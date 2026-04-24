@@ -2,7 +2,21 @@
   "permissions": {
     "allow": [
       "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\Daniel.Law\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" -nologo -v:minimal -t:Build 2>&1 | Select-Object -Last 40)",
-      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\Daniel.Law\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" -nologo -v:minimal -t:Build 2>&1 | Select-Object -Last 25)"
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\Daniel.Law\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" -nologo -v:minimal -t:Build 2>&1 | Select-Object -Last 25)",
+      "Read(//c/Program Files \\(x86\\)/MSBuild/Microsoft/**)",
+      "Read(//c/Program Files/Microsoft Visual Studio/**)",
+      "PowerShell(\"---\")",
+      "PowerShell(\"---vs2022---\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" /t:Restore /v:minimal /nologo 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Build /v:minimal /nologo 2>&1)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" status)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" diff)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" log --oneline -10)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" remote -v)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" branch --show-current)",
+      "PowerShell(gh auth status 2>&1)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" checkout -b fix/vssdk-targets-import 2>&1)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" add src/VStudioCraft/VStudioCraft.csproj .claude/settings.local.json)"
     ]
   }
 }
