@@ -10,27 +10,52 @@ namespace VStudioCraft.Game
         // meshing reduces vertex COUNT by ~5-10x, so total bytes drop sharply.
         public const int FloatsPerVertex = 9;
 
+        // Opaque stream — drawn normally with depth write + depth test.
         private int _vao;
         private int _vbo;
         private int _ebo;
         private int _indexCount;
 
+        // Transparent stream — drawn in a second pass (blending on, depth write off).
+        private int _tVao;
+        private int _tVbo;
+        private int _tEbo;
+        private int _tIndexCount;
+
         public int IndexCount => _indexCount;
+        public int TransparentIndexCount => _tIndexCount;
 
-        // Upload a partially-filled scratch buffer. vertFloats is the number of floats
-        // actually in use (multiple of FloatsPerVertex); indexCount is the number of uints.
-        public void Upload(float[] vertices, int vertFloats, uint[] indices, int indexCount)
+        // Upload both streams (either may be empty). vertFloats/indexCount are counts
+        // actually in use in the scratch buffers; extra capacity is ignored.
+        public void Upload(
+            float[] vertices, int vertFloats, uint[] indices, int indexCount,
+            float[] tVertices, int tVertFloats, uint[] tIndices, int tIndexCount)
         {
-            if (_vao == 0) _vao = GL.GenVertexArray();
-            if (_vbo == 0) _vbo = GL.GenBuffer();
-            if (_ebo == 0) _ebo = GL.GenBuffer();
+            UploadStream(ref _vao, ref _vbo, ref _ebo, vertices, vertFloats, indices, indexCount);
+            UploadStream(ref _tVao, ref _tVbo, ref _tEbo, tVertices, tVertFloats, tIndices, tIndexCount);
+            _indexCount = indexCount;
+            _tIndexCount = tIndexCount;
+        }
 
-            GL.BindVertexArray(_vao);
+        private static void UploadStream(ref int vao, ref int vbo, ref int ebo,
+            float[] vertices, int vertFloats, uint[] indices, int indexCount)
+        {
+            if (indexCount == 0)
+            {
+                // Leave any existing VAO/VBO/EBO resources alive (cheap) but mark them empty.
+                // Caller sets _indexCount = 0 which short-circuits Draw.
+                return;
+            }
+            if (vao == 0) vao = GL.GenVertexArray();
+            if (vbo == 0) vbo = GL.GenBuffer();
+            if (ebo == 0) ebo = GL.GenBuffer();
 
-            GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+            GL.BindVertexArray(vao);
+
+            GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
             GL.BufferData(BufferTarget.ArrayBuffer, vertFloats * sizeof(float), vertices, BufferUsageHint.StaticDraw);
 
-            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, ebo);
             GL.BufferData(BufferTarget.ElementArrayBuffer, indexCount * sizeof(uint), indices, BufferUsageHint.StaticDraw);
 
             const int stride = FloatsPerVertex * sizeof(float);
@@ -44,7 +69,6 @@ namespace VStudioCraft.Game
             GL.EnableVertexAttribArray(3);
 
             GL.BindVertexArray(0);
-            _indexCount = indexCount;
         }
 
         public void Draw()
@@ -55,12 +79,24 @@ namespace VStudioCraft.Game
             GL.BindVertexArray(0);
         }
 
+        public void DrawTransparent()
+        {
+            if (_tIndexCount == 0) return;
+            GL.BindVertexArray(_tVao);
+            GL.DrawElements(PrimitiveType.Triangles, _tIndexCount, DrawElementsType.UnsignedInt, 0);
+            GL.BindVertexArray(0);
+        }
+
         public void Dispose()
         {
             if (_vao != 0) GL.DeleteVertexArray(_vao);
             if (_vbo != 0) GL.DeleteBuffer(_vbo);
             if (_ebo != 0) GL.DeleteBuffer(_ebo);
+            if (_tVao != 0) GL.DeleteVertexArray(_tVao);
+            if (_tVbo != 0) GL.DeleteBuffer(_tVbo);
+            if (_tEbo != 0) GL.DeleteBuffer(_tEbo);
             _vao = _vbo = _ebo = _indexCount = 0;
+            _tVao = _tVbo = _tEbo = _tIndexCount = 0;
         }
     }
 }

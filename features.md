@@ -1,114 +1,99 @@
 # Features vs. Minecraft Alpha 1.1.2_01
 
-Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`) against
-Alpha 1.1.2_01 (released 2010-09-18). Items marked **Have** exist today; items
-under **Missing** are the gap.
+Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
+`src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
+Items marked **Have** exist today; items under **Missing** are the gap.
+
+Last updated after the sky upgrade: distance fog + sun/moon billboards +
+star field + scrolling cloud plane at y=108. All procedural; no assets
+shipped. Celestial bodies draw behind the world, clouds over it.
 
 ---
 
 ## Blocks
 
-**Have**
-- Air, Grass, Dirt, Stone, Sand (5 block IDs)
-- Per-face textures (grass top / side / bottom split)
-- Procedural 16x16 pixel-art atlas, nearest-neighbour sampled
+**Have** — 29 block IDs (`BlockType` enum)
+- Air, Grass, Dirt, Stone, Sand
+- Cobblestone, Bedrock, Gravel, Clay
+- CoalOre, IronOre, GoldOre, DiamondOre, RedstoneOre
+- WoodLog, Planks, Leaves
+- Water (still, transparent), Lava (block only, no flow)
+- GoldBlock, IronBlock, DiamondBlock
+- Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Glass (opaque placeholder), Wool
+- Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf)
+- 33-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
+- Transparent-block routing to a second alpha-blended render pass (water today)
 
 **Missing**
-- Bedrock (indestructible world floor)
-- Gravel (gravity-affected)
-- Cobblestone (drop of stone)
-- Wooden planks (oak only in Alpha)
-- Wood log / tree trunk
-- Leaves (with transparency, decay when detached)
-- Saplings (grow into trees)
-- Glass
-- Mossy cobblestone (dungeon-only in Alpha)
-- Obsidian
-- Bricks
-- Sponge (Alpha had it as a solid cube)
-- Wool (white + dyed variants)
-- Torch (placed on floor/wall, emits light)
-- TNT (primed on activation)
-- Ladder
+- Glass with real transparency (currently opaque placeholder)
 - Ice (slippery, melts in light)
 - Snow layer + snow block
-- Clay block
+- Torch (placed on floor/wall, emits light)
+- TNT priming on activation (block exists but is inert)
+- Ladder
 - Sugar cane / reeds
 - Cactus (damages on contact)
 - Pumpkin + jack-o'-lantern
 - Red + brown mushroom
 - Red + yellow flower (dandelion, rose)
-- Tall grass? — **not in Alpha**; skip
-- Water (source + flowing, with its famous 8-level falloff)
-- Lava (source + flowing; ignites flammables)
+- Water/lava flowing variants (8-level falloff)
 - Fire (spreads and dies)
 - Stone & wooden slab (single + double)
 - Stone & wooden stairs
 - Fences
 - Wooden door, iron door
-- Trapdoor — **added in Beta 1.6**; skip
 - Sign (post + wall)
 - Crafting table (workbench)
 - Furnace (lit + unlit)
 - Chest (with inventory)
-- Ore blocks: coal, iron, gold, diamond, redstone, lapis (lapis was later — coal/iron/gold/diamond/redstone in Alpha)
-- Mineral blocks: iron, gold, diamond
 - Mob spawner (cage with flame)
-- Portal (obsidian frame + purple fill) — **nether added in Alpha 1.2.0**; skip for 1.1.2_01
-- Redstone wire, redstone torch, button, lever, pressure plate, repeater (repeater was Beta)
-  - 1.1.2_01 scope: wire, torch, button, lever, pressure plate
+- Redstone wire, redstone torch, button, lever, pressure plate
 - Dispenser
-- Note block — **added Beta 1.2**; skip
-- Bookshelf
-- Cake — **added Beta 1.2**; skip
-- Jukebox — **added Beta 1.2**; skip
-- Bed — **Beta 1.3**; skip
 
 ## World generation
 
 **Have**
-- Single-octave heightmap (we call 4 octaves but with the default Noise)
-- Grass/dirt/stone layered columns
-- Sand in low-height columns (ad-hoc beaches, no water)
+- 4-octave Perlin heightmap (`Noise.Octaves`)
+- Grass/dirt/stone layered columns with sand shoreline
+- Beach logic pegged to sea level (`BeachHeight = SeaLevel + 1`)
+- Sea level (`SeaLevel = 22`) with still-water fill of every air block ≤ sea level
 - 16 × 128 × 16 chunks, matching Alpha's dimensions
-- Chunk streaming with radius + unload hysteresis
+- Chunk streaming with radius + unload hysteresis (view=6, unload=9)
 - Modified-chunk retention so edits survive unload/reload
+- Bedrock floor: y=0 always + ragged y=1..3 at ~60/40/20% per column
+- Ore veins: Dirt, Gravel, Coal, Iron, Gold, Redstone, Diamond — Alpha-tuned Y ranges (Iron ≤64, Gold ≤32, Redstone/Diamond ≤16), random-walk placement, stone-only replacement
+- Oak trees with canopy that overlaps across chunk seams (deterministic per-column RNG means same tree regardless of which chunk is generated first)
+- Worm-style cave systems — each chunk scans a 5×5 neighbourhood for worm starts, so tunnels cross seams seamlessly. Parabola-tapered radius (1.8..3.6 blocks) with dampened yaw/pitch drift. Carves only stone/dirt/gravel/grass — bedrock, water, and sand (beaches) are preserved. Y-capped below `SeaLevel - 4` and below `surface - 5` per column so caves never break out to the surface or the ocean floor.
+- Off-thread terrain generation via `ChunkJobSystem` worker pool (2–3 workers)
+- Reproducible seed chain per chunk feature (per-chunk and per-column hashed RNG)
 
 **Missing**
-- Sea level (Alpha: y = 63) and ocean filling all air blocks ≤ sea level with water
-- Tree generation (oak), density varying by biome
-- Cave systems (DFS tunnels with worm-style carving)
-- Ravines — **added Beta 1.8**; skip
-- Ore veins: coal, iron, gold, diamond, redstone (layered depth distributions)
+- Cave decoration: glowing ores highlighted by nearby torches (needs light pass)
+- Ravines (long vertical slashes — Alpha got them in Beta, but worth including)
 - Dungeons (4×4 cobble rooms with spawner + 1–2 chests)
 - Surface lava lakes and underground lava pools
-- Water springs / lava springs embedded in cliff faces
+- Water/lava springs embedded in cliff faces
 - Snow/ice biomes (snow layer on top blocks, ice on water)
-- Desert biomes (sand replaces grass/dirt, no trees, cacti)
-- Clay patches in shallow water
-- Gravel patches
+- Desert biomes (no trees, cacti)
 - Pumpkin patches
-- Flowers + mushroom scatter
+- Flowers + mushroom scatter (need cross-plane sprite geometry)
 - Sugar cane next to water
-- Bedrock floor (1–4 random rows at y ≤ 4)
 - Biome system (Alpha used Rainfall/Temperature maps via `OverworldGenerator`)
-- Structures: no villages/strongholds in 1.1.2_01 — skip
-- World spawn point selection (finds a grass block, not just "fall from sky")
-- Reproducible seed chain per chunk feature (Alpha uses deterministic per-chunk RNG)
+- World spawn-point selection (currently spawn is always at origin, high in the air)
 
 ## Lighting
 
 **Have**
 - Directional sun + ambient term in the fragment shader
-- Sun follows a day/dusk/night/dawn piecewise angle
+- Sun follows a day/dusk/night/dawn piecewise angle on a 7-minute cycle
 - Sky colour interpolates between day/dusk/night
 
 **Missing**
 - Block-light propagation (torches, lava, fire — Alpha's 15-level flood-fill)
 - Sky-light propagation (15 at sky-exposed columns, attenuated through translucent blocks)
-- Per-vertex light value stored on chunk vertices (Alpha baked it into a light byte per vertex)
-- Smooth lighting toggle (Alpha had an option; real smooth lighting came later but 1.1.2 had vertex-AO-ish interpolation)
-- Darkening/re-meshing when a block is placed/broken changes neighbour light
+- Per-vertex light stored on chunk vertices
+- Smooth lighting / vertex-AO
+- Re-light on block place/break
 - Moon light (low constant at night, 4 in Alpha)
 - Underwater light attenuation
 
@@ -116,129 +101,120 @@ under **Missing** are the gap.
 
 **Have**
 - Flat sky colour that shifts with sun angle
+- Day/night cycle animates `uSunDir` every frame
+- Sun and moon procedural billboard sprites (camera-aligned quads on a 100-unit celestial sphere; fade smoothly around horizon)
+- Craters on the moon (fixed pattern — no real phases yet, just a static face)
+- Star field — 500 procedurally scattered points on the celestial sphere, fade in at dusk and out at dawn, rotate with sky
+- 2D cloud plane at y=108 (32×32 grid, wind-driven UV scroll, fog-tinted, tinted dusk/night by sun altitude)
+- Distance fog — 48-block falloff band ending just inside the unload radius, colour matches current sky so chunks blend instead of popping
 
 **Missing**
-- Sun and moon sprites as textured billboards
-- Moon phases
-- Star field at night
-- 2D cloud plane at y = 108 (scrolling)
-- Horizon gradient / "void fog"
-- Distance fog (the familiar Alpha render-distance fade)
-- Rain / snow — **added Beta 1.5**; skip
+- Real moon phases (8-frame texture sheet cycled across game-day count)
+- Horizon gradient / "void fog" (sky is still a single flat clear-colour)
+- Rain / snow particles + weather cycle
+- Lightning flashes
+- Alternate biome sky tints
 
 ## Entities & mobs
 
 **Have**
-- None. Player is the only entity.
+- Player only (no mob AI, no dropped items)
 
 **Missing**
 - Entity base class with tick, AABB, velocity, gravity, collision
 - Passive mobs: cow, pig, sheep, chicken
 - Hostile mobs: zombie, skeleton, spider, creeper, slime
-- Spider AI (wall-climb), Creeper hiss+explode, Skeleton bow AI, Zombie swim/swarm
-- Mob AI pathfinding (A* on block grid)
-- Mob spawn cycles (light-level gated, day vs night, distance from player)
-- Despawn logic (distance + time)
-- Drops on death (meat, feathers, bones, arrows, string, gunpowder, rotten flesh (Alpha=raw meat), wool)
-- Dropped-item entity with pickup, merging, 5-min despawn
-- XP orbs — **added Beta 1.8**; skip
+- Mob AI / pathfinding
+- Mob spawn cycles
+- Drops on death
+- Dropped-item entity
 - Projectiles: arrow, snowball, egg
 - Vehicles: minecart, boat
 - Painting
-- Lightning / weather entities — **Beta 1.5**; skip
-- TNT-primed entity (with flash + 4s fuse)
-- Squid (water mob) — **added Beta 1.2**; skip
+- TNT-primed entity
 
 ## Player
 
 **Have**
 - AABB voxel-collision walker with sub-step integration
-- Walk / sprint / jump / gravity / terminal velocity
+- Walk / jump / gravity / terminal velocity
 - Mouse look (yaw+pitch, clamped)
 - Block break + place via 8-block reach raycast
-- 4-block "hotbar" (number keys)
+- Water is non-solid (you can walk / fall through it — swim physics not yet)
+- Health (20 HP = 10 hearts, Alpha-style) in survival mode
+- Fall damage (Alpha formula: `max(0, distance - 3)` half-hearts, cancelled if landing in water)
+- Void damage (4 HP every 0.5 s below y=-16)
+- Respawn on death (teleport to spawn, restore full HP)
 
 **Missing**
-- Health (10 hearts) + damage model (fall, drowning, suffocation, lava, fire, cactus, mob attacks, void)
-- Regeneration at full hunger — **hunger is Beta 1.8**; instead Alpha regen is just time-based while fed? — Alpha: no regen without food; you eat to heal directly. Food-item-based healing.
-- Respawn at world spawn on death
-- Sneak (Shift) — slows movement, prevents falling off edges
-- Sprint — **not in 1.1.2_01**; skip
-- Swim physics (bobbing, slower movement, upward thrust on Space)
-- Ladder climb physics
-- Fall damage thresholds
-- Drowning timer (air bubbles)
-- On-fire state + damage over time
+- Damage from drowning, suffocation, lava, fire, cactus
+- Food-based healing
+- Sneak (Shift) — prevents falling off edges
+- Swim physics (bobbing, slower movement, upward thrust on Space, drowning timer)
+- Ladder climb
+- On-fire state
 - Hand-held item rendering in first-person
 - Arm swing animation on attack
 - Third-person camera (F5)
-- Crouch offset on eye height
+- Death screen with respawn button (currently instant respawn)
 
 ## Inventory / items
 
 **Have**
-- Nothing. Current "hotbar" is just a `SelectedBlock` enum with number-key hotkeys.
+- `SelectedBlock` enum toggled by number keys (creative-lite hotbar)
 
 **Missing**
 - Item stack system (id + damage + count, max 64)
-- Player inventory: 9 hotbar + 27 main + 4 armor + 1 cursor (36+4)
-- Inventory UI (E key toggles; 2×2 crafting inside)
-- Crafting table UI (3×3)
-- Furnace UI (input / fuel / output) + smelt tick
-- Chest UI (single + double-chest joining)
+- Player inventory (9 hotbar + 27 main + 4 armor + 1 cursor)
+- Inventory UI (E key)
+- Crafting table / furnace / chest UIs
 - Drop item (Q)
 - Pick-block (middle mouse)
 - Scroll-wheel hotbar cycling
-- Drag-splitting stacks
-- Shift-click transfer
 
-## Items (the actual items, not blocks)
+## Items (actual items, not blocks)
 
 **Missing**
 - Tools: wood / stone / iron / gold / diamond × pickaxe / shovel / axe / sword / hoe
-- Tool durability + break animation
-- Block-break time curve (hardness × tool tier × effective-tool bonus)
-- Armor: leather / iron / gold / diamond × helmet / chest / legs / boots (chainmail was unobtainable)
-- Armor durability + damage reduction
+- Tool durability
+- Hardness-gated break time
+- Armor + damage reduction
 - Bow + arrows
-- Flint and steel (places fire)
+- Flint and steel
 - Bucket (empty / water / lava / milk)
-- Food items: raw/cooked pork, apple, bread, cake (cake is block), cookie — alpha had pork, apples, bread, golden apple? golden apple was Beta 1.1
-  - 1.1.2_01 scope: raw + cooked pork, apple, bread, mushroom stew, cookie
-- Ingredients: stick, string, feather, gunpowder, coal, iron/gold/diamond ingot, redstone dust, flint, wheat, sugar, egg, bone
-- Dye (bone meal at minimum; multi-colour dyes were Beta)
+- Food items (raw/cooked pork, apple, bread, mushroom stew, cookie)
+- Ingredients (stick, string, feather, gunpowder, coal, ingots, redstone, flint, wheat, sugar, egg, bone)
+- Bone-meal dye
 - Compass, clock
-- Fishing rod — **Alpha 1.2**? — it was in 1.1.2_01 yes
+- Fishing rod
 - Seeds + wheat crop
-- Saddle (for pigs) — Alpha added this
-- Painting item
-- Minecart + powered/storage variants
-- Boat item
-- Record discs — **Beta 1.2**; skip
-- Book — Alpha had book? book was in Alpha yes, used in bookshelf recipe
-- Map — **added Beta 1.6**; skip
+- Saddle
 
 ## HUD / UI
 
 **Have**
-- Status bar at bottom of VS tool window (FPS, controls, selected block)
+- Status bar at bottom of VS tool window (FPS, game mode, HP, controls, selected block)
 - Crosshair
 - Selection wire-outline on targeted block
+- Watery blue overlay when camera is inside water
+- Survival HUD layout: `| hearts | gap | hunger bar |` — heart row right-anchored to `width/3`, hunger row left-anchored to `2×width/3`
+- Heart sprites in classic `<3` style (two-circles + V-taper construction, highlight on upper-left bump, shade on lower-right) with full / half / empty states
+- Drumstick sprites (meat ellipse + bone capsule + knob) for hunger bar, same full / half / empty states
+- Sprite shader + procedural `HudTextures` sheet (reusable brick for all future HUD icons)
 
 **Missing**
 - Hotbar strip (9 slots with selected highlight)
-- Heart row (health)
 - Air bubble row (drowning timer)
+- Dynamic hunger decay + food items (hunger currently pinned at max — scaffolding only)
 - Armor row
 - Tool-durability bar on item icons
-- Item-name popup (centered, fades after 2s on change)
-- Bitmap ASCII font renderer
-- Chat overlay / chat history
-- F3 debug screen (coords, facing, biome, light level, chunk stats, FPS)
-- Pause menu (Options, Save & Quit)
-- Options screen (FOV, render distance, difficulty, music/sound volume, controls)
+- Item-name popup
+- Bitmap font renderer
+- Chat overlay
+- F3 debug screen
+- Pause menu
+- Options screen
 - Main menu + world select + world creation screen
-- Loading / saving overlay
 
 ## Audio
 
@@ -246,65 +222,66 @@ under **Missing** are the gap.
 - Nothing.
 
 **Missing**
-- Background music tracks (Alpha had C418's calm/hal tracks)
-- Ambient cave noises in dark areas
-- Block-specific step sounds (stone, grass, wood, sand, gravel, snow)
+- Background music tracks
+- Ambient cave noises
+- Block-specific step sounds
 - Block-break + place sounds
 - Hit/grunt player sounds
-- Mob sounds (each mob has idle / hurt / death / attack set)
+- Mob sounds
 - Splash sound on water entry
 - Fire crackle, lava pop
-- Bow draw + release, arrow impact
 - UI click on button press
 
 ## Rendering details
 
 **Have**
-- Chunk meshing with face culling against opaque neighbours
-- 16x16 nearest-neighbour texture atlas
-- VAO/VBO/EBO per chunk mesh
-- Distance-based chunk unload
+- Greedy chunk meshing (~5–10× fewer verts than naive)
+- Face culling against opaque neighbours; internal water-water faces skipped
+- Two-pass rendering: opaque first, then alpha-blended transparents (water) with depth-write off
+- 16×16 nearest-neighbour texture atlas (33 layers)
+- VAO/VBO/EBO per chunk mesh, separate VBOs for opaque + transparent streams
+- Frustum culling per chunk (both passes)
+- Dedicated render thread owning the GL context
+- Off-thread meshing via `ChunkJobSystem`
+- Distance-based chunk unload with hysteresis
 
 **Missing**
-- Frustum culling per chunk
-- Transparent-block second pass (water, glass, ice) — sort back-to-front
-- Animated textures (water, lava, fire, portal, destroy stages 0–9)
+- Animated textures (water ripple, lava churn, fire, portal, destroy stages 0–9)
 - Block-break progress overlay (10-frame crack texture)
-- Dropped-item sprite (billboarded 2D texture or 3D block model)
+- Dropped-item sprite
 - First-person held-item / arm renderer
 - Tile-entity rendering (chest lid animation, furnace fire, sign text)
-- Item drops on break (particles pop off)
-- Particle system (block-hit puffs, smoke, fire flame, redstone dust, enchant glint — Alpha scope: hit, smoke, fire, drip, footsteps, splash)
-- Fog uniform + per-fragment fog blend
-- Underwater fog colour swap
-- GUI texture sheet rendering (gui/gui.png, icons.png etc.)
+- Particle system (block-hit puffs, smoke, fire, drip, splash)
+- Underwater fog colour swap (we only tint the framebuffer today; real Alpha uses a deep-blue fog uniform underwater)
+- GUI texture sheet rendering
 
 ## Controls
 
 **Have**
 - WASD, Space, Ctrl (sprint), Esc (release mouse), LMB break, RMB place, 1/2/3/4 hotbar
+- F3 toggles Creative ↔ Survival (re-uses Alpha's F3 slot; debug screen pending)
 
 **Missing**
 - Shift sneak
 - Q drop
 - E inventory
 - T chat
-- F1 HUD toggle, F2 screenshot, F3 debug, F5 third person, F8 mouse smoothing
+- F1 HUD toggle, F2 screenshot, F3 debug screen (currently used for mode toggle), F5 third person
 - Middle-click pick-block
 - Scroll wheel hotbar
 - Configurable key bindings
-- Gamepad? Alpha didn't support; skip
 
 ## Persistence
 
 **Have**
-- Custom gzipped binary world format (magic `VSC1`, version 2)
+- Custom gzipped binary world format (magic `VSC1`, version 3)
 - Per-chunk `IsModified` flag so unmodified chunks don't bloat saves
+- Save includes player position + camera yaw/pitch + game mode + HP
+- v1/v2 saves still load (missing fields default to Creative + full HP)
 
 **Missing**
-- Alpha's `level.dat` (NBT) + `region/*.mcr` chunk files — **not required** for feature parity, only for interop
-- Persistence of: entity list, inventory, health, time of day, game mode, weather state, spawn point, world name, generator seed-per-feature state
-- Autosave on interval (every 30s in Alpha)
+- Persistence of: time of day, seed-per-feature state
+- Autosave on interval
 - Backup on world load failure
 
 ## Multiplayer
@@ -313,48 +290,54 @@ under **Missing** are the gap.
 - Nothing.
 
 **Missing**
-- Server mode (Alpha Server was 1.0.15+)
-- TCP packet protocol (handshake, login, chunk, block-change, player-position, chat)
-- Authentication stub
-- Client-side interpolation of remote players
+- Server mode, TCP protocol, authentication, client-side interpolation
 
 ## Game modes
 
 **Have**
-- Permanent "creative-lite" (instant break, unlimited place of selected block, no health, no drops).
+- Creative mode — instant break, unlimited place of selected block, no damage taken (default).
+- Survival mode — takes fall damage + void damage, 20 HP (10 hearts), instant respawn at spawn point on death.
+- F3 toggles between modes at runtime; mode is persisted to save files.
 
 **Missing**
-- Survival mode (finite inventory, block-break time, drops, damage, respawn)
-- Creative mode was **added Beta 1.8** — Alpha 1.1.2_01 is only survival; skip
-- Difficulty setting (peaceful / easy / normal / hard) — affects mob spawning and damage
-- Hardcore — Beta; skip
+- Survival-specific: finite inventory, block-break time, drops on break
+- Difficulty setting (peaceful / easy / normal / hard)
+- Drowning, suffocation, lava, fire, cactus damage sources
 
 ## Miscellaneous Alpha-era systems
 
 **Missing**
-- Tile entities (chest, furnace, sign, mob spawner, dispenser, note block — last two are Beta)
-- Redstone tick scheduler (separate update queue from block ticks)
-- Random block ticks (grass spread, crop grow, leaf decay, ice melt, fire spread)
+- Tile entities (chest, furnace, sign, mob spawner)
+- Random block ticks (grass spread, crop grow, leaf decay, ice melt)
 - Scheduled ticks (water/lava flow, redstone)
 - Explosion algorithm (ray-based blast with block-resistance)
-- Fire propagation algorithm
+- Fire propagation
 - Mob-spawn attempt loop per game tick
 - Entity tracking & chunk-bucketing
-- Achievement system — **added Beta 1.5**; skip
+
+## Infrastructure
+
+**Have**
+- VS extension (`VStudioCraft.vsix`) hosting the game in a tool window
+- Standalone WPF harness (`VStudioCraft.Standalone`) for iterating without reinstalling the VSIX
+- OpenGL 3.3 Core via OpenTK, GLControl inside a WindowsFormsHost
+- Dedicated render thread with cross-thread `InputState` + `ConcurrentDictionary` chunk storage
+- `ChunkJobSystem` worker pool for terrain gen + meshing off the render thread
+- Per-column deterministic hashed RNG for reproducible gen across chunk borders
 
 ---
 
 ## Suggested next steps (rough order)
 
-1. **Water + lava** as blocks with a flow tick — enables beaches to make sense, lakes, springs.
-2. **Light propagation** (sky + block light) — unlocks torches, caves, mobs.
-3. **Trees** — cheap win, big visual payoff; needs logs + leaves + saplings.
-4. **Inventory + item stacks** — nothing below it works without items.
-5. **Hotbar HUD + font rendering** — so you can see inventory state.
-6. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
-7. **Mobs** (pig/zombie first) — simplest AI, validates the entity system.
-8. **Caves + ores** — gives mining something to find.
+1. **Block + sky light propagation** — prerequisite for torches and mobs; the "makes it feel like Minecraft" locker. Medium-large. Pairs especially well with caves (which are pitch-black tunnels right now).
+2. **Flowers + mushrooms + tall grass** — cross-plane sprite geometry; unlocks decoration across the terrain already in place.
+3. **Flowing water / lava** — promote the current still-water to a proper fluid with 8-level falloff ticks.
+4. **Swim physics + drowning timer** — now that water + survival-HP exist, the player should bob in it and lose air underwater.
+5. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
+6. **Inventory + item stacks** — the "items instead of block-enum" jump.
+7. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
+8. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
 9. **Crafting table + furnace** — recipe plumbing.
-10. **Sound** — music + step sounds close the "it feels like minecraft" gap fast.
+10. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
 
-Each of the above is 200–1000 LoC of new code in this codebase's style; nothing is architecturally blocking.
+Each of the above is 200–1500 LoC of new code in this codebase's style; nothing is architecturally blocking.

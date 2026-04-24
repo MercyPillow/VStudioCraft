@@ -67,9 +67,25 @@ namespace VStudioCraft.Game
             GL.UniformMatrix4(loc, false, ref m);
         }
 
+        public void SetMatrix3(string name, Matrix3 m)
+        {
+            int loc = Loc(name);
+            GL.UniformMatrix3(loc, false, ref m);
+        }
+
+        public void SetVector2(string name, Vector2 v)
+        {
+            GL.Uniform2(Loc(name), v.X, v.Y);
+        }
+
         public void SetVector3(string name, Vector3 v)
         {
             GL.Uniform3(Loc(name), v.X, v.Y, v.Z);
+        }
+
+        public void SetVector4(string name, Vector4 v)
+        {
+            GL.Uniform4(Loc(name), v.X, v.Y, v.Z, v.W);
         }
 
         public void SetFloat(string name, float f)

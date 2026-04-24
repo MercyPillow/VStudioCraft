@@ -75,7 +75,9 @@
     <Compile Include="Game\ChunkJobSystem.cs" />
     <Compile Include="Game\ChunkMesher.cs" />
     <Compile Include="Game\Frustum.cs" />
+    <Compile Include="Game\GameMode.cs" />
     <Compile Include="Game\GameRenderer.cs" />
+    <Compile Include="Game\HudTextures.cs" />
     <Compile Include="Game\InputState.cs" />
     <Compile Include="Game\Mesh.cs" />
     <Compile Include="Game\Noise.cs" />
@@ -83,6 +85,8 @@
     <Compile Include="Game\Player.cs" />
     <Compile Include="Game\Raycast.cs" />
     <Compile Include="Game\Shader.cs" />
+    <Compile Include="Game\SkyRenderer.cs" />
+    <Compile Include="Game\SkyTextures.cs" />
     <Compile Include="Game\TerrainGenerator.cs" />
     <Compile Include="Game\World.cs" />
     <Compile Include="Game\WorldSaveFormat.cs" />

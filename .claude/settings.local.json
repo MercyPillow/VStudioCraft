@@ -28,7 +28,27 @@
       "PowerShell(& \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" auth status 2>&1; \"---\"; & \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" pr list --head fix/vssdk-targets-import --state all --json number,title,url,state 2>&1)",
       "PowerShell(git status; \"---\"; & \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" auth status 2>&1)",
       "PowerShell(if \\($env:GH_TOKEN\\) { \"GH_TOKEN set, length $\\($env:GH_TOKEN.Length\\)\" } else { \"GH_TOKEN not set\" }; \"---\"; try { $r = Invoke-RestMethod \"https://api.github.com/repos/MercyPillow/VStudioCraft/pulls?head=MercyPillow:fix/vssdk-targets-import&state=all\" -Headers @{ \"User-Agent\" = \"vstudiocraft-pr-check\" }; if \\($r.Count -eq 0\\) { \"no existing PR\" } else { $r | Select-Object number, state, html_url, title | Format-Table -AutoSize | Out-String } } catch { \"API error: $_\" })",
-      "PowerShell(git add .claude/settings.local.json)"
+      "PowerShell(git add .claude/settings.local.json)",
+      "PowerShell(git status -sb; \"---\"; & \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" auth status 2>&1; \"---GH_TOKEN---\"; if \\($env:GH_TOKEN\\) { \"set\" } else { \"unset\" })",
+      "PowerShell(& \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" auth status 2>&1; \"---GH_TOKEN---\"; if \\($env:GH_TOKEN\\) { \"set len=$\\($env:GH_TOKEN.Length\\)\" } else { \"unset\" }; \"---GITHUB_TOKEN---\"; if \\($env:GITHUB_TOKEN\\) { \"set len=$\\($env:GITHUB_TOKEN.Length\\)\" } else { \"unset\" })",
+      "PowerShell(& \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" auth status 2>&1; \"---\"; if \\($env:GH_TOKEN\\) { \"GH_TOKEN set\" } else { \"GH_TOKEN unset\" })",
+      "PowerShell(& \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" auth status 2>&1; \"---tokens---\"; if \\($env:GH_TOKEN\\) { \"GH_TOKEN set\" } else { \"GH_TOKEN unset\" }; if \\($env:GITHUB_TOKEN\\) { \"GITHUB_TOKEN set\" } else { \"GITHUB_TOKEN unset\" })",
+      "PowerShell(git status -sb; \"---\"; & \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" pr list --head fix/vssdk-targets-import --state all --json number,title,url,state 2>&1)",
+      "PowerShell(git status -sb; \"---\"; & \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" pr list --head fix/vssdk-targets-import --state open --json number,url,state 2>&1)",
+      "PowerShell($msbuild = \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"; & $msbuild src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj -v:minimal -nologo)",
+      "PowerShell($msbuild = \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"; & $msbuild src\\\\VStudioCraft\\\\VStudioCraft.csproj -v:minimal -nologo /t:Build 2>&1 | Select-Object -Last 20)",
+      "PowerShell(dotnet build src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -c Debug -v minimal 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Restore,Build /p:Configuration=Debug /verbosity:minimal /nologo 2>&1)",
+      "PowerShell(dotnet build src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -c Debug -v minimal -nologo 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Build /p:Configuration=Debug /verbosity:minimal /nologo 2>&1)",
+      "PowerShell(dotnet build src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj -nologo -v:minimal)",
+      "PowerShell(msbuild src\\\\VStudioCraft\\\\VStudioCraft.csproj -nologo -v:minimal -p:Configuration=Debug 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" src\\\\VStudioCraft\\\\VStudioCraft.csproj -nologo -v:minimal -p:Configuration=Debug 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" src\\\\VStudioCraft\\\\VStudioCraft.csproj -nologo -v:minimal -p:Configuration=Debug 2>&1)",
+      "PowerShell(dotnet build src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj -nologo -v:minimal 2>&1)",
+      "PowerShell($msbuild = \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"; if \\(-not \\(Test-Path $msbuild\\)\\) { $msbuild = \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" }; if \\(-not \\(Test-Path $msbuild\\)\\) { $msbuild = \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" }; if \\(-not \\(Test-Path $msbuild\\)\\) { $msbuild = \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\18\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" }; \"msbuild=$msbuild\"; & $msbuild src\\\\VStudioCraft\\\\VStudioCraft.csproj /t:Build /p:Configuration=Debug /v:minimal /nologo 2>&1 | Select-Object -Last 30)",
+      "PowerShell($msbuild = \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"; & $msbuild src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj /t:Build /p:Configuration=Debug /v:minimal /nologo 2>&1 | Select-Object -Last 15)",
+      "PowerShell(git add -A)"
     ]
   }
 }

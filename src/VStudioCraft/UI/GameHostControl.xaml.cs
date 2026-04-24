@@ -306,9 +306,16 @@ namespace VStudioCraft.UI
         private void UpdateStatus()
         {
             var name = string.IsNullOrEmpty(_worldPath) ? "(untitled)" : System.IO.Path.GetFileName(_worldPath);
+            // Cross-thread read: GameMode is a single-enum byte assignment (atomic
+            // on x86/x64) and Health is a single int. Status text is purely
+            // display, so a torn read at worst shows a one-frame stale value.
+            var mode = _renderer?.GameMode ?? GameMode.Creative;
+            int hp = _renderer?.Player.Health ?? 20;
+            string hpBadge = mode == GameMode.Survival ? $"  |  HP {hp}/20" : "";
             StatusText.Text =
                 $"{name}  |  FPS {_fps}  |  game {_gameMs:F2} / render {_renderMs:F2} / swap {_swapMs:F2} ms  " +
-                $"|  Sel: {_input.SelectedBlock}  (1-4 switch, LMB/RMB break/place, WASD+Space+Ctrl move, Esc uncapture)  " +
+                $"|  Mode: {mode}{hpBadge}  |  Sel: {_input.SelectedBlock}  " +
+                $"(1-4 switch, LMB/RMB break/place, WASD+Space+Ctrl move, F3 toggle mode, Esc uncapture)  " +
                 $"|  GPU: {_glRenderer} [{_glVendor}]  |  GL {_glVersion}";
         }
 
@@ -362,6 +369,17 @@ namespace VStudioCraft.UI
                 case Keys.D2: _input.SelectedBlock = BlockType.Dirt;  Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
                 case Keys.D3: _input.SelectedBlock = BlockType.Stone; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
                 case Keys.D4: _input.SelectedBlock = BlockType.Sand;  Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.F3:
+                    if (_renderer != null)
+                    {
+                        // UI-thread write, render-thread read. Enum assignment is a
+                        // single-byte store on x86/x64, so no lock needed.
+                        _renderer.GameMode = _renderer.GameMode == GameMode.Creative
+                            ? GameMode.Survival
+                            : GameMode.Creative;
+                        Dispatcher.BeginInvoke(new Action(UpdateStatus));
+                    }
+                    break;
                 case Keys.Escape: ReleaseMouseLook(); break;
             }
             e.Handled = true;

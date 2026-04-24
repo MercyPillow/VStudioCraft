@@ -21,12 +21,40 @@ namespace VStudioCraft.Game
         // through a block in a single tick. 0.05 = imperceptible wall gap.
         private const float MaxSubStep = 0.05f;
 
+        // Alpha health: 10 hearts × 2 HP = 20 HP max. Even values = full hearts,
+        // odd values = N/2 full + one half-heart rendered at the right edge.
+        public const int MaxHealth = 20;
+
+        // Hunger mirrors health (10 drumsticks × 2 points = 20 max). Alpha
+        // 1.1.2_01 didn't actually have hunger — it arrived in Beta 1.8 — but
+        // we render the bar now so the HUD layout feels complete, and we've
+        // scaffolded the field so a future "food + decay" system slots in
+        // without changing the UI again. Pinned at MaxHunger for now.
+        public const int MaxHunger = 20;
+
         public Vector3 Position;
         public Vector3 Velocity;
         public bool OnGround;
 
+        // Survival HP. Creative mode keeps this pinned at MaxHealth.
+        public int Health = MaxHealth;
+        public int Hunger = MaxHunger;
+        public bool IsDead => Health <= 0;
+
+        // One-shot: set to the drop height (in blocks) whenever the player
+        // transitions from airborne→grounded. The renderer reads it once per
+        // frame to apply fall damage in survival mode, then clears it.
+        public float LastFallDistance;
+
+        // Highest Y reached while airborne — the "peak" from which fall distance
+        // is measured. Reset to current Y while on the ground so small hops
+        // don't accumulate.
+        private float _fallPeakY;
+
         public void Update(float dt, Vector3 wishHorizVel, bool wantJump, World world)
         {
+            bool wasOnGround = OnGround;
+
             // Horizontal velocity is driven directly by input (snappy, Minecraft-like).
             Velocity.X = wishHorizVel.X;
             Velocity.Z = wishHorizVel.Z;
@@ -44,6 +72,61 @@ namespace VStudioCraft.Game
             MoveAxis(0, step.X, world);
             MoveAxis(1, step.Y, world);
             MoveAxis(2, step.Z, world);
+
+            UpdateFallTracking(wasOnGround, world);
+        }
+
+        private void UpdateFallTracking(bool wasOnGround, World world)
+        {
+            if (!OnGround)
+            {
+                // Track the high-water mark for the current airborne arc.
+                if (Position.Y > _fallPeakY) _fallPeakY = Position.Y;
+                return;
+            }
+
+            if (!wasOnGround)
+            {
+                // Just landed. Emit the fall distance unless the player is in
+                // water — water cancels fall damage (classic Alpha rule).
+                float dist = _fallPeakY - Position.Y;
+                if (dist > 0f && !IsInWater(world)) LastFallDistance = dist;
+            }
+            _fallPeakY = Position.Y;
+        }
+
+        public bool IsInWater(World world)
+        {
+            float minX = Position.X - HalfWidth, maxX = Position.X + HalfWidth;
+            float minY = Position.Y,              maxY = Position.Y + Height;
+            float minZ = Position.Z - HalfWidth, maxZ = Position.Z + HalfWidth;
+            int bx0 = (int)Math.Floor(minX);
+            int bx1 = (int)Math.Floor(maxX - 1e-5f);
+            int by0 = (int)Math.Floor(minY);
+            int by1 = (int)Math.Floor(maxY - 1e-5f);
+            int bz0 = (int)Math.Floor(minZ);
+            int bz1 = (int)Math.Floor(maxZ - 1e-5f);
+            for (int y = by0; y <= by1; y++)
+            for (int x = bx0; x <= bx1; x++)
+            for (int z = bz0; z <= bz1; z++)
+            {
+                if (world.GetBlock(x, y, z) == BlockType.Water) return true;
+            }
+            return false;
+        }
+
+        public void TakeDamage(int amount)
+        {
+            if (amount <= 0 || Health <= 0) return;
+            Health -= amount;
+            if (Health < 0) Health = 0;
+        }
+
+        public void HealFull()
+        {
+            Health = MaxHealth;
+            LastFallDistance = 0f;
+            _fallPeakY = Position.Y;
         }
 
         private void MoveAxis(int axis, float delta, World world)

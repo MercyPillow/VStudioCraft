@@ -36,7 +36,35 @@ namespace VStudioCraft.Game
 
     internal static class BlockData
     {
-        public static bool IsSolid(BlockType t) => t != BlockType.Air;
+        // "Solid" means blocks player movement / raycast targeting / new-block
+        // placement. Water reads as non-solid so you can wade and target blocks
+        // through it.
+        public static bool IsSolid(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Air:
+                case BlockType.Water:
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        // "Opaque" means "occludes the face of a neighbouring block." Used by
+        // the greedy mesher to decide whether to emit a face. Water (and later
+        // glass / leaves) are non-opaque so stone shows its face underwater.
+        public static bool IsOpaque(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Air:
+                case BlockType.Water:
+                    return false;
+                default:
+                    return true;
+            }
+        }
 
         // faceKind: 0 = top, 1 = bottom, 2 = side. Returns the atlas tile index.
         public static int GetTileIndex(BlockType t, int faceKind)

@@ -8,7 +8,8 @@ namespace VStudioCraft.Game
     internal static class WorldSaveFormat
     {
         private const uint Magic = 0x31435356;  // 'VSC1' little-endian
-        private const byte CurrentVersion = 2;  // v2 adds IsModified byte per chunk
+        // v1 = initial, v2 = per-chunk IsModified byte, v3 = GameMode + Player.Health.
+        private const byte CurrentVersion = 3;
 
         public struct Header
         {
@@ -16,6 +17,8 @@ namespace VStudioCraft.Game
             public Vector3 CameraPos;
             public float CameraYaw;
             public float CameraPitch;
+            public GameMode GameMode;  // v3+
+            public int Health;         // v3+ (1..MaxHealth; 0 means "load default")
         }
 
         public static void Save(string path, Header header, World world)
@@ -33,6 +36,10 @@ namespace VStudioCraft.Game
                 w.Write(header.CameraPos.Z);
                 w.Write(header.CameraYaw);
                 w.Write(header.CameraPitch);
+                // v3: game mode + HP. Appended after the existing header fields so
+                // a pre-v3 reader would never reach them.
+                w.Write((byte)header.GameMode);
+                w.Write(header.Health);
                 w.Write(world.PersistentChunkCount);
                 foreach (var chunk in world.AllChunksForPersistence())
                 {
@@ -65,6 +72,9 @@ namespace VStudioCraft.Game
                     CameraPos = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()),
                     CameraYaw = r.ReadSingle(),
                     CameraPitch = r.ReadSingle(),
+                    // Pre-v3 defaults: keep the creative-lite behaviour legacy saves had.
+                    GameMode = GameMode.Creative,
+                    Health = Player.MaxHealth,
                 };
 
                 // v1 stored the flying-camera eye position in this slot. From v2 on the slot
@@ -76,6 +86,16 @@ namespace VStudioCraft.Game
                         header.CameraPos.X,
                         header.CameraPos.Y - Player.EyeHeight,
                         header.CameraPos.Z);
+                }
+
+                if (version >= 3)
+                {
+                    header.GameMode = (GameMode)r.ReadByte();
+                    int hp = r.ReadInt32();
+                    // Clamp in case a save was hand-edited or truncated: negative HP
+                    // would trigger instant respawn on load.
+                    if (hp <= 0 || hp > Player.MaxHealth) hp = Player.MaxHealth;
+                    header.Health = hp;
                 }
 
                 var world = World.Empty(header.Seed);

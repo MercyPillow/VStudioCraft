@@ -566,6 +566,9 @@ namespace VStudioCraft.Game
 
         private static void GenerateWater(byte[] pixels)
         {
+            // Alpha still water: calm bluish noise with ~160 alpha so stone and sand
+            // below read through. Blending is enabled in the renderer's transparent pass.
+            var rng = new Random(0xAA7E);
             var palette = new (byte, byte, byte)[]
             {
                 (56, 92, 204),
@@ -573,7 +576,13 @@ namespace VStudioCraft.Game
                 (78, 120, 220),
                 (32, 60, 160),
             };
-            NoiseFill(pixels, 0xAA7E, palette, new[] { 12, 5, 4, 2 });
+            var weights = new[] { 12, 5, 4, 2 };
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                var (r, g, b) = Pick(rng, palette, weights);
+                SetPixel(pixels, x, y, r, g, b, a: 160);
+            }
         }
 
         private static void GenerateLava(byte[] pixels)

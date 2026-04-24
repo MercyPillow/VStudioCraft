@@ -12,12 +12,21 @@ namespace VStudioCraft.Game
     internal sealed class ChunkMesher
     {
         // Flat vertex/index buffers reused across rebuilds so the hot path does no allocation.
+        // Opaque stream — drawn in the depth-write pass.
         private float[] _verts = new float[1 << 14];
         private uint[] _indices = new uint[1 << 14];
         private int _vertFloats;
         private int _indexCount;
 
+        // Transparent stream — drawn in a second pass with alpha blending.
+        // Water (and eventually glass/leaves-fancy) go here.
+        private float[] _tVerts = new float[1 << 12];
+        private uint[] _tIndices = new uint[1 << 12];
+        private int _tVertFloats;
+        private int _tIndexCount;
+
         // Slice mask big enough for the largest face (SizeY × max(SizeX, SizeZ)).
+        // Sign: positive = opaque face, negative = transparent face. 0 = empty.
         private readonly int[] _mask = new int[Math.Max(Chunk.SizeX, Chunk.SizeZ) * Chunk.SizeY];
 
         // Reusable corner scratch (per-quad), so EmitQuad doesn't allocate.
@@ -31,10 +40,17 @@ namespace VStudioCraft.Game
         public float[] Vertices => _verts;
         public uint[] Indices => _indices;
 
+        public int TransparentVertexFloatCount => _tVertFloats;
+        public int TransparentIndexCount => _tIndexCount;
+        public float[] TransparentVertices => _tVerts;
+        public uint[] TransparentIndices => _tIndices;
+
         public void Build(World world, Chunk chunk)
         {
             _vertFloats = 0;
             _indexCount = 0;
+            _tVertFloats = 0;
+            _tIndexCount = 0;
 
             int baseX = chunk.ChunkX * Chunk.SizeX;
             int baseZ = chunk.ChunkZ * Chunk.SizeZ;
@@ -134,15 +150,21 @@ namespace VStudioCraft.Game
                     byte b = BlockOrNeighbor(chunk, nx, ny, nz, nxNeg, nxPos, nzNeg, nzPos);
 
                     // "a" is the source block whose face points in `dir`, "b" is the neighbour.
-                    bool aSolid = a != (byte)BlockType.Air;
-                    bool bSolid = b != (byte)BlockType.Air;
+                    // Emit face iff a is not air, b is not opaque (doesn't occlude),
+                    // and it's not an internal transparent-to-same-transparent boundary
+                    // (e.g. water-water — we don't want inner water faces).
+                    bool aAir = a == (byte)BlockType.Air;
+                    bool aOpaque = !aAir && BlockData.IsOpaque((BlockType)a);
+                    bool bOpaque = b != (byte)BlockType.Air && BlockData.IsOpaque((BlockType)b);
 
-                    if (aSolid && !bSolid)
+                    if (!aAir && !bOpaque && !(a == b && !aOpaque))
                     {
                         // Face of block `a` visible, pointing in `dir`.
                         int faceKind = FaceKindFor(axis, dir);
                         int layer = BlockData.GetTileIndex((BlockType)a, faceKind);
-                        _mask[j * dU + i] = layer + 1;  // 0 = empty, so +1 bias
+                        int key = layer + 1;           // 0 = empty, so +1 bias
+                        if (!aOpaque) key = -key;       // mark transparent with negative key
+                        _mask[j * dU + i] = key;
                     }
                     else
                     {
@@ -173,7 +195,9 @@ namespace VStudioCraft.Game
                             if (!done) h++;
                         }
 
-                        EmitQuad(axis, dir, slice, u, v, i, j, w, h, m - 1, baseX, baseZ);
+                        int layer = (m > 0 ? m : -m) - 1;
+                        bool transparent = m < 0;
+                        EmitQuad(axis, dir, slice, u, v, i, j, w, h, layer, transparent, baseX, baseZ);
 
                         for (int hh = 0; hh < h; hh++)
                         for (int ww = 0; ww < w; ww++)
@@ -213,6 +237,7 @@ namespace VStudioCraft.Game
         private void EmitQuad(
             int axis, int dir, int slice, int u, int v,
             int i, int j, int w, int h, int layer,
+            bool transparent,
             int baseX, int baseZ)
         {
             // Reusable corner scratch (reset each call).
@@ -252,59 +277,83 @@ namespace VStudioCraft.Game
                 uvX3 = 0; uvY3 = h;
             }
 
-            uint baseIdx = (uint)(_vertFloats / Mesh.FloatsPerVertex);
+            int curVertFloats = transparent ? _tVertFloats : _vertFloats;
+            uint baseIdx = (uint)(curVertFloats / Mesh.FloatsPerVertex);
 
             if (dir > 0)
             {
-                AppendVert(_c0[0] + baseX, _c0[1], _c0[2] + baseZ, 0,    0,    nx, ny, nz, layer);
-                AppendVert(_c1[0] + baseX, _c1[1], _c1[2] + baseZ, uvX1, uvY1, nx, ny, nz, layer);
-                AppendVert(_c2[0] + baseX, _c2[1], _c2[2] + baseZ, uvX2, uvY2, nx, ny, nz, layer);
-                AppendVert(_c3[0] + baseX, _c3[1], _c3[2] + baseZ, uvX3, uvY3, nx, ny, nz, layer);
+                AppendVert(transparent, _c0[0] + baseX, _c0[1], _c0[2] + baseZ, 0,    0,    nx, ny, nz, layer);
+                AppendVert(transparent, _c1[0] + baseX, _c1[1], _c1[2] + baseZ, uvX1, uvY1, nx, ny, nz, layer);
+                AppendVert(transparent, _c2[0] + baseX, _c2[1], _c2[2] + baseZ, uvX2, uvY2, nx, ny, nz, layer);
+                AppendVert(transparent, _c3[0] + baseX, _c3[1], _c3[2] + baseZ, uvX3, uvY3, nx, ny, nz, layer);
             }
             else
             {
-                AppendVert(_c0[0] + baseX, _c0[1], _c0[2] + baseZ, 0,    0,    nx, ny, nz, layer);
-                AppendVert(_c3[0] + baseX, _c3[1], _c3[2] + baseZ, uvX3, uvY3, nx, ny, nz, layer);
-                AppendVert(_c2[0] + baseX, _c2[1], _c2[2] + baseZ, uvX2, uvY2, nx, ny, nz, layer);
-                AppendVert(_c1[0] + baseX, _c1[1], _c1[2] + baseZ, uvX1, uvY1, nx, ny, nz, layer);
+                AppendVert(transparent, _c0[0] + baseX, _c0[1], _c0[2] + baseZ, 0,    0,    nx, ny, nz, layer);
+                AppendVert(transparent, _c3[0] + baseX, _c3[1], _c3[2] + baseZ, uvX3, uvY3, nx, ny, nz, layer);
+                AppendVert(transparent, _c2[0] + baseX, _c2[1], _c2[2] + baseZ, uvX2, uvY2, nx, ny, nz, layer);
+                AppendVert(transparent, _c1[0] + baseX, _c1[1], _c1[2] + baseZ, uvX1, uvY1, nx, ny, nz, layer);
             }
 
-            AppendIndex(baseIdx + 0);
-            AppendIndex(baseIdx + 1);
-            AppendIndex(baseIdx + 2);
-            AppendIndex(baseIdx + 0);
-            AppendIndex(baseIdx + 2);
-            AppendIndex(baseIdx + 3);
+            AppendIndex(transparent, baseIdx + 0);
+            AppendIndex(transparent, baseIdx + 1);
+            AppendIndex(transparent, baseIdx + 2);
+            AppendIndex(transparent, baseIdx + 0);
+            AppendIndex(transparent, baseIdx + 2);
+            AppendIndex(transparent, baseIdx + 3);
         }
 
         private void AppendVert(
+            bool transparent,
             float x, float y, float z,
             float u, float v,
             float nx, float ny, float nz,
             float layer)
         {
-            if (_vertFloats + Mesh.FloatsPerVertex > _verts.Length)
+            if (transparent)
             {
-                Array.Resize(ref _verts, _verts.Length * 2);
+                if (_tVertFloats + Mesh.FloatsPerVertex > _tVerts.Length)
+                    Array.Resize(ref _tVerts, _tVerts.Length * 2);
+                _tVerts[_tVertFloats++] = x;
+                _tVerts[_tVertFloats++] = y;
+                _tVerts[_tVertFloats++] = z;
+                _tVerts[_tVertFloats++] = u;
+                _tVerts[_tVertFloats++] = v;
+                _tVerts[_tVertFloats++] = nx;
+                _tVerts[_tVertFloats++] = ny;
+                _tVerts[_tVertFloats++] = nz;
+                _tVerts[_tVertFloats++] = layer;
             }
-            _verts[_vertFloats++] = x;
-            _verts[_vertFloats++] = y;
-            _verts[_vertFloats++] = z;
-            _verts[_vertFloats++] = u;
-            _verts[_vertFloats++] = v;
-            _verts[_vertFloats++] = nx;
-            _verts[_vertFloats++] = ny;
-            _verts[_vertFloats++] = nz;
-            _verts[_vertFloats++] = layer;
+            else
+            {
+                if (_vertFloats + Mesh.FloatsPerVertex > _verts.Length)
+                    Array.Resize(ref _verts, _verts.Length * 2);
+                _verts[_vertFloats++] = x;
+                _verts[_vertFloats++] = y;
+                _verts[_vertFloats++] = z;
+                _verts[_vertFloats++] = u;
+                _verts[_vertFloats++] = v;
+                _verts[_vertFloats++] = nx;
+                _verts[_vertFloats++] = ny;
+                _verts[_vertFloats++] = nz;
+                _verts[_vertFloats++] = layer;
+            }
         }
 
-        private void AppendIndex(uint idx)
+        private void AppendIndex(bool transparent, uint idx)
         {
-            if (_indexCount + 1 > _indices.Length)
+            if (transparent)
             {
-                Array.Resize(ref _indices, _indices.Length * 2);
+                if (_tIndexCount + 1 > _tIndices.Length)
+                    Array.Resize(ref _tIndices, _tIndices.Length * 2);
+                _tIndices[_tIndexCount++] = idx;
             }
-            _indices[_indexCount++] = idx;
+            else
+            {
+                if (_indexCount + 1 > _indices.Length)
+                    Array.Resize(ref _indices, _indices.Length * 2);
+                _indices[_indexCount++] = idx;
+            }
         }
     }
 }

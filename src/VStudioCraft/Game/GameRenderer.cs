@@ -14,27 +14,37 @@ layout(location = 2) in vec3 aNormal;
 layout(location = 3) in float aLayer;
 out vec2 vUV;
 out vec3 vNormal;
+out float vViewDist;
 flat out int vLayer;
 uniform mat4 uProjection;
 uniform mat4 uView;
 void main()
 {
-    gl_Position = uProjection * uView * vec4(aPos, 1.0);
+    vec4 viewPos = uView * vec4(aPos, 1.0);
+    gl_Position = uProjection * viewPos;
     vUV = aUV;
     vNormal = aNormal;
     vLayer = int(aLayer);
+    // View-space -Z is distance into the scene; length(viewPos.xyz) makes
+    // horizontal and vertical distance both contribute, so the fog ring
+    // reads as a hemisphere around the camera, not just a flat band ahead.
+    vViewDist = length(viewPos.xyz);
 }
 ";
 
         private const string FragmentSrc = @"#version 330 core
 in vec2 vUV;
 in vec3 vNormal;
+in float vViewDist;
 flat in int vLayer;
 out vec4 FragColor;
 uniform sampler2DArray uAtlas;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform float uAmbient;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
 void main()
 {
     // Greedy quads emit UVs that span the merged area (e.g. 0..w, 0..h); we
@@ -44,7 +54,12 @@ void main()
     vec4 tex = texture(uAtlas, vec3(tileUV, float(vLayer)));
     float diff = max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
     vec3 light = vec3(uAmbient) + uSunColor * diff * (1.0 - uAmbient);
-    FragColor = vec4(tex.rgb * light, tex.a);
+    vec3 lit = tex.rgb * light;
+    // Distance fog: blend toward horizon colour at the render edge so chunks
+    // fade in/out instead of popping. uFogEnd is tuned to sit just inside the
+    // chunk-unload radius so the terminating cliff never reveals itself.
+    float fog = clamp((vViewDist - uFogStart) / max(uFogEnd - uFogStart, 0.0001), 0.0, 1.0);
+    FragColor = vec4(mix(lit, uFogColor, fog), tex.a);
 }
 ";
 
@@ -57,7 +72,39 @@ void main() { gl_Position = uMVP * vec4(aPos, 1.0); }
         private const string OverlayFragmentSrc = @"#version 330 core
 out vec4 FragColor;
 uniform vec3 uColor;
-void main() { FragColor = vec4(uColor, 1.0); }
+uniform float uAlpha;
+void main() { FragColor = vec4(uColor, uAlpha); }
+";
+
+        // HUD sprite shader: samples a 2D texture with a UV sub-rect so one
+        // sprite sheet can serve many HUD elements. Reuses the unit-quad mesh
+        // (aPos in [0,1]^2 with z=0); the V axis doesn't need flipping because
+        // we upload pixels py=0-first and OpenGL treats pixels[0] as the
+        // UV=(0,0) texel — matching the block atlas convention in this codebase.
+        private const string SpriteVertexSrc = @"#version 330 core
+layout(location = 0) in vec3 aPos;
+out vec2 vUV;
+uniform mat4 uMVP;
+uniform vec2 uUvOffset;
+uniform vec2 uUvScale;
+void main()
+{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = uUvOffset + aPos.xy * uUvScale;
+}
+";
+
+        private const string SpriteFragmentSrc = @"#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2D uSprite;
+uniform vec4 uTint;
+void main()
+{
+    vec4 t = texture(uSprite, vUV);
+    if (t.a < 0.01) discard;
+    FragColor = vec4(t.rgb * uTint.rgb, t.a * uTint.a);
+}
 ";
 
         private const float ReachDistance = 8f;
@@ -77,9 +124,14 @@ void main() { FragColor = vec4(uColor, 1.0); }
 
         private Shader _shader;
         private Shader _overlayShader;
+        private Shader _spriteShader;
         private OverlayMesh _crosshairMesh;
         private OverlayMesh _wireCubeMesh;
+        private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
         private int _atlasTexture;
+        private int _heartTexture;
+        private int _drumstickTexture;
+        private SkyRenderer _sky;
         private World _world;
         private ChunkJobSystem _jobs;
         private readonly Dictionary<(int x, int z), Mesh> _chunkMeshes = new Dictionary<(int x, int z), Mesh>();
@@ -96,6 +148,20 @@ void main() { FragColor = vec4(uColor, 1.0); }
             (a, b) => b.distSq.CompareTo(a.distSq);
 
         private float _timeOfDay = 0.25f;  // start at noon so first view is bright
+
+        // Where the player snaps back to on death in survival. Set whenever a
+        // world is loaded / started; respawn teleports here with full health.
+        private Vector3 _spawnPos;
+
+        // Accumulator for void-damage ticks. Ticks the player for a fixed
+        // amount every half-second while they are below the kill plane.
+        private float _voidTimer;
+
+        // Survival is opt-in; the existing game loop starts in Creative so we
+        // don't break the creative-lite flow everybody already has. Toggled
+        // from the UI thread via F3 — the single enum write is atomic on
+        // x86/x64, so no lock is needed for cross-thread reads.
+        public GameMode GameMode { get; set; } = GameMode.Creative;
 
         public Camera Camera { get; } = new Camera();
         public Player Player { get; } = new Player();
@@ -115,10 +181,28 @@ void main() { FragColor = vec4(uColor, 1.0); }
 
             _shader = new Shader(VertexSrc, FragmentSrc);
             _overlayShader = new Shader(OverlayVertexSrc, OverlayFragmentSrc);
+            _spriteShader = new Shader(SpriteVertexSrc, SpriteFragmentSrc);
             _crosshairMesh = BuildCrosshairMesh();
             _wireCubeMesh = BuildWireCubeMesh();
+            _unitQuadMesh = BuildUnitQuadMesh();
             _atlasTexture = BlockTextures.CreateAtlas();
+            _heartTexture = HudTextures.CreateHeartSheet();
+            _drumstickTexture = HudTextures.CreateDrumstickSheet();
+            _sky = new SkyRenderer();
+            _sky.Initialize();
             _initialized = true;
+        }
+
+        private static OverlayMesh BuildUnitQuadMesh()
+        {
+            float[] v =
+            {
+                0, 0, 0,  1, 0, 0,  1, 1, 0,
+                0, 0, 0,  1, 1, 0,  0, 1, 0,
+            };
+            var m = new OverlayMesh { Primitive = PrimitiveType.Triangles };
+            m.Upload(v);
+            return m;
         }
 
         private static OverlayMesh BuildCrosshairMesh()
@@ -174,6 +258,9 @@ void main() { FragColor = vec4(uColor, 1.0); }
             Player.Position = new Vector3(0.5f, spawnY, 0.5f);
             Player.Velocity = Vector3.Zero;
             Player.OnGround = false;
+            Player.HealFull();
+            _spawnPos = Player.Position;
+            _voidTimer = 0f;
             Camera.Yaw = 0f;
             Camera.Pitch = -0.1f;
             SyncCameraToPlayer();
@@ -187,6 +274,13 @@ void main() { FragColor = vec4(uColor, 1.0); }
             Player.Position = header.CameraPos;
             Player.Velocity = Vector3.Zero;
             Player.OnGround = false;
+            // Saved health + mode restore the exact survival state; if the save is
+            // pre-v3 the loader fills them with Creative + full health defaults.
+            GameMode = header.GameMode;
+            Player.Health = header.Health > 0 ? header.Health : Player.MaxHealth;
+            Player.LastFallDistance = 0f;
+            _spawnPos = Player.Position;
+            _voidTimer = 0f;
             Camera.Yaw = header.CameraYaw;
             Camera.Pitch = header.CameraPitch;
             Camera.ClampPitch();
@@ -202,6 +296,8 @@ void main() { FragColor = vec4(uColor, 1.0); }
                 CameraPos = Player.Position,
                 CameraYaw = Camera.Yaw,
                 CameraPitch = Camera.Pitch,
+                GameMode = GameMode,
+                Health = Player.Health,
             };
             WorldSaveFormat.Save(path, header, _world);
         }
@@ -210,6 +306,68 @@ void main() { FragColor = vec4(uColor, 1.0); }
         {
             if (_world == null) return;
             Player.Update(dt, wishHorizVel, wantJump, _world);
+            SyncCameraToPlayer();
+
+            if (GameMode == GameMode.Survival)
+            {
+                ApplySurvivalDamage(dt);
+            }
+            else
+            {
+                // Creative always reads as full health so switching into
+                // survival mid-session doesn't drop you to 0 HP from a stale read.
+                if (Player.Health != Player.MaxHealth) Player.Health = Player.MaxHealth;
+                _voidTimer = 0f;
+            }
+
+            // Consume any pending fall distance — survival already applied the
+            // damage above; creative ignores it. Either way, clear so the next
+            // landing starts fresh.
+            Player.LastFallDistance = 0f;
+        }
+
+        // Survival damage sources wired up today: fall damage (Alpha formula
+        // `max(0, distance - 3)`) and void damage (4 HP every 0.5 s below
+        // y=-16). Drowning / fire / lava / cactus are deferred — they need
+        // block-specific interaction hooks we don't have yet.
+        private void ApplySurvivalDamage(float dt)
+        {
+            if (Player.LastFallDistance > 3f)
+            {
+                int dmg = (int)Math.Floor(Player.LastFallDistance - 3f);
+                if (dmg > 0) Player.TakeDamage(dmg);
+            }
+
+            if (Player.Position.Y < -16f)
+            {
+                _voidTimer += dt;
+                while (_voidTimer >= 0.5f)
+                {
+                    _voidTimer -= 0.5f;
+                    Player.TakeDamage(4);
+                }
+            }
+            else
+            {
+                _voidTimer = 0f;
+            }
+
+            if (Player.IsDead)
+            {
+                Respawn();
+            }
+        }
+
+        // Teleport to the remembered spawn and restore full HP. In a future
+        // pass we'll add a death screen with a delay + respawn button; for now
+        // it's instant so you don't feel stuck if you fall off the world.
+        private void Respawn()
+        {
+            Player.Position = _spawnPos;
+            Player.Velocity = Vector3.Zero;
+            Player.OnGround = false;
+            Player.HealFull();
+            _voidTimer = 0f;
             SyncCameraToPlayer();
         }
 
@@ -305,7 +463,7 @@ void main() { FragColor = vec4(uColor, 1.0); }
                 return;
             }
 
-            if (r.IndexCount == 0)
+            if (r.IndexCount == 0 && r.TIndexCount == 0)
             {
                 if (_chunkMeshes.TryGetValue((r.X, r.Z), out var old))
                 {
@@ -320,7 +478,9 @@ void main() { FragColor = vec4(uColor, 1.0); }
                 mesh = new Mesh();
                 _chunkMeshes[(r.X, r.Z)] = mesh;
             }
-            mesh.Upload(r.Verts, r.VertFloatCount, r.Indices, r.IndexCount);
+            mesh.Upload(
+                r.Verts, r.VertFloatCount, r.Indices, r.IndexCount,
+                r.TVerts, r.TVertFloatCount, r.TIndices, r.TIndexCount);
         }
 
         public void UpdateStreaming()
@@ -427,6 +587,7 @@ void main() { FragColor = vec4(uColor, 1.0); }
         public void AdvanceTime(float dt)
         {
             _timeOfDay = (_timeOfDay + dt / TotalCycle) % 1f;
+            _sky?.Advance(dt);
         }
 
         // Piecewise angle so day/night/transitions each get their own share of the cycle.
@@ -510,17 +671,33 @@ void main() { FragColor = vec4(uColor, 1.0); }
             var vp = view * proj;
             _frustum.UpdateFromViewProj(ref vp);
 
+            // Celestial bodies (stars, sun, moon) draw first with depth
+            // disabled so the world pass overdraws them. Clouds draw after
+            // the world — they need to respect terrain occlusion from below.
+            float sunAngle = ComputeSunAngle();
+            Vector3 antiSun = -sun;
+            _sky.RenderCelestial(proj, view, Camera.Position, sunAngle, sun, antiSun);
+
+            // Fog end sits 8 blocks inside the unload radius so the boundary
+            // cliff is fully hidden even while a chunk is being streamed out.
+            float fogEnd = (UnloadDistanceChunks * Chunk.SizeX) - 8f;
+            float fogStart = fogEnd - 48f; // ~3 chunks of fade, matches Alpha feel
+
             _shader.Use();
             _shader.SetMatrix4("uProjection", proj);
             _shader.SetMatrix4("uView", view);
             _shader.SetVector3("uSunDir", sun);
             _shader.SetVector3("uSunColor", sunColor);
             _shader.SetFloat("uAmbient", ambient);
+            _shader.SetVector3("uFogColor", sky);
+            _shader.SetFloat("uFogStart", fogStart);
+            _shader.SetFloat("uFogEnd", fogEnd);
             _shader.SetInt("uAtlas", 0);
 
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
 
+            // Pass 1 — opaques. Standard depth test + write, no blend, back-face cull.
             foreach (var kv in _chunkMeshes)
             {
                 int cx = kv.Key.x, cz = kv.Key.z;
@@ -531,10 +708,164 @@ void main() { FragColor = vec4(uColor, 1.0); }
                 kv.Value.Draw();
             }
 
+            // Pass 2 — transparents (water today). Blend on, depth write off so
+            // surfaces behind multiple water faces still accumulate colour instead
+            // of z-fighting. Face culling stays on so we don't double-shade the
+            // underside of a water slab when looking down through it. Skip if the
+            // player's camera is inside a water block — avoids the single big
+            // near-plane quad covering the view.
+            bool cameraInWater = false;
+            if (_world != null)
+            {
+                int cx = (int)Math.Floor(Camera.Position.X);
+                int cy = (int)Math.Floor(Camera.Position.Y);
+                int cz = (int)Math.Floor(Camera.Position.Z);
+                cameraInWater = _world.GetBlock(cx, cy, cz) == BlockType.Water;
+            }
+            if (!cameraInWater)
+            {
+                GL.Enable(EnableCap.Blend);
+                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                GL.DepthMask(false);
+                foreach (var kv in _chunkMeshes)
+                {
+                    if (kv.Value.TransparentIndexCount == 0) continue;
+                    int cx = kv.Key.x, cz = kv.Key.z;
+                    float minX = cx * Chunk.SizeX;
+                    float minZ = cz * Chunk.SizeZ;
+                    if (!_frustum.Intersects(minX, 0, minZ, minX + Chunk.SizeX, Chunk.SizeY, minZ + Chunk.SizeZ))
+                        continue;
+                    kv.Value.DrawTransparent();
+                }
+                GL.DepthMask(true);
+                GL.Disable(EnableCap.Blend);
+            }
+
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
+
+            // Clouds after the world passes — alpha blended against both the
+            // sky behind them and any world geometry poking above their layer.
+            // Skipped when submerged: they'd show through the blue tint anyway.
+            if (!cameraInWater)
+            {
+                _sky.RenderClouds(proj, view, Camera.Position, sky, fogStart, fogEnd, sun.Y);
+            }
+
+            // Apply a watery tint as a full-screen overlay when the camera is submerged.
+            if (cameraInWater)
+            {
+                RenderSubmergedOverlay(width, height);
+            }
 
             RenderSelectionOutline(width, height);
             RenderCrosshair(width, height);
+
+            if (GameMode == GameMode.Survival)
+            {
+                RenderSurvivalHud(width, height);
+            }
+        }
+
+        // Survival HUD layout:
+        //   |  hearts (10)  |  middle gap  |  hunger drumsticks (10)  |
+        //   ←── left 1/3 ──→|←─ middle ───→|←──── right 1/3 ─────────→|
+        //
+        // The heart row is right-anchored to width/3 and the hunger row is
+        // left-anchored to 2*width/3, so both rows sit inside their respective
+        // thirds with a symmetric centre gap that scales with the window.
+        // Hearts grow leftward and drumsticks grow rightward as the window
+        // gets larger; on narrow windows the rows clip (but survival-mode text
+        // UI survives because the status bar lives outside the GL viewport).
+        private void RenderSurvivalHud(int width, int height)
+        {
+            const int iconPx = 20;           // on-screen size (Alpha's 9px upscaled for readability)
+            const int spacing = 2;
+            const int stride = iconPx + spacing;
+            const int count = 10;
+            int totalW = stride * count - spacing;
+            int y0 = height - iconPx - 24;   // 24 px bottom margin
+
+            // Right-edge of the heart row sits on the left third-line.
+            int heartsRightEdge = width / 3;
+            int heartsX0 = heartsRightEdge - totalW;
+            // Left-edge of the hunger row sits on the right third-line.
+            int hungerX0 = 2 * width / 3;
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            _spriteShader.Use();
+            _spriteShader.SetInt("uSprite", 0);
+            _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            _spriteShader.SetVector2("uUvScale", new Vector2(HudTextures.UvWidth, 1f));
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Hearts row.
+            int hp = Math.Max(0, Player.Health);
+            int fullHearts = hp / 2;
+            bool hpHalf = (hp & 1) != 0;
+            DrawIconRow(_heartTexture, heartsX0, y0, iconPx, stride, count, fullHearts, hpHalf, ortho);
+
+            // Hunger row.
+            int hg = Math.Max(0, Player.Hunger);
+            int fullHunger = hg / 2;
+            bool hgHalf = (hg & 1) != 0;
+            DrawIconRow(_drumstickTexture, hungerX0, y0, iconPx, stride, count, fullHunger, hgHalf, ortho);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Draws a strip of N identical-width icons. Each slot picks full /
+        // half / empty from the sprite sheet based on (fullCount, hasHalf), so
+        // the same call pattern serves both hearts and drumsticks.
+        private void DrawIconRow(int texture, int x0, int y0, int iconPx, int stride, int count,
+            int fullCount, bool hasHalf, Matrix4 ortho)
+        {
+            GL.BindTexture(TextureTarget.Texture2D, texture);
+            for (int i = 0; i < count; i++)
+            {
+                float uvOffX;
+                if (i < fullCount) uvOffX = HudTextures.UvFullX;
+                else if (i == fullCount && hasHalf) uvOffX = HudTextures.UvHalfX;
+                else uvOffX = HudTextures.UvEmptyX;
+
+                float xp = x0 + i * stride;
+                float yp = y0;
+                var model = Matrix4.CreateScale(iconPx, iconPx, 1f) * Matrix4.CreateTranslation(xp, yp, 0f);
+                _spriteShader.SetMatrix4("uMVP", model * ortho);
+                _spriteShader.SetVector2("uUvOffset", new Vector2(uvOffX, 0f));
+                _unitQuadMesh.Draw();
+            }
+        }
+
+        // Blue wash over the whole viewport — reads as "underwater". Uses the
+        // overlay shader's uAlpha uniform rather than a blend-colour trick.
+        private void RenderSubmergedOverlay(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+            var scale = Matrix4.CreateScale(width, height, 1f);
+            var mvp = scale * ortho;
+
+            _overlayShader.Use();
+            _overlayShader.SetMatrix4("uMVP", mvp);
+            _overlayShader.SetVector3("uColor", new Vector3(0.15f, 0.28f, 0.55f));
+            _overlayShader.SetFloat("uAlpha", 0.55f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+            _unitQuadMesh.Draw();
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
         }
 
         private void RenderSelectionOutline(int width, int height)
@@ -548,6 +879,7 @@ void main() { FragColor = vec4(uColor, 1.0); }
             _overlayShader.Use();
             _overlayShader.SetMatrix4("uMVP", mvp);
             _overlayShader.SetVector3("uColor", new Vector3(0.05f, 0.05f, 0.05f));
+            _overlayShader.SetFloat("uAlpha", 1f);
             GL.LineWidth(2f);
             _wireCubeMesh.Draw();
         }
@@ -561,6 +893,7 @@ void main() { FragColor = vec4(uColor, 1.0); }
             _overlayShader.Use();
             _overlayShader.SetMatrix4("uMVP", mvp);
             _overlayShader.SetVector3("uColor", new Vector3(1f, 1f, 1f));
+            _overlayShader.SetFloat("uAlpha", 1f);
 
             GL.Disable(EnableCap.DepthTest);
             GL.Disable(EnableCap.CullFace);
@@ -577,12 +910,26 @@ void main() { FragColor = vec4(uColor, 1.0); }
             _chunkMeshes.Clear();
             _crosshairMesh?.Dispose();
             _wireCubeMesh?.Dispose();
+            _unitQuadMesh?.Dispose();
             _shader?.Dispose();
             _overlayShader?.Dispose();
+            _spriteShader?.Dispose();
+            _sky?.Dispose();
+            _sky = null;
             if (_atlasTexture != 0)
             {
                 GL.DeleteTexture(_atlasTexture);
                 _atlasTexture = 0;
+            }
+            if (_heartTexture != 0)
+            {
+                GL.DeleteTexture(_heartTexture);
+                _heartTexture = 0;
+            }
+            if (_drumstickTexture != 0)
+            {
+                GL.DeleteTexture(_drumstickTexture);
+                _drumstickTexture = 0;
             }
         }
     }

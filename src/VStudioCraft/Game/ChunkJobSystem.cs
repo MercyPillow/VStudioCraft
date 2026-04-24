@@ -37,6 +37,11 @@ namespace VStudioCraft.Game
             public int VertFloatCount;
             public uint[] Indices;
             public int IndexCount;
+            // Transparent stream (water today, glass/fancy-leaves tomorrow).
+            public float[] TVerts;
+            public int TVertFloatCount;
+            public uint[] TIndices;
+            public int TIndexCount;
         }
 
         private readonly World _world;
@@ -119,11 +124,17 @@ namespace VStudioCraft.Game
                                 Array.Copy(mesher.Vertices, verts, mesher.VertexFloatCount);
                                 var idxs = new uint[mesher.IndexCount];
                                 Array.Copy(mesher.Indices, idxs, mesher.IndexCount);
+                                var tVerts = new float[mesher.TransparentVertexFloatCount];
+                                Array.Copy(mesher.TransparentVertices, tVerts, mesher.TransparentVertexFloatCount);
+                                var tIdxs = new uint[mesher.TransparentIndexCount];
+                                Array.Copy(mesher.TransparentIndices, tIdxs, mesher.TransparentIndexCount);
                                 _meshResults.Enqueue(new MeshResult
                                 {
                                     X = job.X, Z = job.Z,
                                     Verts = verts, VertFloatCount = mesher.VertexFloatCount,
                                     Indices = idxs, IndexCount = mesher.IndexCount,
+                                    TVerts = tVerts, TVertFloatCount = mesher.TransparentVertexFloatCount,
+                                    TIndices = tIdxs, TIndexCount = mesher.TransparentIndexCount,
                                 });
                             }
                         }
