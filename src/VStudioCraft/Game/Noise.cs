@@ -7,8 +7,11 @@ namespace VStudioCraft.Game
     {
         private readonly int[] _p = new int[512];
 
+        public int Seed { get; }
+
         public Noise(int seed)
         {
+            Seed = seed;
             var rng = new Random(seed);
             var perm = new int[256];
             for (int i = 0; i < 256; i++) perm[i] = i;

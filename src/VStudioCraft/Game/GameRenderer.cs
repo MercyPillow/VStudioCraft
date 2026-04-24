@@ -63,9 +63,9 @@ void main() { FragColor = vec4(uColor, 1.0); }
         private const float ReachDistance = 8f;
         public const int ViewDistanceChunks = 6;   // ~13x13 kept loaded around the player
         public const int UnloadDistanceChunks = 9; // 3 chunks of hysteresis beyond view distance
-        private const int MaxStreamingGensPerFrame = 2;
+        private const int MaxInstallsPerFrame = 8; // completed-gen drains per frame
         private const int MaxUnloadsPerFrame = 3;
-        private const int MaxRemeshPerFrame = 3;
+        private const int MaxMeshUploadsPerFrame = 4; // completed-mesh drains per frame
 
         private const float DayDuration = 300f;         // 5 min
         private const float TransitionDuration = 30f;   // 30 s (dawn and dusk each)
@@ -81,10 +81,10 @@ void main() { FragColor = vec4(uColor, 1.0); }
         private OverlayMesh _wireCubeMesh;
         private int _atlasTexture;
         private World _world;
+        private ChunkJobSystem _jobs;
         private readonly Dictionary<(int x, int z), Mesh> _chunkMeshes = new Dictionary<(int x, int z), Mesh>();
         private bool _initialized;
 
-        private readonly ChunkMesher _mesher = new ChunkMesher();
         private Frustum _frustum;
 
         // Reusable sort scratch used by ProcessDirtyChunks / streaming so the
@@ -220,86 +220,128 @@ void main() { FragColor = vec4(uColor, 1.0); }
 
         private void SetWorld(World world)
         {
+            // Tear down the old job system first so outstanding workers finish
+            // against the old world and don't try to deliver stale results into
+            // the new one.
+            _jobs?.Dispose();
+            _jobs = null;
+
             foreach (var m in _chunkMeshes.Values) m.Dispose();
             _chunkMeshes.Clear();
 
             _world = world;
             _world.MarkAllDirty();
-            ProcessDirtyChunks();
+
+            // 2–3 workers is a sweet spot: enough to keep the render thread fed
+            // without oversubscribing against the UI + render threads. Capped so
+            // a 32-thread box doesn't spin up a pile of chunk workers we can't
+            // feed fast enough to matter.
+            int workerCount = Math.Max(1, Math.Min(3, Environment.ProcessorCount - 2));
+            _jobs = new ChunkJobSystem(_world, workerCount);
         }
 
-        private void RebuildChunkMesh(int cx, int cz)
+        // Drain completed mesh results — budgeted per frame so we don't spike GL
+        // upload time when many workers complete at once. Chunks still in the
+        // dirty set are pushed to the job system; successful enqueues clear the
+        // dirty bit. If a chunk is re-dirtied while its job is in flight the bit
+        // stays, and we'll enqueue a fresh job next frame after the worker clears.
+        public void ProcessDirtyChunks(int maxUploadsPerFrame = MaxMeshUploadsPerFrame)
         {
-            var chunk = _world.GetChunk(cx, cz);
-            if (chunk == null)
+            if (_world == null || _jobs == null) return;
+
+            if (_world.DirtyChunks.Count > 0)
             {
-                if (_chunkMeshes.TryGetValue((cx, cz), out var gone))
+                int pcx = (int)Math.Floor(Camera.Position.X / Chunk.SizeX);
+                int pcz = (int)Math.Floor(Camera.Position.Z / Chunk.SizeZ);
+
+                _scratchChunks.Clear();
+                foreach (var k in _world.DirtyChunks)
                 {
-                    gone.Dispose();
-                    _chunkMeshes.Remove((cx, cz));
+                    int dx = k.x - pcx, dz = k.z - pcz;
+                    _scratchChunks.Add((k.x, k.z, dx * dx + dz * dz));
+                }
+                _scratchChunks.Sort(CompareAsc);
+
+                for (int i = 0; i < _scratchChunks.Count; i++)
+                {
+                    var key = (_scratchChunks[i].x, _scratchChunks[i].z);
+                    if (!_world.HasChunk(key.Item1, key.Item2))
+                    {
+                        // Chunk disappeared (e.g. unload); drop any stale mesh.
+                        if (_chunkMeshes.TryGetValue(key, out var gone))
+                        {
+                            gone.Dispose();
+                            _chunkMeshes.Remove(key);
+                        }
+                        _world.DirtyChunks.Remove(key);
+                        continue;
+                    }
+                    if (_jobs.TryEnqueueMesh(key.Item1, key.Item2))
+                    {
+                        _world.DirtyChunks.Remove(key);
+                    }
+                    // else: already in-flight; keep the dirty bit, retry next frame.
+                }
+            }
+
+            int applied = 0;
+            while (applied < maxUploadsPerFrame && _jobs.TryDequeueMesh(out var r))
+            {
+                ApplyMeshResult(r);
+                applied++;
+            }
+        }
+
+        private void ApplyMeshResult(ChunkJobSystem.MeshResult r)
+        {
+            // Chunk may have been unloaded since the worker picked it up.
+            if (!_world.HasChunk(r.X, r.Z))
+            {
+                if (_chunkMeshes.TryGetValue((r.X, r.Z), out var stale))
+                {
+                    stale.Dispose();
+                    _chunkMeshes.Remove((r.X, r.Z));
                 }
                 return;
             }
 
-            _mesher.Build(_world, chunk);
-
-            if (_mesher.IndexCount == 0)
+            if (r.IndexCount == 0)
             {
-                if (_chunkMeshes.TryGetValue((cx, cz), out var old))
+                if (_chunkMeshes.TryGetValue((r.X, r.Z), out var old))
                 {
                     old.Dispose();
-                    _chunkMeshes.Remove((cx, cz));
+                    _chunkMeshes.Remove((r.X, r.Z));
                 }
                 return;
             }
 
-            if (!_chunkMeshes.TryGetValue((cx, cz), out var mesh))
+            if (!_chunkMeshes.TryGetValue((r.X, r.Z), out var mesh))
             {
                 mesh = new Mesh();
-                _chunkMeshes[(cx, cz)] = mesh;
+                _chunkMeshes[(r.X, r.Z)] = mesh;
             }
-            mesh.Upload(_mesher.Vertices, _mesher.VertexFloatCount, _mesher.Indices, _mesher.IndexCount);
-        }
-
-        public void ProcessDirtyChunks(int maxPerFrame = int.MaxValue)
-        {
-            if (_world == null || _world.DirtyChunks.Count == 0) return;
-
-            if (maxPerFrame >= _world.DirtyChunks.Count)
-            {
-                foreach (var key in _world.DirtyChunks)
-                {
-                    RebuildChunkMesh(key.x, key.z);
-                }
-                _world.DirtyChunks.Clear();
-                return;
-            }
-
-            // Sort by distance to camera so the nearest chunks mesh first.
-            int pcx = (int)Math.Floor(Camera.Position.X / Chunk.SizeX);
-            int pcz = (int)Math.Floor(Camera.Position.Z / Chunk.SizeZ);
-
-            _scratchChunks.Clear();
-            foreach (var k in _world.DirtyChunks)
-            {
-                int dx = k.x - pcx, dz = k.z - pcz;
-                _scratchChunks.Add((k.x, k.z, dx * dx + dz * dz));
-            }
-            _scratchChunks.Sort(CompareAsc);
-
-            int limit = Math.Min(_scratchChunks.Count, maxPerFrame);
-            for (int i = 0; i < limit; i++)
-            {
-                RebuildChunkMesh(_scratchChunks[i].x, _scratchChunks[i].z);
-                _world.DirtyChunks.Remove((_scratchChunks[i].x, _scratchChunks[i].z));
-            }
+            mesh.Upload(r.Verts, r.VertFloatCount, r.Indices, r.IndexCount);
         }
 
         public void UpdateStreaming()
         {
-            if (_world == null) return;
+            if (_world == null || _jobs == null) return;
             int pcx = (int)Math.Floor(Camera.Position.X / Chunk.SizeX);
             int pcz = (int)Math.Floor(Camera.Position.Z / Chunk.SizeZ);
+
+            // Drain completed gen results and install them. Drop any that ended
+            // up outside the current unload radius while they were in-flight.
+            int installed = 0;
+            int unloadR2 = UnloadDistanceChunks * UnloadDistanceChunks;
+            while (installed < MaxInstallsPerFrame && _jobs.TryDequeueGen(out var r))
+            {
+                int dx = r.Chunk.ChunkX - pcx, dz = r.Chunk.ChunkZ - pcz;
+                if (dx * dx + dz * dz <= unloadR2)
+                {
+                    _world.InstallGeneratedChunk(r.Chunk);
+                }
+                installed++;
+            }
 
             GenerateNearMissing(pcx, pcz);
             UnloadFar(pcx, pcz);
@@ -315,7 +357,7 @@ void main() { FragColor = vec4(uColor, 1.0); }
                 int ds = dx * dx + dz * dz;
                 if (ds > r * r) continue;
                 int cx = pcx + dx, cz = pcz + dz;
-                if (_world.GetChunk(cx, cz) == null)
+                if (!_world.HasChunk(cx, cz))
                 {
                     _scratchChunks.Add((cx, cz, ds));
                 }
@@ -323,10 +365,12 @@ void main() { FragColor = vec4(uColor, 1.0); }
 
             if (_scratchChunks.Count == 0) return;
             _scratchChunks.Sort(CompareAsc);
-            int limit = Math.Min(_scratchChunks.Count, MaxStreamingGensPerFrame);
-            for (int i = 0; i < limit; i++)
+            // Enqueue the whole ring — the job system dedupes already-in-flight
+            // keys. Workers pull from the queue in order, so chunks near the
+            // camera get generated first.
+            for (int i = 0; i < _scratchChunks.Count; i++)
             {
-                _world.EnsureChunk(_scratchChunks[i].x, _scratchChunks[i].z);
+                _jobs.TryEnqueueGen(_scratchChunks[i].x, _scratchChunks[i].z);
             }
         }
 
@@ -527,6 +571,8 @@ void main() { FragColor = vec4(uColor, 1.0); }
 
         public void Dispose()
         {
+            _jobs?.Dispose();
+            _jobs = null;
             foreach (var m in _chunkMeshes.Values) m.Dispose();
             _chunkMeshes.Clear();
             _crosshairMesh?.Dispose();

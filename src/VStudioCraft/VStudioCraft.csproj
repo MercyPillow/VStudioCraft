@@ -72,6 +72,7 @@
     <Compile Include="Game\BlockTextures.cs" />
     <Compile Include="Game\Camera.cs" />
     <Compile Include="Game\Chunk.cs" />
+    <Compile Include="Game\ChunkJobSystem.cs" />
     <Compile Include="Game\ChunkMesher.cs" />
     <Compile Include="Game\Frustum.cs" />
     <Compile Include="Game\GameRenderer.cs" />

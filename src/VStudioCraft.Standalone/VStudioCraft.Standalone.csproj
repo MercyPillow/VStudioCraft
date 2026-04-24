@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>VStudioCraft</RootNamespace>
+    <AssemblyName>VStudioCraft.Standalone</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenTK" Version="3.3.3" />
+    <PackageReference Include="OpenTK.GLControl" Version="3.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Game engine sources from the VSIX project, linked in so both targets
+         share the exact same implementation. The standalone project compiles
+         them into its own assembly for running outside Visual Studio. -->
+    <Compile Include="..\VStudioCraft\Game\*.cs">
+      <Link>Game\%(Filename)%(Extension)</Link>
+    </Compile>
+
+    <!-- GL viewport user control: XAML + code-behind, also linked. -->
+    <Page Include="..\VStudioCraft\UI\GameHostControl.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+      <Link>UI\GameHostControl.xaml</Link>
+    </Page>
+    <Compile Include="..\VStudioCraft\UI\GameHostControl.xaml.cs">
+      <Link>UI\GameHostControl.xaml.cs</Link>
+      <DependentUpon>GameHostControl.xaml</DependentUpon>
+    </Compile>
+  </ItemGroup>
+
+</Project>

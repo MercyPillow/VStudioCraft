@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 using System.Windows.Threading;
 using OpenTK;
@@ -16,22 +18,37 @@ namespace VStudioCraft.UI
     {
         private GLControl _gl;
         private GameRenderer _renderer;
-        private DispatcherTimer _tick;
         private readonly InputState _input = new InputState();
         private readonly Stopwatch _clock = new Stopwatch();
-        private double _lastSeconds;
 
-        // Rolling FPS sampled every ~0.5s so the number doesn't strobe frame-to-frame.
-        private int _fpsFrameCount;
-        private double _fpsWindowStart;
-        private int _fps;
+        // Render thread owns the GL context end-to-end so frame rate is decoupled
+        // from WPF's 60 Hz CompositionTarget.Rendering cadence. UI thread only
+        // handles input + menu actions; GL-touching actions are queued here.
+        private Thread _renderThread;
+        private volatile bool _shutdownRequested;
+        private readonly ConcurrentQueue<Action> _renderQueue = new ConcurrentQueue<Action>();
+        private readonly ManualResetEventSlim _contextDetached = new ManualResetEventSlim(false);
+        private IntPtr _glHandle;   // cached HWND so GetPhysicalSize doesn't touch Control.Handle off-UI-thread
+
+        // Rolling FPS + per-phase timings. Written on render thread, read on UI
+        // thread when UpdateStatus runs via Dispatcher.BeginInvoke.
+        private volatile int _fps;
+        private double _gameMs;
+        private double _renderMs;
+        private double _swapMs;
+
+        // Cached at GL init so we can tell at a glance whether the driver gave us
+        // a hardware context (NVIDIA/AMD/Intel) or the GDI Generic software fallback.
+        private string _glVersion = "init";
+        private string _glRenderer = "init";
+        private string _glVendor = "init";
 
         private bool _mouseCaptured;
 
         private string _pendingLoadPath;
         private int _pendingSeed;
         private bool _pendingIsLoad;
-        private bool _glReady;
+        private volatile bool _glReady;
 
         private string _worldPath;
         private bool _disposed;
@@ -64,47 +81,43 @@ namespace VStudioCraft.UI
         public void LoadFromFile(string path)
         {
             _worldPath = path;
-            if (_glReady && TryMakeCurrent())
-            {
-                _renderer.LoadFromFile(path);
-                UpdateStatus();
-            }
-            else
+            if (!_glReady)
             {
                 _pendingIsLoad = true;
                 _pendingLoadPath = path;
+                return;
             }
+            _renderQueue.Enqueue(() =>
+            {
+                _renderer.LoadFromFile(path);
+                Dispatcher.BeginInvoke(new Action(UpdateStatus));
+            });
         }
 
         public void StartNewWorld(int seed)
         {
-            if (_glReady && TryMakeCurrent())
-            {
-                _renderer.StartNewWorld(seed);
-                UpdateStatus();
-            }
-            else
+            if (!_glReady)
             {
                 _pendingIsLoad = false;
                 _pendingSeed = seed;
+                return;
             }
+            _renderQueue.Enqueue(() =>
+            {
+                _renderer.StartNewWorld(seed);
+                Dispatcher.BeginInvoke(new Action(UpdateStatus));
+            });
         }
 
         public void SaveToFile(string path)
         {
             _worldPath = path;
-            if (_glReady && TryMakeCurrent())
+            if (!_glReady) return;
+            _renderQueue.Enqueue(() =>
             {
                 _renderer.SaveToFile(path);
-                UpdateStatus();
-            }
-        }
-
-        private bool TryMakeCurrent()
-        {
-            if (_gl == null || !_gl.IsHandleCreated) return false;
-            try { _gl.MakeCurrent(); return true; }
-            catch (OpenTK.Graphics.GraphicsContextException) { return false; }
+                Dispatcher.BeginInvoke(new Action(UpdateStatus));
+            });
         }
 
         // Return the HWND's client-area size in physical pixels. WinForms' Control.Width
@@ -120,13 +133,13 @@ namespace VStudioCraft.UI
 
         private (int w, int h) GetPhysicalSize()
         {
-            if (_gl != null && _gl.IsHandleCreated && GetClientRect(_gl.Handle, out var r))
+            if (_glHandle != IntPtr.Zero && GetClientRect(_glHandle, out var r))
             {
                 int w = r.Right - r.Left;
                 int h = r.Bottom - r.Top;
                 if (w > 0 && h > 0) return (w, h);
             }
-            return (Math.Max(1, _gl?.Width ?? 1), Math.Max(1, _gl?.Height ?? 1));
+            return (1, 1);
         }
 
         public void Shutdown()
@@ -134,10 +147,12 @@ namespace VStudioCraft.UI
             if (_disposed) return;
             _disposed = true;
             ReleaseMouseLook();
-            _tick?.Stop();
-            _tick = null;
-            _renderer?.Dispose();
+
+            _shutdownRequested = true;
+            try { _renderThread?.Join(2000); } catch { }
+            _renderThread = null;
             _renderer = null;
+
             _gl?.Dispose();
             _gl = null;
         }
@@ -145,8 +160,14 @@ namespace VStudioCraft.UI
         private void GlOnLoad(object sender, EventArgs e)
         {
             _gl.MakeCurrent();
+            _glHandle = _gl.Handle;
+
             _renderer = new GameRenderer();
             _renderer.InitializeGraphics();
+
+            _glVersion = GL.GetString(StringName.Version) ?? "unknown";
+            _glRenderer = GL.GetString(StringName.Renderer) ?? "unknown";
+            _glVendor = GL.GetString(StringName.Vendor) ?? "unknown";
 
             if (_pendingIsLoad && !string.IsNullOrEmpty(_pendingLoadPath))
             {
@@ -157,79 +178,138 @@ namespace VStudioCraft.UI
                 int seed = _pendingSeed != 0 ? _pendingSeed : (int)(DateTime.Now.Ticks & 0x7FFFFFFF);
                 _renderer.StartNewWorld(seed);
             }
+
+            // Release GL context from the UI thread so the render thread can claim it.
+            // VSync off so SwapBuffers returns as soon as the driver queues the flip;
+            // the render thread then immediately starts the next frame.
+            _gl.VSync = false;
+            _gl.Context.MakeCurrent(null);
+
             _glReady = true;
-
             UpdateStatus();
-
             _clock.Start();
-            // 4 ms (~240 Hz ceiling) so the timer isn't itself the cap. Actual frame
-            // rate will be limited by vsync / GPU / dispatcher pressure, not by us.
-            _tick = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(4) };
-            _tick.Tick += OnTick;
-            _tick.Start();
+
+            _renderThread = new Thread(RenderLoop)
+            {
+                IsBackground = true,
+                Name = "VStudioCraft GL render",
+            };
+            _renderThread.Start();
+        }
+
+        private void RenderLoop()
+        {
+            try
+            {
+                _gl.MakeCurrent();
+            }
+            catch (GraphicsContextException)
+            {
+                return;
+            }
+
+            try
+            {
+                long gameTicks = 0, renderTicks = 0, swapTicks = 0;
+                int frames = 0;
+                double windowStart = _clock.Elapsed.TotalSeconds;
+                double lastSeconds = windowStart;
+                double tickToMs = 1000.0 / Stopwatch.Frequency;
+
+                while (!_shutdownRequested)
+                {
+                    // Drain UI-requested GL work (Load/Save/New worlds etc).
+                    while (_renderQueue.TryDequeue(out var work))
+                    {
+                        try { work(); } catch { /* swallow; next frame still draws */ }
+                    }
+
+                    double now = _clock.Elapsed.TotalSeconds;
+                    float dt = (float)Math.Min(0.1, now - lastSeconds);
+                    lastSeconds = now;
+
+                    long t0 = Stopwatch.GetTimestamp();
+
+                    bool changed = false;
+                    if (_input.BreakPressed)
+                    {
+                        changed |= _renderer.TryBreak();
+                        _input.BreakPressed = false;
+                    }
+                    if (_input.PlacePressed)
+                    {
+                        changed |= _renderer.TryPlace(_input.SelectedBlock);
+                        _input.PlacePressed = false;
+                    }
+                    if (changed)
+                    {
+                        var cb = Modified;
+                        if (cb != null) Dispatcher.BeginInvoke(cb);
+                    }
+
+                    _renderer.UpdateStreaming();
+                    _renderer.ProcessDirtyChunks(3);
+                    _renderer.AdvanceTime(dt);
+                    UpdatePlayer(dt);
+
+                    long t1 = Stopwatch.GetTimestamp();
+
+                    var (pw, ph) = GetPhysicalSize();
+                    _renderer.Render(pw, ph);
+
+                    long t2 = Stopwatch.GetTimestamp();
+
+                    // Use the context directly: GLControl.SwapBuffers touches Control.Handle
+                    // which would throw when invoked off the UI thread.
+                    _gl.Context.SwapBuffers();
+
+                    long t3 = Stopwatch.GetTimestamp();
+
+                    gameTicks += t1 - t0;
+                    renderTicks += t2 - t1;
+                    swapTicks += t3 - t2;
+                    frames++;
+
+                    double windowElapsed = now - windowStart;
+                    if (windowElapsed >= 0.5 && frames > 0)
+                    {
+                        int frozenFps = (int)Math.Round(frames / windowElapsed);
+                        double g = gameTicks * tickToMs / frames;
+                        double r = renderTicks * tickToMs / frames;
+                        double s = swapTicks * tickToMs / frames;
+
+                        _fps = frozenFps;
+                        _gameMs = g;
+                        _renderMs = r;
+                        _swapMs = s;
+
+                        gameTicks = renderTicks = swapTicks = 0;
+                        frames = 0;
+                        windowStart = now;
+
+                        Dispatcher.BeginInvoke(new Action(UpdateStatus));
+                    }
+                }
+            }
+            catch (GraphicsContextException)
+            {
+                // Context was yanked out from under us (VS tab reparenting or shutdown race).
+            }
+            finally
+            {
+                try { _renderer?.Dispose(); } catch { }
+                try { _gl?.Context?.MakeCurrent(null); } catch { }
+                _contextDetached.Set();
+            }
         }
 
         private void UpdateStatus()
         {
-            var glVersion = _glReady ? (GL.GetString(StringName.Version) ?? "unknown") : "init";
             var name = string.IsNullOrEmpty(_worldPath) ? "(untitled)" : System.IO.Path.GetFileName(_worldPath);
-            StatusText.Text = $"VStudioCraft  |  {name}  |  FPS {_fps}  |  Click to capture mouse, Esc to release  |  WASD walk, Space jump, Ctrl sprint  |  LMB break, RMB place  |  1/2/3/4 = Grass/Dirt/Stone/Sand  |  Selected: {_input.SelectedBlock}  |  OpenGL {glVersion}";
-        }
-
-        private void OnTick(object sender, EventArgs e)
-        {
-            if (_renderer == null || _gl == null) return;
-            if (!_gl.IsHandleCreated) return;
-
-            try { _gl.MakeCurrent(); }
-            catch (OpenTK.Graphics.GraphicsContextException)
-            {
-                // Transient HWND / context state during VS tab dock/float/reparent.
-                // Skip this frame; we'll retry on the next tick.
-                return;
-            }
-
-            double now = _clock.Elapsed.TotalSeconds;
-            float dt = (float)Math.Min(0.1, now - _lastSeconds);
-            _lastSeconds = now;
-
-            _fpsFrameCount++;
-            double fpsElapsed = now - _fpsWindowStart;
-            if (fpsElapsed >= 0.5)
-            {
-                _fps = (int)Math.Round(_fpsFrameCount / fpsElapsed);
-                _fpsFrameCount = 0;
-                _fpsWindowStart = now;
-                UpdateStatus();
-            }
-
-            bool changed = false;
-            if (_input.BreakPressed)
-            {
-                changed |= _renderer.TryBreak();
-                _input.BreakPressed = false;
-            }
-            if (_input.PlacePressed)
-            {
-                changed |= _renderer.TryPlace(_input.SelectedBlock);
-                _input.PlacePressed = false;
-            }
-            if (changed) Modified?.Invoke();
-
-            _renderer.UpdateStreaming();
-            _renderer.ProcessDirtyChunks(3);
-            _renderer.AdvanceTime(dt);
-            UpdatePlayer(dt);
-
-            try
-            {
-                var (pw, ph) = GetPhysicalSize();
-                _renderer.Render(pw, ph);
-                _gl.SwapBuffers();
-            }
-            catch (OpenTK.Graphics.GraphicsContextException)
-            {
-            }
+            StatusText.Text =
+                $"{name}  |  FPS {_fps}  |  game {_gameMs:F2} / render {_renderMs:F2} / swap {_swapMs:F2} ms  " +
+                $"|  Sel: {_input.SelectedBlock}  (1-4 switch, LMB/RMB break/place, WASD+Space+Ctrl move, Esc uncapture)  " +
+                $"|  GPU: {_glRenderer} [{_glVendor}]  |  GL {_glVersion}";
         }
 
         private void UpdatePlayer(float dt)
@@ -262,23 +342,14 @@ namespace VStudioCraft.UI
 
         private void GlOnPaint(object sender, PaintEventArgs e)
         {
-            // Rendering is driven by the tick timer, not by WM_PAINT. This avoids
-            // races where VS reparents the host's HWND and our cached GL context's
-            // HDC is momentarily invalid.
+            // Rendering is driven by the render thread, not by WM_PAINT.
         }
 
         private void GlOnResize(object sender, EventArgs e)
         {
-            if (_renderer == null || _gl == null || !_gl.IsHandleCreated) return;
-            try
-            {
-                _gl.MakeCurrent();
-                var (pw, ph) = GetPhysicalSize();
-                _renderer.OnResize(pw, ph);
-            }
-            catch (OpenTK.Graphics.GraphicsContextException)
-            {
-            }
+            // Render thread picks up the new client rect via GetPhysicalSize each frame;
+            // GL.Viewport is set inside GameRenderer.Render before drawing. No UI-thread
+            // GL work needed here.
         }
 
         private void GlOnKeyDown(object sender, KeyEventArgs e)
@@ -287,10 +358,10 @@ namespace VStudioCraft.UI
 
             switch (e.KeyCode)
             {
-                case Keys.D1: _input.SelectedBlock = BlockType.Grass; UpdateStatus(); break;
-                case Keys.D2: _input.SelectedBlock = BlockType.Dirt;  UpdateStatus(); break;
-                case Keys.D3: _input.SelectedBlock = BlockType.Stone; UpdateStatus(); break;
-                case Keys.D4: _input.SelectedBlock = BlockType.Sand;  UpdateStatus(); break;
+                case Keys.D1: _input.SelectedBlock = BlockType.Grass; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D2: _input.SelectedBlock = BlockType.Dirt;  Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D3: _input.SelectedBlock = BlockType.Stone; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D4: _input.SelectedBlock = BlockType.Sand;  Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
                 case Keys.Escape: ReleaseMouseLook(); break;
             }
             e.Handled = true;
@@ -335,8 +406,7 @@ namespace VStudioCraft.UI
             int dy = screenPos.Y - center.Y;
             if (dx == 0 && dy == 0) return;
 
-            _input.MouseDx += dx;
-            _input.MouseDy += dy;
+            _input.AddMouseDelta(dx, dy);
             // Snap back to center so we can always accumulate relative motion.
             WfCursor.Position = center;
             WfCursor.Clip = rect;
@@ -359,8 +429,7 @@ namespace VStudioCraft.UI
             if (!_mouseCaptured) return;
             _mouseCaptured = false;
             _input.MouseLookActive = false;
-            _input.MouseDx = 0;
-            _input.MouseDy = 0;
+            _input.ConsumeMouseDelta(out _, out _);
             WfCursor.Clip = System.Drawing.Rectangle.Empty;
             WfCursor.Show();
         }
