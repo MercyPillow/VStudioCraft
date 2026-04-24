@@ -2,7 +2,33 @@
   "permissions": {
     "allow": [
       "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\Daniel.Law\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" -nologo -v:minimal -t:Build 2>&1 | Select-Object -Last 40)",
-      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\Daniel.Law\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" -nologo -v:minimal -t:Build 2>&1 | Select-Object -Last 25)"
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\Daniel.Law\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" -nologo -v:minimal -t:Build 2>&1 | Select-Object -Last 25)",
+      "Read(//c/Program Files \\(x86\\)/MSBuild/Microsoft/**)",
+      "Read(//c/Program Files/Microsoft Visual Studio/**)",
+      "PowerShell(\"---\")",
+      "PowerShell(\"---vs2022---\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" /t:Restore /v:minimal /nologo 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Build /v:minimal /nologo 2>&1)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" status)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" diff)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" log --oneline -10)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" remote -v)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" branch --show-current)",
+      "PowerShell(gh auth status 2>&1)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" checkout -b fix/vssdk-targets-import 2>&1)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" add src/VStudioCraft/VStudioCraft.csproj .claude/settings.local.json)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" log --oneline -3)",
+      "PowerShell(git -C \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\" push -u origin fix/vssdk-targets-import 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\VStudioCraft.sln\" /t:Build /v:minimal /nologo 2>&1)",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\" src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -v:minimal -nologo)",
+      "Bash(MSBuild.exe src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -v:minimal -nologo)",
+      "PowerShell(gh pr list --head fix/vssdk-targets-import --state all --json number,title,url,state)",
+      "PowerShell(git add .claude/settings.local.json VStudioCraft.sln src/VStudioCraft/Game/Block.cs src/VStudioCraft/Game/BlockTextures.cs src/VStudioCraft/Game/ChunkJobSystem.cs src/VStudioCraft/Game/GameRenderer.cs src/VStudioCraft/Game/InputState.cs src/VStudioCraft/Game/Noise.cs src/VStudioCraft/Game/TerrainGenerator.cs src/VStudioCraft/Game/World.cs src/VStudioCraft/UI/GameHostControl.xaml.cs src/VStudioCraft/VStudioCraft.csproj src/VStudioCraft.Standalone)",
+      "PowerShell(git push origin fix/vssdk-targets-import 2>&1)",
+      "PowerShell(& \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" auth status 2>&1; \"---\"; & \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" pr list --head fix/vssdk-targets-import --state all --json number,title,url,state 2>&1)",
+      "PowerShell(git status; \"---\"; & \"$env:ProgramFiles\\\\GitHub CLI\\\\gh.exe\" auth status 2>&1)",
+      "PowerShell(if \\($env:GH_TOKEN\\) { \"GH_TOKEN set, length $\\($env:GH_TOKEN.Length\\)\" } else { \"GH_TOKEN not set\" }; \"---\"; try { $r = Invoke-RestMethod \"https://api.github.com/repos/MercyPillow/VStudioCraft/pulls?head=MercyPillow:fix/vssdk-targets-import&state=all\" -Headers @{ \"User-Agent\" = \"vstudiocraft-pr-check\" }; if \\($r.Count -eq 0\\) { \"no existing PR\" } else { $r | Select-Object number, state, html_url, title | Format-Table -AutoSize | Out-String } } catch { \"API error: $_\" })",
+      "PowerShell(git add .claude/settings.local.json)"
     ]
   }
 }

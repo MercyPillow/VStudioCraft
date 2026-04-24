@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 
 namespace VStudioCraft.Game
@@ -8,14 +9,20 @@ namespace VStudioCraft.Game
         // Small starter patch so the first frame isn't empty. Streaming fills in the rest.
         public const int InitialRadiusChunks = 2;  // 5x5 = 25 chunks
 
-        private readonly Dictionary<(int x, int z), Chunk> _chunks = new Dictionary<(int x, int z), Chunk>();
+        // ConcurrentDictionary so chunk-mesh/gen workers can read the dict while
+        // the render thread inserts completed chunks. Block-byte races during
+        // meshing are benign (byte reads are atomic; the chunk stays dirty if an
+        // edit happens mid-mesh and will be remeshed).
+        private readonly ConcurrentDictionary<(int x, int z), Chunk> _chunks = new ConcurrentDictionary<(int x, int z), Chunk>();
         // Modified chunks that have been unloaded are held here so re-entering their area
         // restores the player's edits instead of regenerating them from noise.
-        private readonly Dictionary<(int x, int z), Chunk> _modified = new Dictionary<(int x, int z), Chunk>();
+        private readonly ConcurrentDictionary<(int x, int z), Chunk> _modified = new ConcurrentDictionary<(int x, int z), Chunk>();
+        // Dirty set is only mutated on the render thread — no concurrency primitive needed.
         private readonly HashSet<(int x, int z)> _dirty = new HashSet<(int x, int z)>();
         private readonly Noise _noise;
 
         public int Seed { get; }
+        public Noise Noise => _noise;
 
         private World(int seed)
         {
@@ -40,13 +47,14 @@ namespace VStudioCraft.Game
 
         // Streaming entry point. Generates the chunk if missing and marks it + its
         // 4 neighbours dirty so their edge faces can be re-culled against the new chunk.
+        // Synchronous — kept for the rare case we need a chunk immediately (e.g. load).
         public bool EnsureChunk(int cx, int cz)
         {
             if (_chunks.ContainsKey((cx, cz))) return false;
             Chunk c;
-            if (_modified.TryGetValue((cx, cz), out c))
+            if (_modified.TryRemove((cx, cz), out c))
             {
-                _modified.Remove((cx, cz));
+                // Use the cached modified chunk verbatim.
             }
             else
             {
@@ -54,30 +62,44 @@ namespace VStudioCraft.Game
                 TerrainGenerator.Generate(c, _noise);
             }
             _chunks[(cx, cz)] = c;
+            MarkChunkAndNeighborsDirty(cx, cz);
+            return true;
+        }
+
+        // Async path: a worker produced this chunk; install it and mark it dirty.
+        // If a cached-modified version exists (player edits survived an unload),
+        // prefer that and discard the freshly-generated copy.
+        public bool InstallGeneratedChunk(Chunk chunk)
+        {
+            var key = (chunk.ChunkX, chunk.ChunkZ);
+            if (_chunks.ContainsKey(key)) return false;
+            if (_modified.TryRemove(key, out var cached)) chunk = cached;
+            _chunks[key] = chunk;
+            MarkChunkAndNeighborsDirty(chunk.ChunkX, chunk.ChunkZ);
+            return true;
+        }
+
+        public bool HasChunk(int cx, int cz) => _chunks.ContainsKey((cx, cz));
+
+        private void MarkChunkAndNeighborsDirty(int cx, int cz)
+        {
             _dirty.Add((cx, cz));
             _dirty.Add((cx - 1, cz));
             _dirty.Add((cx + 1, cz));
             _dirty.Add((cx, cz - 1));
             _dirty.Add((cx, cz + 1));
-            return true;
         }
 
         // Remove a chunk from the active set. Modified chunks are kept in the side
         // dictionary; unmodified ones are discarded (regenerate identically later).
         public void UnloadChunk(int cx, int cz)
         {
-            if (!_chunks.TryGetValue((cx, cz), out var c)) return;
-            _chunks.Remove((cx, cz));
-            if (c.IsModified)
-            {
-                _modified[(cx, cz)] = c;
-            }
-            // Mark neighbours dirty — their edge faces may need re-adding now that we're gone.
+            if (!_chunks.TryRemove((cx, cz), out var c)) return;
+            if (c.IsModified) _modified[(cx, cz)] = c;
             _dirty.Add((cx - 1, cz));
             _dirty.Add((cx + 1, cz));
             _dirty.Add((cx, cz - 1));
             _dirty.Add((cx, cz + 1));
-            // We ourselves are no longer active; drop any leftover dirty bit for this key.
             _dirty.Remove((cx, cz));
         }
 
