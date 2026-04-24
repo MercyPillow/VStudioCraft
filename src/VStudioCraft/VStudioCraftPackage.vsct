@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidVStudioCraftPackage">
+    <Groups>
+      <Group guid="guidVStudioCraftCommandSet" id="VStudioCraftMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_FILE" />
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidVStudioCraftCommandSet" id="NewWorldCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidVStudioCraftCommandSet" id="VStudioCraftMenuGroup" />
+        <Strings>
+          <ButtonText>New Voxel World...</ButtonText>
+          <CommandName>VStudioCraft.NewWorld</CommandName>
+        </Strings>
+      </Button>
+      <Button guid="guidVStudioCraftCommandSet" id="OpenWorldCommandId" priority="0x0101" type="Button">
+        <Parent guid="guidVStudioCraftCommandSet" id="VStudioCraftMenuGroup" />
+        <Strings>
+          <ButtonText>Open Voxel World...</ButtonText>
+          <CommandName>VStudioCraft.OpenWorld</CommandName>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidVStudioCraftPackage" value="{a8d1c7e2-3f9b-4c5d-8e2a-1b6d4f7c9e3a}" />
+    <GuidSymbol name="guidVStudioCraftCommandSet" value="{b3f2d6e8-1a4c-47e5-9b2a-6d8f3c5e1a7b}">
+      <IDSymbol name="VStudioCraftMenuGroup" value="0x1020" />
+      <IDSymbol name="NewWorldCommandId" value="0x0100" />
+      <IDSymbol name="OpenWorldCommandId" value="0x0101" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

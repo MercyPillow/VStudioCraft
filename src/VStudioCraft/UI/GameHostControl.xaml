@@ -1,0 +1,18 @@
+<UserControl x:Class="VStudioCraft.UI.GameHostControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
+             Background="Black"
+             Focusable="True">
+    <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Bottom" Background="#DD101820" BorderBrush="#333" BorderThickness="0,1,0,0" Padding="8,4">
+            <TextBlock x:Name="StatusText"
+                       Foreground="#E0E8F0"
+                       FontFamily="Consolas"
+                       FontSize="12"
+                       TextWrapping="NoWrap"
+                       Text="VStudioCraft" />
+        </Border>
+        <wfi:WindowsFormsHost x:Name="Host" Margin="1,0,0,0" />
+    </DockPanel>
+</UserControl>

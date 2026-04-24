@@ -1,0 +1,145 @@
+using System;
+using System.Collections.Generic;
+
+namespace VStudioCraft.Game
+{
+    internal sealed class World
+    {
+        // Small starter patch so the first frame isn't empty. Streaming fills in the rest.
+        public const int InitialRadiusChunks = 2;  // 5x5 = 25 chunks
+
+        private readonly Dictionary<(int x, int z), Chunk> _chunks = new Dictionary<(int x, int z), Chunk>();
+        // Modified chunks that have been unloaded are held here so re-entering their area
+        // restores the player's edits instead of regenerating them from noise.
+        private readonly Dictionary<(int x, int z), Chunk> _modified = new Dictionary<(int x, int z), Chunk>();
+        private readonly HashSet<(int x, int z)> _dirty = new HashSet<(int x, int z)>();
+        private readonly Noise _noise;
+
+        public int Seed { get; }
+
+        private World(int seed)
+        {
+            Seed = seed;
+            _noise = new Noise(seed);
+        }
+
+        public static World Generate(int seed)
+        {
+            var w = new World(seed);
+            for (int cz = -InitialRadiusChunks; cz <= InitialRadiusChunks; cz++)
+            for (int cx = -InitialRadiusChunks; cx <= InitialRadiusChunks; cx++)
+            {
+                var c = new Chunk(cx, cz);
+                TerrainGenerator.Generate(c, w._noise);
+                w._chunks[(cx, cz)] = c;
+            }
+            return w;
+        }
+
+        public static World Empty(int seed) => new World(seed);
+
+        // Streaming entry point. Generates the chunk if missing and marks it + its
+        // 4 neighbours dirty so their edge faces can be re-culled against the new chunk.
+        public bool EnsureChunk(int cx, int cz)
+        {
+            if (_chunks.ContainsKey((cx, cz))) return false;
+            Chunk c;
+            if (_modified.TryGetValue((cx, cz), out c))
+            {
+                _modified.Remove((cx, cz));
+            }
+            else
+            {
+                c = new Chunk(cx, cz);
+                TerrainGenerator.Generate(c, _noise);
+            }
+            _chunks[(cx, cz)] = c;
+            _dirty.Add((cx, cz));
+            _dirty.Add((cx - 1, cz));
+            _dirty.Add((cx + 1, cz));
+            _dirty.Add((cx, cz - 1));
+            _dirty.Add((cx, cz + 1));
+            return true;
+        }
+
+        // Remove a chunk from the active set. Modified chunks are kept in the side
+        // dictionary; unmodified ones are discarded (regenerate identically later).
+        public void UnloadChunk(int cx, int cz)
+        {
+            if (!_chunks.TryGetValue((cx, cz), out var c)) return;
+            _chunks.Remove((cx, cz));
+            if (c.IsModified)
+            {
+                _modified[(cx, cz)] = c;
+            }
+            // Mark neighbours dirty — their edge faces may need re-adding now that we're gone.
+            _dirty.Add((cx - 1, cz));
+            _dirty.Add((cx + 1, cz));
+            _dirty.Add((cx, cz - 1));
+            _dirty.Add((cx, cz + 1));
+            // We ourselves are no longer active; drop any leftover dirty bit for this key.
+            _dirty.Remove((cx, cz));
+        }
+
+        // Save path — emit active + cached-modified chunks so edits survive a round trip.
+        public IEnumerable<Chunk> AllChunksForPersistence()
+        {
+            foreach (var c in _chunks.Values) yield return c;
+            foreach (var c in _modified.Values) yield return c;
+        }
+
+        public int PersistentChunkCount => _chunks.Count + _modified.Count;
+
+        public IEnumerable<Chunk> Chunks => _chunks.Values;
+        public int ChunkCount => _chunks.Count;
+        public HashSet<(int x, int z)> DirtyChunks => _dirty;
+
+        public void AddChunk(Chunk chunk)
+        {
+            _chunks[(chunk.ChunkX, chunk.ChunkZ)] = chunk;
+        }
+
+        public Chunk GetChunk(int cx, int cz)
+        {
+            _chunks.TryGetValue((cx, cz), out var c);
+            return c;
+        }
+
+        public BlockType GetBlock(int wx, int wy, int wz)
+        {
+            if (wy < 0 || wy >= Chunk.SizeY) return BlockType.Air;
+            int cx = (int)Math.Floor(wx / (float)Chunk.SizeX);
+            int cz = (int)Math.Floor(wz / (float)Chunk.SizeZ);
+            int lx = wx - cx * Chunk.SizeX;
+            int lz = wz - cz * Chunk.SizeZ;
+            var c = GetChunk(cx, cz);
+            if (c == null) return BlockType.Air;
+            return c.Get(lx, wy, lz);
+        }
+
+        public bool SetBlock(int wx, int wy, int wz, BlockType t)
+        {
+            if (wy < 0 || wy >= Chunk.SizeY) return false;
+            int cx = (int)Math.Floor(wx / (float)Chunk.SizeX);
+            int cz = (int)Math.Floor(wz / (float)Chunk.SizeZ);
+            int lx = wx - cx * Chunk.SizeX;
+            int lz = wz - cz * Chunk.SizeZ;
+            var c = GetChunk(cx, cz);
+            if (c == null) return false;
+            c.Set(lx, wy, lz, t);
+            c.IsModified = true;
+
+            _dirty.Add((cx, cz));
+            if (lx == 0)               _dirty.Add((cx - 1, cz));
+            if (lx == Chunk.SizeX - 1) _dirty.Add((cx + 1, cz));
+            if (lz == 0)               _dirty.Add((cx, cz - 1));
+            if (lz == Chunk.SizeZ - 1) _dirty.Add((cx, cz + 1));
+            return true;
+        }
+
+        public void MarkAllDirty()
+        {
+            foreach (var k in _chunks.Keys) _dirty.Add(k);
+        }
+    }
+}
