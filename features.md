@@ -158,7 +158,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Walk / jump / gravity / terminal velocity
 - Mouse look (yaw+pitch, clamped)
 - Block break + place via 8-block reach raycast
-- Water is non-solid (you walk / fall through it cleanly)
+- Water and lava are both non-solid (you walk / fall through either cleanly), non-raycast-targetable, and replaced when you place a block into them. Both source variants are treated symmetrically with their flowing variants for collision, face culling, and light propagation.
 - Swim physics: in water gravity drops to ~28% of normal, terminal speed clamps to ±3..4.5 m/s, horizontal velocity halves; Space accelerates upward at 22 m/s² so tap-tap-tap brings you back to the surface
 - Camera bob while swimming — gentle vertical sway scaled by horizontal speed, eased back to zero on exit
 - Health (20 HP = 10 hearts, Alpha-style) in survival mode
@@ -231,7 +231,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Status bar at bottom of VS tool window (FPS, game mode, HP, controls, selected block)
 - Crosshair
 - Selection wire-outline on targeted block
-- Watery blue overlay when camera is inside water
+- Submerged screen tint: blue + 0.55 alpha for water, thick orange + 0.80 alpha for lava (Alpha 1.1.2 made lava nearly opaque from the inside)
 - Survival HUD layout: `| hearts | gap | (hunger bar) |` — heart row right-anchored to `width/3`, hunger row left-anchored to `2×width/3`. Hunger row only renders when the per-world `HungerEnabled` survival sub-setting is on (off by default)
 - Heart sprites in classic `<3` style (two-circles + V-taper construction, highlight on upper-left bump, shade on lower-right) with full / half / empty states
 - Drumstick sprites (meat ellipse + bone capsule + knob) for hunger bar, same full / half / empty states

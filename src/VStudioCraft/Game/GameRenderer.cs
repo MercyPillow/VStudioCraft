@@ -1131,11 +1131,15 @@ void main()
             int px = hit.X + hit.Nx;
             int py = hit.Y + hit.Ny;
             int pz = hit.Z + hit.Nz;
-            // Allow placing into Air or Water (water gets replaced, classic
-            // Alpha behaviour). Anything else — including torches and other
-            // non-cube blocks the raycast can target — blocks the place.
+            // Allow placing into Air or any fluid cell (the fluid gets
+            // replaced, classic Alpha behaviour — works for both water and
+            // lava families, source and flowing alike). Anything else —
+            // including torches and other non-cube blocks the raycast can
+            // target — blocks the place.
             var existing = _world.GetBlock(px, py, pz);
-            if (existing != BlockType.Air && existing != BlockType.Water && existing != BlockType.FlowingWater) return false;
+            if (existing != BlockType.Air
+                && existing != BlockType.Water && existing != BlockType.FlowingWater
+                && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
             // Cross-sprite blocks need a solid block beneath them to attach
             // to. Torches: floor-only for now (wall attachment needs block
             // metadata). Flowers/mushrooms/tall grass: same rule.
@@ -1495,22 +1499,26 @@ void main()
                 kv.Value.Draw();
             }
 
-            // Pass 2 — transparents (water today). Blend on, depth write off so
-            // surfaces behind multiple water faces still accumulate colour instead
-            // of z-fighting. Face culling stays on so we don't double-shade the
-            // underside of a water slab when looking down through it. Skip if the
-            // player's camera is inside a water block — avoids the single big
-            // near-plane quad covering the view.
-            bool cameraInWater = false;
+            // Pass 2 — transparents (water + lava). Blend on, depth write off
+            // so surfaces behind multiple translucent faces still accumulate
+            // colour instead of z-fighting. Face culling stays on so we don't
+            // double-shade the underside of a fluid slab when looking down
+            // through it. Skip if the player's camera is inside a fluid cell
+            // of either family — avoids the single big near-plane quad
+            // covering the view.
+            bool cameraInFluid = false;
+            bool cameraInLava = false;
             if (_world != null)
             {
                 int cx = (int)Math.Floor(Camera.Position.X);
                 int cy = (int)Math.Floor(Camera.Position.Y);
                 int cz = (int)Math.Floor(Camera.Position.Z);
                 var inBlock = _world.GetBlock(cx, cy, cz);
-                cameraInWater = inBlock == BlockType.Water || inBlock == BlockType.FlowingWater;
+                cameraInLava = inBlock == BlockType.Lava || inBlock == BlockType.FlowingLava;
+                cameraInFluid = cameraInLava
+                    || inBlock == BlockType.Water || inBlock == BlockType.FlowingWater;
             }
-            if (!cameraInWater)
+            if (!cameraInFluid)
             {
                 GL.Enable(EnableCap.Blend);
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
@@ -1533,16 +1541,19 @@ void main()
 
             // Clouds after the world passes — alpha blended against both the
             // sky behind them and any world geometry poking above their layer.
-            // Skipped when submerged: they'd show through the blue tint anyway.
-            if (!cameraInWater)
+            // Skipped when submerged in either fluid: the tint would wash them
+            // out anyway.
+            if (!cameraInFluid)
             {
                 _sky.RenderClouds(proj, view, Camera.Position, sky, fogStart, fogEnd, sun.Y);
             }
 
-            // Apply a watery tint as a full-screen overlay when the camera is submerged.
-            if (cameraInWater)
+            // Full-screen tint when submerged. Water = blue / 0.55 alpha;
+            // lava = thick orange / 0.80 alpha (Alpha 1.1.2 made lava nearly
+            // opaque so you could barely see swimming through it).
+            if (cameraInFluid)
             {
-                RenderSubmergedOverlay(width, height);
+                RenderSubmergedOverlay(width, height, cameraInLava);
             }
 
             RenderDrops(width, height);
@@ -1669,9 +1680,11 @@ void main()
             }
         }
 
-        // Blue wash over the whole viewport — reads as "underwater". Uses the
-        // overlay shader's uAlpha uniform rather than a blend-colour trick.
-        private void RenderSubmergedOverlay(int width, int height)
+        // Full-screen wash that reads as "submerged". Blue+0.55 for water;
+        // thick orange+0.80 for lava (Alpha 1.1.2 made lava almost opaque so
+        // you could barely see swimming through it). Uses the overlay
+        // shader's uAlpha uniform rather than a blend-colour trick.
+        private void RenderSubmergedOverlay(int width, int height, bool inLava)
         {
             var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
             var scale = Matrix4.CreateScale(width, height, 1f);
@@ -1679,8 +1692,16 @@ void main()
 
             _overlayShader.Use();
             _overlayShader.SetMatrix4("uMVP", mvp);
-            _overlayShader.SetVector3("uColor", new Vector3(0.15f, 0.28f, 0.55f));
-            _overlayShader.SetFloat("uAlpha", 0.55f);
+            if (inLava)
+            {
+                _overlayShader.SetVector3("uColor", new Vector3(0.85f, 0.30f, 0.05f));
+                _overlayShader.SetFloat("uAlpha", 0.80f);
+            }
+            else
+            {
+                _overlayShader.SetVector3("uColor", new Vector3(0.15f, 0.28f, 0.55f));
+                _overlayShader.SetFloat("uAlpha", 0.55f);
+            }
 
             GL.Enable(EnableCap.Blend);
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);

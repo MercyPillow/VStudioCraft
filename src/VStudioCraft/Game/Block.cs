@@ -45,10 +45,17 @@ namespace VStudioCraft.Game
     internal static class BlockData
     {
         // "Solid" gates player COLLISION only — used by physics/swept AABB.
-        // Non-solid: player walks straight through (Air, Water, Torch).
+        // Non-solid: player walks straight through (Air, fluids, Torch).
         // Raycast targeting and placement-cell occupancy use IsRaycastTarget /
         // IsCubeShape instead so a torch can be broken without colliding with
         // it as the player walks past.
+        //
+        // Both fluid families (water + lava) include the source AND flowing
+        // variants here. Without Lava in the list the source cell would
+        // behave as a solid floor under the player while the flowing cells
+        // beside it are walk-through, leading to "lava floor, lava waterfall
+        // is fine" weirdness. Same shape as water — burning damage will hook
+        // in via a separate per-tick fluid-contact check, not via collision.
         public static bool IsSolid(BlockType t)
         {
             switch (t)
@@ -56,6 +63,7 @@ namespace VStudioCraft.Game
                 case BlockType.Air:
                 case BlockType.Water:
                 case BlockType.FlowingWater:
+                case BlockType.Lava:
                 case BlockType.FlowingLava:
                 case BlockType.Torch:
                 case BlockType.Dandelion:
@@ -70,10 +78,12 @@ namespace VStudioCraft.Game
         }
 
         // "Targetable by raycast" — true for any block the player should be
-        // able to LMB-break or RMB-place-against. Air and water are skipped
-        // (you raycast through both); torches and future cross-sprite blocks
-        // (flowers, mushrooms) are targetable so the player can interact even
-        // though they aren't collidable.
+        // able to LMB-break or RMB-place-against. Air and fluid families are
+        // skipped (you raycast through both); torches and future cross-sprite
+        // blocks (flowers, mushrooms) are targetable so the player can
+        // interact even though they aren't collidable. Both fluid sources
+        // (Water / Lava) and their flowing variants are non-targetable —
+        // matches Alpha (you can't punch out a fluid source by clicking it).
         public static bool IsRaycastTarget(BlockType t)
         {
             switch (t)
@@ -81,6 +91,7 @@ namespace VStudioCraft.Game
                 case BlockType.Air:
                 case BlockType.Water:
                 case BlockType.FlowingWater:
+                case BlockType.Lava:
                 case BlockType.FlowingLava:
                     return false;
                 default:
@@ -118,6 +129,7 @@ namespace VStudioCraft.Game
                 case BlockType.Air:
                 case BlockType.Water:
                 case BlockType.FlowingWater:
+                case BlockType.Lava:
                 case BlockType.FlowingLava:
                 // Cross-sprite blocks don't fill the cell. If they were marked
                 // opaque the cube sweep would cull the faces of the block
@@ -168,6 +180,7 @@ namespace VStudioCraft.Game
                 case BlockType.Air:
                 case BlockType.Water:
                 case BlockType.FlowingWater:
+                case BlockType.Lava:
                 case BlockType.FlowingLava:
                 case BlockType.Glass:
                 case BlockType.Leaves:
