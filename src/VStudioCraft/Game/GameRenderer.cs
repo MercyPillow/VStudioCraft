@@ -168,10 +168,12 @@ void main()
     // tile reads as a 'lit' face of a cube even without isometric geometry.
     // Not pixel-perfect Alpha (which renders an actual rotated cube), but
     // a clear visual cue at hotbar size and zero extra geometry.
-    // Upload convention: py=0 is uploaded first, so v=0 is the top of the
-    // tile. The unit quad's aPos.y runs 0..1 top-to-bottom in screen space
-    // (ortho is (0, w, h, 0)) so vUV.y=0 = top of icon = brighter face.
-    float shade = mix(1.05, 0.78, vUV.y);
+    // The block atlas convention is v=0 at the BOTTOM of each tile (see
+    // GenerateGrassSide — the green overhang lives at high y so it appears
+    // along the top of the face). The hotbar render path V-flips the UVs
+    // so the icon shows top-up; that means here vUV.y=1 is the top of the
+    // icon. Gradient: bright at top (vUV.y=1), dim at bottom (vUV.y=0).
+    float shade = mix(0.78, 1.05, vUV.y);
     FragColor = vec4(t.rgb * uTint.rgb * shade, t.a * uTint.a);
 }
 ";
@@ -1108,13 +1110,12 @@ void main()
             GL.Enable(EnableCap.DepthTest);
         }
 
-        // Hotbar layout (2× upscale of Alpha's chrome — fits the standalone
-        // window without overwhelming the view):
+        // Hotbar layout (~2.3× upscale of Alpha's chrome = 2× + 15%):
         //
-        //   bar           : 364 × 44, bottom-centred with a small margin
-        //   slot pitch    : 40 px between slot centres
-        //   icon size     : 32 × 32 inside each slot
-        //   highlight     : 48 × 48 frame on the selected slot (overlaps bar)
+        //   bar           : ~419 × 51, bottom-centred with a generous margin
+        //   slot pitch    : ~46 px between slot centres
+        //   icon size     : ~37 × 37 inside each slot
+        //   highlight     : ~55 × 55 frame on the selected slot (overlaps bar)
         //
         // The block icon is the side-face tile from the atlas, sampled via
         // _spriteArrayShader (Texture2DArray). Reading the side rather than
@@ -1124,18 +1125,23 @@ void main()
         // sprite tile so faceKind doesn't matter.
         //
         // Tooltip line: the selected block name in uppercase, centred above
-        // the bar at 2× font scale (10 × 14 px per glyph). Always-on for V1
-        // so players have feedback on what they're holding without consulting
-        // the WPF status strip.
+        // the bar. Always-on for V1 so players have feedback on what they're
+        // holding without consulting the WPF status strip.
+        //
+        // Non-integer Scale gives slightly uneven pixel doubling under the
+        // sampler's Nearest filter; the chrome is simple enough that this
+        // reads as 'a bit chunky' rather than blurry, which is the expected
+        // look for retro pixel HUDs at non-integer zoom.
         private void RenderHotbar(int width, int height)
         {
-            const int Scale = 2;
-            const int BarPx = HotbarTextures.BarWidth * Scale;     // 364
-            const int BarH = HotbarTextures.BarHeight * Scale;     // 44
-            const int SlotPx = HotbarTextures.SlotInner * Scale;   // 40
-            const int IconPx = HotbarTextures.IconInner * Scale;   // 32
-            const int HighlightPx = HotbarTextures.HighlightSize * Scale; // 48
-            const int BottomMargin = 6;
+            const float Scale = 2.3f;                                   // 2× + 15%
+            int BarPx = (int)(HotbarTextures.BarWidth * Scale);         // ~419
+            int BarH  = (int)(HotbarTextures.BarHeight * Scale);        // ~51
+            int SlotPx = (int)(HotbarTextures.SlotInner * Scale);       // ~46
+            int IconPx = (int)(HotbarTextures.IconInner * Scale);       // ~37
+            int HighlightPx = (int)(HotbarTextures.HighlightSize * Scale); // ~55
+            int FramePx = (int)(1 * Scale);                             // ~2 (1px frame scaled)
+            const int BottomMargin = 28; // lifts the bar off the very edge of the window
 
             int barX = (width - BarPx) / 2;
             int barY = height - BarH - BottomMargin;
@@ -1161,15 +1167,22 @@ void main()
             _spriteArrayShader.Use();
             _spriteArrayShader.SetInt("uAtlas", 0);
             _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
-            _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
-            _spriteArrayShader.SetVector2("uUvScale", new Vector2(1f, 1f));
+            // V-flip: the block atlas was authored with v=0 at the bottom of
+            // each tile (so greedy-mesher quads sample the green grass
+            // overhang at the top of each face). The unit-quad's aPos.y
+            // grows top-to-bottom in screen space under our ortho, so without
+            // a flip the icon would show its bottom row at the top of the
+            // slot (upside-down). We map aPos.y=0 → vUV.y=1 by pre-loading
+            // the offset to 1 and scaling by -1.
+            _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
+            _spriteArrayShader.SetVector2("uUvScale", new Vector2(1f, -1f));
             GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
 
             BlockType[] slots = Input?.HotbarSlots;
             int selected = Input != null ? Input.HotbarIndex : 0;
-            // Slot 0 starts at barX + 1*Scale (skip the 1-px left frame, scaled).
-            int firstSlotX = barX + 1 * Scale;
-            int slotY = barY + 1 * Scale;
+            // Slot 0 starts inside the bar's 1-px frame (FramePx scales with the bar).
+            int firstSlotX = barX + FramePx;
+            int slotY = barY + FramePx;
             int iconPad = (SlotPx - IconPx) / 2;
 
             for (int i = 0; i < HotbarTextures.SlotCount; i++)

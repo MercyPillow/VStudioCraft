@@ -313,10 +313,14 @@ namespace VStudioCraft.UI
             var mode = _renderer?.GameMode ?? GameMode.Creative;
             int hp = _renderer?.Player.Health ?? 20;
             string hpBadge = mode == GameMode.Survival ? $"  |  HP {hp}/20" : "";
+            // Sel/hotbar hint dropped from this strip — the in-game hotbar
+            // HUD now shows the held block (and the bar itself documents the
+            // 1-9 number-key mapping visually). The status strip stays focused
+            // on debug data the HUD doesn't surface: perf timings, mode, GPU.
             StatusText.Text =
                 $"{name}  |  FPS {_fps}  |  game {_gameMs:F2} / render {_renderMs:F2} / swap {_swapMs:F2} ms  " +
-                $"|  Mode: {mode}{hpBadge}  |  Sel: {_input.SelectedBlock}  " +
-                $"(1-9 hotbar, LMB/RMB break/place, WASD+Space+Ctrl move, F3 toggle mode, Esc uncapture)  " +
+                $"|  Mode: {mode}{hpBadge}  " +
+                $"(LMB/RMB break/place, WASD+Space+Ctrl move, F3 toggle mode, Esc uncapture)  " +
                 $"|  GPU: {_glRenderer} [{_glVendor}]  |  GL {_glVersion}";
         }
 
@@ -366,15 +370,18 @@ namespace VStudioCraft.UI
 
             switch (e.KeyCode)
             {
-                case Keys.D1: _input.HotbarIndex = 0; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D2: _input.HotbarIndex = 1; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D3: _input.HotbarIndex = 2; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D4: _input.HotbarIndex = 3; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D5: _input.HotbarIndex = 4; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D6: _input.HotbarIndex = 5; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D7: _input.HotbarIndex = 6; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D8: _input.HotbarIndex = 7; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D9: _input.HotbarIndex = 8; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                // Number keys just flip the render-thread-visible hotbar
+                // index; the status strip no longer shows the held block,
+                // so there's nothing to refresh on the UI thread.
+                case Keys.D1: _input.HotbarIndex = 0; break;
+                case Keys.D2: _input.HotbarIndex = 1; break;
+                case Keys.D3: _input.HotbarIndex = 2; break;
+                case Keys.D4: _input.HotbarIndex = 3; break;
+                case Keys.D5: _input.HotbarIndex = 4; break;
+                case Keys.D6: _input.HotbarIndex = 5; break;
+                case Keys.D7: _input.HotbarIndex = 6; break;
+                case Keys.D8: _input.HotbarIndex = 7; break;
+                case Keys.D9: _input.HotbarIndex = 8; break;
                 case Keys.F3:
                     if (_renderer != null)
                     {
