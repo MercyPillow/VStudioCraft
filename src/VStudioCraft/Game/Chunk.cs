@@ -14,6 +14,14 @@ namespace VStudioCraft.Game
 
         public bool IsModified { get; set; }
 
+        // True if this chunk has fluid cells that might still propagate. Set
+        // when terrain gen places water/lava, when the player edits near a
+        // fluid, or when a neighbour-chunk fluid tick writes into us. Cleared
+        // when a tick scans the chunk and finds no air-bordered fluid (i.e.
+        // every source has reached steady state). Lets the tick skip the
+        // bulk of the world cheaply once flow settles.
+        public bool HasActiveFluid { get; set; }
+
         // Flat byte storage, indexed as (x * SizeY + y) * SizeZ + z so Z is the fastest-
         // varying axis — matches the mesher's innermost loop for cache-friendly sweeps.
         private readonly byte[] _blocks = new byte[BlockCount];

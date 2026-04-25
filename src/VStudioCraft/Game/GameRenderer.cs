@@ -378,22 +378,24 @@ void main()
             Player.LastFallDistance = 0f;
 
             // Fluid tick — every FluidTickInterval seconds drive a single
-            // pass of source-driven outflow. Cells changed are added to the
-            // world's dirty set so the mesher remeshes them, and we kick a
-            // chunk re-light so newly-flooded cells stop blocking sky-light.
+            // pass of source-driven outflow. The tick itself self-gates on
+            // each chunk's HasActiveFluid flag, so a steady-state ocean
+            // costs nothing after the first scan. We only re-light chunks
+            // whose lava (light-emitting) cells changed; pure water flow is
+            // light-transparent and never alters the light field.
             _fluidTickAccumulator += dt;
             while (_fluidTickAccumulator >= FluidTickInterval)
             {
                 _fluidTickAccumulator -= FluidTickInterval;
-                var changed = FluidTick.Tick(_world);
-                if (changed.Count > 0)
+                var result = FluidTick.Tick(_world);
+                foreach (var key in result.LightChangedChunks)
                 {
-                    foreach (var key in changed)
-                    {
-                        var c = _world.GetChunk(key.x, key.z);
-                        if (c != null) LightCalculator.RecomputeChunk(c);
-                        _world.DirtyChunks.Add(key);
-                    }
+                    var c = _world.GetChunk(key.x, key.z);
+                    if (c != null) LightCalculator.RecomputeChunk(c);
+                }
+                foreach (var key in result.ChangedChunks)
+                {
+                    _world.DirtyChunks.Add(key);
                 }
             }
         }

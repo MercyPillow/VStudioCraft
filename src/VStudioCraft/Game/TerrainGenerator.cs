@@ -30,6 +30,11 @@ namespace VStudioCraft.Game
             GenerateOresAndPatches(chunk, noise);
             GenerateTrees(chunk, noise);
             GenerateFlora(chunk, noise);
+            // Newly-generated chunks start "active" so the first fluid tick
+            // gets a chance to propagate any source cells (terrain places
+            // still water at sea level). After one no-op tick the flag will
+            // self-clear and we stop paying the per-cell scan.
+            chunk.HasActiveFluid = true;
         }
 
         // ---------- Pass 1: heightmap columns (stone / dirt / grass / sand). ----------

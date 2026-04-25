@@ -171,6 +171,13 @@ namespace VStudioCraft.Game
             if (lx == Chunk.SizeX - 1) _dirty.Add((cx + 1, cz));
             if (lz == 0)               _dirty.Add((cx, cz - 1));
             if (lz == Chunk.SizeZ - 1) _dirty.Add((cx, cz + 1));
+
+            // Re-engage fluid ticks on this chunk + its neighbours. The fluid
+            // tick auto-deactivates chunks that have reached steady state, so
+            // an edit (dig out a wall next to the ocean, place a new source,
+            // etc.) needs to flip the flag back on or the next tick will
+            // skip the chunk entirely.
+            FluidTick.MarkActiveAroundEdit(this, cx, cz);
             return true;
         }
 
