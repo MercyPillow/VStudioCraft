@@ -78,10 +78,12 @@ namespace VStudioCraft.Game
             // Fluid surface lids — for each non-falling flowing-fluid cell with
             // air directly above we drop the cube sweep's full-cube top face
             // (handled inside Sweep) and emit a custom inset top quad here at
-            // a y proportional to the cell's remaining reach. This gives the
-            // pond / cliff-base visual of "less water = thinner slab" without
-            // the mesher needing to special-case shrunken-cell side faces.
-            EmitFluidSurfaceLids(chunk, baseX, baseZ);
+            // a y proportional to the cell's remaining reach. The four corners
+            // of each lid take the max water height of the four cells meeting
+            // at that corner (Minecraft convention) — adjacent cells share the
+            // same corner-cell set, so they compute identical heights at the
+            // shared edge and the lids meet without a vertical gap.
+            EmitFluidSurfaceLids(chunk, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
         }
 
         // Top-exposed flowing fluid cell? Source cells and falling cells stay
@@ -109,7 +111,10 @@ namespace VStudioCraft.Game
             return (reach + 1) * (1f / 8f);
         }
 
-        private void EmitFluidSurfaceLids(Chunk chunk, int baseX, int baseZ)
+        private void EmitFluidSurfaceLids(
+            Chunk chunk,
+            Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos,
+            int baseX, int baseZ)
         {
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int y = 0; y < Chunk.SizeY; y++)
@@ -118,7 +123,20 @@ namespace VStudioCraft.Game
                 if (!IsSurfaceFluid(chunk, x, y, z)) continue;
                 int idx = Chunk.Index(x, y, z);
                 var t = (BlockType)chunk.RawBlocks[idx];
-                float topY = y + SurfaceFluidHeight(chunk.RawMeta[idx]);
+                int group = BlockData.FluidGroup(t);
+
+                // Each corner is shared with up to three diagonal/cardinal
+                // neighbour cells. We compute its height as the max water
+                // surface among the four cells that meet at that corner —
+                // adjacent surface-fluid cells running this same calculation
+                // see the same four-cell set at their shared corner and so
+                // produce identical heights, which makes the slabs join
+                // without the "stair step" gap between reach=N and reach=N-1
+                // tiles.
+                float hSW = CornerLidY(chunk, nxNeg, nxPos, nzNeg, nzPos, x,     y, z,     group);
+                float hNW = CornerLidY(chunk, nxNeg, nxPos, nzNeg, nzPos, x,     y, z + 1, group);
+                float hNE = CornerLidY(chunk, nxNeg, nxPos, nzNeg, nzPos, x + 1, y, z + 1, group);
+                float hSE = CornerLidY(chunk, nxNeg, nxPos, nzNeg, nzPos, x + 1, y, z,     group);
 
                 int layer = BlockData.GetTileIndex(t, 0);  // top tile
                 // Light at the air cell above (or full sky if at world top).
@@ -126,26 +144,86 @@ namespace VStudioCraft.Game
                     ? LightAt(chunk, x, y + 1, z)
                     : 15 * 16;
                 bool transparent = (t == BlockType.FlowingWater);
-                EmitFluidLidQuad(x + baseX, topY, z + baseZ, layer, lightPacked, transparent);
+                EmitFluidLidQuad(x + baseX, z + baseZ, hSW, hNW, hNE, hSE, layer, lightPacked, transparent);
             }
         }
 
-        private void EmitFluidLidQuad(float wx, float topY, float wz, int layer, int lightPacked, bool transparent)
+        // Returns the lid Y of a corner at chunk-local XZ (cx, cz), where the
+        // central fluid cell sits with its bottom at world y. We sample the
+        // four cells at (cx-1..cx, y, cz-1..cz) and only consider same-family
+        // fluid contributions:
+        //   - source / falling cell / column-filled (fluid above): 1.0
+        //   - normal flowing cell: (reach+1)/8
+        //   - anything else (air, solid block, cross-sprite): no contribution
+        // Solid blocks are deliberately ignored so the water height tracks
+        // only the fluid network — a stone wall next to a half-deep flow no
+        // longer pulls the corner up to 1.0 ("clinging"), it just stays at
+        // the surrounding water's level. The central cell is always one of
+        // the four samples, so the result is at least its own height.
+        private static float CornerLidY(
+            Chunk chunk, Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos,
+            int cx, int y, int cz, int group)
+        {
+            float maxH = 0f;
+            bool sawFluid = false;
+            for (int dx = -1; dx <= 0; dx++)
+            for (int dz = -1; dz <= 0; dz++)
+            {
+                int sx = cx + dx, sz = cz + dz;
+                byte raw = BlockOrNeighbor(chunk, sx, y, sz, nxNeg, nxPos, nzNeg, nzPos);
+                if (raw == (byte)BlockType.Air) continue;
+                var bt = (BlockType)raw;
+                if (BlockData.FluidGroup(bt) != group) continue;
+
+                float h;
+                // Fluid in the cell above this sample → the column is
+                // filled, surface is at the top of the cell.
+                byte aboveRaw = BlockOrNeighbor(chunk, sx, y + 1, sz, nxNeg, nxPos, nzNeg, nzPos);
+                if (aboveRaw != (byte)BlockType.Air
+                    && BlockData.FluidGroup((BlockType)aboveRaw) == group)
+                {
+                    h = 1f;
+                }
+                else if (bt == BlockType.Water || bt == BlockType.Lava)
+                {
+                    // Source — full cube, surface at the top.
+                    h = 1f;
+                }
+                else
+                {
+                    byte meta = MetaOrNeighbor(chunk, sx, y, sz, nxNeg, nxPos, nzNeg, nzPos);
+                    if ((meta & 0x10) != 0) h = 1f;          // falling cell, fills column
+                    else h = (((meta & 0x0F) + 1) * (1f / 8f));
+                }
+                if (h > maxH) maxH = h;
+                sawFluid = true;
+            }
+
+            // Central cell is always sampled (dx=0, dz=0 hits the in-chunk
+            // surface fluid cell), so sawFluid is normally true. Fallback to
+            // the cell-bottom Y if for any reason no fluid was seen.
+            if (!sawFluid) return y;
+            return y + maxH;
+        }
+
+        private void EmitFluidLidQuad(
+            float wx, float wz,
+            float hSW, float hNW, float hNE, float hSE,
+            int layer, int lightPacked, bool transparent)
         {
             int curVertFloats = transparent ? _tVertFloats : _vertFloats;
             uint baseIdx = (uint)(curVertFloats / Mesh.FloatsPerVertex);
             float light = lightPacked;
-            // CCW when viewed from above (+Y), so the cross-product normal is
-            // +Y and back-face culling keeps the lid visible from the sky.
-            // Visit corners SW → NW → NE → SE — matches the cube sweep's
-            // top-face winding for axis=1, dir=+1. (Earlier this looped the
-            // other way, producing a -Y normal, and the entire surface of every
-            // pond was culled — the side walls remained visible, leading to
-            // the "flowing water is invisible but its end-edge shows" report.)
-            AppendVert(transparent, wx + 0f, topY, wz + 0f, 0f, 0f, 0f, 1f, 0f, layer, light);
-            AppendVert(transparent, wx + 0f, topY, wz + 1f, 0f, 1f, 0f, 1f, 0f, layer, light);
-            AppendVert(transparent, wx + 1f, topY, wz + 1f, 1f, 1f, 0f, 1f, 0f, layer, light);
-            AppendVert(transparent, wx + 1f, topY, wz + 0f, 1f, 0f, 0f, 1f, 0f, layer, light);
+            // CCW when viewed from above so the geometric normal is +Y and
+            // back-face culling keeps the lid visible from the sky. Corner
+            // order SW → NW → NE → SE matches the cube sweep's top-face
+            // winding (axis=1, dir=+1). With per-corner Y, the lid can be
+            // sloped — the average of the four heights is still up-facing
+            // because every corner is at most 1.0 above the cell base.
+            AppendVert(transparent, wx + 0f, hSW, wz + 0f, 0f, 0f, 0f, 1f, 0f, layer, light);
+            AppendVert(transparent, wx + 0f, hNW, wz + 1f, 0f, 1f, 0f, 1f, 0f, layer, light);
+            AppendVert(transparent, wx + 1f, hNE, wz + 1f, 1f, 1f, 0f, 1f, 0f, layer, light);
+            AppendVert(transparent, wx + 1f, hSE, wz + 0f, 1f, 0f, 0f, 1f, 0f, layer, light);
             AppendIndex(transparent, baseIdx + 0);
             AppendIndex(transparent, baseIdx + 1);
             AppendIndex(transparent, baseIdx + 2);
@@ -295,6 +373,44 @@ namespace VStudioCraft.Game
                 return LightAt(nzPos, lx, y, lz - Chunk.SizeZ);
             }
             return 15 * 16;
+        }
+
+        // Fetch a meta byte at chunk-local coords, mirroring BlockOrNeighbor.
+        // Used by the fluid lid pass to read the reach / falling bits of
+        // diagonal neighbours when computing corner heights. Out-of-world
+        // returns 0 (treated as the default "no extra data" by callers).
+        private static byte MetaOrNeighbor(
+            Chunk center, int lx, int y, int lz,
+            Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos)
+        {
+            if ((uint)y >= Chunk.SizeY) return 0;
+
+            if ((uint)lx < Chunk.SizeX && (uint)lz < Chunk.SizeZ)
+                return center.RawMeta[Chunk.Index(lx, y, lz)];
+
+            if (lx < 0)
+            {
+                if (nxNeg == null) return 0;
+                if ((uint)lz < Chunk.SizeZ) return nxNeg.RawMeta[Chunk.Index(Chunk.SizeX + lx, y, lz)];
+                return 0;
+            }
+            if (lx >= Chunk.SizeX)
+            {
+                if (nxPos == null) return 0;
+                if ((uint)lz < Chunk.SizeZ) return nxPos.RawMeta[Chunk.Index(lx - Chunk.SizeX, y, lz)];
+                return 0;
+            }
+            if (lz < 0)
+            {
+                if (nzNeg == null) return 0;
+                return nzNeg.RawMeta[Chunk.Index(lx, y, Chunk.SizeZ + lz)];
+            }
+            if (lz >= Chunk.SizeZ)
+            {
+                if (nzPos == null) return 0;
+                return nzPos.RawMeta[Chunk.Index(lx, y, lz - Chunk.SizeZ)];
+            }
+            return 0;
         }
 
         // Fetch a block at chunk-local coords, crossing into a neighbour chunk if the
