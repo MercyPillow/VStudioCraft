@@ -43,7 +43,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Cactus (damages on contact)
 - Pumpkin + jack-o'-lantern
 - Tall grass / flower / mushroom block-tick removal when the grass below is broken (today the sprite stays floating)
-- Variable-height fluid SIDE faces — the top lid is sloped via per-corner heights, but the cube sweep still emits full-height (0..1) side faces, so the air-facing edge of a low-reach cell shows a thin "lip" above its slope (interior pool surfaces are unaffected because their side faces are skipped between same-family fluid neighbours, and lid corners against solid walls pull up to 1.0 so shoreline edges already seal cleanly)
+- Fluid side faces against glass or other non-opaque non-fluid blocks still use the cube sweep (full height). Only air-facing sides are replaced by the custom trapezoid; glass-adjacent water still shows a full-height side face at that boundary. Rare edge case, acceptable for V1.
 - Water-meets-lava block formation (cobblestone / stone / obsidian)
 - Water/lava textures animated (current tiles are static)
 - Fire (spreads and dies)

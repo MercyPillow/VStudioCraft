@@ -138,13 +138,65 @@ namespace VStudioCraft.Game
                 float hNE = CornerLidY(chunk, nxNeg, nxPos, nzNeg, nzPos, x + 1, y, z + 1, group);
                 float hSE = CornerLidY(chunk, nxNeg, nxPos, nzNeg, nzPos, x + 1, y, z,     group);
 
-                int layer = BlockData.GetTileIndex(t, 0);  // top tile
+                int layer = BlockData.GetTileIndex(t, 0);  // same tile all faces
                 // Light at the air cell above (or full sky if at world top).
                 int lightPacked = (y + 1 < Chunk.SizeY)
                     ? LightAt(chunk, x, y + 1, z)
                     : 15 * 16;
                 bool transparent = (t == BlockType.FlowingWater);
-                EmitFluidLidQuad(x + baseX, z + baseZ, hSW, hNW, hNE, hSE, layer, lightPacked, transparent);
+
+                float wx = x + baseX, wz = z + baseZ, wy = y;
+                EmitFluidLidQuad(wx, wz, hSW, hNW, hNE, hSE, layer, lightPacked, transparent);
+
+                // Trapezoidal side faces for each air-facing edge. The cube
+                // sweep's full-height side face was suppressed for these;
+                // we emit one whose top tracks the sloped lid so the
+                // end-cap respects the water level instead of being full-height.
+
+                // +X east face (top corners SE and NE)
+                if (BlockOrNeighbor(chunk, x + 1, y, z, nxNeg, nxPos, nzNeg, nzPos) == (byte)BlockType.Air)
+                {
+                    int lp = LightOrNeighbor(chunk, x + 1, y, z, nxNeg, nxPos, nzNeg, nzPos);
+                    EmitFluidSideFace(
+                        wx+1, wy,  wz,   0f, 0f,
+                        wx+1, hSE, wz,   0f, hSE-wy,
+                        wx+1, hNE, wz+1, 1f, hNE-wy,
+                        wx+1, wy,  wz+1, 1f, 0f,
+                        1f, 0f, 0f, layer, lp, transparent);
+                }
+                // -X west face (top corners SW and NW)
+                if (BlockOrNeighbor(chunk, x - 1, y, z, nxNeg, nxPos, nzNeg, nzPos) == (byte)BlockType.Air)
+                {
+                    int lp = LightOrNeighbor(chunk, x - 1, y, z, nxNeg, nxPos, nzNeg, nzPos);
+                    EmitFluidSideFace(
+                        wx,  wy,  wz,   1f, 0f,
+                        wx,  wy,  wz+1, 0f, 0f,
+                        wx,  hNW, wz+1, 0f, hNW-wy,
+                        wx,  hSW, wz,   1f, hSW-wy,
+                        -1f, 0f, 0f, layer, lp, transparent);
+                }
+                // +Z north face (top corners NW and NE)
+                if (BlockOrNeighbor(chunk, x, y, z + 1, nxNeg, nxPos, nzNeg, nzPos) == (byte)BlockType.Air)
+                {
+                    int lp = LightOrNeighbor(chunk, x, y, z + 1, nxNeg, nxPos, nzNeg, nzPos);
+                    EmitFluidSideFace(
+                        wx,   wy,  wz+1, 0f, 0f,
+                        wx+1, wy,  wz+1, 1f, 0f,
+                        wx+1, hNE, wz+1, 1f, hNE-wy,
+                        wx,   hNW, wz+1, 0f, hNW-wy,
+                        0f, 0f, 1f, layer, lp, transparent);
+                }
+                // -Z south face (top corners SW and SE)
+                if (BlockOrNeighbor(chunk, x, y, z - 1, nxNeg, nxPos, nzNeg, nzPos) == (byte)BlockType.Air)
+                {
+                    int lp = LightOrNeighbor(chunk, x, y, z - 1, nxNeg, nxPos, nzNeg, nzPos);
+                    EmitFluidSideFace(
+                        wx+1, wy,  wz, 0f, 0f,
+                        wx,   wy,  wz, 1f, 0f,
+                        wx,   hSW, wz, 1f, hSW-wy,
+                        wx+1, hSE, wz, 0f, hSE-wy,
+                        0f, 0f, -1f, layer, lp, transparent);
+                }
             }
         }
 
@@ -224,6 +276,32 @@ namespace VStudioCraft.Game
             AppendVert(transparent, wx + 0f, hNW, wz + 1f, 0f, 1f, 0f, 1f, 0f, layer, light);
             AppendVert(transparent, wx + 1f, hNE, wz + 1f, 1f, 1f, 0f, 1f, 0f, layer, light);
             AppendVert(transparent, wx + 1f, hSE, wz + 0f, 1f, 0f, 0f, 1f, 0f, layer, light);
+            AppendIndex(transparent, baseIdx + 0);
+            AppendIndex(transparent, baseIdx + 1);
+            AppendIndex(transparent, baseIdx + 2);
+            AppendIndex(transparent, baseIdx + 0);
+            AppendIndex(transparent, baseIdx + 2);
+            AppendIndex(transparent, baseIdx + 3);
+        }
+
+        // Generic quad emitter for the four trapezoidal side faces of a surface
+        // fluid cell. Caller provides all four corner positions and UVs; indices
+        // always fan (0,1,2), (0,2,3). The normal is passed through to the shader
+        // for face-shading — keep it perpendicular to the face plane.
+        private void EmitFluidSideFace(
+            float x0, float y0, float z0, float u0, float v0,
+            float x1, float y1, float z1, float u1, float v1,
+            float x2, float y2, float z2, float u2, float v2,
+            float x3, float y3, float z3, float u3, float v3,
+            float nx, float ny, float nz,
+            int layer, int lightPacked, bool transparent)
+        {
+            uint baseIdx = (uint)((transparent ? _tVertFloats : _vertFloats) / Mesh.FloatsPerVertex);
+            float light = lightPacked;
+            AppendVert(transparent, x0, y0, z0, u0, v0, nx, ny, nz, layer, light);
+            AppendVert(transparent, x1, y1, z1, u1, v1, nx, ny, nz, layer, light);
+            AppendVert(transparent, x2, y2, z2, u2, v2, nx, ny, nz, layer, light);
+            AppendVert(transparent, x3, y3, z3, u3, v3, nx, ny, nz, layer, light);
             AppendIndex(transparent, baseIdx + 0);
             AppendIndex(transparent, baseIdx + 1);
             AppendIndex(transparent, baseIdx + 2);
@@ -506,19 +584,23 @@ namespace VStudioCraft.Game
                         (a != (byte)BlockType.Air && b != (byte)BlockType.Air &&
                          BlockData.FluidGroup((BlockType)a) != 0 &&
                          BlockData.FluidGroup((BlockType)a) == BlockData.FluidGroup((BlockType)b)));
-                    // Surface flowing-fluid cells get a custom inset top face
-                    // emitted in EmitFluidSurfaceLids; suppress the cube sweep's
-                    // top face for this cell so the two don't z-fight. We only
-                    // do this for the +Y top direction — side and bottom faces
-                    // stay full-height in the cube sweep, which is the V1
-                    // tradeoff (a thin "lip" can show against non-fluid shore
-                    // blocks; interior pool surfaces are unaffected because
-                    // their side faces are skipped by internalTransparent).
-                    if (axis == 1 && dir > 0 && aCube
+                    // Surface flowing-fluid cells get custom geometry from
+                    // EmitFluidSurfaceLids — suppress the cube sweep so the two
+                    // don't z-fight.
+                    //   Top face (+Y):  always replaced by the sloped lid quad.
+                    //   Side faces (±X/Z) against air: replaced by a trapezoidal
+                    //     quad whose top edge follows the corner heights of the
+                    //     lid (so the end-cap is not full-height).
+                    //   Bottom / opaque-neighbour faces: cube sweep handles
+                    //     those unchanged.
+                    if (aCube
                         && (uint)cx < Chunk.SizeX && (uint)cy < Chunk.SizeY && (uint)cz < Chunk.SizeZ
                         && IsSurfaceFluid(chunk, cx, cy, cz))
                     {
-                        aCube = false;
+                        if (axis == 1 && dir > 0)
+                            aCube = false;   // top — always replaced
+                        else if ((axis == 0 || axis == 2) && b == (byte)BlockType.Air)
+                            aCube = false;   // air-facing side — replaced by trapezoid
                     }
                     if (!aAir && aCube && !bOpaque && !internalTransparent)
                     {
