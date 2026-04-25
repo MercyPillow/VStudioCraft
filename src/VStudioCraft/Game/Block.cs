@@ -38,6 +38,8 @@ namespace VStudioCraft.Game
         BrownMushroom = 33,
         RedMushroom = 34,
         TallGrass = 35,
+        FlowingWater = 36,
+        FlowingLava = 37,
     }
 
     internal static class BlockData
@@ -53,6 +55,8 @@ namespace VStudioCraft.Game
             {
                 case BlockType.Air:
                 case BlockType.Water:
+                case BlockType.FlowingWater:
+                case BlockType.FlowingLava:
                 case BlockType.Torch:
                 case BlockType.Dandelion:
                 case BlockType.Rose:
@@ -76,6 +80,8 @@ namespace VStudioCraft.Game
             {
                 case BlockType.Air:
                 case BlockType.Water:
+                case BlockType.FlowingWater:
+                case BlockType.FlowingLava:
                     return false;
                 default:
                     return true;
@@ -111,9 +117,41 @@ namespace VStudioCraft.Game
             {
                 case BlockType.Air:
                 case BlockType.Water:
+                case BlockType.FlowingWater:
+                case BlockType.FlowingLava:
+                // Cross-sprite blocks don't fill the cell. If they were marked
+                // opaque the cube sweep would cull the faces of the block
+                // beneath them (so the grass under a torch loses its top face)
+                // AND the four side neighbours (so you see through into the
+                // chunk because their facing wall didn't get a quad emitted).
+                case BlockType.Torch:
+                case BlockType.Dandelion:
+                case BlockType.Rose:
+                case BlockType.BrownMushroom:
+                case BlockType.RedMushroom:
+                case BlockType.TallGrass:
                     return false;
                 default:
                     return true;
+            }
+        }
+
+        // True for any block in the same fluid family — water sources and
+        // flowing water both count as "water", lava and flowing lava both
+        // count as "lava". The mesher uses this to skip internal faces
+        // between fluid cells of the same kind.
+        public static int FluidGroup(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Water:
+                case BlockType.FlowingWater:
+                    return 1;
+                case BlockType.Lava:
+                case BlockType.FlowingLava:
+                    return 2;
+                default:
+                    return 0;
             }
         }
 
@@ -129,6 +167,8 @@ namespace VStudioCraft.Game
             {
                 case BlockType.Air:
                 case BlockType.Water:
+                case BlockType.FlowingWater:
+                case BlockType.FlowingLava:
                 case BlockType.Glass:
                 case BlockType.Leaves:
                 case BlockType.Torch:
@@ -152,6 +192,7 @@ namespace VStudioCraft.Game
             switch (t)
             {
                 case BlockType.Lava:
+                case BlockType.FlowingLava:
                     return 15;
                 case BlockType.Torch:
                     return 14;
@@ -201,8 +242,10 @@ namespace VStudioCraft.Game
                 case BlockType.Leaves:
                     return BlockTextures.TileLeaves;
                 case BlockType.Water:
+                case BlockType.FlowingWater:
                     return BlockTextures.TileWater;
                 case BlockType.Lava:
+                case BlockType.FlowingLava:
                     return BlockTextures.TileLava;
                 case BlockType.GoldBlock:
                     return BlockTextures.TileGoldBlock;

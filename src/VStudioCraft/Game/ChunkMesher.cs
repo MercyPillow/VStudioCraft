@@ -301,7 +301,18 @@ namespace VStudioCraft.Game
                     // already never occlude a neighbour because IsOpaque is
                     // false, so b doesn't need a separate filter.
                     bool aCube = !aAir && BlockData.IsCubeShape((BlockType)a);
-                    if (!aAir && aCube && !bOpaque && !(a == b && !aOpaque))
+                    // Internal-face skip: same byte (e.g. water-water) OR same
+                    // fluid family (water source vs flowing water — both share
+                    // group 1, lava + flowing lava share group 2). Without the
+                    // family check the inner faces between a sea-source cell
+                    // and the falling-water cell that springs out of it would
+                    // form a visible square in the water.
+                    bool internalTransparent = !aOpaque && (
+                        a == b ||
+                        (a != (byte)BlockType.Air && b != (byte)BlockType.Air &&
+                         BlockData.FluidGroup((BlockType)a) != 0 &&
+                         BlockData.FluidGroup((BlockType)a) == BlockData.FluidGroup((BlockType)b)));
+                    if (!aAir && aCube && !bOpaque && !internalTransparent)
                     {
                         // Face of block `a` visible, pointing in `dir`. Light is
                         // sampled at the air-side cell (the `b` neighbour cell at

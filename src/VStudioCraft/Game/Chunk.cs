@@ -25,6 +25,12 @@ namespace VStudioCraft.Game
         // be redundant since lighting is a deterministic function of blocks).
         private readonly byte[] _light = new byte[BlockCount];
 
+        // Per-cell metadata. Today only fluid cells use it: low 4 bits = remaining
+        // horizontal spread reach, bit 4 (0x10) = falling marker. Other cells leave
+        // it 0. Not persisted (re-derived from blocks on world entry; a fresh tick
+        // will reach the steady state within ~7 ticks for water columns).
+        private readonly byte[] _meta = new byte[BlockCount];
+
         public Chunk(int chunkX, int chunkZ)
         {
             ChunkX = chunkX;
@@ -33,6 +39,7 @@ namespace VStudioCraft.Game
 
         public byte[] RawBlocks => _blocks;
         public byte[] RawLight => _light;
+        public byte[] RawMeta => _meta;
 
         public static int Index(int x, int y, int z) => (x * SizeY + y) * SizeZ + z;
 

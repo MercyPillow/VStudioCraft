@@ -200,6 +200,15 @@ void main()
         // amount every half-second while they are below the kill plane.
         private float _voidTimer;
 
+        // Fluid tick cadence. Alpha ticked water at 5 game-ticks (~0.25s) and
+        // lava at 30 game-ticks (~1.5s). We share one cadence for both at
+        // 0.25s and let the per-fluid reach difference (water=7, lava=3) do
+        // most of the visual differentiation. The TickFluids call iterates
+        // every loaded chunk; on the live workload it's well under a frame's
+        // budget and we'll add a "has fluid" gate when it isn't.
+        private const float FluidTickInterval = 0.25f;
+        private float _fluidTickAccumulator;
+
         // Survival is opt-in; the existing game loop starts in Creative so we
         // don't break the creative-lite flow everybody already has. Toggled
         // from the UI thread via F3 — the single enum write is atomic on
@@ -367,6 +376,26 @@ void main()
             // damage above; creative ignores it. Either way, clear so the next
             // landing starts fresh.
             Player.LastFallDistance = 0f;
+
+            // Fluid tick — every FluidTickInterval seconds drive a single
+            // pass of source-driven outflow. Cells changed are added to the
+            // world's dirty set so the mesher remeshes them, and we kick a
+            // chunk re-light so newly-flooded cells stop blocking sky-light.
+            _fluidTickAccumulator += dt;
+            while (_fluidTickAccumulator >= FluidTickInterval)
+            {
+                _fluidTickAccumulator -= FluidTickInterval;
+                var changed = FluidTick.Tick(_world);
+                if (changed.Count > 0)
+                {
+                    foreach (var key in changed)
+                    {
+                        var c = _world.GetChunk(key.x, key.z);
+                        if (c != null) LightCalculator.RecomputeChunk(c);
+                        _world.DirtyChunks.Add(key);
+                    }
+                }
+            }
         }
 
         // Survival damage sources wired up today: fall damage (Alpha formula
@@ -621,7 +650,7 @@ void main()
             // Alpha behaviour). Anything else — including torches and other
             // non-cube blocks the raycast can target — blocks the place.
             var existing = _world.GetBlock(px, py, pz);
-            if (existing != BlockType.Air && existing != BlockType.Water) return false;
+            if (existing != BlockType.Air && existing != BlockType.Water && existing != BlockType.FlowingWater) return false;
             // Cross-sprite blocks need a solid block beneath them to attach
             // to. Torches: floor-only for now (wall attachment needs block
             // metadata). Flowers/mushrooms/tall grass: same rule.
@@ -780,7 +809,8 @@ void main()
                 int cx = (int)Math.Floor(Camera.Position.X);
                 int cy = (int)Math.Floor(Camera.Position.Y);
                 int cz = (int)Math.Floor(Camera.Position.Z);
-                cameraInWater = _world.GetBlock(cx, cy, cz) == BlockType.Water;
+                var inBlock = _world.GetBlock(cx, cy, cz);
+                cameraInWater = inBlock == BlockType.Water || inBlock == BlockType.FlowingWater;
             }
             if (!cameraInWater)
             {

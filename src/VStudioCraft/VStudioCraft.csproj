@@ -76,6 +76,7 @@
     <Compile Include="Game\ChunkMesher.cs" />
     <Compile Include="Game\Frustum.cs" />
     <Compile Include="Game\GameMode.cs" />
+    <Compile Include="Game\FluidTick.cs" />
     <Compile Include="Game\GameRenderer.cs" />
     <Compile Include="Game\HudTextures.cs" />
     <Compile Include="Game\InputState.cs" />

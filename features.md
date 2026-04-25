@@ -4,21 +4,23 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 `src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
 Items marked **Have** exist today; items under **Missing** are the gap.
 
-Last updated after surface flora: dandelion, rose, brown + red mushroom
-and tall grass — five new cross-sprite blocks scattered deterministically
-across grass surfaces in the terrain pass, all sharing the alpha-tested
-opaque pass introduced for torches.
+Last updated after the fluid pass: water and lava sources now propagate
+into adjacent air every 0.25s via a source-driven outflow tick. Dig into
+the sea floor and the ocean floods in; place a source on a cliff and it
+falls. FlowingWater / FlowingLava are first-class block types with a
+per-cell metadata byte tracking remaining horizontal reach.
 
 ---
 
 ## Blocks
 
-**Have** — 35 block IDs (`BlockType` enum)
+**Have** — 37 block IDs (`BlockType` enum)
 - Air, Grass, Dirt, Stone, Sand
 - Cobblestone, Bedrock, Gravel, Clay
 - CoalOre, IronOre, GoldOre, DiamondOre, RedstoneOre
 - WoodLog, Planks, Leaves
-- Water (still, transparent), Lava (block only, no flow)
+- Water (source) + FlowingWater (spread cell, water-tinted) — both transparent, share fluid family for face culling
+- Lava (source) + FlowingLava (spread cell, emits 15 block-light) — full-block visual today, no churn animation yet
 - GoldBlock, IronBlock, DiamondBlock
 - Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Glass (opaque placeholder), Wool
 - Torch (floor placement, emits 14 block-light, cross-sprite model, alpha-tested)
@@ -41,7 +43,10 @@ opaque pass introduced for torches.
 - Cactus (damages on contact)
 - Pumpkin + jack-o'-lantern
 - Tall grass / flower / mushroom block-tick removal when the grass below is broken (today the sprite stays floating)
-- Water/lava flowing variants (8-level falloff)
+- Fluid drain when a source is removed (today flowing cells persist as a permanent puddle until manually broken)
+- Fluid level visual (top-face inset by `(level + 1) / 9` to read as a partial slab — currently every flowing cell renders as a full cube)
+- Water-meets-lava block formation (cobblestone / stone / obsidian)
+- Water/lava textures animated (current tiles are static)
 - Fire (spreads and dies)
 - Stone & wooden slab (single + double)
 - Stone & wooden stairs
@@ -69,6 +74,7 @@ opaque pass introduced for torches.
 - Ore veins: Dirt, Gravel, Coal, Iron, Gold, Redstone, Diamond — Alpha-tuned Y ranges (Iron ≤64, Gold ≤32, Redstone/Diamond ≤16), random-walk placement, stone-only replacement
 - Oak trees with canopy that overlaps across chunk seams (deterministic per-column RNG means same tree regardless of which chunk is generated first)
 - Surface flora scatter: dandelion / rose / brown + red mushroom / tall grass placed on grass surfaces with a per-column hashed RNG (~1 sprite per 16 grass columns, weighted toward tall grass and flowers, mushrooms rare). Skipped on beach and over carved cave openings.
+- Fluid simulation: source-driven outflow tick every 0.25s. Sources flow downward into Air at full reach, horizontally up to 7 cells (water) or 3 cells (lava). Per-cell 5-bit metadata (4-bit reach + falling marker) carries the flow state; affected chunks are marked dirty and re-lit each tick.
 - Worm-style cave systems — each chunk scans a 5×5 neighbourhood for worm starts, so tunnels cross seams seamlessly. Parabola-tapered radius (1.8..3.6 blocks) with dampened yaw/pitch drift. Carves only stone/dirt/gravel/grass — bedrock, water, and sand (beaches) are preserved. Y-capped below `SeaLevel - 4` and below `surface - 5` per column so caves never break out to the surface or the ocean floor.
 - Off-thread terrain generation via `ChunkJobSystem` worker pool (2–3 workers)
 - Reproducible seed chain per chunk feature (per-chunk and per-column hashed RNG)
@@ -340,8 +346,8 @@ opaque pass introduced for torches.
 
 ## Suggested next steps (rough order)
 
-1. **Flowing water / lava** — promote the current still-water to a proper fluid with 8-level falloff ticks.
-2. **Swim physics + drowning timer** — now that water + survival-HP exist, the player should bob in it and lose air underwater.
+1. **Swim physics + drowning timer** — now that water + survival-HP exist, the player should bob in it and lose air underwater.
+2. **Fluid drain + level rendering** — finish the fluid pass: BFS from sources each tick to remove orphaned flowing cells, and render top-face inset proportional to the cell's reach metadata.
 3. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
 4. **Inventory + item stacks** — the "items instead of block-enum" jump.
 5. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
