@@ -150,27 +150,30 @@ namespace VStudioCraft.Game
             int lz = wz - cz * Chunk.SizeZ;
             var c = GetChunk(cx, cz);
             if (c == null) return false;
+            var oldT = c.Get(lx, wy, lz);
+            if (oldT == t) return false; // no-op edit; don't dirty anything
             c.Set(lx, wy, lz, t);
             c.IsModified = true;
 
-            // Re-light. We do a full chunk recompute since incremental light
-            // updates (Alpha used a "decreased + increased" queue pair) are a
-            // notable amount of code; full recompute is O(SizeX*SizeY*SizeZ)
-            // and runs only when the player actually places/breaks something,
-            // so the cost is acceptable. Border cells leak a stale level into
-            // the neighbour for one mesh pass, so relight neighbours too if
-            // the change touched their edge.
-            LightCalculator.RecomputeChunk(c);
-            if (lx == 0)               { var n = GetChunk(cx - 1, cz); if (n != null) LightCalculator.RecomputeChunk(n); }
-            if (lx == Chunk.SizeX - 1) { var n = GetChunk(cx + 1, cz); if (n != null) LightCalculator.RecomputeChunk(n); }
-            if (lz == 0)               { var n = GetChunk(cx, cz - 1); if (n != null) LightCalculator.RecomputeChunk(n); }
-            if (lz == Chunk.SizeZ - 1) { var n = GetChunk(cx, cz + 1); if (n != null) LightCalculator.RecomputeChunk(n); }
-
+            // Incremental light update — touches only the cells whose sky
+            // or block light value actually changes (standard remove-then-add
+            // BFS), and only marks chunks dirty whose light field was
+            // modified. Replaces the previous 3×3 RecomputeRegion which
+            // synchronously cleared and reflooded 9 chunks of light on every
+            // click — that was the source of the place-block stutter.
+            var touched = LightCalculator.UpdateAfterEdit(this, wx, wy, wz, oldT, t);
+            foreach (var k in touched) _dirty.Add(k);
+            // The edit chunk's mesh always needs rebuilding because its block
+            // changed, even if no light value did (e.g. dirt → stone).
             _dirty.Add((cx, cz));
-            if (lx == 0)               _dirty.Add((cx - 1, cz));
-            if (lx == Chunk.SizeX - 1) _dirty.Add((cx + 1, cz));
-            if (lz == 0)               _dirty.Add((cx, cz - 1));
-            if (lz == Chunk.SizeZ - 1) _dirty.Add((cx, cz + 1));
+            // If the edit cell sits on a chunk boundary, the neighbour's
+            // border faces may need re-culling against the new block. The
+            // incremental light update only touches the neighbour if the
+            // light field changed, so dirty it explicitly here.
+            if (lx == 0) _dirty.Add((cx - 1, cz));
+            else if (lx == Chunk.SizeX - 1) _dirty.Add((cx + 1, cz));
+            if (lz == 0) _dirty.Add((cx, cz - 1));
+            else if (lz == Chunk.SizeZ - 1) _dirty.Add((cx, cz + 1));
 
             // Re-engage fluid ticks on this chunk + its neighbours. The fluid
             // tick auto-deactivates chunks that have reached steady state, so

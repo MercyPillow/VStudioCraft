@@ -446,10 +446,16 @@ void main()
             {
                 _fluidTickAccumulator -= FluidTickInterval;
                 var result = FluidTick.Tick(_world);
+                // Lava emits 15 light, so a single advancing lava cell can
+                // brighten adjacent chunks. Relight a 3×3 region around each
+                // light-changed chunk so the glow doesn't stop at the border.
+                // Region recomputes overlap when nearby chunks both reported
+                // changes; the cost is bounded by edits-per-tick which is
+                // small in practice (lava only spreads a few cells per tick).
                 foreach (var key in result.LightChangedChunks)
                 {
-                    var c = _world.GetChunk(key.x, key.z);
-                    if (c != null) LightCalculator.RecomputeChunk(c);
+                    var touched = LightCalculator.RecomputeRegion(_world, key.x, key.z);
+                    foreach (var k in touched) _world.DirtyChunks.Add(k);
                 }
                 foreach (var key in result.ChangedChunks)
                 {
