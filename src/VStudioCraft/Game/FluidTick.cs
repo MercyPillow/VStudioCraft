@@ -41,10 +41,11 @@ namespace VStudioCraft.Game
         // spread. Vertical fall always refreshes to full reach (matches
         // Alpha — water down a cliff fans out at full reach again).
         //
-        // Alpha's water reach is 7. We use 4 here so the spread reads as a
-        // contained puddle rather than a flood — pending a real drain pass,
-        // a too-wide reach turns every dug-out hole into a permanent lake.
-        private const int WaterReach = 4;
+        // Alpha's water reach is 7 cells (lava 3). With the cliff-edge rule
+        // (no horizontal spread when the cell below is air) the wider reach
+        // no longer floods waterfalls down a column; it just gives ground
+        // pools the authentic Alpha footprint.
+        private const int WaterReach = 7;
         private const int LavaReach  = 3;
 
 
