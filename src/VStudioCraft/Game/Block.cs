@@ -201,6 +201,70 @@ namespace VStudioCraft.Game
             }
         }
 
+        // Bare-hand break time in seconds. Matches Alpha 1.1.2's hardness
+        // table reasonably (no proper tools yet, so the values here are the
+        // worst-case "punch through with your fist" times). A negative value
+        // means unbreakable. Hardness 0 breaks instantly the first frame the
+        // hold-LMB raycast lands on the block.
+        //
+        // Used by the survival break-progress system; creative mode skips
+        // the timer and breaks instantly on click.
+        public static float Hardness(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Bedrock:
+                    return -1f;
+                case BlockType.Obsidian:
+                    return 50f;
+                case BlockType.IronBlock:
+                case BlockType.DiamondBlock:
+                case BlockType.GoldBlock:
+                    return 5f;
+                case BlockType.IronOre:
+                case BlockType.DiamondOre:
+                case BlockType.GoldOre:
+                case BlockType.RedstoneOre:
+                case BlockType.CoalOre:
+                    return 3f;
+                case BlockType.Cobblestone:
+                case BlockType.MossyCobblestone:
+                case BlockType.Stone:
+                case BlockType.Bricks:
+                    return 1.5f;
+                case BlockType.WoodLog:
+                case BlockType.Planks:
+                case BlockType.Bookshelf:
+                    return 2f;
+                case BlockType.Dirt:
+                case BlockType.Grass:
+                case BlockType.Sand:
+                case BlockType.Gravel:
+                case BlockType.Clay:
+                    return 0.5f;
+                case BlockType.Wool:
+                    return 0.8f;
+                case BlockType.Glass:
+                case BlockType.Sponge:
+                    return 0.3f;
+                case BlockType.Leaves:
+                    return 0.2f;
+                case BlockType.Tnt:
+                    return 0f;
+                case BlockType.Torch:
+                case BlockType.Dandelion:
+                case BlockType.Rose:
+                case BlockType.BrownMushroom:
+                case BlockType.RedMushroom:
+                case BlockType.TallGrass:
+                    return 0f;
+                // Air/fluids aren't raycast-targetable so callers shouldn't
+                // hit this; return 0 anyway as a defensive default.
+                default:
+                    return 0f;
+            }
+        }
+
         // faceKind: 0 = top, 1 = bottom, 2 = side. Returns the atlas tile index.
         public static int GetTileIndex(BlockType t, int faceKind)
         {

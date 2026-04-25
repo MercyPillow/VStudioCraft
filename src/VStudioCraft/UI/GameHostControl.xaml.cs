@@ -519,7 +519,11 @@ namespace VStudioCraft.UI
                 return;
             }
 
-            if (e.Button == MouseButtons.Left)       _input.BreakPressed = true;
+            if (e.Button == MouseButtons.Left)
+            {
+                _input.BreakPressed = true;
+                _input.BreakHeld = true;
+            }
             else if (e.Button == MouseButtons.Right) _input.PlacePressed = true;
         }
 
@@ -595,6 +599,11 @@ namespace VStudioCraft.UI
 
         private void GlOnMouseUp(object sender, MouseEventArgs e)
         {
+            // BreakHeld stays true between LMB-down and LMB-up; the renderer
+            // resets break-progress as soon as it sees this clear. Right
+            // button doesn't have a parallel hold state — placement is a
+            // one-shot fired by BreakPressed-equivalent on click.
+            if (e.Button == MouseButtons.Left) _input.BreakHeld = false;
         }
 
         private void GlOnMouseMove(object sender, MouseEventArgs e)

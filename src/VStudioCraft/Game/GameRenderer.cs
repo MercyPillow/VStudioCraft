@@ -112,6 +112,35 @@ uniform mat4 uMVP;
 void main() { gl_Position = uMVP * vec4(aPos, 1.0); }
 ";
 
+        // Crack-overlay shader. Draws a slightly-inflated cube around the
+        // block currently being broken; samples the 10-frame crack atlas and
+        // alpha-tests so only the dark crack pixels show. The shader is intentionally
+        // tiny — the artwork is in the texture, not in the lighting model.
+        private const string CrackVertexSrc = @"#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUV;
+out vec2 vUV;
+uniform mat4 uMVP;
+void main()
+{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = aUV;
+}
+";
+
+        private const string CrackFragmentSrc = @"#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2DArray uCrack;
+uniform float uLayer;
+void main()
+{
+    vec4 t = texture(uCrack, vec3(vUV, uLayer));
+    if (t.a < 0.5) discard;
+    FragColor = t;
+}
+";
+
         private const string OverlayFragmentSrc = @"#version 330 core
 out vec4 FragColor;
 uniform vec3 uColor;
@@ -197,9 +226,11 @@ void main()
         private Shader _overlayShader;
         private Shader _spriteShader;
         private Shader _spriteArrayShader; // sampler2DArray variant for block-atlas icons
+        private Shader _crackShader;       // pos+uv -> sampler2DArray for break overlay
         private OverlayMesh _crosshairMesh;
         private OverlayMesh _wireCubeMesh;
         private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
+        private TexturedCubeMesh _breakCubeMesh;
         private int _atlasTexture;
         private int _heartTexture;
         private int _drumstickTexture;
@@ -207,6 +238,18 @@ void main()
         private int _hotbarBarTexture;
         private int _hotbarHighlightTexture;
         private int _fontTexture;
+        private int _crackTexture;
+
+        // Block-break progress (survival only). Tracks the cell currently being
+        // broken plus a 0..1 progress accumulator. Reset whenever the player
+        // releases LMB, looks at a different cell, or the cell goes away.
+        // Hardness < 0 (bedrock) is unbreakable so we never accumulate; hardness
+        // 0 (flowers, torches, TNT) breaks instantly on the first held frame.
+        // The renderer reads InputState.BreakHeld each frame to drive this.
+        private bool _breakHasTarget;
+        private int _breakTargetX, _breakTargetY, _breakTargetZ;
+        private BlockType _breakTargetType;
+        private float _breakProgress;
 
         // Input state shared with the host. The render thread reads
         // HotbarSlots / HotbarIndex from this every frame to paint the bar.
@@ -297,10 +340,13 @@ void main()
             _overlayShader = new Shader(OverlayVertexSrc, OverlayFragmentSrc);
             _spriteShader = new Shader(SpriteVertexSrc, SpriteFragmentSrc);
             _spriteArrayShader = new Shader(SpriteVertexSrc, SpriteArrayFragmentSrc);
+            _crackShader = new Shader(CrackVertexSrc, CrackFragmentSrc);
             _crosshairMesh = BuildCrosshairMesh();
             _wireCubeMesh = BuildWireCubeMesh();
             _unitQuadMesh = BuildUnitQuadMesh();
+            _breakCubeMesh = BuildBreakCubeMesh();
             _atlasTexture = BlockTextures.CreateAtlas();
+            _crackTexture = CrackTextures.CreateAtlas();
             _heartTexture = HudTextures.CreateHeartSheet();
             _drumstickTexture = HudTextures.CreateDrumstickSheet();
             _bubbleTexture = HudTextures.CreateBubbleSheet();
@@ -369,6 +415,53 @@ void main()
             return m;
         }
 
+        // Slightly inflated unit cube with per-face UVs in [0,1]. Sits 0.003 of
+        // a block outside the target cell so the crack texture floats just
+        // above the block surface and never z-fights with the underlying chunk
+        // mesh. Same inflation factor as the selection wire-cube — keeps both
+        // overlays sitting at the same visual depth.
+        //
+        // 36 vertices, 5 floats each (pos.xyz, uv.xy). Authored with face
+        // winding that matches Back-face culling (CCW from outside the cube).
+        // UV mapping picks (0,0) at the visual top-left of each face after the
+        // crack overlay's ortho convention; the shader does no flipping.
+        private static TexturedCubeMesh BuildBreakCubeMesh()
+        {
+            const float e = 0.003f;
+            float a = -e, b = 1f + e;
+            // Per-face: 6 verts (two tris), each pos.xyz + uv.xy.
+            // Layout: tri 1 (bl, br, tr), tri 2 (bl, tr, tl).
+            float[] v =
+            {
+                // -X (left face) — outward normal -X, CCW seen from -X looking +X
+                a, a, b,  0,0,   a, a, a,  1,0,   a, b, a,  1,1,
+                a, a, b,  0,0,   a, b, a,  1,1,   a, b, b,  0,1,
+
+                // +X (right face) — CCW seen from +X looking -X
+                b, a, a,  0,0,   b, a, b,  1,0,   b, b, b,  1,1,
+                b, a, a,  0,0,   b, b, b,  1,1,   b, b, a,  0,1,
+
+                // -Y (bottom face) — CCW seen from below looking up
+                a, a, a,  0,0,   b, a, a,  1,0,   b, a, b,  1,1,
+                a, a, a,  0,0,   b, a, b,  1,1,   a, a, b,  0,1,
+
+                // +Y (top face) — CCW seen from above looking down
+                a, b, b,  0,0,   b, b, b,  1,0,   b, b, a,  1,1,
+                a, b, b,  0,0,   b, b, a,  1,1,   a, b, a,  0,1,
+
+                // -Z (back face) — CCW seen from -Z looking +Z
+                a, a, a,  0,0,   a, b, a,  0,1,   b, b, a,  1,1,
+                a, a, a,  0,0,   b, b, a,  1,1,   b, a, a,  1,0,
+
+                // +Z (front face) — CCW seen from +Z looking -Z
+                b, a, b,  0,0,   b, b, b,  0,1,   a, b, b,  1,1,
+                b, a, b,  0,0,   a, b, b,  1,1,   a, a, b,  1,0,
+            };
+            var m = new TexturedCubeMesh();
+            m.Upload(v);
+            return m;
+        }
+
         public void StartNewWorld(int seed)
         {
             SetWorld(World.Generate(seed));
@@ -426,6 +519,13 @@ void main()
             if (_world == null) return;
             Player.Update(dt, wishHorizVel, wantJump, _world);
             SyncCameraToPlayer();
+
+            // Per-frame break-progress accumulation. Survival uses hold-LMB
+            // gated by hardness; creative ignores progress and breaks instantly
+            // via the existing BreakPressed path. Ticks even on the same frame
+            // as a creative-instant break — the survival branch will reset on
+            // its own next frame, no harm done.
+            UpdateBreakProgress(dt);
 
             if (GameMode == GameMode.Survival)
             {
@@ -757,7 +857,94 @@ void main()
         {
             if (_world == null) return false;
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit)) return false;
+            // Bedrock (and any future hardness<0 block) is unbreakable in
+            // both modes — the click is silently ignored. Creative still
+            // breaks everything else instantly; survival lets the click
+            // through but the actual break is gated by hold-progress and
+            // happens inside UpdateBreakProgress.
+            var t = _world.GetBlock(hit.X, hit.Y, hit.Z);
+            if (BlockData.Hardness(t) < 0f) return false;
+            if (GameMode == GameMode.Survival) return false;
             return _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
+        }
+
+        // Drives the survival break-progress timer. Called every frame from
+        // UpdatePlayer (which only runs while !paused). Resets progress on
+        // any of:
+        //   - LMB released (BreakHeld false)
+        //   - Raycast misses (looking at sky / out of reach)
+        //   - Target cell or block-type changed since last frame
+        //   - Game flipped to creative
+        // Otherwise accumulates dt/hardness; once progress >= 1 the block
+        // breaks and the state resets so the next break-cycle starts clean.
+        private void UpdateBreakProgress(float dt)
+        {
+            if (Input == null || _world == null)
+            {
+                _breakHasTarget = false;
+                _breakProgress = 0f;
+                return;
+            }
+
+            // Creative skips the timer entirely and uses the one-shot
+            // BreakPressed path. Drop any in-flight progress so a mode flip
+            // mid-break doesn't leave a stale crack overlay floating.
+            if (GameMode != GameMode.Survival || !Input.BreakHeld)
+            {
+                _breakHasTarget = false;
+                _breakProgress = 0f;
+                return;
+            }
+
+            if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
+            {
+                _breakHasTarget = false;
+                _breakProgress = 0f;
+                return;
+            }
+
+            var t = _world.GetBlock(hit.X, hit.Y, hit.Z);
+            float hardness = BlockData.Hardness(t);
+            if (hardness < 0f)
+            {
+                // Bedrock / unbreakable — show no progress.
+                _breakHasTarget = false;
+                _breakProgress = 0f;
+                return;
+            }
+
+            bool sameTarget = _breakHasTarget &&
+                              _breakTargetX == hit.X &&
+                              _breakTargetY == hit.Y &&
+                              _breakTargetZ == hit.Z &&
+                              _breakTargetType == t;
+
+            if (!sameTarget)
+            {
+                _breakHasTarget = true;
+                _breakTargetX = hit.X;
+                _breakTargetY = hit.Y;
+                _breakTargetZ = hit.Z;
+                _breakTargetType = t;
+                _breakProgress = 0f;
+            }
+
+            if (hardness <= 0f)
+            {
+                // Hardness zero — flowers, torches, TNT — chip through immediately.
+                _breakProgress = 1f;
+            }
+            else
+            {
+                _breakProgress += dt / hardness;
+            }
+
+            if (_breakProgress >= 1f)
+            {
+                _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
+                _breakHasTarget = false;
+                _breakProgress = 0f;
+            }
         }
 
         public bool TryPlace(BlockType t)
@@ -968,6 +1155,7 @@ void main()
                 RenderSubmergedOverlay(width, height);
             }
 
+            RenderBreakOverlay(width, height);
             RenderSelectionOutline(width, height);
             RenderCrosshair(width, height);
 
@@ -1094,6 +1282,37 @@ void main()
             GL.Enable(EnableCap.CullFace);
             GL.Enable(EnableCap.DepthTest);
             GL.Disable(EnableCap.Blend);
+        }
+
+        // Draws the 10-frame crack overlay around the block currently being
+        // broken. Frame index = floor(progress * 10) clamped to [0, 9] so the
+        // last frame holds for one tick before the block actually breaks.
+        // Uses alpha-test (no blending) so the cracks read as crisp dark lines
+        // over the underlying block face — matches the torch-tile convention.
+        // Skipped entirely when no break is in progress.
+        private void RenderBreakOverlay(int width, int height)
+        {
+            if (!_breakHasTarget || _breakProgress <= 0f) return;
+
+            int frame = (int)(_breakProgress * CrackTextures.FrameCount);
+            if (frame < 0) frame = 0;
+            else if (frame >= CrackTextures.FrameCount) frame = CrackTextures.FrameCount - 1;
+
+            var model = Matrix4.CreateTranslation(_breakTargetX, _breakTargetY, _breakTargetZ);
+            var mvp = model * Camera.GetView() * Camera.GetProjection(width, height);
+
+            _crackShader.Use();
+            _crackShader.SetMatrix4("uMVP", mvp);
+            _crackShader.SetInt("uCrack", 0);
+            _crackShader.SetFloat("uLayer", frame);
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _crackTexture);
+            // Slight inflation (built into the mesh) keeps us out of z-fight
+            // with the underlying chunk face. Cull is left on — back faces of
+            // the inflated cube would just sit behind the front faces anyway.
+            _breakCubeMesh.Draw();
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
         private void RenderSelectionOutline(int width, int height)
@@ -1395,10 +1614,12 @@ void main()
             _crosshairMesh?.Dispose();
             _wireCubeMesh?.Dispose();
             _unitQuadMesh?.Dispose();
+            _breakCubeMesh?.Dispose();
             _shader?.Dispose();
             _overlayShader?.Dispose();
             _spriteShader?.Dispose();
             _spriteArrayShader?.Dispose();
+            _crackShader?.Dispose();
             _sky?.Dispose();
             _sky = null;
             if (_atlasTexture != 0)
@@ -1435,6 +1656,11 @@ void main()
             {
                 GL.DeleteTexture(_fontTexture);
                 _fontTexture = 0;
+            }
+            if (_crackTexture != 0)
+            {
+                GL.DeleteTexture(_crackTexture);
+                _crackTexture = 0;
             }
         }
     }

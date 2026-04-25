@@ -18,6 +18,13 @@ namespace VStudioCraft.Game
         public bool BreakPressed;   // one-shot, consumed by renderer
         public bool PlacePressed;   // one-shot, consumed by renderer
 
+        // True while the left mouse button is held with mouse-look captured.
+        // Drives survival-mode block-break progress: the renderer accumulates
+        // dt/hardness each frame this is set against a stable target. The
+        // one-shot BreakPressed above still fires on click (used in creative
+        // for instant break); survival ignores it and uses BreakHeld instead.
+        public bool BreakHeld;
+
         // 9-slot hotbar. The render thread reads HotbarIndex + HotbarSlots
         // every frame to draw the bar; the UI thread writes them in response
         // to number-key presses. Both fields are atomic single-word writes
@@ -82,6 +89,7 @@ namespace VStudioCraft.Game
             }
             MouseLookActive = false;
             BreakPressed = PlacePressed = false;
+            BreakHeld = false;
         }
     }
 }
