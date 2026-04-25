@@ -192,6 +192,27 @@ namespace VStudioCraft.Game
                     ? (group == 1 ? WaterReach : LavaReach)
                     : (meta[idx] & 0x0F);
 
+                // Landing conversion: a falling cell that finds solid ground
+                // beneath it stops being "falling" — it becomes the wellhead
+                // of the puddle that fans out from the cliff base. We have to
+                // clear the 0x10 bit explicitly here, otherwise neighbouring
+                // puddle cells that look up to us via HasHorizFeeder reject
+                // us (falling neighbours don't count as horizontal feeders),
+                // so the entire ring around a waterfall base would drain on
+                // each tick. With the bit cleared the landed cell is treated
+                // as a normal non-falling spreader.
+                if (!isSource && isFalling && y > 0)
+                {
+                    int belowIdx0 = Chunk.Index(x, y - 1, z);
+                    var below0 = (BlockType)blocks[belowIdx0];
+                    if (below0 != BlockType.Air && BlockData.FluidGroup(below0) != group)
+                    {
+                        meta[idx] &= 0x0F;        // strip falling bit
+                        chunk.IsModified = true;
+                        isFalling = false;
+                    }
+                }
+
                 // Orphan check: a non-source flowing cell with no upstream
                 // feeder converts to Air. The wave of "no feeder anymore"
                 // propagates one cell per tick, which is the visible Alpha

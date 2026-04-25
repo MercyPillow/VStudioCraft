@@ -135,11 +135,17 @@ namespace VStudioCraft.Game
             int curVertFloats = transparent ? _tVertFloats : _vertFloats;
             uint baseIdx = (uint)(curVertFloats / Mesh.FloatsPerVertex);
             float light = lightPacked;
-            // CCW from above so back-face culling keeps the lid visible from the sky.
+            // CCW when viewed from above (+Y), so the cross-product normal is
+            // +Y and back-face culling keeps the lid visible from the sky.
+            // Visit corners SW → NW → NE → SE — matches the cube sweep's
+            // top-face winding for axis=1, dir=+1. (Earlier this looped the
+            // other way, producing a -Y normal, and the entire surface of every
+            // pond was culled — the side walls remained visible, leading to
+            // the "flowing water is invisible but its end-edge shows" report.)
             AppendVert(transparent, wx + 0f, topY, wz + 0f, 0f, 0f, 0f, 1f, 0f, layer, light);
-            AppendVert(transparent, wx + 1f, topY, wz + 0f, 1f, 0f, 0f, 1f, 0f, layer, light);
-            AppendVert(transparent, wx + 1f, topY, wz + 1f, 1f, 1f, 0f, 1f, 0f, layer, light);
             AppendVert(transparent, wx + 0f, topY, wz + 1f, 0f, 1f, 0f, 1f, 0f, layer, light);
+            AppendVert(transparent, wx + 1f, topY, wz + 1f, 1f, 1f, 0f, 1f, 0f, layer, light);
+            AppendVert(transparent, wx + 1f, topY, wz + 0f, 1f, 0f, 0f, 1f, 0f, layer, light);
             AppendIndex(transparent, baseIdx + 0);
             AppendIndex(transparent, baseIdx + 1);
             AppendIndex(transparent, baseIdx + 2);
