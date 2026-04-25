@@ -43,8 +43,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Cactus (damages on contact)
 - Pumpkin + jack-o'-lantern
 - Tall grass / flower / mushroom block-tick removal when the grass below is broken (today the sprite stays floating)
-- Fluid drain when a source is removed (today flowing cells persist as a permanent puddle until manually broken)
-- Fluid level visual (top-face inset by `(level + 1) / 9` to read as a partial slab — currently every flowing cell renders as a full cube)
+- Variable-height fluid SIDE faces — top is inset, but side faces still go full-height in the cube sweep, so a flowing cell against a non-fluid shore shows a thin "lip" above the water surface (interior pool surfaces are unaffected because their side faces are skipped between same-family fluid neighbours)
 - Water-meets-lava block formation (cobblestone / stone / obsidian)
 - Water/lava textures animated (current tiles are static)
 - Fire (spreads and dies)
@@ -75,6 +74,8 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Oak trees with canopy that overlaps across chunk seams (deterministic per-column RNG means same tree regardless of which chunk is generated first)
 - Surface flora scatter: dandelion / rose / brown + red mushroom / tall grass placed on grass surfaces with a per-column hashed RNG (~1 sprite per 16 grass columns, weighted toward tall grass and flowers, mushrooms rare). Skipped on beach and over carved cave openings.
 - Fluid simulation: source-driven outflow tick every 0.25s. Sources flow downward into Air at full reach, horizontally up to 7 cells (water, matching Alpha) or 3 cells (lava). Falling cells (those over an air gap) skip horizontal spread that tick — waterfalls stay narrow on the way down and only fan out at the base, which lets the wider 7-cell reach work without flooding columns. Per-cell 5-bit metadata (4-bit reach + falling marker) carries the flow state. Per-chunk `HasActiveFluid` flag self-deactivates steady-state chunks so a settled ocean costs nothing per tick; player edits re-engage the flag on the chunk + 4 neighbours. Light is recomputed only for chunks where lava propagated (water is light-transparent).
+- Fluid drain on source removal: every tick each non-source flowing cell checks for a feeder (same-family fluid above OR a horizontal neighbour that is a source / non-falling flowing cell with strictly greater reach). No feeder → cell drains to Air. The drain wave advances one cell per tick, so breaking a source produces an Alpha-style receding puddle instead of a permanent footprint.
+- Fluid level rendering: top-exposed flowing cells (non-source, non-falling, air directly above) emit a custom inset top quad at `y + (reach + 1)/8`. A fresh source-adjacent spread reads ~88% full; a far dribble reads ~12% — visible "puddle vs. stream" depth without altering the cube mesher's side/bottom faces.
 - Worm-style cave systems — each chunk scans a 5×5 neighbourhood for worm starts, so tunnels cross seams seamlessly. Parabola-tapered radius (1.8..3.6 blocks) with dampened yaw/pitch drift. Carves only stone/dirt/gravel/grass — bedrock, water, and sand (beaches) are preserved. Y-capped below `SeaLevel - 4` and below `surface - 5` per column so caves never break out to the surface or the ocean floor.
 - Off-thread terrain generation via `ChunkJobSystem` worker pool (2–3 workers)
 - Reproducible seed chain per chunk feature (per-chunk and per-column hashed RNG)
@@ -349,12 +350,11 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 ## Suggested next steps (rough order)
 
-1. **Fluid drain + level rendering** — finish the fluid pass: BFS from sources each tick to remove orphaned flowing cells, and render top-face inset proportional to the cell's reach metadata.
-2. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
-3. **Inventory + item stacks** — the "items instead of block-enum" jump.
-4. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
-5. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
-6. **Crafting table + furnace** — recipe plumbing.
-7. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
+1. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
+2. **Inventory + item stacks** — the "items instead of block-enum" jump.
+3. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
+4. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
+5. **Crafting table + furnace** — recipe plumbing.
+6. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
 
 Each of the above is 200–1500 LoC of new code in this codebase's style; nothing is architecturally blocking.
