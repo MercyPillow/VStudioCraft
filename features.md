@@ -145,7 +145,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Mob AI / pathfinding
 - Mob spawn cycles
 - Drops on death
-- Dropped-item entity
+- Dropped-item entity (block drops on break — see _Inventory / items_; mob drops still missing since there are no mobs)
 - Projectiles: arrow, snowball, egg
 - Vehicles: minecart, boat
 - Painting
@@ -184,22 +184,27 @@ per-cell metadata byte tracking remaining horizontal reach.
 **Have**
 - 9-slot hotbar with selected highlight (number keys 1–9 cycle slots)
 - Hotbar HUD chrome rendered procedurally (`HotbarTextures`): bar background, selected highlight ring, 5×7 bitmap font sheet covering uppercase + digits + basic punctuation
-- Block icons rendered from the side-face tile via a `sampler2DArray` sprite shader (`SpriteArrayFragmentSrc`) with a faux top-light gradient so flat tiles still read as 3D-ish at hotbar size
+- 3-face block icons (`RenderBlockIcon3D`) — true 3D cube rendered into the slot rectangle with -45° yaw + 30° pitch, drawn through the same multi-face cube shader the world drops use, so a hotbar icon looks like a "paused drop" with proper top + side + side textures (cross-sprite blocks like torches and flowers stay on the flat-sprite path)
+- Dropped items in the world also render through the multi-face cube shader, so a broken grass cube on the ground shows grass-top up + dirt-bottom + grass-side around (instead of side-tile on every face)
 - Selected block name rendered above the bar using the bitmap font (CamelCase → "Flowing Water" pretty-print)
 
 **Have (continued)**
-- Inventory screen (E key) — modal panel with title bar, 3×9 main grid, and a hotbar row that mirrors the live `Input.HotbarSlots`. Same world-halt + cursor-release lifecycle as the pause menu (new `IsWorldHalted = IsPaused || IsInventoryOpen` flag in `GameRenderer`). Layout lives in `InventoryScreen` so click hit-testing slots in lockstep with rendering. Slots are display-only today — pickup/drop wires in once `ItemStack` lands.
+- Inventory screen (E key) — modal panel with title bar, 3×9 main grid, and a hotbar row backed by the live `Input.Inventory`. Same world-halt + cursor-release lifecycle as the pause menu (`IsWorldHalted = IsPaused || IsInventoryOpen` flag in `GameRenderer`). Layout lives in `InventoryScreen` so click hit-testing tracks rendering exactly.
+- `ItemStack` (BlockType + Count, max 64, Air/0 = Empty) and `Inventory` (27 main + 9 hotbar + 1 cursor). The hotbar shares slot indices 27..35 with the in-world bar so a single `Slots[]` array drives both views.
+- Inventory slot click handling — left-click runs Alpha's standard pick / drop / swap / merge exchange between the cursor stack and the clicked slot (via `Inventory.HandleLeftClickSlot`). Cursor stack follows the mouse and renders above every slot.
+- Stack-count digits drawn in the bottom-right of each non-empty slot (`DrawStackCount` — scale-2 bitmap font, dark drop-shadow). Hotbar HUD shows them too.
+- Block drops on break (survival): the broken block spawns a 0.25-block `DroppedItem` that bobs + spins, falls under gravity, settles on the floor, and gets picked up when the player walks within 1.5 blocks (`TickDrops`). `Inventory.TryAdd` runs Alpha's two-pass merge-then-fill (hotbar first, then main grid), with leftover staying in the world for re-pickup.
+- Toss-from-cursor — clicking outside the inventory panel with a non-empty cursor lobs the stack into the world as a drop (`TossCursorStack`), with a 1 s pickup cooldown so the throw isn't instantly re-grabbed.
+- Scroll-wheel hotbar cycling — wheel up/down moves the selected hotbar slot left/right (1 slot per Windows 120-unit notch), gated to gameplay (no wheel scroll while a modal is up).
 
 **Missing**
-- Item stack system (id + damage + count, max 64)
-- Player inventory storage (9 hotbar slots are real; 27 main + 4 armor + 1 cursor still need an `ItemStack` model)
-- Inventory slot interaction (pickup, drop, split, shift-click)
-- Crafting table / furnace / chest UIs
-- Drop item (Q)
+- Right-click "split half" stack op in the inventory (currently both buttons run the left-click rules)
+- Shift-click "move to other half" (hotbar ↔ main grid)
+- Crafting table / furnace / chest UIs (no inventory beyond the player)
+- Drop item via Q (only the GUI-toss path is wired)
 - Pick-block (middle mouse)
-- Scroll-wheel hotbar cycling
-- Stack-count digits drawn in the bottom-right of each slot (font is in place; needs a real stack model first)
-- True isometric block icons (currently a flat side-tile with a gradient — Alpha renders the 3 visible cube faces)
+- Armor slots (4 slots — the `Inventory` is 27+9 today; armor is unmodelled)
+- Drop-vs-drop merging on the floor (each break spawns a fresh drop; they don't coalesce)
 
 ## Items (actual items, not blocks)
 
@@ -226,23 +231,22 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Crosshair
 - Selection wire-outline on targeted block
 - Watery blue overlay when camera is inside water
-- Survival HUD layout: `| hearts | gap | hunger bar |` — heart row right-anchored to `width/3`, hunger row left-anchored to `2×width/3`
+- Survival HUD layout: `| hearts | gap | (hunger bar) |` — heart row right-anchored to `width/3`, hunger row left-anchored to `2×width/3`. Hunger row only renders when the per-world `HungerEnabled` survival sub-setting is on (off by default)
 - Heart sprites in classic `<3` style (two-circles + V-taper construction, highlight on upper-left bump, shade on lower-right) with full / half / empty states
 - Drumstick sprites (meat ellipse + bone capsule + knob) for hunger bar, same full / half / empty states
 - Bubble sprites for the air row — full circle / shrunken popping bubble / transparent empty; row only renders while air < max
 - Sprite shader + procedural `HudTextures` sheet (reusable brick for all future HUD icons)
+- Pause menu (`GAME MENU`): BACK TO GAME / OPTIONS / SAVE / QUIT, with hover highlight and bitmap-font labels
+- Options sub-menu (opened from pause-menu OPTIONS): SURVIVAL section with HUNGER BAR toggle (disabled in Creative). Esc pops Options back to the pause menu; BACK button does the same. Setting persists per-world in the save header.
 
 **Missing**
-- Hotbar strip (9 slots with selected highlight)
-- Dynamic hunger decay + food items (hunger currently pinned at max — scaffolding only)
+- Dynamic hunger decay + food items. Hunger sub-setting and EatFood scaffold (flat-heal vs. refill branch) exist; eating items, hunger drain on activity, and the food UX itself are pending.
 - Armor row
 - Tool-durability bar on item icons
 - Item-name popup
-- Bitmap font renderer
 - Chat overlay
 - F3 debug screen
-- Pause menu
-- Options screen
+- More Options (render distance, brightness, controls, audio…)
 - Main menu + world select + world creation screen
 
 ## Audio
@@ -303,10 +307,10 @@ per-cell metadata byte tracking remaining horizontal reach.
 ## Persistence
 
 **Have**
-- Custom gzipped binary world format (magic `VSC1`, version 3)
+- Custom gzipped binary world format (magic `VSC1`, version 4)
 - Per-chunk `IsModified` flag so unmodified chunks don't bloat saves
-- Save includes player position + camera yaw/pitch + game mode + HP
-- v1/v2 saves still load (missing fields default to Creative + full HP)
+- Save includes player position + camera yaw/pitch + game mode + HP + HungerEnabled survival sub-setting
+- v1/v2/v3 saves still load (missing fields default to Creative + full HP + hunger off)
 
 **Missing**
 - Persistence of: time of day, seed-per-feature state
@@ -325,7 +329,8 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 **Have**
 - Creative mode — instant break, unlimited place of selected block, no damage taken (default).
-- Survival mode — takes fall damage + void damage, 20 HP (10 hearts), instant respawn at spawn point on death.
+- Survival mode — takes fall damage + void damage + drowning, 20 HP (10 hearts), instant respawn at spawn point on death.
+- Survival sub-setting (Options → Survival → Hunger Bar): when on, drumstick row renders + slow health regen kicks in at ≥70% hunger (1 HP every 4 s). When off (default), hunger UI is hidden and `EatFood(amount)` flat-heals instead. The flag is per-world and persisted in the save header.
 - F3 toggles between modes at runtime; mode is persisted to save files.
 
 **Missing**
@@ -358,8 +363,8 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 ## Suggested next steps (rough order)
 
-1. **Inventory + item stacks** — the "items instead of block-enum" jump (hotbar UI is now in place; needs a real ItemStack model + drop/pick handling).
-2. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
+1. ~~**Inventory + item stacks**~~ — done. `ItemStack`/`Inventory` model, click-to-move slot exchange, cursor stack, stack-count digits, drops on break with pickup, GUI-toss.
+2. **Block hardness + mining time + drops** — break timing exists; drops now exist; per-block hardness tuning + tool-aware mining time still needed.
 3. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
 4. **Crafting table + furnace** — recipe plumbing.
 5. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.

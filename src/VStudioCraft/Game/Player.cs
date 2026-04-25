@@ -212,6 +212,27 @@ namespace VStudioCraft.Game
             if (Health < 0) Health = 0;
         }
 
+        // Heal counterpart to TakeDamage. Caps at MaxHealth and is a no-op
+        // on a dead player (the respawn flow is the only path back to live
+        // HP). Used by the hunger-driven slow regen and any future "ate food
+        // with hunger off" instant heal.
+        public void Heal(int amount)
+        {
+            if (amount <= 0 || Health <= 0) return;
+            Health += amount;
+            if (Health > MaxHealth) Health = MaxHealth;
+        }
+
+        // Refill hunger up to MaxHunger. The actual eat-food UX (slot use,
+        // animation, sound) hasn't landed yet — this is the API the hunger
+        // path will call from EatFood when it does.
+        public void Eat(int amount)
+        {
+            if (amount <= 0) return;
+            Hunger += amount;
+            if (Hunger > MaxHunger) Hunger = MaxHunger;
+        }
+
         public void HealFull()
         {
             Health = MaxHealth;

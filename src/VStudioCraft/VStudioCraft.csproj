@@ -75,6 +75,7 @@
     <Compile Include="Game\CrackTextures.cs" />
     <Compile Include="Game\ChunkJobSystem.cs" />
     <Compile Include="Game\ChunkMesher.cs" />
+    <Compile Include="Game\DroppedItem.cs" />
     <Compile Include="Game\Frustum.cs" />
     <Compile Include="Game\GameMode.cs" />
     <Compile Include="Game\FluidTick.cs" />
@@ -82,10 +83,13 @@
     <Compile Include="Game\HotbarTextures.cs" />
     <Compile Include="Game\HudTextures.cs" />
     <Compile Include="Game\InputState.cs" />
+    <Compile Include="Game\Inventory.cs" />
     <Compile Include="Game\InventoryScreen.cs" />
+    <Compile Include="Game\ItemStack.cs" />
     <Compile Include="Game\LightCalculator.cs" />
     <Compile Include="Game\Mesh.cs" />
     <Compile Include="Game\Noise.cs" />
+    <Compile Include="Game\OptionsMenu.cs" />
     <Compile Include="Game\OverlayMesh.cs" />
     <Compile Include="Game\PauseMenu.cs" />
     <Compile Include="Game\Player.cs" />

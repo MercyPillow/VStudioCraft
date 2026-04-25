@@ -141,6 +141,50 @@ void main()
 }
 ";
 
+        // Multi-face cube shader. Same Texture2DArray sampling as the crack
+        // shader, but each cube face picks a different layer from a 6-element
+        // uniform array. Indexed off `gl_VertexID / 6` since the break-cube
+        // mesh lays out exactly 6 verts per face in the order:
+        //   0=-X, 1=+X, 2=-Y(bottom), 3=+Y(top), 4=-Z, 5=+Z.
+        // Used for both world-space drops (so a dropped grass cube shows
+        // grass-top + grass-side like a placed block) and the inventory's
+        // 3-face isometric icons. uTint lets the HUD path pre-shade faces
+        // (top brighter, sides dimmer) without authoring three tile copies.
+        // uFaceShade indexes the same way as uLayers — supplied per face.
+        private const string MultiFaceCubeVertexSrc = @"#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUV;
+out vec2 vUV;
+flat out float vLayer;
+flat out float vShade;
+uniform mat4 uMVP;
+uniform float uLayers[6];
+uniform float uFaceShade[6];
+void main()
+{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = aUV;
+    int face = gl_VertexID / 6;
+    vLayer = uLayers[face];
+    vShade = uFaceShade[face];
+}
+";
+
+        private const string MultiFaceCubeFragmentSrc = @"#version 330 core
+in vec2 vUV;
+flat in float vLayer;
+flat in float vShade;
+out vec4 FragColor;
+uniform sampler2DArray uAtlas;
+uniform vec4 uTint;
+void main()
+{
+    vec4 t = texture(uAtlas, vec3(vUV, vLayer));
+    if (t.a < 0.5) discard;
+    FragColor = vec4(t.rgb * uTint.rgb * vShade, t.a * uTint.a);
+}
+";
+
         private const string OverlayFragmentSrc = @"#version 330 core
 out vec4 FragColor;
 uniform vec3 uColor;
@@ -227,6 +271,7 @@ void main()
         private Shader _spriteShader;
         private Shader _spriteArrayShader; // sampler2DArray variant for block-atlas icons
         private Shader _crackShader;       // pos+uv -> sampler2DArray for break overlay
+        private Shader _multiFaceCubeShader; // pos+uv -> per-face sampler2DArray (drops + iso icons)
         private OverlayMesh _crosshairMesh;
         private OverlayMesh _wireCubeMesh;
         private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
@@ -251,8 +296,18 @@ void main()
         private BlockType _breakTargetType;
         private float _breakProgress;
 
+        // Dropped item entities. Survival breaks spawn one of these at the
+        // broken block's centre; TickDrops integrates physics + pickup each
+        // frame the world isn't halted; RenderDrops draws each as a small
+        // spinning textured cube. There is no general entity system yet —
+        // this is a flat list owned directly by the renderer. Drops are
+        // not persisted to save files (yet); SetWorld clears them so a
+        // load doesn't inherit drops from the previous session.
+        private readonly System.Collections.Generic.List<DroppedItem> _drops
+            = new System.Collections.Generic.List<DroppedItem>();
+
         // Input state shared with the host. The render thread reads
-        // HotbarSlots / HotbarIndex from this every frame to paint the bar.
+        // Inventory / HotbarIndex from this every frame to paint the bar.
         // Set once by the host after construction and never reassigned, so
         // no synchronisation is required for the reference itself.
         public InputState Input { get; set; }
@@ -282,10 +337,34 @@ void main()
             set => _isInventoryOpen = value;
         }
 
+        // True while the Options sub-menu (opened from the pause menu) is
+        // showing. Implies _isPaused — the host only opens it on top of an
+        // already-paused state, and BACK/Esc returns to the pause menu.
+        // Volatile for the UI/render thread sync, same as the others.
+        private volatile bool _isOptionsOpen;
+        public bool IsOptionsOpen
+        {
+            get => _isOptionsOpen;
+            set => _isOptionsOpen = value;
+        }
+
+        // Per-world setting: show the hunger drumstick row + drive
+        // hunger-based slow regen. Off by default (the user explicitly
+        // wanted the bar gone unless they opt in). Persisted in the world
+        // save header (v4+); creative mode ignores the flag entirely
+        // because the survival HUD doesn't render then.
+        private volatile bool _hungerEnabled;
+        public bool HungerEnabled
+        {
+            get => _hungerEnabled;
+            set => _hungerEnabled = value;
+        }
+
         // Convenience for the host: any modal UI that should freeze the
-        // world. New modals (chat overlay, options screen, world-creation
-        // dialog…) just OR themselves in here and the rest of the loop
-        // gates on this single flag.
+        // world. New modals (chat overlay, world-creation dialog…) just
+        // OR themselves in here and the rest of the loop gates on this
+        // single flag. Options doesn't add to this list because it only
+        // ever opens on top of the pause menu (which is already halted).
         public bool IsWorldHalted => _isPaused || _isInventoryOpen;
         private SkyRenderer _sky;
         private World _world;
@@ -324,6 +403,14 @@ void main()
         private float _airDecayTimer;
         private float _drownDamageTimer;
 
+        // Hunger-driven slow health regen. Active only when HungerEnabled
+        // is on and Hunger >= 70% of max (14/20). Heals 1 HP per tick; the
+        // interval (4 s) is conservative — Alpha didn't have this loop, so
+        // we picked a cadence that feels healing-but-not-trivializing.
+        private const int   HungerRegenThreshold  = 14;       // 70% of MaxHunger
+        private const float HungerRegenInterval   = 4f;       // seconds per +1 HP
+        private float _hungerRegenTimer;
+
         // Fluid tick cadence. Alpha ticked water at 5 game-ticks (~0.25s) and
         // lava at 30 game-ticks (~1.5s). We share one cadence for both at
         // 0.25s and let the per-fluid reach difference (water=7, lava=3) do
@@ -360,6 +447,7 @@ void main()
             _spriteShader = new Shader(SpriteVertexSrc, SpriteFragmentSrc);
             _spriteArrayShader = new Shader(SpriteVertexSrc, SpriteArrayFragmentSrc);
             _crackShader = new Shader(CrackVertexSrc, CrackFragmentSrc);
+            _multiFaceCubeShader = new Shader(MultiFaceCubeVertexSrc, MultiFaceCubeFragmentSrc);
             _crosshairMesh = BuildCrosshairMesh();
             _wireCubeMesh = BuildWireCubeMesh();
             _unitQuadMesh = BuildUnitQuadMesh();
@@ -514,6 +602,7 @@ void main()
             // pre-v3 the loader fills them with Creative + full health defaults.
             GameMode = header.GameMode;
             Player.Health = header.Health > 0 ? header.Health : Player.MaxHealth;
+            HungerEnabled = header.HungerEnabled;
             Player.LastFallDistance = 0f;
             _spawnPos = Player.Position;
             _voidTimer = 0f;
@@ -534,6 +623,7 @@ void main()
                 CameraPitch = Camera.Pitch,
                 GameMode = GameMode,
                 Health = Player.Health,
+                HungerEnabled = HungerEnabled,
             };
             WorldSaveFormat.Save(path, header, _world);
         }
@@ -564,6 +654,7 @@ void main()
                 _voidTimer = 0f;
                 _airDecayTimer = 0f;
                 _drownDamageTimer = 0f;
+                _hungerRegenTimer = 0f;
             }
 
             // Consume any pending fall distance — survival already applied the
@@ -664,10 +755,48 @@ void main()
                 _drownDamageTimer = 0f;
             }
 
+            // Hunger-driven slow regen. Only when the option is on and the
+            // player isn't already topped up; the threshold is the same 70%
+            // rule the user asked for. Reset the timer the moment the
+            // condition drops so a brief hunger dip doesn't accidentally
+            // accumulate a heal-tick.
+            if (HungerEnabled
+                && Player.Hunger >= HungerRegenThreshold
+                && Player.Health < Player.MaxHealth
+                && !Player.IsDead)
+            {
+                _hungerRegenTimer += dt;
+                while (_hungerRegenTimer >= HungerRegenInterval
+                       && Player.Health < Player.MaxHealth)
+                {
+                    _hungerRegenTimer -= HungerRegenInterval;
+                    Player.Heal(1);
+                }
+            }
+            else
+            {
+                _hungerRegenTimer = 0f;
+            }
+
             if (Player.IsDead)
             {
                 Respawn();
             }
+        }
+
+        // The eat-food entry point — items aren't wired to it yet (the eat
+        // animation + slot consumption are deferred). Behaviour:
+        //   HungerEnabled ON  → restore Hunger by `amount`. Health regens
+        //                       passively in ApplySurvivalDamage when Hunger
+        //                       is high enough.
+        //   HungerEnabled OFF → restore Health directly by `amount`, since
+        //                       there's no hunger pool to refill.
+        // Called by future food items / cheats / debug hooks.
+        public void EatFood(int amount)
+        {
+            if (amount <= 0) return;
+            if (HungerEnabled) Player.Eat(amount);
+            else               Player.Heal(amount);
         }
 
         // Teleport to the remembered spawn and restore full HP. In a future
@@ -682,6 +811,7 @@ void main()
             _voidTimer = 0f;
             _airDecayTimer = 0f;
             _drownDamageTimer = 0f;
+            _hungerRegenTimer = 0f;
             SyncCameraToPlayer();
         }
 
@@ -703,6 +833,11 @@ void main()
 
             foreach (var m in _chunkMeshes.Values) m.Dispose();
             _chunkMeshes.Clear();
+
+            // Drops belong to the previous world and reference its block
+            // coordinates — drop them so a world swap doesn't leave stale
+            // floating items at coordinates that may no longer be loaded.
+            _drops.Clear();
 
             _world = world;
             _world.MarkAllDirty();
@@ -965,7 +1100,14 @@ void main()
 
             if (_breakProgress >= 1f)
             {
-                _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
+                // Snapshot the broken cell + type before the SetBlock so
+                // the spawn position uses block coordinates, not stale
+                // raycast coords if the player happens to be looking
+                // somewhere else by the time the next frame runs.
+                int bx = hit.X, by = hit.Y, bz = hit.Z;
+                var brokenType = t;
+                _world.SetBlock(bx, by, bz, BlockType.Air);
+                SpawnBreakDrop(bx, by, bz, brokenType);
                 _breakHasTarget = false;
                 _breakProgress = 0f;
             }
@@ -974,6 +1116,17 @@ void main()
         public bool TryPlace(BlockType t)
         {
             if (_world == null) return false;
+            // In survival, you can only place blocks you actually have. The
+            // call site already passes Input.SelectedBlock as `t`, so this
+            // is mainly belt-and-braces against an empty hotbar slot
+            // (SelectedBlock returns Air there) and against a stack count
+            // that's hit zero between this check and the previous frame.
+            if (GameMode == GameMode.Survival)
+            {
+                if (Input == null || t == BlockType.Air) return false;
+                var heldStack = Input.Inventory.GetHotbar(Input.HotbarIndex);
+                if (heldStack.IsEmpty || heldStack.Type != t) return false;
+            }
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit)) return false;
             int px = hit.X + hit.Nx;
             int py = hit.Y + hit.Ny;
@@ -988,7 +1141,180 @@ void main()
             // metadata). Flowers/mushrooms/tall grass: same rule.
             if (!BlockData.IsCubeShape(t) && !BlockData.IsSolid(_world.GetBlock(px, py - 1, pz)))
                 return false;
-            return _world.SetBlock(px, py, pz, t);
+            bool placed = _world.SetBlock(px, py, pz, t);
+            if (placed && GameMode == GameMode.Survival)
+            {
+                // Decrement the held stack — once the slot empties, the
+                // SelectedBlock guard above prevents subsequent placements.
+                Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+            }
+            return placed;
+        }
+
+        // Spawn a dropped-item entity for a block broken in survival. A
+        // small upward + slightly-randomised lateral kick is added so the
+        // cube hops out of the just-broken cell rather than spawning
+        // already-resting on the floor below — reads as a real ejection
+        // and lets the player see it. Position is the cell centre.
+        // Creative breaks (TryBreak) intentionally don't call this — the
+        // creative loop is "block-replace mode" and would otherwise litter
+        // the world with drops the player didn't want.
+        private void SpawnBreakDrop(int bx, int by, int bz, BlockType type)
+        {
+            if (type == BlockType.Air) return;
+            // Skip items we can't yet pick up cleanly: fluid sources just
+            // disappear (matches Alpha — broken water doesn't drop).
+            if (type == BlockType.Water || type == BlockType.FlowingWater
+                || type == BlockType.Lava  || type == BlockType.FlowingLava) return;
+
+            var rng = _dropRng;
+            float jx = ((float)rng.NextDouble() - 0.5f) * 2f;   // -1..1
+            float jz = ((float)rng.NextDouble() - 0.5f) * 2f;
+            var d = new DroppedItem
+            {
+                Position = new Vector3(bx + 0.5f, by + 0.5f, bz + 0.5f),
+                Velocity = new Vector3(jx, 3.5f, jz),
+                Stack = new ItemStack(type, 1),
+                AgeSec = 0f,
+                PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+            };
+            _drops.Add(d);
+        }
+
+        private readonly System.Random _dropRng = new System.Random(0xD0E5);
+
+        // Per-frame physics + pickup pass over every loose drop. Caller
+        // (the host's render loop) only invokes this when the world is
+        // unpaused, so drops freeze in place during pause / inventory.
+        public void TickDrops(float dt)
+        {
+            if (_world == null || Input == null) return;
+            if (_drops.Count == 0) return;
+
+            // Player body centre — drop pickup uses sphere distance from
+            // the drop's centre to this point (feet + half-height puts us
+            // at the AABB centre, which feels right for "did I brush it").
+            var playerCenter = Player.Position + new Vector3(0f, Player.Height * 0.5f, 0f);
+            var inv = Input.Inventory;
+            float pr2 = DroppedItem.PickupRadius * DroppedItem.PickupRadius;
+
+            for (int i = _drops.Count - 1; i >= 0; i--)
+            {
+                var d = _drops[i];
+                d.AgeSec += dt;
+                if (d.PickupCooldownSec > 0f) d.PickupCooldownSec -= dt;
+
+                if (d.AgeSec > DroppedItem.MaxLifetimeSec)
+                {
+                    _drops.RemoveAt(i);
+                    continue;
+                }
+
+                // Gravity + integrate. Cap fall speed so a drop in the void
+                // doesn't accumulate ridiculous velocity. Drag x/z lightly
+                // every frame so airborne drops decelerate and floor drops
+                // come to rest within a fraction of a second.
+                d.Velocity.Y -= 20f * dt;
+                if (d.Velocity.Y < -20f) d.Velocity.Y = -20f;
+                d.Position += d.Velocity * dt;
+                d.Velocity.X *= 0.92f;
+                d.Velocity.Z *= 0.92f;
+
+                // Single-cell ground test: if the cell underneath the
+                // drop's bottom is solid, snap the drop up so its bottom
+                // sits flush with the cell top. No wall sweep — drops
+                // thrown into a wall just slide along the floor once
+                // gravity wins. Good enough for scattered loose items.
+                int cx = (int)System.Math.Floor(d.Position.X);
+                int cyBot = (int)System.Math.Floor(d.Position.Y - DroppedItem.HalfSize);
+                int cz = (int)System.Math.Floor(d.Position.Z);
+                if (BlockData.IsSolid(_world.GetBlock(cx, cyBot, cz)))
+                {
+                    d.Position.Y = cyBot + 1f + DroppedItem.HalfSize;
+                    if (d.Velocity.Y < 0f) d.Velocity.Y = 0f;
+                    // Stronger horizontal drag once on ground so the drop
+                    // settles instead of skating.
+                    d.Velocity.X *= 0.6f;
+                    d.Velocity.Z *= 0.6f;
+                }
+
+                // Pickup. Spawn-cooldown gates a 1-frame re-grab from the
+                // miner's body brushing past the just-spawned drop.
+                if (d.PickupCooldownSec <= 0f)
+                {
+                    float dx = d.Position.X - playerCenter.X;
+                    float dy = d.Position.Y - playerCenter.Y;
+                    float dz = d.Position.Z - playerCenter.Z;
+                    if (dx * dx + dy * dy + dz * dz <= pr2)
+                    {
+                        var leftover = inv.TryAdd(d.Stack);
+                        if (leftover.IsEmpty)
+                        {
+                            _drops.RemoveAt(i);
+                            continue;
+                        }
+                        // Partial pickup — the absorbed portion is gone,
+                        // remainder stays in the world for someone with
+                        // empty slots to grab later.
+                        d.Stack = leftover;
+                    }
+                }
+            }
+        }
+
+        // Inventory click dispatcher. Hits a slot under (mx, my) and
+        // routes through the Inventory's standard exchange rules. A click
+        // outside the panel with a non-empty cursor tosses the cursor
+        // stack into the world as a drop — same effect as Alpha's
+        // outside-panel discard.
+        public void HandleInventoryClick(int button, int mx, int my, int screenW, int screenH)
+        {
+            if (Input == null) return;
+            int slot = InventoryScreen.HitTest(screenW, screenH, mx, my);
+            var inv = Input.Inventory;
+            if (slot >= 0)
+            {
+                // For now both buttons run the same exchange — the right-
+                // click "split" semantics arrive when we add more granular
+                // stack ops. Single button covers the user's request
+                // (move items between hotbar and main).
+                inv.HandleLeftClickSlot(slot);
+                return;
+            }
+            // Outside the panel: drop the cursor stack into the world.
+            // Same effect as a Q-toss but originated from the GUI.
+            if (!inv.Cursor.IsEmpty)
+            {
+                TossCursorStack();
+            }
+        }
+
+        // Toss the cursor's stack into the world in front of the player.
+        // Used by clicks outside the inventory panel today; Q-drop will
+        // hook into the same path when it lands.
+        private void TossCursorStack()
+        {
+            if (Input == null) return;
+            var stack = Input.Inventory.Cursor;
+            if (stack.IsEmpty) return;
+            Input.Inventory.Cursor = ItemStack.Empty;
+
+            // Spawn just in front of the player at eye height with a
+            // forward kick + small upward arc so it lobs off the cliff /
+            // into the open instead of dribbling at the player's feet.
+            Vector3 fwd = Camera.Forward;
+            Vector3 spawn = Camera.Position + fwd * 0.6f;
+            var d = new DroppedItem
+            {
+                Position = spawn,
+                Velocity = fwd * 4f + new Vector3(0f, 1.5f, 0f),
+                Stack = stack,
+                AgeSec = 0f,
+                // Longer cooldown than break-spawned drops so the player
+                // can throw items without immediately re-picking them.
+                PickupCooldownSec = 1f,
+            };
+            _drops.Add(d);
         }
 
         public void OnResize(int width, int height)
@@ -1179,6 +1505,7 @@ void main()
                 RenderSubmergedOverlay(width, height);
             }
 
+            RenderDrops(width, height);
             RenderBreakOverlay(width, height);
             RenderSelectionOutline(width, height);
             RenderCrosshair(width, height);
@@ -1195,7 +1522,14 @@ void main()
             // we still gate on _isInventoryOpen first so a stuck flag
             // can't double-stack the dim wash.
             if (_isInventoryOpen) RenderInventory(width, height);
-            else if (_isPaused) RenderPauseMenu(width, height);
+            else if (_isPaused)
+            {
+                // Options is layered on top of the pause menu — draw the
+                // pause backdrop first so dismissing options reveals it
+                // without a one-frame flicker.
+                if (_isOptionsOpen) RenderOptionsMenu(width, height);
+                else                RenderPauseMenu(width, height);
+            }
         }
 
         // Survival HUD layout:
@@ -1242,16 +1576,21 @@ void main()
             bool hpHalf = (hp & 1) != 0;
             DrawIconRow(_heartTexture, heartsX0, y0, iconPx, stride, count, fullHearts, hpHalf, ortho);
 
-            // Hunger row.
-            int hg = Math.Max(0, Player.Hunger);
-            int fullHunger = hg / 2;
-            bool hgHalf = (hg & 1) != 0;
-            DrawIconRow(_drumstickTexture, hungerX0, y0, iconPx, stride, count, fullHunger, hgHalf, ortho);
+            // Hunger row — gated behind the per-world HungerEnabled toggle.
+            // Default off (the user asked for the bar to be hidden unless
+            // explicitly opted in via Options → Survival → Hunger Bar).
+            if (HungerEnabled)
+            {
+                int hg = Math.Max(0, Player.Hunger);
+                int fullHunger = hg / 2;
+                bool hgHalf = (hg & 1) != 0;
+                DrawIconRow(_drumstickTexture, hungerX0, y0, iconPx, stride, count, fullHunger, hgHalf, ortho);
+            }
 
-            // Bubble row — sits one stride above the hunger row, sharing the
-            // hunger row's left anchor. Only drawn when Air < MaxAir; while
-            // surfaced (Air pinned at MaxAir) the bubbles are invisible to
-            // match Alpha's "bubbles only show when you need them" rule.
+            // Bubble row — sits one stride above the hunger row's anchor
+            // (or the hearts' baseline if hunger is hidden). Only drawn
+            // when Air < MaxAir; while surfaced the bubbles are invisible
+            // to match Alpha's "bubbles only show when you need them" rule.
             int air = Math.Max(0, Player.Air);
             if (air < Player.MaxAir)
             {
@@ -1344,6 +1683,196 @@ void main()
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
+        // Draw every loose dropped item as a small spinning textured cube
+        // at its world position. Uses the break-overlay's pos+UV cube mesh
+        // with the multi-face cube shader so a dropped grass cube shows
+        // grass-top + grass-side + dirt-bottom (matching how the same block
+        // looks when placed). World shading is uniform across faces — the
+        // chunk's ambient lighting gives placed blocks their per-face
+        // brightness, but a 0.25-block drop in mid-air doesn't need that
+        // and a flat 1.0 shade keeps it readable from any angle.
+        private void RenderDrops(int width, int height)
+        {
+            if (_drops.Count == 0) return;
+
+            _multiFaceCubeShader.Use();
+            _multiFaceCubeShader.SetInt("uAtlas", 0);
+            _multiFaceCubeShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            SetCubeFaceShade(_multiFaceCubeShader,
+                /*top*/1f, /*side*/1f, /*bottom*/1f);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+
+            var view = Camera.GetView();
+            var proj = Camera.GetProjection(width, height);
+
+            // Constant 0.25-block cube around drop centre. The base mesh
+            // (_breakCubeMesh) spans [0,1]^3 (with tiny inflation), so we
+            // first translate by -0.5 to centre on origin, then scale.
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var sizeScale   = Matrix4.CreateScale(0.25f);
+
+            BlockType lastType = BlockType.Air;
+            for (int i = 0; i < _drops.Count; i++)
+            {
+                var d = _drops[i];
+                if (d.Stack.Type != lastType)
+                {
+                    SetCubeFaceLayers(_multiFaceCubeShader, d.Stack.Type);
+                    lastType = d.Stack.Type;
+                }
+
+                // Cute Alpha-style spin around vertical + tiny vertical bob.
+                float spin = d.AgeSec * 1.5f;
+                float bob  = (float)System.Math.Sin(d.AgeSec * 2.0) * 0.05f;
+
+                var rotY  = Matrix4.CreateRotationY(spin);
+                var trans = Matrix4.CreateTranslation(d.Position.X,
+                                                      d.Position.Y + bob,
+                                                      d.Position.Z);
+                var model = localCentre * sizeScale * rotY * trans;
+                var mvp = model * view * proj;
+                _multiFaceCubeShader.SetMatrix4("uMVP", mvp);
+                _breakCubeMesh.Draw();
+            }
+
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Set per-face atlas layer indices on the multi-face cube shader.
+        // Mesh face order is fixed by BuildBreakCubeMesh:
+        //   0 = -X, 1 = +X, 2 = -Y (bottom), 3 = +Y (top), 4 = -Z, 5 = +Z.
+        // BlockData.GetTileIndex's faceKind is 0=top, 1=bottom, 2=side; we
+        // remap accordingly so a grass cube renders grass-top up top, dirt
+        // down below, and grass-side around — same as a placed block.
+        private static void SetCubeFaceLayers(Shader sh, BlockType type)
+        {
+            int side = BlockData.GetTileIndex(type, /*side*/2);
+            int top  = BlockData.GetTileIndex(type, /*top*/0);
+            int bot  = BlockData.GetTileIndex(type, /*bottom*/1);
+            sh.SetFloat("uLayers[0]", side); // -X
+            sh.SetFloat("uLayers[1]", side); // +X
+            sh.SetFloat("uLayers[2]", bot);  // -Y bottom
+            sh.SetFloat("uLayers[3]", top);  // +Y top
+            sh.SetFloat("uLayers[4]", side); // -Z
+            sh.SetFloat("uLayers[5]", side); // +Z
+        }
+
+        // Set per-face shade multipliers on the multi-face cube shader.
+        // Same mesh face order as SetCubeFaceLayers. Used by the inventory
+        // icon path to fake directional light on the iso-rotated cube
+        // (top brightest, sides slightly dimmer) so the three visible
+        // faces read as distinct surfaces even when their tiles are the
+        // same colour (e.g. cobblestone).
+        private static void SetCubeFaceShade(Shader sh, float top, float side, float bottom)
+        {
+            sh.SetFloat("uFaceShade[0]", side);
+            sh.SetFloat("uFaceShade[1]", side);
+            sh.SetFloat("uFaceShade[2]", bottom);
+            sh.SetFloat("uFaceShade[3]", top);
+            sh.SetFloat("uFaceShade[4]", side);
+            sh.SetFloat("uFaceShade[5]", side);
+        }
+
+        // Render a 3-face block icon (top + two sides) into a pixel
+        // rectangle on the HUD. Uses the exact same multi-face cube
+        // shader + mesh as the world drops, with the same uniform
+        // shading (no faux directional light), so a hotbar icon looks
+        // like a "paused drop" rather than a separate iso illustration.
+        // The camera is a small ortho-ish perspective that matches the
+        // angle a player typically views a drop on the ground at.
+        // Cross-sprite blocks (torch, flowers, tall grass) are NOT routed
+        // through here — the 3D cube wouldn't look right for an "X"-shaped
+        // sprite; they continue to use the flat sprite path with the side tile.
+        private void RenderBlockIcon3D(BlockType type, int slotX, int slotY,
+            int slotW, int slotH, Matrix4 ortho)
+        {
+            // Classic Minecraft inventory orientation:
+            //   1. Yaw -45° around Y so a corner of the cube faces the
+            //      camera. The front edge (between two side faces) is now
+            //      vertical, sitting dead-centre in screen X.
+            //   2. Pitch +30° around X. The top of the now corner-on cube
+            //      tips toward the viewer, exposing the top face as a
+            //      flat diamond above the two side faces. Bottom tucks
+            //      back behind the front edge and gets back-face culled.
+            //
+            // CRITICAL: yaw FIRST, then pitch. The reverse order
+            // (pitch * yaw) yaws an already-tilted cube around the world
+            // Y axis — the pitched cube swings, leaving the front seam
+            // tilted rather than vertical and the top diamond rotated
+            // off-axis. Yaw-then-pitch yaws the upright cube and then
+            // pitches the resulting (still-axis-aligned-in-Y) corner-on
+            // shape, so the seam stays vertical.
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var rotY = Matrix4.CreateRotationY(MathHelper.DegreesToRadians(-45f));
+            var rotX = Matrix4.CreateRotationX(MathHelper.DegreesToRadians(30f));
+
+            // After yaw 45° + pitch 30° the cube projects to a hexagon
+            // roughly 1.42 wide and 1.58 tall (slightly taller than wide
+            // because the back-top and front-bottom corners stick further
+            // out vertically once the cube is tipped). Fit so the icon
+            // touches the smaller of the two slot bounds — width-only
+            // would overflow the slot vertically; height-only would leave
+            // a wide gap on the sides.
+            const float ProjectedW = 1.42f;
+            const float ProjectedH = 1.58f;
+            const float SlotPad    = 0.92f;
+            float fitPx = System.Math.Min(
+                slotW * SlotPad / ProjectedW,
+                slotH * SlotPad / ProjectedH);
+
+            // Y is negated because the screen ortho has y growing
+            // downward (top-left origin) but our model's +Y points up.
+            //
+            // CRITICAL: Z stays at 1, NOT fitPx. The HUD ortho uses
+            // near=-1/far=1, and the hardware clips against those planes
+            // regardless of whether the depth test is enabled. Scaling Z
+            // by fitPx (~30-50) would push the rotated cube's depth
+            // extent out to ±~40, far past the [-1,1] near/far range, so
+            // ~98% of the cube gets clipped and only a thin slice through
+            // z=0 survives — which renders as just the cube's edges.
+            // Ortho projection ignores Z for screen position, so a small
+            // Z scale produces an identical 2D silhouette while keeping
+            // every vertex inside the depth bounds.
+            var scale = Matrix4.CreateScale(fitPx, -fitPx, 1f);
+            var trans = Matrix4.CreateTranslation(
+                slotX + slotW * 0.5f, slotY + slotH * 0.5f, 0f);
+
+            var mvp = localCentre * rotY * rotX * scale * trans * ortho;
+
+            _multiFaceCubeShader.Use();
+            _multiFaceCubeShader.SetInt("uAtlas", 0);
+            _multiFaceCubeShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            SetCubeFaceLayers(_multiFaceCubeShader, type);
+            // Uniform shade across all faces — matches RenderDrops, so
+            // a hotbar icon reads as the same cube as the world drop
+            // (which the user explicitly asked for).
+            SetCubeFaceShade(_multiFaceCubeShader,
+                /*top*/1f, /*side*/1f, /*bottom*/1f);
+            _multiFaceCubeShader.SetMatrix4("uMVP", mvp);
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+
+            // Cull to hide the 3 back-facing faces; without this the
+            // far-side faces would draw on top of the near ones because
+            // the HUD pass runs with depth test off.
+            //
+            // Winding sanity: the negative Y in `scale` flips winding once,
+            // but the HUD ortho (CreateOrthographicOffCenter with top=0,
+            // bottom=height) already encodes a Y flip too. Two flips cancel,
+            // so the final geometry is still CCW from the eye — i.e. the
+            // default FrontFace=Ccw is correct. The earlier FrontFace=Cw
+            // override hid the FRONT faces and left only the back-facing
+            // (away-from-camera) faces visible, which read as just edges
+            // / inside-of-cube seams. Don't touch FrontFace here.
+            GL.Enable(EnableCap.CullFace);
+            GL.CullFace(CullFaceMode.Back);
+            _breakCubeMesh.Draw();
+
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
         private void RenderSelectionOutline(int width, int height)
         {
             if (_world == null) return;
@@ -1432,21 +1961,12 @@ void main()
             DrawSpriteQuad(barX, barY, BarPx, BarH, ortho);
 
             // ---- block icons ---------------------------------------------
-            _spriteArrayShader.Use();
-            _spriteArrayShader.SetInt("uAtlas", 0);
-            _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
-            // V-flip: the block atlas was authored with v=0 at the bottom of
-            // each tile (so greedy-mesher quads sample the green grass
-            // overhang at the top of each face). The unit-quad's aPos.y
-            // grows top-to-bottom in screen space under our ortho, so without
-            // a flip the icon would show its bottom row at the top of the
-            // slot (upside-down). We map aPos.y=0 → vUV.y=1 by pre-loading
-            // the offset to 1 and scaling by -1.
-            _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
-            _spriteArrayShader.SetVector2("uUvScale", new Vector2(1f, -1f));
-            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
-
-            BlockType[] slots = Input?.HotbarSlots;
+            // Cube blocks render as a 3-face isometric (top + 2 sides) via
+            // RenderBlockIcon3D — same look as a placed block, so the
+            // hotbar tile matches what the player will actually place.
+            // Cross-sprite items (torch, flowers, tall grass) keep the
+            // flat sprite path since their tile is an X, not a cube.
+            var inv = Input?.Inventory;
             int selected = Input != null ? Input.HotbarIndex : 0;
             // Slot 0 starts inside the bar's 1-px frame (FramePx scales with the bar).
             int firstSlotX = barX + FramePx;
@@ -1455,18 +1975,26 @@ void main()
 
             for (int i = 0; i < HotbarTextures.SlotCount; i++)
             {
-                if (slots == null || i >= slots.Length) break;
-                var t = slots[i];
-                if (t == BlockType.Air) continue;
-                int layer = BlockData.GetTileIndex(t, /*side*/2);
-                _spriteArrayShader.SetFloat("uLayer", layer);
+                if (inv == null) break;
+                var stack = inv.Slots[Inventory.HotbarStart + i];
+                if (stack.IsEmpty) continue;
                 int xp = firstSlotX + i * SlotPx + iconPad;
                 int yp = slotY + iconPad;
-                DrawSpriteQuadFor(_spriteArrayShader, xp, yp, IconPx, IconPx, ortho);
+                if (BlockData.IsCubeShape(stack.Type))
+                {
+                    RenderBlockIcon3D(stack.Type, xp, yp, IconPx, IconPx, ortho);
+                }
+                else
+                {
+                    DrawFlatSpriteIcon(stack.Type, xp, yp, IconPx, IconPx, ortho);
+                }
             }
+            // RenderBlockIcon3D toggles CullFace; restore the HUD pass
+            // baseline (cull off, depth off) before the next sprite draws.
+            GL.Disable(EnableCap.CullFace);
 
             // ---- selected highlight --------------------------------------
-            if (slots != null && selected >= 0 && selected < HotbarTextures.SlotCount)
+            if (inv != null && selected >= 0 && selected < HotbarTextures.SlotCount)
             {
                 _spriteShader.Use();
                 _spriteShader.SetInt("uSprite", 0);
@@ -1483,13 +2011,29 @@ void main()
                 DrawSpriteQuad(hx, hy, HighlightPx, HighlightPx, ortho);
             }
 
-            // ---- tooltip text --------------------------------------------
-            if (slots != null && selected >= 0 && selected < slots.Length)
+            // ---- stack-count digits --------------------------------------
+            // Drawn after the highlight so the digit sits above the frame
+            // outline. Single-item stacks skip the count to keep the bar
+            // visually clean.
+            if (inv != null)
             {
-                var t = slots[selected];
-                if (t != BlockType.Air)
+                for (int i = 0; i < HotbarTextures.SlotCount; i++)
                 {
-                    string label = FriendlyName(t);
+                    var stack = inv.Slots[Inventory.HotbarStart + i];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    int xp = firstSlotX + i * SlotPx;
+                    int yp = slotY;
+                    DrawStackCount(stack.Count, xp, yp, SlotPx, SlotPx, ortho);
+                }
+            }
+
+            // ---- tooltip text --------------------------------------------
+            if (inv != null && selected >= 0 && selected < HotbarTextures.SlotCount)
+            {
+                var stack = inv.Slots[Inventory.HotbarStart + selected];
+                if (!stack.IsEmpty)
+                {
+                    string label = FriendlyName(stack.Type);
                     DrawString(label, /*scale*/2, /*centerX*/width / 2,
                         /*topY*/barY - HotbarTextures.GlyphCellH * 2 - 4,
                         new Vector4(1f, 1f, 1f, 1f), ortho);
@@ -1539,6 +2083,63 @@ void main()
                 new Vector2(HotbarTextures.GlyphUvW, HotbarTextures.GlyphUvH));
             GL.BindTexture(TextureTarget.Texture2D, _fontTexture);
 
+            for (int i = 0; i < text.Length; i++)
+            {
+                int gi = HotbarTextures.GlyphIndex(text[i]);
+                if (gi < 0) { x += glyphW; continue; }
+                HotbarTextures.GlyphUv(gi, out float u, out float v);
+                _spriteShader.SetVector2("uUvOffset", new Vector2(u, v));
+                DrawSpriteQuadFor(_spriteShader, x, topY, glyphW, glyphH, ortho);
+                x += glyphW;
+            }
+        }
+
+        // Draw an inventory-stack count (e.g. "64") right-aligned to the
+        // bottom-right corner of a slot rect. Uses scale-2 glyphs (~12×16
+        // px) so they read clearly without dominating the icon. A 1-px
+        // dark-grey drop-shadow gives the digits contrast against pale
+        // block icons (sand, planks). Caller must have blend on; the
+        // sprite shader is rebound each call so it can interleave with
+        // other draw passes (block-icon array shader, highlight, etc.).
+        private void DrawStackCount(int count, int slotX, int slotY,
+            int slotW, int slotH, Matrix4 ortho)
+        {
+            string text = count.ToString();
+            int scale = 2;
+            int glyphW = HotbarTextures.GlyphCellW * scale;
+            int glyphH = HotbarTextures.GlyphCellH * scale;
+            int total = text.Length * glyphW;
+
+            // Right-bottom anchor with a small inset so the digits sit
+            // inside the slot border instead of clipping the corner.
+            const int InsetX = 3;
+            const int InsetY = 3;
+            int rightX = slotX + slotW - InsetX;
+            int topY = slotY + slotH - InsetY - glyphH;
+            int leftX = rightX - total;
+
+            // Drop-shadow pass (offset +1,+1) — same string, dark tint.
+            DrawDigits(text, leftX + 1, topY + 1, glyphW, glyphH,
+                new Vector4(0f, 0f, 0f, 0.85f), ortho);
+            // Foreground pass — bright white.
+            DrawDigits(text, leftX, topY, glyphW, glyphH,
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+        }
+
+        // Inner glyph-loop helper shared by DrawStackCount's shadow + fg
+        // passes. Mirrors DrawString but takes a left-anchored x instead
+        // of a centre, since stack counts are right-anchored to the slot.
+        private void DrawDigits(string text, int leftX, int topY,
+            int glyphW, int glyphH, Vector4 tint, Matrix4 ortho)
+        {
+            _spriteShader.Use();
+            _spriteShader.SetInt("uSprite", 0);
+            _spriteShader.SetVector4("uTint", tint);
+            _spriteShader.SetVector2("uUvScale",
+                new Vector2(HotbarTextures.GlyphUvW, HotbarTextures.GlyphUvH));
+            GL.BindTexture(TextureTarget.Texture2D, _fontTexture);
+
+            int x = leftX;
             for (int i = 0; i < text.Length; i++)
             {
                 int gi = HotbarTextures.GlyphIndex(text[i]);
@@ -1608,11 +2209,90 @@ void main()
             GL.Disable(EnableCap.Blend);
         }
 
+        // Options sub-menu. Same dim wash + frame palette as the pause
+        // menu so the two read as one UI family. Section headings draw
+        // dimmer (no fill, no border) so they look like labels rather
+        // than buttons; disabled rows draw greyed and ignore hover.
+        private void RenderOptionsMenu(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Dim background — same wash as the pause menu (slightly darker
+            // because we're layered on top of an already-dim world).
+            DrawSolidQuad(0, 0, width, height,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+
+            int mx = Input?.MenuMouseX ?? -1;
+            int my = Input?.MenuMouseY ?? -1;
+
+            bool isSurvival = GameMode == GameMode.Survival;
+            var rows = OptionsMenu.BuildRows(width, height, HungerEnabled, isSurvival);
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                var r = rows[i];
+
+                if (r.IsSection)
+                {
+                    // Section heading — no fill, no border. Slightly muted
+                    // grey so it reads as a label distinct from buttons.
+                    int labelTopY = r.Y + (r.H - HotbarTextures.GlyphCellH * 2) / 2;
+                    DrawString(r.Label, /*scale*/2,
+                        /*centerX*/r.X + r.W / 2, labelTopY,
+                        new Vector4(0.78f, 0.82f, 0.88f, 1f), ortho);
+                    continue;
+                }
+
+                bool hover = !r.IsDisabled
+                    && mx >= r.X && mx < r.X + r.W
+                    && my >= r.Y && my < r.Y + r.H;
+
+                Vector3 fill;
+                if (r.IsDisabled)       fill = new Vector3(0.10f, 0.12f, 0.16f);
+                else if (hover)         fill = new Vector3(0.42f, 0.55f, 0.72f);
+                else                    fill = new Vector3(0.16f, 0.20f, 0.26f);
+                float alpha = r.IsDisabled ? 0.7f : 0.95f;
+                DrawSolidQuad(r.X, r.Y, r.W, r.H, fill, alpha, ortho);
+
+                // 2-px frame around the button.
+                Vector3 border;
+                if (r.IsDisabled)       border = new Vector3(0.40f, 0.42f, 0.46f);
+                else if (hover)         border = new Vector3(1f, 1f, 1f);
+                else                    border = new Vector3(0.78f, 0.82f, 0.88f);
+                DrawSolidQuad(r.X, r.Y, r.W, 2, border, 1f, ortho);
+                DrawSolidQuad(r.X, r.Y + r.H - 2, r.W, 2, border, 1f, ortho);
+                DrawSolidQuad(r.X, r.Y, 2, r.H, border, 1f, ortho);
+                DrawSolidQuad(r.X + r.W - 2, r.Y, 2, r.H, border, 1f, ortho);
+
+                Vector4 textCol = r.IsDisabled
+                    ? new Vector4(0.55f, 0.58f, 0.62f, 1f)
+                    : new Vector4(1f, 1f, 1f, 1f);
+                int btnLabelTopY = r.Y + (r.H - HotbarTextures.GlyphCellH * 2) / 2;
+                DrawString(r.Label, /*scale*/2,
+                    /*centerX*/r.X + r.W / 2, btnLabelTopY,
+                    textCol, ortho);
+            }
+
+            // Title above the row stack.
+            DrawString("OPTIONS", /*scale*/3, /*centerX*/width / 2,
+                /*topY*/OptionsMenu.TitleY(width, height, HungerEnabled, isSurvival),
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
         // Inventory overlay — dim wash + panel + 3×9 main grid + 1×9 hotbar
-        // row. The bottom row mirrors the live hotbar (Input.HotbarSlots) so
-        // the player can see what they're carrying. The 27 main-grid slots
-        // are display-only placeholders today; click-through-to-storage
-        // lands here when the ItemStack model arrives (see features.md).
+        // row. Both rows are live: every slot reads from Input.Inventory.Slots
+        // and renders the block icon + stack-count digits. The cursor stack
+        // (held while moving items between slots) follows MenuMouseX/Y so
+        // the player can see what they're carrying mid-drag.
         private void RenderInventory(int width, int height)
         {
             var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
@@ -1667,54 +2347,109 @@ void main()
                 DrawSolidQuad(sx + sw - b, sy, b, sh, wellEdgeHi, 1f, ortho);         // right
             }
 
-            // ---- hotbar-row block icons --------------------------------
-            // Same shader setup as RenderHotbar (V-flipped UVs since the
-            // block atlas was authored bottom-up but our ortho is top-down).
-            BlockType[] slots = Input?.HotbarSlots;
-            if (slots != null)
-            {
-                _spriteArrayShader.Use();
-                _spriteArrayShader.SetInt("uAtlas", 0);
-                _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
-                _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
-                _spriteArrayShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
-                GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+            // ---- block icons (every non-empty slot) --------------------
+            // Cube blocks render as 3-face isometric icons; cross-sprites
+            // (torch / flowers / tall grass) keep the flat sprite path so
+            // their X-shaped tile reads correctly. Slot indices match
+            // Inventory.Slots[] exactly, so no remap is needed.
+            var inv = Input?.Inventory;
+            int iconPad = (InventoryScreen.SlotPx - InventoryScreen.IconPx) / 2;
+            int hotbarBase = InventoryScreen.MainSlotCount;
 
-                int iconPad = (InventoryScreen.SlotPx - InventoryScreen.IconPx) / 2;
-                int hotbarBase = InventoryScreen.MainSlotCount; // first hotbar slot index
-                for (int i = 0; i < InventoryScreen.HotbarSlotCount; i++)
+            if (inv != null)
+            {
+                for (int i = 0; i < InventoryScreen.TotalSlots; i++)
                 {
-                    if (i >= slots.Length) break;
-                    var t = slots[i];
-                    if (t == BlockType.Air) continue;
-                    int layer = BlockData.GetTileIndex(t, /*side*/2);
-                    _spriteArrayShader.SetFloat("uLayer", layer);
-                    InventoryScreen.GetSlotRect(hotbarBase + i, width, height,
+                    var stack = inv.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    InventoryScreen.GetSlotRect(i, width, height,
                         out int sx, out int sy, out _, out _);
-                    DrawSpriteQuadFor(_spriteArrayShader,
-                        sx + iconPad, sy + iconPad,
-                        InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
+                    int xp = sx + iconPad;
+                    int yp = sy + iconPad;
+                    if (BlockData.IsCubeShape(stack.Type))
+                    {
+                        RenderBlockIcon3D(stack.Type, xp, yp,
+                            InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
+                    }
+                    else
+                    {
+                        DrawFlatSpriteIcon(stack.Type, xp, yp,
+                            InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
+                    }
+                }
+                // RenderBlockIcon3D toggles cull state; reset to the HUD
+                // pass baseline before the highlight + count passes.
+                GL.Disable(EnableCap.CullFace);
+            }
+
+            // ---- selected hotbar highlight -----------------------------
+            // Mirror the in-game bar so the player can see which hotbar
+            // slot is "live" while they browse storage.
+            int selected = Input != null ? Input.HotbarIndex : -1;
+            if (selected >= 0 && selected < InventoryScreen.HotbarSlotCount)
+            {
+                _spriteShader.Use();
+                _spriteShader.SetInt("uSprite", 0);
+                _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+                _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
+                _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
+                GL.BindTexture(TextureTarget.Texture2D, _hotbarHighlightTexture);
+
+                InventoryScreen.GetSlotRect(hotbarBase + selected, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                int hSize = HotbarTextures.HighlightSize * 2; // ~48 px, slightly bigger than slot
+                int hx = sx + (sw - hSize) / 2;
+                int hy = sy + (sh - hSize) / 2;
+                DrawSpriteQuad(hx, hy, hSize, hSize, ortho);
+            }
+
+            // ---- per-slot stack counts ---------------------------------
+            // Drawn after icons + highlight so digits sit on top of both.
+            // Stacks of 1 don't show a count (Alpha behaviour, keeps the
+            // grid visually quiet for fresh pickups).
+            if (inv != null)
+            {
+                for (int i = 0; i < InventoryScreen.TotalSlots; i++)
+                {
+                    var stack = inv.Slots[i];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    InventoryScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+            }
+
+            // ---- cursor stack (follows the mouse) ----------------------
+            // Rendered last so it floats above every slot. Position is
+            // anchored to the cursor centre so the icon doesn't lurch
+            // when the player drags from a slot's edge to its centre.
+            if (inv != null && !inv.Cursor.IsEmpty && Input != null)
+            {
+                int cx = Input.MenuMouseX;
+                int cy = Input.MenuMouseY;
+                int iconSize = InventoryScreen.IconPx;
+                int ix = cx - iconSize / 2;
+                int iy = cy - iconSize / 2;
+
+                if (BlockData.IsCubeShape(inv.Cursor.Type))
+                {
+                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                    GL.Disable(EnableCap.CullFace);
+                }
+                else
+                {
+                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
                 }
 
-                // Selected highlight on the hotbar row mirrors the in-game
-                // bar so the player can see which slot is "live" while they
-                // browse storage.
-                int selected = Input != null ? Input.HotbarIndex : -1;
-                if (selected >= 0 && selected < InventoryScreen.HotbarSlotCount)
+                // Count badge in the same bottom-right anchor as a slot
+                // would use. Using SlotPx as the synthetic frame keeps
+                // visual parity with in-slot counts.
+                if (inv.Cursor.Count > 1)
                 {
-                    _spriteShader.Use();
-                    _spriteShader.SetInt("uSprite", 0);
-                    _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
-                    _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
-                    _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
-                    GL.BindTexture(TextureTarget.Texture2D, _hotbarHighlightTexture);
-
-                    InventoryScreen.GetSlotRect(hotbarBase + selected, width, height,
-                        out int sx, out int sy, out int sw, out int sh);
-                    int hSize = HotbarTextures.HighlightSize * 2; // ~48 px, slightly bigger than slot
-                    int hx = sx + (sw - hSize) / 2;
-                    int hy = sy + (sh - hSize) / 2;
-                    DrawSpriteQuad(hx, hy, hSize, hSize, ortho);
+                    int frame = InventoryScreen.SlotPx;
+                    int frameX = cx - frame / 2;
+                    int frameY = cy - frame / 2;
+                    DrawStackCount(inv.Cursor.Count, frameX, frameY, frame, frame, ortho);
                 }
             }
 
@@ -1723,6 +2458,27 @@ void main()
             GL.Disable(EnableCap.Blend);
             GL.BindTexture(TextureTarget.Texture2D, 0);
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Draw a flat block-tile sprite to a HUD pixel rect. Used for
+        // cross-sprite items (torch, flowers, tall grass) — those tiles
+        // are an "X"-shape so a 3-face cube icon would look wrong; the
+        // flat sprite reads exactly like the in-world geometry. Same V-flip
+        // as the legacy hotbar path: the block atlas was authored with v=0
+        // at the bottom of each tile, but the screen ortho grows y down,
+        // so we map aPos.y=0 → vUV.y=1 to render top-up.
+        private void DrawFlatSpriteIcon(BlockType type, int x, int y, int w, int h, Matrix4 ortho)
+        {
+            _spriteArrayShader.Use();
+            _spriteArrayShader.SetInt("uAtlas", 0);
+            _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
+            _spriteArrayShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
+            int layer = BlockData.GetTileIndex(type, /*side*/2);
+            _spriteArrayShader.SetFloat("uLayer", layer);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+            DrawSpriteQuadFor(_spriteArrayShader, x, y, w, h, ortho);
         }
 
         // Solid-colour quad at (x,y) sized (w,h) in pixels via the overlay
@@ -1766,6 +2522,7 @@ void main()
             _spriteShader?.Dispose();
             _spriteArrayShader?.Dispose();
             _crackShader?.Dispose();
+            _multiFaceCubeShader?.Dispose();
             _sky?.Dispose();
             _sky = null;
             if (_atlasTexture != 0)

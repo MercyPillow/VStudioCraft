@@ -272,6 +272,21 @@ namespace VStudioCraft.UI
                         _input.BreakPressed = false;
                         _input.PlacePressed = false;
                     }
+
+                    // Drain queued inventory-screen clicks while it's open.
+                    // Host MouseDown writes (button, x, y) into _input;
+                    // renderer applies the slot/cursor swap here so all
+                    // Inventory mutations stay on the render thread.
+                    if (_renderer.IsInventoryOpen && _input.InventoryClickButton != 0)
+                    {
+                        var (pw0, ph0) = GetPhysicalSize();
+                        _renderer.HandleInventoryClick(
+                            _input.InventoryClickButton,
+                            _input.InventoryClickX,
+                            _input.InventoryClickY,
+                            pw0, ph0);
+                        _input.InventoryClickButton = 0;
+                    }
                     if (changed)
                     {
                         var cb = Modified;
@@ -289,6 +304,7 @@ namespace VStudioCraft.UI
                     {
                         _renderer.AdvanceTime(dt);
                         UpdatePlayer(dt);
+                        _renderer.TickDrops(dt);
                     }
 
                     long t1 = Stopwatch.GetTimestamp();
@@ -438,10 +454,12 @@ namespace VStudioCraft.UI
                     ToggleInventory();
                     break;
                 case Keys.Escape:
-                    // Inventory takes precedence — Esc dismisses it without
-                    // also flipping the pause menu. Otherwise, normal pause
-                    // toggle.
+                    // Modal precedence: inventory > options > pause. Esc
+                    // pops the topmost modal so the player isn't trapped
+                    // (e.g. Esc inside Options returns to the pause menu,
+                    // a second Esc returns to the game).
                     if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
+                    else if (_renderer != null && _renderer.IsOptionsOpen) _renderer.IsOptionsOpen = false;
                     else TogglePause();
                     break;
             }
@@ -454,6 +472,10 @@ namespace VStudioCraft.UI
             if (_renderer.IsPaused)
             {
                 _renderer.IsPaused = false;
+                // Closing the pause layer also drops any sub-menu (Options)
+                // that was open on top, so a future re-pause starts on the
+                // top-level pause menu rather than mid-Options.
+                _renderer.IsOptionsOpen = false;
                 // Resume the look-capture so the player drops straight back
                 // into the game without an extra click.
                 CaptureMouseLook();
@@ -499,7 +521,7 @@ namespace VStudioCraft.UI
             if (_renderer != null && _renderer.IsWorldHalted) return;
 
             _wheelAccum += e.Delta;
-            int slotCount = _input.HotbarSlots.Length;
+            int slotCount = Inventory.HotbarCount;
             if (slotCount <= 0) return;
 
             // 120 units per notch is the Windows convention. Scroll up
@@ -531,26 +553,45 @@ namespace VStudioCraft.UI
         {
             _gl.Focus();
 
-            // Inventory open: swallow the click so it doesn't re-capture
-            // the cursor or fire a place/break action under the panel. Slot
-            // interaction (pickup / drop / split) lands here when the
-            // ItemStack model arrives — for now it's display-only.
+            // Inventory open: route the click into InputState as a
+            // one-shot. The render thread reads (button, x, y) once per
+            // frame in RenderLoop and dispatches to the renderer's
+            // HandleInventoryClick — keeps every Inventory mutation on
+            // the render thread without needing a lock around Slots[].
             if (_renderer != null && _renderer.IsInventoryOpen)
             {
+                if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
+                {
+                    var (px, py) = ToPhysicalCoord(e.X, e.Y);
+                    _input.InventoryClickX = px;
+                    _input.InventoryClickY = py;
+                    _input.InventoryClickButton = e.Button == MouseButtons.Left ? 1 : 2;
+                }
                 return;
             }
 
-            // Paused: clicks hit-test the pause menu. We swallow them either
-            // way so the click never re-captures the cursor or fires a place/
-            // break action under the menu.
+            // Paused: clicks hit-test the pause menu (or the options menu
+            // if it's layered on top). We swallow them either way so the
+            // click never re-captures the cursor or fires a place / break
+            // action under the menu.
             if (_renderer != null && _renderer.IsPaused)
             {
                 if (e.Button == MouseButtons.Left)
                 {
                     var (px, py) = ToPhysicalCoord(e.X, e.Y);
                     var (pw, ph) = GetPhysicalSize();
-                    var act = PauseMenu.HitTest(pw, ph, px, py);
-                    HandlePauseMenuAction(act);
+                    if (_renderer.IsOptionsOpen)
+                    {
+                        bool isSurvival = _renderer.GameMode == VStudioCraft.Game.GameMode.Survival;
+                        var oact = OptionsMenu.HitTest(pw, ph, px, py,
+                            _renderer.HungerEnabled, isSurvival);
+                        HandleOptionsMenuAction(oact);
+                    }
+                    else
+                    {
+                        var act = PauseMenu.HitTest(pw, ph, px, py);
+                        HandlePauseMenuAction(act);
+                    }
                 }
                 return;
             }
@@ -581,9 +622,11 @@ namespace VStudioCraft.UI
                     TogglePause();
                     break;
                 case PauseMenu.ActionId.Options:
-                    // Placeholder — keeps the slot in the menu and feels
-                    // clickable, but no options surface yet. Hooks in here
-                    // when an options panel is added.
+                    // Layer the Options sub-menu on top of the pause menu.
+                    // _isPaused stays true so the world remains halted; the
+                    // renderer draws OptionsMenu over the dim wash + pause
+                    // buttons (the buttons become unreachable until BACK).
+                    _renderer.IsOptionsOpen = true;
                     break;
                 case PauseMenu.ActionId.Save:
                     RaiseSaveRequested();
@@ -592,6 +635,26 @@ namespace VStudioCraft.UI
                     RaiseQuitRequested();
                     break;
                 case PauseMenu.ActionId.None:
+                    break;
+            }
+        }
+
+        // Click handling for the Options sub-menu. Toggles flip the matching
+        // GameRenderer property in place; BACK pops the layer. Section
+        // headings and disabled rows already short-circuit inside
+        // OptionsMenu.HitTest, so we only ever see actionable IDs here.
+        private void HandleOptionsMenuAction(OptionsMenu.ActionId act)
+        {
+            if (_renderer == null) return;
+            switch (act)
+            {
+                case OptionsMenu.ActionId.Back:
+                    _renderer.IsOptionsOpen = false;
+                    break;
+                case OptionsMenu.ActionId.ToggleHunger:
+                    _renderer.HungerEnabled = !_renderer.HungerEnabled;
+                    break;
+                case OptionsMenu.ActionId.None:
                     break;
             }
         }

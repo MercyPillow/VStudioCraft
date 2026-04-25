@@ -8,8 +8,9 @@ namespace VStudioCraft.Game
     internal static class WorldSaveFormat
     {
         private const uint Magic = 0x31435356;  // 'VSC1' little-endian
-        // v1 = initial, v2 = per-chunk IsModified byte, v3 = GameMode + Player.Health.
-        private const byte CurrentVersion = 3;
+        // v1 = initial, v2 = per-chunk IsModified byte, v3 = GameMode + Player.Health,
+        // v4 = HungerEnabled survival sub-setting.
+        private const byte CurrentVersion = 4;
 
         public struct Header
         {
@@ -19,6 +20,7 @@ namespace VStudioCraft.Game
             public float CameraPitch;
             public GameMode GameMode;  // v3+
             public int Health;         // v3+ (1..MaxHealth; 0 means "load default")
+            public bool HungerEnabled; // v4+ — survival sub-setting; default off
         }
 
         public static void Save(string path, Header header, World world)
@@ -40,6 +42,8 @@ namespace VStudioCraft.Game
                 // a pre-v3 reader would never reach them.
                 w.Write((byte)header.GameMode);
                 w.Write(header.Health);
+                // v4: hunger sub-setting flag. Appended again, same logic.
+                w.Write((byte)(header.HungerEnabled ? 1 : 0));
                 w.Write(world.PersistentChunkCount);
                 foreach (var chunk in world.AllChunksForPersistence())
                 {
@@ -75,6 +79,9 @@ namespace VStudioCraft.Game
                     // Pre-v3 defaults: keep the creative-lite behaviour legacy saves had.
                     GameMode = GameMode.Creative,
                     Health = Player.MaxHealth,
+                    // Pre-v4 worlds didn't know about the hunger sub-setting; default off
+                    // so legacy saves match the new "no hunger bar by default" behaviour.
+                    HungerEnabled = false,
                 };
 
                 // v1 stored the flying-camera eye position in this slot. From v2 on the slot
@@ -96,6 +103,10 @@ namespace VStudioCraft.Game
                     // would trigger instant respawn on load.
                     if (hp <= 0 || hp > Player.MaxHealth) hp = Player.MaxHealth;
                     header.Health = hp;
+                }
+                if (version >= 4)
+                {
+                    header.HungerEnabled = r.ReadByte() != 0;
                 }
 
                 var world = World.Empty(header.Seed);
