@@ -109,6 +109,7 @@ namespace VStudioCraft.Game
                         {
                             var c = new Chunk(job.X, job.Z);
                             TerrainGenerator.Generate(c, _world.Noise);
+                            LightCalculator.RecomputeChunk(c);
                             _genResults.Enqueue(new GenResult { Chunk = c });
                         }
                         else

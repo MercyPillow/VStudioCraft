@@ -70,6 +70,95 @@ namespace VStudioCraft.Game
             Sweep(chunk, 1, -1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
             Sweep(chunk, 2, +1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
             Sweep(chunk, 2, -1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
+
+            // Model pass — scan for non-cube blocks and emit per-block sprite
+            // geometry into the opaque stream (alpha-tested via shader discard).
+            EmitModels(chunk, baseX, baseZ);
+        }
+
+        // Cross-sprite "X" model: two perpendicular vertical quads through the
+        // cell centre, each rendered double-sided so the player sees the torch
+        // from any angle. Used today by torches; flowers / mushrooms / tall
+        // grass will reuse this geometry once their tiles are added.
+        private void EmitModels(Chunk chunk, int baseX, int baseZ)
+        {
+            for (int x = 0; x < Chunk.SizeX; x++)
+            for (int y = 0; y < Chunk.SizeY; y++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                byte b = chunk.RawBlocks[Chunk.Index(x, y, z)];
+                if (b == (byte)BlockType.Air) continue;
+                var t = (BlockType)b;
+                if (BlockData.IsCubeShape(t)) continue;
+
+                int layer = BlockData.GetTileIndex(t, 2);
+                int lightPacked = LightAt(chunk, x, y, z);
+                EmitCrossSprite(x + baseX, y, z + baseZ, layer, lightPacked);
+            }
+        }
+
+        private void EmitCrossSprite(float wx, float wy, float wz, int layer, int lightPacked)
+        {
+            // Two diagonal planes through the cell centre. Each plane is
+            // emitted twice with opposite winding so back-face culling doesn't
+            // hide either side. Normals point straight up so per-axis face
+            // shading reads the brightest (top) bias — matches how Alpha
+            // shades cross sprites.
+            //
+            // Vertex coords are 0..1 within the cell, offset by (wx, wy, wz).
+            // UV runs 0..1 across the full diagonal so the whole tile shows.
+            const float ny = 1f, nx = 0f, nz = 0f;
+
+            // Plane 1: from (0, *, 0) to (1, *, 1) (NW-SE diagonal).
+            EmitCrossQuad(
+                wx + 0f, wy + 0f, wz + 0f,  0f, 0f,
+                wx + 1f, wy + 0f, wz + 1f,  1f, 0f,
+                wx + 1f, wy + 1f, wz + 1f,  1f, 1f,
+                wx + 0f, wy + 1f, wz + 0f,  0f, 1f,
+                nx, ny, nz, layer, lightPacked);
+            // Plane 1 back side.
+            EmitCrossQuad(
+                wx + 1f, wy + 0f, wz + 1f,  0f, 0f,
+                wx + 0f, wy + 0f, wz + 0f,  1f, 0f,
+                wx + 0f, wy + 1f, wz + 0f,  1f, 1f,
+                wx + 1f, wy + 1f, wz + 1f,  0f, 1f,
+                nx, ny, nz, layer, lightPacked);
+            // Plane 2: from (0, *, 1) to (1, *, 0) (NE-SW diagonal).
+            EmitCrossQuad(
+                wx + 0f, wy + 0f, wz + 1f,  0f, 0f,
+                wx + 1f, wy + 0f, wz + 0f,  1f, 0f,
+                wx + 1f, wy + 1f, wz + 0f,  1f, 1f,
+                wx + 0f, wy + 1f, wz + 1f,  0f, 1f,
+                nx, ny, nz, layer, lightPacked);
+            // Plane 2 back side.
+            EmitCrossQuad(
+                wx + 1f, wy + 0f, wz + 0f,  0f, 0f,
+                wx + 0f, wy + 0f, wz + 1f,  1f, 0f,
+                wx + 0f, wy + 1f, wz + 1f,  1f, 1f,
+                wx + 1f, wy + 1f, wz + 0f,  0f, 1f,
+                nx, ny, nz, layer, lightPacked);
+        }
+
+        private void EmitCrossQuad(
+            float x0, float y0, float z0, float u0, float v0,
+            float x1, float y1, float z1, float u1, float v1,
+            float x2, float y2, float z2, float u2, float v2,
+            float x3, float y3, float z3, float u3, float v3,
+            float nx, float ny, float nz,
+            int layer, int lightPacked)
+        {
+            uint baseIdx = (uint)(_vertFloats / Mesh.FloatsPerVertex);
+            float light = lightPacked;
+            AppendVert(false, x0, y0, z0, u0, v0, nx, ny, nz, layer, light);
+            AppendVert(false, x1, y1, z1, u1, v1, nx, ny, nz, layer, light);
+            AppendVert(false, x2, y2, z2, u2, v2, nx, ny, nz, layer, light);
+            AppendVert(false, x3, y3, z3, u3, v3, nx, ny, nz, layer, light);
+            AppendIndex(false, baseIdx + 0);
+            AppendIndex(false, baseIdx + 1);
+            AppendIndex(false, baseIdx + 2);
+            AppendIndex(false, baseIdx + 0);
+            AppendIndex(false, baseIdx + 2);
+            AppendIndex(false, baseIdx + 3);
         }
 
         private static byte BlockAt(Chunk c, int lx, int y, int lz)
@@ -78,6 +167,56 @@ namespace VStudioCraft.Game
             if ((uint)lx < Chunk.SizeX && (uint)lz < Chunk.SizeZ)
                 return c.RawBlocks[Chunk.Index(lx, y, lz)];
             return 0;
+        }
+
+        // Returns packed sky*16 + block (0..255). Out-of-bounds above the world
+        // gets full sky (15*16 + 0 = 240); below the world gets darkness (0).
+        // Crossing a missing chunk falls back to "lit", same as we treat the
+        // top of the world — this keeps the chunk border bright instead of
+        // gating it black until the neighbour generates.
+        private static int LightAt(Chunk c, int lx, int y, int lz)
+        {
+            if (y >= Chunk.SizeY) return 15 * 16;
+            if (y < 0) return 0;
+            if ((uint)lx < Chunk.SizeX && (uint)lz < Chunk.SizeZ)
+            {
+                byte b = c.RawLight[Chunk.Index(lx, y, lz)];
+                int sky = (b >> 4) & 0xF;
+                int blk = b & 0xF;
+                return sky * 16 + blk;
+            }
+            return 15 * 16;
+        }
+
+        private static int LightOrNeighbor(
+            Chunk center, int lx, int y, int lz,
+            Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos)
+        {
+            if (y >= Chunk.SizeY) return 15 * 16;
+            if (y < 0) return 0;
+            if ((uint)lx < Chunk.SizeX && (uint)lz < Chunk.SizeZ)
+                return LightAt(center, lx, y, lz);
+            if (lx < 0)
+            {
+                if (nxNeg == null) return 15 * 16;
+                return LightAt(nxNeg, Chunk.SizeX + lx, y, lz);
+            }
+            if (lx >= Chunk.SizeX)
+            {
+                if (nxPos == null) return 15 * 16;
+                return LightAt(nxPos, lx - Chunk.SizeX, y, lz);
+            }
+            if (lz < 0)
+            {
+                if (nzNeg == null) return 15 * 16;
+                return LightAt(nzNeg, lx, y, Chunk.SizeZ + lz);
+            }
+            if (lz >= Chunk.SizeZ)
+            {
+                if (nzPos == null) return 15 * 16;
+                return LightAt(nzPos, lx, y, lz - Chunk.SizeZ);
+            }
+            return 15 * 16;
         }
 
         // Fetch a block at chunk-local coords, crossing into a neighbour chunk if the
@@ -156,14 +295,33 @@ namespace VStudioCraft.Game
                     bool aAir = a == (byte)BlockType.Air;
                     bool aOpaque = !aAir && BlockData.IsOpaque((BlockType)a);
                     bool bOpaque = b != (byte)BlockType.Air && BlockData.IsOpaque((BlockType)b);
-
-                    if (!aAir && !bOpaque && !(a == b && !aOpaque))
+                    // Non-cube blocks (torches, flowers, mushrooms) get their
+                    // geometry from the model pass after the sweeps, so the
+                    // cube sweep must not emit a face when `a` is one. They
+                    // already never occlude a neighbour because IsOpaque is
+                    // false, so b doesn't need a separate filter.
+                    bool aCube = !aAir && BlockData.IsCubeShape((BlockType)a);
+                    if (!aAir && aCube && !bOpaque && !(a == b && !aOpaque))
                     {
-                        // Face of block `a` visible, pointing in `dir`.
+                        // Face of block `a` visible, pointing in `dir`. Light is
+                        // sampled at the air-side cell (the `b` neighbour cell at
+                        // (nx, ny, nz)) — that's the face-illuminating cell, not
+                        // the solid block itself. Pack into the mask key so greedy
+                        // merging stops at light-boundary cells; otherwise a wall
+                        // partly in cave-shadow and partly in sun would merge into
+                        // one quad with a single intermediate brightness.
                         int faceKind = FaceKindFor(axis, dir);
                         int layer = BlockData.GetTileIndex((BlockType)a, faceKind);
-                        int key = layer + 1;           // 0 = empty, so +1 bias
-                        if (!aOpaque) key = -key;       // mark transparent with negative key
+                        int lightPacked = LightOrNeighbor(chunk, nx, ny, nz, nxNeg, nxPos, nzNeg, nzPos);
+
+                        // Layout, all in the positive int range (sign bit reserved
+                        // for transparent flag below):
+                        //   bits  0..15  layer+1   (0 = empty, +1 bias)
+                        //   bits 16..23  light     (sky*16 + block, 0..255)
+                        // Light occupies a full byte so the sky-or-block max can
+                        // round-trip cleanly.
+                        int key = ((layer + 1) & 0xFFFF) | ((lightPacked & 0xFF) << 16);
+                        if (!aOpaque) key = -key;
                         _mask[j * dU + i] = key;
                     }
                     else
@@ -195,9 +353,11 @@ namespace VStudioCraft.Game
                             if (!done) h++;
                         }
 
-                        int layer = (m > 0 ? m : -m) - 1;
+                        int abs = m > 0 ? m : -m;
+                        int layer = (abs & 0xFFFF) - 1;
+                        int light = (abs >> 16) & 0xFF;
                         bool transparent = m < 0;
-                        EmitQuad(axis, dir, slice, u, v, i, j, w, h, layer, transparent, baseX, baseZ);
+                        EmitQuad(axis, dir, slice, u, v, i, j, w, h, layer, light, transparent, baseX, baseZ);
 
                         for (int hh = 0; hh < h; hh++)
                         for (int ww = 0; ww < w; ww++)
@@ -237,6 +397,7 @@ namespace VStudioCraft.Game
         private void EmitQuad(
             int axis, int dir, int slice, int u, int v,
             int i, int j, int w, int h, int layer,
+            int light,
             bool transparent,
             int baseX, int baseZ)
         {
@@ -282,17 +443,17 @@ namespace VStudioCraft.Game
 
             if (dir > 0)
             {
-                AppendVert(transparent, _c0[0] + baseX, _c0[1], _c0[2] + baseZ, 0,    0,    nx, ny, nz, layer);
-                AppendVert(transparent, _c1[0] + baseX, _c1[1], _c1[2] + baseZ, uvX1, uvY1, nx, ny, nz, layer);
-                AppendVert(transparent, _c2[0] + baseX, _c2[1], _c2[2] + baseZ, uvX2, uvY2, nx, ny, nz, layer);
-                AppendVert(transparent, _c3[0] + baseX, _c3[1], _c3[2] + baseZ, uvX3, uvY3, nx, ny, nz, layer);
+                AppendVert(transparent, _c0[0] + baseX, _c0[1], _c0[2] + baseZ, 0,    0,    nx, ny, nz, layer, light);
+                AppendVert(transparent, _c1[0] + baseX, _c1[1], _c1[2] + baseZ, uvX1, uvY1, nx, ny, nz, layer, light);
+                AppendVert(transparent, _c2[0] + baseX, _c2[1], _c2[2] + baseZ, uvX2, uvY2, nx, ny, nz, layer, light);
+                AppendVert(transparent, _c3[0] + baseX, _c3[1], _c3[2] + baseZ, uvX3, uvY3, nx, ny, nz, layer, light);
             }
             else
             {
-                AppendVert(transparent, _c0[0] + baseX, _c0[1], _c0[2] + baseZ, 0,    0,    nx, ny, nz, layer);
-                AppendVert(transparent, _c3[0] + baseX, _c3[1], _c3[2] + baseZ, uvX3, uvY3, nx, ny, nz, layer);
-                AppendVert(transparent, _c2[0] + baseX, _c2[1], _c2[2] + baseZ, uvX2, uvY2, nx, ny, nz, layer);
-                AppendVert(transparent, _c1[0] + baseX, _c1[1], _c1[2] + baseZ, uvX1, uvY1, nx, ny, nz, layer);
+                AppendVert(transparent, _c0[0] + baseX, _c0[1], _c0[2] + baseZ, 0,    0,    nx, ny, nz, layer, light);
+                AppendVert(transparent, _c3[0] + baseX, _c3[1], _c3[2] + baseZ, uvX3, uvY3, nx, ny, nz, layer, light);
+                AppendVert(transparent, _c2[0] + baseX, _c2[1], _c2[2] + baseZ, uvX2, uvY2, nx, ny, nz, layer, light);
+                AppendVert(transparent, _c1[0] + baseX, _c1[1], _c1[2] + baseZ, uvX1, uvY1, nx, ny, nz, layer, light);
             }
 
             AppendIndex(transparent, baseIdx + 0);
@@ -308,7 +469,8 @@ namespace VStudioCraft.Game
             float x, float y, float z,
             float u, float v,
             float nx, float ny, float nz,
-            float layer)
+            float layer,
+            float light)
         {
             if (transparent)
             {
@@ -323,6 +485,7 @@ namespace VStudioCraft.Game
                 _tVerts[_tVertFloats++] = ny;
                 _tVerts[_tVertFloats++] = nz;
                 _tVerts[_tVertFloats++] = layer;
+                _tVerts[_tVertFloats++] = light;
             }
             else
             {
@@ -337,6 +500,7 @@ namespace VStudioCraft.Game
                 _verts[_vertFloats++] = ny;
                 _verts[_vertFloats++] = nz;
                 _verts[_vertFloats++] = layer;
+                _verts[_vertFloats++] = light;
             }
         }
 

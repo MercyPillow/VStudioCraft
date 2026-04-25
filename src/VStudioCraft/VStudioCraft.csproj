@@ -79,6 +79,7 @@
     <Compile Include="Game\GameRenderer.cs" />
     <Compile Include="Game\HudTextures.cs" />
     <Compile Include="Game\InputState.cs" />
+    <Compile Include="Game\LightCalculator.cs" />
     <Compile Include="Game\Mesh.cs" />
     <Compile Include="Game\Noise.cs" />
     <Compile Include="Game\OverlayMesh.cs" />

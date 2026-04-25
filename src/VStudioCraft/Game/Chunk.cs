@@ -18,6 +18,13 @@ namespace VStudioCraft.Game
         // varying axis — matches the mesher's innermost loop for cache-friendly sweeps.
         private readonly byte[] _blocks = new byte[BlockCount];
 
+        // Per-block lighting, packed as (sky << 4) | block — 4 bits each, 0..15.
+        // Sky = exposure to the sky (full = 15 above ground); block = emission from
+        // luminous blocks (lava, torches later). Recomputed by LightCalculator after
+        // generation and after edits; not persisted (round-tripped to disk would just
+        // be redundant since lighting is a deterministic function of blocks).
+        private readonly byte[] _light = new byte[BlockCount];
+
         public Chunk(int chunkX, int chunkZ)
         {
             ChunkX = chunkX;
@@ -25,6 +32,7 @@ namespace VStudioCraft.Game
         }
 
         public byte[] RawBlocks => _blocks;
+        public byte[] RawLight => _light;
 
         public static int Index(int x, int y, int z) => (x * SizeY + y) * SizeZ + z;
 
@@ -39,6 +47,32 @@ namespace VStudioCraft.Game
         {
             if ((uint)x >= SizeX || (uint)y >= SizeY || (uint)z >= SizeZ) return;
             _blocks[Index(x, y, z)] = (byte)t;
+        }
+
+        public byte GetSkyLight(int x, int y, int z)
+        {
+            if ((uint)x >= SizeX || (uint)y >= SizeY || (uint)z >= SizeZ) return 15;
+            return (byte)((_light[Index(x, y, z)] >> 4) & 0xF);
+        }
+
+        public void SetSkyLight(int x, int y, int z, byte value)
+        {
+            if ((uint)x >= SizeX || (uint)y >= SizeY || (uint)z >= SizeZ) return;
+            int i = Index(x, y, z);
+            _light[i] = (byte)((_light[i] & 0x0F) | ((value & 0xF) << 4));
+        }
+
+        public byte GetBlockLight(int x, int y, int z)
+        {
+            if ((uint)x >= SizeX || (uint)y >= SizeY || (uint)z >= SizeZ) return 0;
+            return (byte)(_light[Index(x, y, z)] & 0xF);
+        }
+
+        public void SetBlockLight(int x, int y, int z, byte value)
+        {
+            if ((uint)x >= SizeX || (uint)y >= SizeY || (uint)z >= SizeZ) return;
+            int i = Index(x, y, z);
+            _light[i] = (byte)((_light[i] & 0xF0) | (value & 0xF));
         }
 
         public void WriteTo(BinaryWriter w)

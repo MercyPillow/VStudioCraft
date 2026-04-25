@@ -44,7 +44,7 @@ namespace VStudioCraft.Game
 
             while (t <= maxDist)
             {
-                if (BlockData.IsSolid(world.GetBlock(ix, iy, iz)))
+                if (BlockData.IsRaycastTarget(world.GetBlock(ix, iy, iz)))
                 {
                     hit.X = ix; hit.Y = iy; hit.Z = iz;
                     switch (axis)

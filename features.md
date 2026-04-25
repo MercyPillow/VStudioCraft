@@ -4,15 +4,16 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 `src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
 Items marked **Have** exist today; items under **Missing** are the gap.
 
-Last updated after the sky upgrade: distance fog + sun/moon billboards +
-star field + scrolling cloud plane at y=108. All procedural; no assets
-shipped. Celestial bodies draw behind the world, clouds over it.
+Last updated after the lighting pass: per-block 4-bit sky + 4-bit block
+light, Alpha-style 15-level flood fill, baked into vertex stream and
+modulated in the fragment shader. Caves, overhangs, and the night side
+of the world now read as dark; lava cells emit a warm 15-block glow.
 
 ---
 
 ## Blocks
 
-**Have** — 29 block IDs (`BlockType` enum)
+**Have** — 30 block IDs (`BlockType` enum)
 - Air, Grass, Dirt, Stone, Sand
 - Cobblestone, Bedrock, Gravel, Clay
 - CoalOre, IronOre, GoldOre, DiamondOre, RedstoneOre
@@ -20,15 +21,19 @@ shipped. Celestial bodies draw behind the world, clouds over it.
 - Water (still, transparent), Lava (block only, no flow)
 - GoldBlock, IronBlock, DiamondBlock
 - Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Glass (opaque placeholder), Wool
+- Torch (floor placement, emits 14 block-light, cross-sprite model, alpha-tested)
 - Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf)
-- 33-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
+- 34-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
 - Transparent-block routing to a second alpha-blended render pass (water today)
+- Cross-sprite (X-shape) model path for non-cube blocks, alpha-tested in opaque pass via fragment-shader `discard`
+- Per-block shape category (`IsCubeShape`) and raycast/collision separation (`IsRaycastTarget` vs `IsSolid`) so torches and future flowers can be targetable but non-collidable
 
 **Missing**
 - Glass with real transparency (currently opaque placeholder)
 - Ice (slippery, melts in light)
 - Snow layer + snow block
-- Torch (placed on floor/wall, emits light)
+- Torch wall placement (floor torches work; wall variants need a metadata byte for orientation)
+- Torch fall on block-below removal (no block-update tick yet)
 - TNT priming on activation (block exists but is inert)
 - Ladder
 - Sugar cane / reeds
@@ -68,7 +73,6 @@ shipped. Celestial bodies draw behind the world, clouds over it.
 - Reproducible seed chain per chunk feature (per-chunk and per-column hashed RNG)
 
 **Missing**
-- Cave decoration: glowing ores highlighted by nearby torches (needs light pass)
 - Ravines (long vertical slashes — Alpha got them in Beta, but worth including)
 - Dungeons (4×4 cobble rooms with spawner + 1–2 chests)
 - Surface lava lakes and underground lava pools
@@ -87,15 +91,22 @@ shipped. Celestial bodies draw behind the world, clouds over it.
 - Directional sun + ambient term in the fragment shader
 - Sun follows a day/dusk/night/dawn piecewise angle on a 7-minute cycle
 - Sky colour interpolates between day/dusk/night
+- 4-bit sky + 4-bit block light per block (packed byte per cell, parallel to the block array)
+- Sky-light propagation: column top-down seed at level 15 down to first opaque block, then BFS lateral spread (Alpha-style 15-level flood fill)
+- Block-light propagation: lava emits 15, BFS fills outward through air/water/glass/leaves
+- Per-vertex light baked into the chunk vertex stream (10th float, packed `sky*16 + block`); greedy mesher key includes light so quads don't merge across light boundaries
+- Re-light on block place/break (full-chunk recompute on the affected chunk + neighbours when the edit touches a border)
+- Day/night attenuates outdoor sky contribution (`uSkyLightLevel`: 1.0 at noon, ~0.18 at midnight) while indoor block-light stays constant
+- Block-light is warm-tinted (torch/lava amber) vs. sky-light's neutral white so light sources read distinct
+- Per-axis face shading (top 1.0 / sides 0.78 / bottom 0.55) preserved on top of the per-cell light
 
 **Missing**
-- Block-light propagation (torches, lava, fire — Alpha's 15-level flood-fill)
-- Sky-light propagation (15 at sky-exposed columns, attenuated through translucent blocks)
-- Per-vertex light stored on chunk vertices
-- Smooth lighting / vertex-AO
-- Re-light on block place/break
-- Moon light (low constant at night, 4 in Alpha)
-- Underwater light attenuation
+- Smooth lighting / vertex-AO (currently flat-lit per quad — corners aren't sampled separately)
+- Cross-chunk light propagation (today each chunk lights independently; small seams resolve when both sides relight, but a true "light leaks across chunk borders" pass would eliminate them)
+- Incremental relight (Alpha's "decreased + increased" queue pair) — currently we full-recompute the chunk on every edit
+- Underwater light attenuation (water passes light losslessly today; Alpha attenuates a few levels)
+- Glowstone, fire, jack-o'-lantern as block-light sources (Lava emits 15, Torch emits 14)
+- Persisted light (currently recomputed deterministically on load — saves space but costs ~1 ms per chunk on world entry)
 
 ## Sky / weather
 
@@ -258,7 +269,7 @@ shipped. Celestial bodies draw behind the world, clouds over it.
 ## Controls
 
 **Have**
-- WASD, Space, Ctrl (sprint), Esc (release mouse), LMB break, RMB place, 1/2/3/4 hotbar
+- WASD, Space, Ctrl (sprint), Esc (release mouse), LMB break, RMB place, 1/2/3/4/5 hotbar (Grass/Dirt/Stone/Sand/Torch)
 - F3 toggles Creative ↔ Survival (re-uses Alpha's F3 slot; debug screen pending)
 
 **Missing**
@@ -329,15 +340,14 @@ shipped. Celestial bodies draw behind the world, clouds over it.
 
 ## Suggested next steps (rough order)
 
-1. **Block + sky light propagation** — prerequisite for torches and mobs; the "makes it feel like Minecraft" locker. Medium-large. Pairs especially well with caves (which are pitch-black tunnels right now).
-2. **Flowers + mushrooms + tall grass** — cross-plane sprite geometry; unlocks decoration across the terrain already in place.
-3. **Flowing water / lava** — promote the current still-water to a proper fluid with 8-level falloff ticks.
-4. **Swim physics + drowning timer** — now that water + survival-HP exist, the player should bob in it and lose air underwater.
-5. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
-6. **Inventory + item stacks** — the "items instead of block-enum" jump.
-7. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
-8. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
-9. **Crafting table + furnace** — recipe plumbing.
-10. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
+1. **Flowers + mushrooms + tall grass** — cross-sprite geometry is in place (torches use it); just need procedural tiles + sprinkle pass in TerrainGenerator + a destroy-on-no-grass-below check.
+2. **Flowing water / lava** — promote the current still-water to a proper fluid with 8-level falloff ticks.
+3. **Swim physics + drowning timer** — now that water + survival-HP exist, the player should bob in it and lose air underwater.
+4. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
+5. **Inventory + item stacks** — the "items instead of block-enum" jump.
+6. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
+7. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
+8. **Crafting table + furnace** — recipe plumbing.
+9. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
 
 Each of the above is 200–1500 LoC of new code in this codebase's style; nothing is architecturally blocking.

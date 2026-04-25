@@ -38,6 +38,7 @@ namespace VStudioCraft.Game
             {
                 var c = new Chunk(cx, cz);
                 TerrainGenerator.Generate(c, w._noise);
+                LightCalculator.RecomputeChunk(c);
                 w._chunks[(cx, cz)] = c;
             }
             return w;
@@ -60,6 +61,7 @@ namespace VStudioCraft.Game
             {
                 c = new Chunk(cx, cz);
                 TerrainGenerator.Generate(c, _noise);
+                LightCalculator.RecomputeChunk(c);
             }
             _chunks[(cx, cz)] = c;
             MarkChunkAndNeighborsDirty(cx, cz);
@@ -150,6 +152,19 @@ namespace VStudioCraft.Game
             if (c == null) return false;
             c.Set(lx, wy, lz, t);
             c.IsModified = true;
+
+            // Re-light. We do a full chunk recompute since incremental light
+            // updates (Alpha used a "decreased + increased" queue pair) are a
+            // notable amount of code; full recompute is O(SizeX*SizeY*SizeZ)
+            // and runs only when the player actually places/breaks something,
+            // so the cost is acceptable. Border cells leak a stale level into
+            // the neighbour for one mesh pass, so relight neighbours too if
+            // the change touched their edge.
+            LightCalculator.RecomputeChunk(c);
+            if (lx == 0)               { var n = GetChunk(cx - 1, cz); if (n != null) LightCalculator.RecomputeChunk(n); }
+            if (lx == Chunk.SizeX - 1) { var n = GetChunk(cx + 1, cz); if (n != null) LightCalculator.RecomputeChunk(n); }
+            if (lz == 0)               { var n = GetChunk(cx, cz - 1); if (n != null) LightCalculator.RecomputeChunk(n); }
+            if (lz == Chunk.SizeZ - 1) { var n = GetChunk(cx, cz + 1); if (n != null) LightCalculator.RecomputeChunk(n); }
 
             _dirty.Add((cx, cz));
             if (lx == 0)               _dirty.Add((cx - 1, cz));

@@ -10,7 +10,7 @@ namespace VStudioCraft.Game
     internal static class BlockTextures
     {
         public const int TileSize = 16;
-        public const int LayerCount = 33;
+        public const int LayerCount = 34;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -45,6 +45,7 @@ namespace VStudioCraft.Game
         public const int TileSponge = 30;
         public const int TileGlass = 31;
         public const int TileWool = 32;
+        public const int TileTorch = 33;
 
         // A 2D texture array — one layer per tile. Greedy meshing can emit merged
         // quads with UVs exceeding [0,1]; with a layered texture and Repeat wrap the
@@ -94,6 +95,7 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileSponge, GenerateSponge);
             UploadLayer(layerPixels, TileGlass, GenerateGlass);
             UploadLayer(layerPixels, TileWool, GenerateWool);
+            UploadLayer(layerPixels, TileTorch, GenerateTorch);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -827,6 +829,58 @@ namespace VStudioCraft.Game
                 (244, 244, 240),
             };
             NoiseFill(pixels, 0x5011, palette, new[] { 12, 5, 4 });
+        }
+
+        private static void GenerateTorch(byte[] pixels)
+        {
+            // Pixel-art torch on a transparent background. The fragment shader
+            // does an alpha-test discard at < 0.5 so any pixel left at alpha=0
+            // disappears — no blending needed.
+            //
+            // Coordinate convention: y=0 is the bottom of the texture, which is
+            // also the bottom of the rendered cross-sprite face. The wooden
+            // shaft runs y=0..7 in the centre, the flame burns y=8..12.
+            var rng = new Random(0x707C);
+
+            // Base: fully transparent.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, 0, 0, 0, 0);
+
+            // Wooden shaft — 2px wide, centred on x=7..8, height 0..7.
+            for (int y = 0; y <= 7; y++)
+            {
+                // Slight per-row jitter so it doesn't read as a straight bar.
+                SetJittered(pixels, 7, y, 138, 96, 54, 8, rng);
+                SetJittered(pixels, 8, y, 118, 80, 42, 8, rng);
+            }
+
+            // Flame head — three short rows of warming colour. Hottest core
+            // (white-yellow) sits at the centre, surrounded by orange, red,
+            // and finally a faint outer halo so the silhouette is more than
+            // a perfect rectangle.
+            //
+            // y=8 (base of flame): orange/red, slightly wider than shaft.
+            SetPixel(pixels, 6, 8, 220, 100, 30, 220);
+            SetPixel(pixels, 7, 8, 250, 200, 60, 255);
+            SetPixel(pixels, 8, 8, 250, 200, 60, 255);
+            SetPixel(pixels, 9, 8, 220, 100, 30, 220);
+            // y=9: bright yellow centre, orange outer.
+            SetPixel(pixels, 6, 9, 230, 130, 40, 200);
+            SetPixel(pixels, 7, 9, 252, 232, 130, 255);
+            SetPixel(pixels, 8, 9, 252, 232, 130, 255);
+            SetPixel(pixels, 9, 9, 230, 130, 40, 200);
+            // y=10: yellow tapering, red shoulders.
+            SetPixel(pixels, 7, 10, 252, 220, 110, 255);
+            SetPixel(pixels, 8, 10, 252, 220, 110, 255);
+            SetPixel(pixels, 6, 10, 200, 70, 24, 160);
+            SetPixel(pixels, 9, 10, 200, 70, 24, 160);
+            // y=11: small orange tip.
+            SetPixel(pixels, 7, 11, 240, 160, 50, 220);
+            SetPixel(pixels, 8, 11, 240, 160, 50, 220);
+            // y=12: faint outer glow above the flame.
+            SetPixel(pixels, 7, 12, 220, 110, 30, 140);
+            SetPixel(pixels, 8, 12, 220, 110, 30, 140);
         }
     }
 }

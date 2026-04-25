@@ -5,10 +5,12 @@ namespace VStudioCraft.Game
 {
     internal sealed class Mesh : IDisposable
     {
-        // Vertex layout: pos(3) + uv(2) + normal(3) + layer(1) = 9 floats.
-        // Per-vertex cost went up by 4 bytes vs. the pre-greedy format, but greedy
-        // meshing reduces vertex COUNT by ~5-10x, so total bytes drop sharply.
-        public const int FloatsPerVertex = 9;
+        // Vertex layout: pos(3) + uv(2) + normal(3) + layer(1) + light(1) = 10 floats.
+        // The trailing light float is packed sky*16 + block (0..255), unpacked in
+        // the vertex shader so the fragment receives separate interpolated sky and
+        // block contributions. Greedy meshing still keeps overall byte count well
+        // below pre-greedy single-quad-per-block, so the +4 bytes is cheap.
+        public const int FloatsPerVertex = 10;
 
         // Opaque stream — drawn normally with depth write + depth test.
         private int _vao;
@@ -67,6 +69,8 @@ namespace VStudioCraft.Game
             GL.EnableVertexAttribArray(2);
             GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, stride, 8 * sizeof(float));
             GL.EnableVertexAttribArray(3);
+            GL.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, stride, 9 * sizeof(float));
+            GL.EnableVertexAttribArray(4);
 
             GL.BindVertexArray(0);
         }

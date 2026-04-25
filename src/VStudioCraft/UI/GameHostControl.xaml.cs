@@ -369,6 +369,7 @@ namespace VStudioCraft.UI
                 case Keys.D2: _input.SelectedBlock = BlockType.Dirt;  Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
                 case Keys.D3: _input.SelectedBlock = BlockType.Stone; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
                 case Keys.D4: _input.SelectedBlock = BlockType.Sand;  Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D5: _input.SelectedBlock = BlockType.Torch; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
                 case Keys.F3:
                     if (_renderer != null)
                     {

@@ -12,9 +12,12 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aUV;
 layout(location = 2) in vec3 aNormal;
 layout(location = 3) in float aLayer;
+layout(location = 4) in float aLight;
 out vec2 vUV;
 out vec3 vNormal;
 out float vViewDist;
+out float vSkyLight;
+out float vBlockLight;
 flat out int vLayer;
 uniform mat4 uProjection;
 uniform mat4 uView;
@@ -25,6 +28,13 @@ void main()
     vUV = aUV;
     vNormal = aNormal;
     vLayer = int(aLayer);
+    // aLight is packed sky*16 + block. Unpack here so the fragment receives
+    // separately-interpolated channels: interpolating the packed value would
+    // smear sky into block at light boundaries (e.g. cave-mouth seams).
+    float skyN   = floor(aLight / 16.0);
+    float blockN = aLight - skyN * 16.0;
+    vSkyLight   = skyN   / 15.0;
+    vBlockLight = blockN / 15.0;
     // View-space -Z is distance into the scene; length(viewPos.xyz) makes
     // horizontal and vertical distance both contribute, so the fog ring
     // reads as a hemisphere around the camera, not just a flat band ahead.
@@ -36,12 +46,15 @@ void main()
 in vec2 vUV;
 in vec3 vNormal;
 in float vViewDist;
+in float vSkyLight;
+in float vBlockLight;
 flat in int vLayer;
 out vec4 FragColor;
 uniform sampler2DArray uAtlas;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform float uAmbient;
+uniform float uSkyLightLevel;
 uniform vec3 uFogColor;
 uniform float uFogStart;
 uniform float uFogEnd;
@@ -52,8 +65,38 @@ void main()
     // gives the same result but fract avoids any driver quirks at integer seams.
     vec2 tileUV = fract(vUV);
     vec4 tex = texture(uAtlas, vec3(tileUV, float(vLayer)));
+    // Alpha-test for cross-sprite blocks (torches today; flowers/mushrooms
+    // later). Torch tile leaves the surrounding texels at alpha=0 so they
+    // discard here, leaving only the post and flame visible. Real translucent
+    // blocks (water, alpha=160) survive the threshold and are drawn in the
+    // separate transparent pass with blending.
+    if (tex.a < 0.5) discard;
+
+    // Combine sky + block contributions. uSkyLightLevel scales sky over the
+    // day/night cycle (1.0 at noon, ~0.15 at midnight) so caves and night-time
+    // both naturally darken to the block-light floor. Block light is warm-tinted
+    // so torches/lava read distinct from sky-bright daylight.
+    vec3 skyLit   = vSkyLight   * uSkyLightLevel * vec3(1.0, 0.97, 0.92);
+    vec3 blockLit = vBlockLight * vec3(1.0, 0.78, 0.45);
+    vec3 light = max(skyLit, blockLit);
+
+    // Floor so totally dark areas aren't pure black (matches Alpha's
+    // 'minimum brightness' minimum so you can still navigate caves dimly).
+    light = max(light, vec3(0.06));
+
+    // Light-coloured face shading: top brighter, bottom darker, sides middling.
+    // Approximates Alpha's per-axis fixed shading without the sun-direction
+    // dependence (the per-vertex sky term already encodes 'this face sees the sky').
+    float dirBias = 0.78;
+    if (vNormal.y >  0.5) dirBias = 1.0;
+    else if (vNormal.y < -0.5) dirBias = 0.55;
+    light *= dirBias;
+
+    // Subtle directional sun warmth on top-facing faces, so dawn/dusk
+    // reads as more than just a brightness change.
     float diff = max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
-    vec3 light = vec3(uAmbient) + uSunColor * diff * (1.0 - uAmbient);
+    light += uSunColor * diff * 0.08 * uSkyLightLevel;
+
     vec3 lit = tex.rgb * light;
     // Distance fog: blend toward horizon colour at the render edge so chunks
     // fade in/out instead of popping. uFogEnd is tuned to sit just inside the
@@ -574,7 +617,15 @@ void main()
             int px = hit.X + hit.Nx;
             int py = hit.Y + hit.Ny;
             int pz = hit.Z + hit.Nz;
-            if (BlockData.IsSolid(_world.GetBlock(px, py, pz))) return false;
+            // Allow placing into Air or Water (water gets replaced, classic
+            // Alpha behaviour). Anything else — including torches and other
+            // non-cube blocks the raycast can target — blocks the place.
+            var existing = _world.GetBlock(px, py, pz);
+            if (existing != BlockType.Air && existing != BlockType.Water) return false;
+            // Torches need a solid block beneath them to attach to. (Wall
+            // attachment will arrive when we add metadata; floor-only for now.)
+            if (t == BlockType.Torch && !BlockData.IsSolid(_world.GetBlock(px, py - 1, pz)))
+                return false;
             return _world.SetBlock(px, py, pz, t);
         }
 
@@ -662,6 +713,13 @@ void main()
             var sky = ComputeSkyColor(sun);
             var sunColor = ComputeSunColor(sun);
             float ambient = 0.22f + 0.18f * Math.Max(0f, sun.Y);
+            // 0..1 scale on the per-block sky-light term. At noon (sun.Y ≈ 1)
+            // it's 1.0; at midnight (sun.Y ≈ -1) it floors at 0.18 so a moonlit
+            // night reads as dim but not pitch black, matching the sky's own
+            // glow. Block light (torches/lava) is unaffected by this — it's
+            // local emission, not driven by the sun.
+            float skyLightLevel = 0.18f + 0.82f * Math.Max(0f, (sun.Y + 0.1f) / 1.1f);
+            if (skyLightLevel > 1f) skyLightLevel = 1f;
 
             GL.ClearColor(sky.X, sky.Y, sky.Z, 1.0f);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
@@ -689,6 +747,7 @@ void main()
             _shader.SetVector3("uSunDir", sun);
             _shader.SetVector3("uSunColor", sunColor);
             _shader.SetFloat("uAmbient", ambient);
+            _shader.SetFloat("uSkyLightLevel", skyLightLevel);
             _shader.SetVector3("uFogColor", sky);
             _shader.SetFloat("uFogStart", fogStart);
             _shader.SetFloat("uFogEnd", fogEnd);

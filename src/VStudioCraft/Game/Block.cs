@@ -32,19 +32,55 @@ namespace VStudioCraft.Game
         Sponge = 27,
         Glass = 28,
         Wool = 29,
+        Torch = 30,
     }
 
     internal static class BlockData
     {
-        // "Solid" means blocks player movement / raycast targeting / new-block
-        // placement. Water reads as non-solid so you can wade and target blocks
-        // through it.
+        // "Solid" gates player COLLISION only — used by physics/swept AABB.
+        // Non-solid: player walks straight through (Air, Water, Torch).
+        // Raycast targeting and placement-cell occupancy use IsRaycastTarget /
+        // IsCubeShape instead so a torch can be broken without colliding with
+        // it as the player walks past.
         public static bool IsSolid(BlockType t)
         {
             switch (t)
             {
                 case BlockType.Air:
                 case BlockType.Water:
+                case BlockType.Torch:
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        // "Targetable by raycast" — true for any block the player should be
+        // able to LMB-break or RMB-place-against. Air and water are skipped
+        // (you raycast through both); torches and future cross-sprite blocks
+        // (flowers, mushrooms) are targetable so the player can interact even
+        // though they aren't collidable.
+        public static bool IsRaycastTarget(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Air:
+                case BlockType.Water:
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        // "Cube shape" — true for the standard 1x1x1 voxel block that the
+        // greedy mesher emits as cube faces. Non-cube blocks (Torch today,
+        // flowers/mushrooms/ladders later) are skipped by the cube sweep and
+        // emitted by a separate model-pass in ChunkMesher.
+        public static bool IsCubeShape(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Torch:
                     return false;
                 default:
                     return true;
@@ -63,6 +99,44 @@ namespace VStudioCraft.Game
                     return false;
                 default:
                     return true;
+            }
+        }
+
+        // "LightTransparent" controls whether sky / block light propagates through
+        // a cell during flood-fill. Air passes everything; water passes light
+        // (Alpha treated water as light-transmissive with no extra attenuation —
+        // we can later bump per-step decay if it turns out too bright). Glass and
+        // leaves are visually opaque-ish but never block light. Torches occupy
+        // a sub-cell volume so light still flows through their cell.
+        public static bool IsLightTransparent(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Air:
+                case BlockType.Water:
+                case BlockType.Glass:
+                case BlockType.Leaves:
+                case BlockType.Torch:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        // 0..15 luminous emission. Lava glows full bright. Torches sit at 14 —
+        // matches Alpha so a torch placed against a wall lights about 14 cells
+        // before fading out, leaving the 15th cell almost dark. Glowstone/fire
+        // slot in here.
+        public static int LightEmission(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Lava:
+                    return 15;
+                case BlockType.Torch:
+                    return 14;
+                default:
+                    return 0;
             }
         }
 
@@ -135,6 +209,8 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileGlass;
                 case BlockType.Wool:
                     return BlockTextures.TileWool;
+                case BlockType.Torch:
+                    return BlockTextures.TileTorch;
                 default:
                     return BlockTextures.TileStone;
             }
