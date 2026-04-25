@@ -78,6 +78,7 @@
     <Compile Include="Game\GameMode.cs" />
     <Compile Include="Game\FluidTick.cs" />
     <Compile Include="Game\GameRenderer.cs" />
+    <Compile Include="Game\HotbarTextures.cs" />
     <Compile Include="Game\HudTextures.cs" />
     <Compile Include="Game\InputState.cs" />
     <Compile Include="Game\LightCalculator.cs" />

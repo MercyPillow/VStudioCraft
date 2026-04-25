@@ -163,6 +163,7 @@ namespace VStudioCraft.UI
             _glHandle = _gl.Handle;
 
             _renderer = new GameRenderer();
+            _renderer.Input = _input;
             _renderer.InitializeGraphics();
 
             _glVersion = GL.GetString(StringName.Version) ?? "unknown";
@@ -315,7 +316,7 @@ namespace VStudioCraft.UI
             StatusText.Text =
                 $"{name}  |  FPS {_fps}  |  game {_gameMs:F2} / render {_renderMs:F2} / swap {_swapMs:F2} ms  " +
                 $"|  Mode: {mode}{hpBadge}  |  Sel: {_input.SelectedBlock}  " +
-                $"(1-4 switch, LMB/RMB break/place, WASD+Space+Ctrl move, F3 toggle mode, Esc uncapture)  " +
+                $"(1-9 hotbar, LMB/RMB break/place, WASD+Space+Ctrl move, F3 toggle mode, Esc uncapture)  " +
                 $"|  GPU: {_glRenderer} [{_glVendor}]  |  GL {_glVersion}";
         }
 
@@ -365,14 +366,15 @@ namespace VStudioCraft.UI
 
             switch (e.KeyCode)
             {
-                case Keys.D1: _input.SelectedBlock = BlockType.Grass; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D2: _input.SelectedBlock = BlockType.Dirt;  Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D3: _input.SelectedBlock = BlockType.Stone; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D4: _input.SelectedBlock = BlockType.Sand;  Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D5: _input.SelectedBlock = BlockType.Torch;     Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D6: _input.SelectedBlock = BlockType.Dandelion; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D7: _input.SelectedBlock = BlockType.Rose;      Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
-                case Keys.D8: _input.SelectedBlock = BlockType.TallGrass; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D1: _input.HotbarIndex = 0; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D2: _input.HotbarIndex = 1; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D3: _input.HotbarIndex = 2; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D4: _input.HotbarIndex = 3; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D5: _input.HotbarIndex = 4; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D6: _input.HotbarIndex = 5; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D7: _input.HotbarIndex = 6; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D8: _input.HotbarIndex = 7; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
+                case Keys.D9: _input.HotbarIndex = 8; Dispatcher.BeginInvoke(new Action(UpdateStatus)); break;
                 case Keys.F3:
                     if (_renderer != null)
                     {

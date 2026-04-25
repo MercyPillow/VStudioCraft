@@ -182,7 +182,10 @@ per-cell metadata byte tracking remaining horizontal reach.
 ## Inventory / items
 
 **Have**
-- `SelectedBlock` enum toggled by number keys (creative-lite hotbar)
+- 9-slot hotbar with selected highlight (number keys 1–9 cycle slots)
+- Hotbar HUD chrome rendered procedurally (`HotbarTextures`): bar background, selected highlight ring, 5×7 bitmap font sheet covering uppercase + digits + basic punctuation
+- Block icons rendered from the side-face tile via a `sampler2DArray` sprite shader (`SpriteArrayFragmentSrc`) with a faux top-light gradient so flat tiles still read as 3D-ish at hotbar size
+- Selected block name rendered above the bar using the bitmap font (CamelCase → "Flowing Water" pretty-print)
 
 **Missing**
 - Item stack system (id + damage + count, max 64)
@@ -192,6 +195,8 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Drop item (Q)
 - Pick-block (middle mouse)
 - Scroll-wheel hotbar cycling
+- Stack-count digits drawn in the bottom-right of each slot (font is in place; needs a real stack model first)
+- True isometric block icons (currently a flat side-tile with a gradient — Alpha renders the 3 visible cube faces)
 
 ## Items (actual items, not blocks)
 
@@ -350,11 +355,10 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 ## Suggested next steps (rough order)
 
-1. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
-2. **Inventory + item stacks** — the "items instead of block-enum" jump.
-3. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
-4. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
-5. **Crafting table + furnace** — recipe plumbing.
-6. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
+1. **Inventory + item stacks** — the "items instead of block-enum" jump (hotbar UI is now in place; needs a real ItemStack model + drop/pick handling).
+2. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
+3. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
+4. **Crafting table + furnace** — recipe plumbing.
+5. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
 
 Each of the above is 200–1500 LoC of new code in this codebase's style; nothing is architecturally blocking.

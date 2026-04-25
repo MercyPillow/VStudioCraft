@@ -17,7 +17,39 @@ namespace VStudioCraft.Game
 
         public bool BreakPressed;   // one-shot, consumed by renderer
         public bool PlacePressed;   // one-shot, consumed by renderer
-        public BlockType SelectedBlock = BlockType.Grass;
+
+        // 9-slot hotbar. The render thread reads HotbarIndex + HotbarSlots
+        // every frame to draw the bar; the UI thread writes them in response
+        // to number-key presses. Both fields are atomic single-word writes
+        // on x86/x64 (the slot array reference is fixed at construction —
+        // only its contents are mutated, and only by the UI thread), so no
+        // lock is needed for the cross-thread reads.
+        public int HotbarIndex;
+        public readonly BlockType[] HotbarSlots = new BlockType[]
+        {
+            BlockType.Grass,
+            BlockType.Dirt,
+            BlockType.Stone,
+            BlockType.Sand,
+            BlockType.Torch,
+            BlockType.Dandelion,
+            BlockType.Rose,
+            BlockType.TallGrass,
+            BlockType.Planks,
+        };
+
+        // Block currently held — what TryPlace places, what the status text
+        // shows. Slot index is clamped on read so an out-of-range index never
+        // crashes (in practice it's always 0..8).
+        public BlockType SelectedBlock
+        {
+            get
+            {
+                int i = HotbarIndex;
+                if (i < 0 || i >= HotbarSlots.Length) i = 0;
+                return HotbarSlots[i];
+            }
+        }
 
         public void KeyDown(Keys k) { lock (_lock) _down.Add(k); }
         public void KeyUp(Keys k) { lock (_lock) _down.Remove(k); }

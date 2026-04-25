@@ -150,6 +150,32 @@ void main()
 }
 ";
 
+        // Variant of the sprite shader that samples from the block-atlas
+        // Texture2DArray. Same vertex shader; the fragment picks a layer
+        // from a uniform so a single draw can pick out any tile in the atlas.
+        // Used for rendering block icons inside hotbar slots.
+        private const string SpriteArrayFragmentSrc = @"#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2DArray uAtlas;
+uniform float uLayer;
+uniform vec4 uTint;
+void main()
+{
+    vec4 t = texture(uAtlas, vec3(vUV, uLayer));
+    if (t.a < 0.01) discard;
+    // Faux-3D shading: gradient from top-bright to bottom-dim so the flat
+    // tile reads as a 'lit' face of a cube even without isometric geometry.
+    // Not pixel-perfect Alpha (which renders an actual rotated cube), but
+    // a clear visual cue at hotbar size and zero extra geometry.
+    // Upload convention: py=0 is uploaded first, so v=0 is the top of the
+    // tile. The unit quad's aPos.y runs 0..1 top-to-bottom in screen space
+    // (ortho is (0, w, h, 0)) so vUV.y=0 = top of icon = brighter face.
+    float shade = mix(1.05, 0.78, vUV.y);
+    FragColor = vec4(t.rgb * uTint.rgb * shade, t.a * uTint.a);
+}
+";
+
         private const float ReachDistance = 8f;
         public const int ViewDistanceChunks = 6;   // ~13x13 kept loaded around the player
         public const int UnloadDistanceChunks = 9; // 3 chunks of hysteresis beyond view distance
@@ -168,6 +194,7 @@ void main()
         private Shader _shader;
         private Shader _overlayShader;
         private Shader _spriteShader;
+        private Shader _spriteArrayShader; // sampler2DArray variant for block-atlas icons
         private OverlayMesh _crosshairMesh;
         private OverlayMesh _wireCubeMesh;
         private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
@@ -175,6 +202,15 @@ void main()
         private int _heartTexture;
         private int _drumstickTexture;
         private int _bubbleTexture;
+        private int _hotbarBarTexture;
+        private int _hotbarHighlightTexture;
+        private int _fontTexture;
+
+        // Input state shared with the host. The render thread reads
+        // HotbarSlots / HotbarIndex from this every frame to paint the bar.
+        // Set once by the host after construction and never reassigned, so
+        // no synchronisation is required for the reference itself.
+        public InputState Input { get; set; }
         private SkyRenderer _sky;
         private World _world;
         private ChunkJobSystem _jobs;
@@ -246,6 +282,7 @@ void main()
             _shader = new Shader(VertexSrc, FragmentSrc);
             _overlayShader = new Shader(OverlayVertexSrc, OverlayFragmentSrc);
             _spriteShader = new Shader(SpriteVertexSrc, SpriteFragmentSrc);
+            _spriteArrayShader = new Shader(SpriteVertexSrc, SpriteArrayFragmentSrc);
             _crosshairMesh = BuildCrosshairMesh();
             _wireCubeMesh = BuildWireCubeMesh();
             _unitQuadMesh = BuildUnitQuadMesh();
@@ -253,6 +290,9 @@ void main()
             _heartTexture = HudTextures.CreateHeartSheet();
             _drumstickTexture = HudTextures.CreateDrumstickSheet();
             _bubbleTexture = HudTextures.CreateBubbleSheet();
+            _hotbarBarTexture = HotbarTextures.CreateBarTexture();
+            _hotbarHighlightTexture = HotbarTextures.CreateSelectedHighlightTexture();
+            _fontTexture = HotbarTextures.CreateFontTexture();
             _sky = new SkyRenderer();
             _sky.Initialize();
             _initialized = true;
@@ -915,6 +955,8 @@ void main()
             {
                 RenderSurvivalHud(width, height);
             }
+
+            RenderHotbar(width, height);
         }
 
         // Survival HUD layout:
@@ -1066,6 +1108,180 @@ void main()
             GL.Enable(EnableCap.DepthTest);
         }
 
+        // Hotbar layout (2× upscale of Alpha's chrome — fits the standalone
+        // window without overwhelming the view):
+        //
+        //   bar           : 364 × 44, bottom-centred with a small margin
+        //   slot pitch    : 40 px between slot centres
+        //   icon size     : 32 × 32 inside each slot
+        //   highlight     : 48 × 48 frame on the selected slot (overlaps bar)
+        //
+        // The block icon is the side-face tile from the atlas, sampled via
+        // _spriteArrayShader (Texture2DArray). Reading the side rather than
+        // the top makes Grass etc. recognisable at hotbar size — the top
+        // tile is mostly green noise; the side shows the dirt + grass band.
+        // Cross-sprite items (torch, flowers, tall grass) have a single
+        // sprite tile so faceKind doesn't matter.
+        //
+        // Tooltip line: the selected block name in uppercase, centred above
+        // the bar at 2× font scale (10 × 14 px per glyph). Always-on for V1
+        // so players have feedback on what they're holding without consulting
+        // the WPF status strip.
+        private void RenderHotbar(int width, int height)
+        {
+            const int Scale = 2;
+            const int BarPx = HotbarTextures.BarWidth * Scale;     // 364
+            const int BarH = HotbarTextures.BarHeight * Scale;     // 44
+            const int SlotPx = HotbarTextures.SlotInner * Scale;   // 40
+            const int IconPx = HotbarTextures.IconInner * Scale;   // 32
+            const int HighlightPx = HotbarTextures.HighlightSize * Scale; // 48
+            const int BottomMargin = 6;
+
+            int barX = (width - BarPx) / 2;
+            int barY = height - BarH - BottomMargin;
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // ---- bar background ------------------------------------------
+            _spriteShader.Use();
+            _spriteShader.SetInt("uSprite", 0);
+            _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
+            _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
+            GL.BindTexture(TextureTarget.Texture2D, _hotbarBarTexture);
+            DrawSpriteQuad(barX, barY, BarPx, BarH, ortho);
+
+            // ---- block icons ---------------------------------------------
+            _spriteArrayShader.Use();
+            _spriteArrayShader.SetInt("uAtlas", 0);
+            _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
+            _spriteArrayShader.SetVector2("uUvScale", new Vector2(1f, 1f));
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+
+            BlockType[] slots = Input?.HotbarSlots;
+            int selected = Input != null ? Input.HotbarIndex : 0;
+            // Slot 0 starts at barX + 1*Scale (skip the 1-px left frame, scaled).
+            int firstSlotX = barX + 1 * Scale;
+            int slotY = barY + 1 * Scale;
+            int iconPad = (SlotPx - IconPx) / 2;
+
+            for (int i = 0; i < HotbarTextures.SlotCount; i++)
+            {
+                if (slots == null || i >= slots.Length) break;
+                var t = slots[i];
+                if (t == BlockType.Air) continue;
+                int layer = BlockData.GetTileIndex(t, /*side*/2);
+                _spriteArrayShader.SetFloat("uLayer", layer);
+                int xp = firstSlotX + i * SlotPx + iconPad;
+                int yp = slotY + iconPad;
+                DrawSpriteQuadFor(_spriteArrayShader, xp, yp, IconPx, IconPx, ortho);
+            }
+
+            // ---- selected highlight --------------------------------------
+            if (slots != null && selected >= 0 && selected < HotbarTextures.SlotCount)
+            {
+                _spriteShader.Use();
+                _spriteShader.SetInt("uSprite", 0);
+                _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+                _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
+                _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
+                GL.BindTexture(TextureTarget.Texture2D, _hotbarHighlightTexture);
+
+                // Centre the (slightly oversize) highlight on the slot's centre.
+                int slotCx = firstSlotX + selected * SlotPx + SlotPx / 2;
+                int slotCy = barY + BarH / 2;
+                int hx = slotCx - HighlightPx / 2;
+                int hy = slotCy - HighlightPx / 2;
+                DrawSpriteQuad(hx, hy, HighlightPx, HighlightPx, ortho);
+            }
+
+            // ---- tooltip text --------------------------------------------
+            if (slots != null && selected >= 0 && selected < slots.Length)
+            {
+                var t = slots[selected];
+                if (t != BlockType.Air)
+                {
+                    string label = FriendlyName(t);
+                    DrawString(label, /*scale*/2, /*centerX*/width / 2,
+                        /*topY*/barY - HotbarTextures.GlyphCellH * 2 - 4,
+                        new Vector4(1f, 1f, 1f, 1f), ortho);
+                }
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // CamelCase enum -> human-readable label. "FlowingWater" -> "Flowing Water".
+        // Cheap one-pass split since this only runs once per frame for the tooltip.
+        private static string FriendlyName(BlockType t)
+        {
+            string raw = t.ToString();
+            if (raw.Length == 0) return raw;
+            var sb = new System.Text.StringBuilder(raw.Length + 4);
+            sb.Append(raw[0]);
+            for (int i = 1; i < raw.Length; i++)
+            {
+                char c = raw[i];
+                if (char.IsUpper(c) && !char.IsUpper(raw[i - 1])) sb.Append(' ');
+                sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        // Draws a string with the bitmap font at a given pixel scale,
+        // horizontally centred on (centerX, topY). Each character occupies a
+        // 6×8 cell in the font sheet; we draw a separate textured quad per
+        // glyph so we can pick its UV sub-rect from the sheet.
+        private void DrawString(string text, int scale, int centerX, int topY,
+            Vector4 tint, Matrix4 ortho)
+        {
+            int glyphW = HotbarTextures.GlyphCellW * scale;
+            int glyphH = HotbarTextures.GlyphCellH * scale;
+            int total = text.Length * glyphW;
+            int x = centerX - total / 2;
+
+            _spriteShader.Use();
+            _spriteShader.SetInt("uSprite", 0);
+            _spriteShader.SetVector4("uTint", tint);
+            _spriteShader.SetVector2("uUvScale",
+                new Vector2(HotbarTextures.GlyphUvW, HotbarTextures.GlyphUvH));
+            GL.BindTexture(TextureTarget.Texture2D, _fontTexture);
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                int gi = HotbarTextures.GlyphIndex(text[i]);
+                if (gi < 0) { x += glyphW; continue; }
+                HotbarTextures.GlyphUv(gi, out float u, out float v);
+                _spriteShader.SetVector2("uUvOffset", new Vector2(u, v));
+                DrawSpriteQuadFor(_spriteShader, x, topY, glyphW, glyphH, ortho);
+                x += glyphW;
+            }
+        }
+
+        private void DrawSpriteQuad(int x, int y, int w, int h, Matrix4 ortho)
+            => DrawSpriteQuadFor(_spriteShader, x, y, w, h, ortho);
+
+        // Generic version that lets a caller drive any sprite-shaped shader
+        // (sampler2D or sampler2DArray) — the MVP layout is identical, only
+        // the bound texture and uniform names differ.
+        private void DrawSpriteQuadFor(Shader sh, int x, int y, int w, int h, Matrix4 ortho)
+        {
+            var model = Matrix4.CreateScale(w, h, 1f) * Matrix4.CreateTranslation(x, y, 0f);
+            sh.SetMatrix4("uMVP", model * ortho);
+            _unitQuadMesh.Draw();
+        }
+
         public void Dispose()
         {
             _jobs?.Dispose();
@@ -1078,6 +1294,7 @@ void main()
             _shader?.Dispose();
             _overlayShader?.Dispose();
             _spriteShader?.Dispose();
+            _spriteArrayShader?.Dispose();
             _sky?.Dispose();
             _sky = null;
             if (_atlasTexture != 0)
@@ -1099,6 +1316,21 @@ void main()
             {
                 GL.DeleteTexture(_bubbleTexture);
                 _bubbleTexture = 0;
+            }
+            if (_hotbarBarTexture != 0)
+            {
+                GL.DeleteTexture(_hotbarBarTexture);
+                _hotbarBarTexture = 0;
+            }
+            if (_hotbarHighlightTexture != 0)
+            {
+                GL.DeleteTexture(_hotbarHighlightTexture);
+                _hotbarHighlightTexture = 0;
+            }
+            if (_fontTexture != 0)
+            {
+                GL.DeleteTexture(_fontTexture);
+                _fontTexture = 0;
             }
         }
     }
