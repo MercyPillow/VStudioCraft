@@ -10,7 +10,7 @@ namespace VStudioCraft.Game
     internal static class BlockTextures
     {
         public const int TileSize = 16;
-        public const int LayerCount = 34;
+        public const int LayerCount = 39;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -46,6 +46,11 @@ namespace VStudioCraft.Game
         public const int TileGlass = 31;
         public const int TileWool = 32;
         public const int TileTorch = 33;
+        public const int TileDandelion = 34;
+        public const int TileRose = 35;
+        public const int TileBrownMushroom = 36;
+        public const int TileRedMushroom = 37;
+        public const int TileTallGrass = 38;
 
         // A 2D texture array — one layer per tile. Greedy meshing can emit merged
         // quads with UVs exceeding [0,1]; with a layered texture and Repeat wrap the
@@ -96,6 +101,11 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileGlass, GenerateGlass);
             UploadLayer(layerPixels, TileWool, GenerateWool);
             UploadLayer(layerPixels, TileTorch, GenerateTorch);
+            UploadLayer(layerPixels, TileDandelion, GenerateDandelion);
+            UploadLayer(layerPixels, TileRose, GenerateRose);
+            UploadLayer(layerPixels, TileBrownMushroom, GenerateBrownMushroom);
+            UploadLayer(layerPixels, TileRedMushroom, GenerateRedMushroom);
+            UploadLayer(layerPixels, TileTallGrass, GenerateTallGrass);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -881,6 +891,177 @@ namespace VStudioCraft.Game
             // y=12: faint outer glow above the flame.
             SetPixel(pixels, 7, 12, 220, 110, 30, 140);
             SetPixel(pixels, 8, 12, 220, 110, 30, 140);
+        }
+
+        // ----- Cross-sprite flora tiles -----
+        // All five tiles share the same convention as Torch: y=0 is the bottom
+        // of the rendered face, transparent background, the fragment shader
+        // discards alpha < 0.5 so they live in the opaque pass with no blending.
+
+        private static void GenerateDandelion(byte[] pixels)
+        {
+            // Tall green stem with a small yellow flower-head sitting on top
+            // and a pair of leaf nubs partway up the stem. Alpha-era dandelions
+            // were a 4-5 pixel cluster of yellow on a single-pixel stem.
+            var rng = new Random(0xDA4D);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, 0, 0, 0, 0);
+
+            // Stem y=1..10 at x=7
+            for (int y = 1; y <= 10; y++)
+                SetJittered(pixels, 7, y, 80, 130, 50, 8, rng);
+            // Pair of leaf nubs midway.
+            SetJittered(pixels, 6, 4, 70, 120, 44, 8, rng);
+            SetJittered(pixels, 8, 6, 70, 120, 44, 8, rng);
+
+            // Yellow flower head: 3x3 cluster centred at (7, 11), with the
+            // outer corners slightly dimmer to soften the silhouette.
+            SetPixel(pixels, 7, 11, 248, 220, 60, 255);
+            SetPixel(pixels, 6, 11, 230, 196, 50, 255);
+            SetPixel(pixels, 8, 11, 230, 196, 50, 255);
+            SetPixel(pixels, 7, 10, 230, 196, 50, 255);
+            SetPixel(pixels, 7, 12, 252, 232, 90, 255);
+            SetPixel(pixels, 6, 12, 220, 180, 40, 220);
+            SetPixel(pixels, 8, 12, 220, 180, 40, 220);
+            SetPixel(pixels, 6, 10, 200, 160, 30, 180);
+            SetPixel(pixels, 8, 10, 200, 160, 30, 180);
+        }
+
+        private static void GenerateRose(byte[] pixels)
+        {
+            // Single tall stem with red bloom petals on top. Rose in alpha was
+            // visibly a vertical green stick with a red triangular flower.
+            var rng = new Random(0x6053);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, 0, 0, 0, 0);
+
+            // Stem y=0..9 at x=7
+            for (int y = 0; y <= 9; y++)
+                SetJittered(pixels, 7, y, 70, 120, 44, 8, rng);
+            // Single leaf jutting out partway up.
+            SetJittered(pixels, 8, 5, 86, 140, 56, 8, rng);
+            SetJittered(pixels, 6, 3, 86, 140, 56, 8, rng);
+
+            // Red bloom: a triangular cluster of petals above the stem.
+            // Inner is brighter red, outer is darker maroon for shading.
+            SetPixel(pixels, 7, 10, 220, 50, 50, 255);
+            SetPixel(pixels, 6, 10, 180, 30, 30, 255);
+            SetPixel(pixels, 8, 10, 180, 30, 30, 255);
+            SetPixel(pixels, 7, 11, 240, 70, 70, 255);
+            SetPixel(pixels, 6, 11, 220, 50, 50, 255);
+            SetPixel(pixels, 8, 11, 220, 50, 50, 255);
+            SetPixel(pixels, 5, 11, 160, 24, 24, 220);
+            SetPixel(pixels, 9, 11, 160, 24, 24, 220);
+            SetPixel(pixels, 7, 12, 252, 100, 90, 255);
+            SetPixel(pixels, 6, 12, 220, 50, 50, 220);
+            SetPixel(pixels, 8, 12, 220, 50, 50, 220);
+            SetPixel(pixels, 7, 13, 200, 36, 36, 200);
+            // Tiny yellow centre pollen pip.
+            SetPixel(pixels, 7, 12, 252, 220, 80, 255);
+        }
+
+        private static void GenerateBrownMushroom(byte[] pixels)
+        {
+            // Squat stem with a dome cap. Brown is the "harmless" mushroom in
+            // alpha, slightly smaller than the red one.
+            var rng = new Random(0xB607);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, 0, 0, 0, 0);
+
+            // Stem (cream) y=0..4 at x=7..8
+            for (int y = 0; y <= 4; y++)
+            {
+                SetJittered(pixels, 7, y, 220, 210, 184, 6, rng);
+                SetJittered(pixels, 8, y, 200, 190, 164, 6, rng);
+            }
+
+            // Cap: brown dome roughly 5 wide, 3 tall at y=5..7
+            // Row y=5 (cap underside): darker brown shadow
+            for (int x = 6; x <= 9; x++)
+                SetJittered(pixels, x, 5, 92, 64, 40, 6, rng);
+            // Row y=6 (cap body): mid brown
+            for (int x = 5; x <= 10; x++)
+                SetJittered(pixels, x, 6, 150, 108, 70, 8, rng);
+            // Row y=7 (cap top): lighter highlight
+            for (int x = 6; x <= 9; x++)
+                SetJittered(pixels, x, 7, 180, 140, 96, 8, rng);
+            // Row y=8: tip
+            SetJittered(pixels, 7, 8, 160, 120, 80, 6, rng);
+            SetJittered(pixels, 8, 8, 160, 120, 80, 6, rng);
+        }
+
+        private static void GenerateRedMushroom(byte[] pixels)
+        {
+            // Same skeleton as the brown mushroom but with a taller red cap
+            // and white spots on top — the "amanita" silhouette.
+            var rng = new Random(0xED70);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, 0, 0, 0, 0);
+
+            // Stem y=0..4 at x=7..8
+            for (int y = 0; y <= 4; y++)
+            {
+                SetJittered(pixels, 7, y, 230, 220, 196, 5, rng);
+                SetJittered(pixels, 8, y, 210, 200, 176, 5, rng);
+            }
+
+            // Cap underside (gills) y=5
+            for (int x = 6; x <= 9; x++)
+                SetJittered(pixels, x, 5, 220, 200, 184, 5, rng);
+            // Cap body y=6..8 in red
+            for (int x = 5; x <= 10; x++)
+                SetJittered(pixels, x, 6, 200, 36, 36, 8, rng);
+            for (int x = 5; x <= 10; x++)
+                SetJittered(pixels, x, 7, 220, 50, 50, 8, rng);
+            for (int x = 6; x <= 9; x++)
+                SetJittered(pixels, x, 8, 200, 36, 36, 8, rng);
+            SetJittered(pixels, 7, 9, 180, 24, 24, 6, rng);
+            SetJittered(pixels, 8, 9, 180, 24, 24, 6, rng);
+
+            // White spots scattered on the cap.
+            SetPixel(pixels, 6, 7, 240, 240, 232, 255);
+            SetPixel(pixels, 9, 7, 240, 240, 232, 255);
+            SetPixel(pixels, 8, 6, 240, 240, 232, 255);
+            SetPixel(pixels, 7, 8, 240, 240, 232, 255);
+        }
+
+        private static void GenerateTallGrass(byte[] pixels)
+        {
+            // A scatter of upright green blades, slightly varied in height,
+            // fanning out from the centre. Alpha's tall grass was a sparser,
+            // taller-than-it-is-wide bundle.
+            var rng = new Random(0x7A11);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, 0, 0, 0, 0);
+
+            // 6 blades at varying x positions and heights, with the tallest
+            // in the centre, shorter blades fanning out. Bottom always at y=0.
+            int[] bladeXs = { 4, 6, 7, 8, 10, 12 };
+            int[] bladeH  = { 4, 7, 9, 8, 6, 3 };
+            for (int b = 0; b < bladeXs.Length; b++)
+            {
+                int bx = bladeXs[b];
+                int h = bladeH[b];
+                for (int y = 0; y < h; y++)
+                {
+                    // Top tip is yellower (drying), base is darker green.
+                    byte rr, gg, bb;
+                    if (y == h - 1)      { rr = 168; gg = 188; bb = 80; }
+                    else if (y >= h - 2) { rr = 110; gg = 170; bb = 70; }
+                    else                  { rr = 80;  gg = 140; bb = 50; }
+                    SetJittered(pixels, bx, y, rr, gg, bb, 8, rng);
+                }
+            }
+            // A couple of horizontal "spread" blades at the very base so the
+            // root cluster doesn't read as just vertical sticks.
+            SetJittered(pixels, 5, 0, 80, 140, 50, 6, rng);
+            SetJittered(pixels, 9, 0, 80, 140, 50, 6, rng);
+            SetJittered(pixels, 11, 0, 80, 140, 50, 6, rng);
         }
     }
 }

@@ -622,9 +622,10 @@ void main()
             // non-cube blocks the raycast can target — blocks the place.
             var existing = _world.GetBlock(px, py, pz);
             if (existing != BlockType.Air && existing != BlockType.Water) return false;
-            // Torches need a solid block beneath them to attach to. (Wall
-            // attachment will arrive when we add metadata; floor-only for now.)
-            if (t == BlockType.Torch && !BlockData.IsSolid(_world.GetBlock(px, py - 1, pz)))
+            // Cross-sprite blocks need a solid block beneath them to attach
+            // to. Torches: floor-only for now (wall attachment needs block
+            // metadata). Flowers/mushrooms/tall grass: same rule.
+            if (!BlockData.IsCubeShape(t) && !BlockData.IsSolid(_world.GetBlock(px, py - 1, pz)))
                 return false;
             return _world.SetBlock(px, py, pz, t);
         }

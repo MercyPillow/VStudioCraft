@@ -33,6 +33,11 @@ namespace VStudioCraft.Game
         Glass = 28,
         Wool = 29,
         Torch = 30,
+        Dandelion = 31,
+        Rose = 32,
+        BrownMushroom = 33,
+        RedMushroom = 34,
+        TallGrass = 35,
     }
 
     internal static class BlockData
@@ -49,6 +54,11 @@ namespace VStudioCraft.Game
                 case BlockType.Air:
                 case BlockType.Water:
                 case BlockType.Torch:
+                case BlockType.Dandelion:
+                case BlockType.Rose:
+                case BlockType.BrownMushroom:
+                case BlockType.RedMushroom:
+                case BlockType.TallGrass:
                     return false;
                 default:
                     return true;
@@ -81,6 +91,11 @@ namespace VStudioCraft.Game
             switch (t)
             {
                 case BlockType.Torch:
+                case BlockType.Dandelion:
+                case BlockType.Rose:
+                case BlockType.BrownMushroom:
+                case BlockType.RedMushroom:
+                case BlockType.TallGrass:
                     return false;
                 default:
                     return true;
@@ -117,6 +132,11 @@ namespace VStudioCraft.Game
                 case BlockType.Glass:
                 case BlockType.Leaves:
                 case BlockType.Torch:
+                case BlockType.Dandelion:
+                case BlockType.Rose:
+                case BlockType.BrownMushroom:
+                case BlockType.RedMushroom:
+                case BlockType.TallGrass:
                     return true;
                 default:
                     return false;
@@ -211,6 +231,16 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileWool;
                 case BlockType.Torch:
                     return BlockTextures.TileTorch;
+                case BlockType.Dandelion:
+                    return BlockTextures.TileDandelion;
+                case BlockType.Rose:
+                    return BlockTextures.TileRose;
+                case BlockType.BrownMushroom:
+                    return BlockTextures.TileBrownMushroom;
+                case BlockType.RedMushroom:
+                    return BlockTextures.TileRedMushroom;
+                case BlockType.TallGrass:
+                    return BlockTextures.TileTallGrass;
                 default:
                     return BlockTextures.TileStone;
             }

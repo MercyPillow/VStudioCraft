@@ -29,6 +29,7 @@ namespace VStudioCraft.Game
             GenerateWater(chunk);
             GenerateOresAndPatches(chunk, noise);
             GenerateTrees(chunk, noise);
+            GenerateFlora(chunk, noise);
         }
 
         // ---------- Pass 1: heightmap columns (stone / dirt / grass / sand). ----------
@@ -385,6 +386,63 @@ namespace VStudioCraft.Game
             int idx = Chunk.Index(lx, wy, lz);
             if (overwrite || chunk.RawBlocks[idx] == (byte)BlockType.Air)
                 chunk.RawBlocks[idx] = (byte)t;
+        }
+
+        // ---------- Pass 5: surface flora (flowers, mushrooms, tall grass). ----------
+
+        // Deterministic per-column scatter on grass surfaces. We iterate over
+        // exactly the chunk's own columns (not a border) because each flora
+        // block is a single 1-block sprite that fits in its column — there's
+        // no canopy to bleed into a neighbour. The per-column hash uses the
+        // same seeding scheme as trees, with a different tag, so the same
+        // block never lands in the same cell as a tree trunk on regen.
+        private static void GenerateFlora(Chunk chunk, Noise noise)
+        {
+            int baseX = chunk.ChunkX * Chunk.SizeX;
+            int baseZ = chunk.ChunkZ * Chunk.SizeZ;
+
+            for (int lx = 0; lx < Chunk.SizeX; lx++)
+            for (int lz = 0; lz < Chunk.SizeZ; lz++)
+            {
+                int wx = baseX + lx;
+                int wz = baseZ + lz;
+                // Different tag to keep this stream independent of the tree
+                // RNG, while still being deterministic per (seed, wx, wz).
+                var rng = new Random(unchecked(ColumnHash(noise.Seed, wx, wz) * (int)0x9E3779B1));
+
+                // ~1/16 chance to place SOMETHING. Scaled high enough that a
+                // grass field reads as "decorated" without becoming a meadow.
+                if (rng.Next(16) != 0) continue;
+
+                int surface = SurfaceHeight(noise, wx, wz);
+                if (surface <= BeachHeight) continue;          // skip beach/ocean
+                int placeY = surface;                            // one above ground
+                if (placeY >= Chunk.SizeY) continue;
+                int groundY = surface - 1;
+
+                // The cell directly below must be grass and the placement
+                // cell itself must currently be air. This skips cave openings
+                // (where the surface column was carved away) and tree/leaf
+                // squares we can't see through to the ground for.
+                int placeIdx = Chunk.Index(lx, placeY, lz);
+                int groundIdx = Chunk.Index(lx, groundY, lz);
+                if (chunk.RawBlocks[placeIdx] != (byte)BlockType.Air) continue;
+                if (chunk.RawBlocks[groundIdx] != (byte)BlockType.Grass) continue;
+
+                // Roll the type. Tall grass dominates; flowers next; mushrooms
+                // are rare on the open surface (alpha placed brown/red ones
+                // mostly in dim places — we still surface-spawn a few so the
+                // world isn't barren of them until we add caves-spawn).
+                BlockType pick;
+                int r = rng.Next(100);
+                if (r < 55)      pick = BlockType.TallGrass;
+                else if (r < 75) pick = BlockType.Dandelion;
+                else if (r < 90) pick = BlockType.Rose;
+                else if (r < 96) pick = BlockType.BrownMushroom;
+                else             pick = BlockType.RedMushroom;
+
+                chunk.RawBlocks[placeIdx] = (byte)pick;
+            }
         }
 
         // ---------- Deterministic hash helpers. ----------

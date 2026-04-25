@@ -4,16 +4,16 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 `src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
 Items marked **Have** exist today; items under **Missing** are the gap.
 
-Last updated after the lighting pass: per-block 4-bit sky + 4-bit block
-light, Alpha-style 15-level flood fill, baked into vertex stream and
-modulated in the fragment shader. Caves, overhangs, and the night side
-of the world now read as dark; lava cells emit a warm 15-block glow.
+Last updated after surface flora: dandelion, rose, brown + red mushroom
+and tall grass — five new cross-sprite blocks scattered deterministically
+across grass surfaces in the terrain pass, all sharing the alpha-tested
+opaque pass introduced for torches.
 
 ---
 
 ## Blocks
 
-**Have** — 30 block IDs (`BlockType` enum)
+**Have** — 35 block IDs (`BlockType` enum)
 - Air, Grass, Dirt, Stone, Sand
 - Cobblestone, Bedrock, Gravel, Clay
 - CoalOre, IronOre, GoldOre, DiamondOre, RedstoneOre
@@ -22,11 +22,12 @@ of the world now read as dark; lava cells emit a warm 15-block glow.
 - GoldBlock, IronBlock, DiamondBlock
 - Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Glass (opaque placeholder), Wool
 - Torch (floor placement, emits 14 block-light, cross-sprite model, alpha-tested)
+- Dandelion, Rose, BrownMushroom, RedMushroom, TallGrass — cross-sprite flora, non-collidable, raycast-targetable, light-transparent, scattered on grass during terrain gen
 - Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf)
-- 34-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
+- 39-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
 - Transparent-block routing to a second alpha-blended render pass (water today)
 - Cross-sprite (X-shape) model path for non-cube blocks, alpha-tested in opaque pass via fragment-shader `discard`
-- Per-block shape category (`IsCubeShape`) and raycast/collision separation (`IsRaycastTarget` vs `IsSolid`) so torches and future flowers can be targetable but non-collidable
+- Per-block shape category (`IsCubeShape`) and raycast/collision separation (`IsRaycastTarget` vs `IsSolid`) so torches/flowers/grass are targetable but non-collidable
 
 **Missing**
 - Glass with real transparency (currently opaque placeholder)
@@ -39,8 +40,7 @@ of the world now read as dark; lava cells emit a warm 15-block glow.
 - Sugar cane / reeds
 - Cactus (damages on contact)
 - Pumpkin + jack-o'-lantern
-- Red + brown mushroom
-- Red + yellow flower (dandelion, rose)
+- Tall grass / flower / mushroom block-tick removal when the grass below is broken (today the sprite stays floating)
 - Water/lava flowing variants (8-level falloff)
 - Fire (spreads and dies)
 - Stone & wooden slab (single + double)
@@ -68,6 +68,7 @@ of the world now read as dark; lava cells emit a warm 15-block glow.
 - Bedrock floor: y=0 always + ragged y=1..3 at ~60/40/20% per column
 - Ore veins: Dirt, Gravel, Coal, Iron, Gold, Redstone, Diamond — Alpha-tuned Y ranges (Iron ≤64, Gold ≤32, Redstone/Diamond ≤16), random-walk placement, stone-only replacement
 - Oak trees with canopy that overlaps across chunk seams (deterministic per-column RNG means same tree regardless of which chunk is generated first)
+- Surface flora scatter: dandelion / rose / brown + red mushroom / tall grass placed on grass surfaces with a per-column hashed RNG (~1 sprite per 16 grass columns, weighted toward tall grass and flowers, mushrooms rare). Skipped on beach and over carved cave openings.
 - Worm-style cave systems — each chunk scans a 5×5 neighbourhood for worm starts, so tunnels cross seams seamlessly. Parabola-tapered radius (1.8..3.6 blocks) with dampened yaw/pitch drift. Carves only stone/dirt/gravel/grass — bedrock, water, and sand (beaches) are preserved. Y-capped below `SeaLevel - 4` and below `surface - 5` per column so caves never break out to the surface or the ocean floor.
 - Off-thread terrain generation via `ChunkJobSystem` worker pool (2–3 workers)
 - Reproducible seed chain per chunk feature (per-chunk and per-column hashed RNG)
@@ -80,7 +81,6 @@ of the world now read as dark; lava cells emit a warm 15-block glow.
 - Snow/ice biomes (snow layer on top blocks, ice on water)
 - Desert biomes (no trees, cacti)
 - Pumpkin patches
-- Flowers + mushroom scatter (need cross-plane sprite geometry)
 - Sugar cane next to water
 - Biome system (Alpha used Rainfall/Temperature maps via `OverworldGenerator`)
 - World spawn-point selection (currently spawn is always at origin, high in the air)
@@ -249,7 +249,7 @@ of the world now read as dark; lava cells emit a warm 15-block glow.
 - Greedy chunk meshing (~5–10× fewer verts than naive)
 - Face culling against opaque neighbours; internal water-water faces skipped
 - Two-pass rendering: opaque first, then alpha-blended transparents (water) with depth-write off
-- 16×16 nearest-neighbour texture atlas (33 layers)
+- 16×16 nearest-neighbour texture atlas (39 layers)
 - VAO/VBO/EBO per chunk mesh, separate VBOs for opaque + transparent streams
 - Frustum culling per chunk (both passes)
 - Dedicated render thread owning the GL context
@@ -269,7 +269,7 @@ of the world now read as dark; lava cells emit a warm 15-block glow.
 ## Controls
 
 **Have**
-- WASD, Space, Ctrl (sprint), Esc (release mouse), LMB break, RMB place, 1/2/3/4/5 hotbar (Grass/Dirt/Stone/Sand/Torch)
+- WASD, Space, Ctrl (sprint), Esc (release mouse), LMB break, RMB place, 1–8 hotbar (Grass / Dirt / Stone / Sand / Torch / Dandelion / Rose / TallGrass)
 - F3 toggles Creative ↔ Survival (re-uses Alpha's F3 slot; debug screen pending)
 
 **Missing**
@@ -340,14 +340,13 @@ of the world now read as dark; lava cells emit a warm 15-block glow.
 
 ## Suggested next steps (rough order)
 
-1. **Flowers + mushrooms + tall grass** — cross-sprite geometry is in place (torches use it); just need procedural tiles + sprinkle pass in TerrainGenerator + a destroy-on-no-grass-below check.
-2. **Flowing water / lava** — promote the current still-water to a proper fluid with 8-level falloff ticks.
-3. **Swim physics + drowning timer** — now that water + survival-HP exist, the player should bob in it and lose air underwater.
-4. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
-5. **Inventory + item stacks** — the "items instead of block-enum" jump.
-6. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
-7. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
-8. **Crafting table + furnace** — recipe plumbing.
-9. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
+1. **Flowing water / lava** — promote the current still-water to a proper fluid with 8-level falloff ticks.
+2. **Swim physics + drowning timer** — now that water + survival-HP exist, the player should bob in it and lose air underwater.
+3. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
+4. **Inventory + item stacks** — the "items instead of block-enum" jump.
+5. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
+6. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
+7. **Crafting table + furnace** — recipe plumbing.
+8. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
 
 Each of the above is 200–1500 LoC of new code in this codebase's style; nothing is architecturally blocking.
