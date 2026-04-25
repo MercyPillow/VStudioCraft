@@ -157,17 +157,20 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Walk / jump / gravity / terminal velocity
 - Mouse look (yaw+pitch, clamped)
 - Block break + place via 8-block reach raycast
-- Water is non-solid (you can walk / fall through it — swim physics not yet)
+- Water is non-solid (you walk / fall through it cleanly)
+- Swim physics: in water gravity drops to ~28% of normal, terminal speed clamps to ±3..4.5 m/s, horizontal velocity halves; Space accelerates upward at 22 m/s² so tap-tap-tap brings you back to the surface
+- Camera bob while swimming — gentle vertical sway scaled by horizontal speed, eased back to zero on exit
 - Health (20 HP = 10 hearts, Alpha-style) in survival mode
+- Air supply (20 = 10 bubbles, depletes in 15 s of head-submerged time, refills instantly on surfacing)
 - Fall damage (Alpha formula: `max(0, distance - 3)` half-hearts, cancelled if landing in water)
+- Drowning damage (2 HP every 1 s once air runs out)
 - Void damage (4 HP every 0.5 s below y=-16)
-- Respawn on death (teleport to spawn, restore full HP)
+- Respawn on death (teleport to spawn, restore full HP + air)
 
 **Missing**
-- Damage from drowning, suffocation, lava, fire, cactus
+- Damage from suffocation, lava, fire, cactus
 - Food-based healing
 - Sneak (Shift) — prevents falling off edges
-- Swim physics (bobbing, slower movement, upward thrust on Space, drowning timer)
 - Ladder climb
 - On-fire state
 - Hand-held item rendering in first-person
@@ -217,11 +220,11 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Survival HUD layout: `| hearts | gap | hunger bar |` — heart row right-anchored to `width/3`, hunger row left-anchored to `2×width/3`
 - Heart sprites in classic `<3` style (two-circles + V-taper construction, highlight on upper-left bump, shade on lower-right) with full / half / empty states
 - Drumstick sprites (meat ellipse + bone capsule + knob) for hunger bar, same full / half / empty states
+- Bubble sprites for the air row — full circle / shrunken popping bubble / transparent empty; row only renders while air < max
 - Sprite shader + procedural `HudTextures` sheet (reusable brick for all future HUD icons)
 
 **Missing**
 - Hotbar strip (9 slots with selected highlight)
-- Air bubble row (drowning timer)
 - Dynamic hunger decay + food items (hunger currently pinned at max — scaffolding only)
 - Armor row
 - Tool-durability bar on item icons
@@ -346,13 +349,12 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 ## Suggested next steps (rough order)
 
-1. **Swim physics + drowning timer** — now that water + survival-HP exist, the player should bob in it and lose air underwater.
-2. **Fluid drain + level rendering** — finish the fluid pass: BFS from sources each tick to remove orphaned flowing cells, and render top-face inset proportional to the cell's reach metadata.
-3. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
-4. **Inventory + item stacks** — the "items instead of block-enum" jump.
-5. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
-6. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
-7. **Crafting table + furnace** — recipe plumbing.
-8. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
+1. **Fluid drain + level rendering** — finish the fluid pass: BFS from sources each tick to remove orphaned flowing cells, and render top-face inset proportional to the cell's reach metadata.
+2. **Hotbar HUD + bitmap font** — reuse the new sprite shader + HudTextures pattern; prerequisite for real inventory.
+3. **Inventory + item stacks** — the "items instead of block-enum" jump.
+4. **Block hardness + mining time + drops** — turns creative-lite into alpha-lite survival.
+5. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
+6. **Crafting table + furnace** — recipe plumbing.
+7. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
 
 Each of the above is 200–1500 LoC of new code in this codebase's style; nothing is architecturally blocking.

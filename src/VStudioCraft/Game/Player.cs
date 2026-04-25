@@ -17,6 +17,22 @@ namespace VStudioCraft.Game
         public const float JumpSpeed = 8.4f;     // apex ≈ 1.26 blocks
         public const float MaxFallSpeed = 78f;
 
+        // Swim physics. In water gravity is much weaker (you sink slowly), the
+        // terminal speed is bounded both ways (drag), and Space pushes you up
+        // instead of behaving like a ground-jump. The horizontal scale matches
+        // Alpha's "water is sticky" feel — half walking speed in either axis.
+        public const float WaterGravity = 8f;       // m/s²
+        public const float WaterMaxFall = 3f;       // sinks slowly
+        public const float WaterMaxRise = 4.5f;     // upward terminal while holding Space
+        public const float SwimUpAccel = 22f;       // m/s² applied while Space held
+        public const float WaterMoveScale = 0.5f;   // horizontal velocity multiplier
+
+        // Bobbing: pure visual offset added to the camera Y when in water. The
+        // amplitude is small (Alpha's bob is similarly subtle) and the cadence
+        // is tied to the swim cycle so head-strokes read as the bob beats.
+        public const float SwimBobAmplitude = 0.05f;
+        public const float SwimBobFrequency = 4f;   // radians/sec
+
         // Small sub-step cap so fast motion (e.g. terminal-velocity fall) can't skip
         // through a block in a single tick. 0.05 = imperceptible wall gap.
         private const float MaxSubStep = 0.05f;
@@ -32,6 +48,12 @@ namespace VStudioCraft.Game
         // without changing the UI again. Pinned at MaxHunger for now.
         public const int MaxHunger = 20;
 
+        // Air supply (Alpha: 300 ticks ≈ 15s). Two air points per rendered
+        // bubble, so 20 max = 10 bubbles, identical scale to hearts/hunger.
+        // Decays only while the head (top half of the AABB) is submerged in
+        // water. Once it reaches zero, drowning damage starts in survival.
+        public const int MaxAir = 20;
+
         public Vector3 Position;
         public Vector3 Velocity;
         public bool OnGround;
@@ -39,7 +61,19 @@ namespace VStudioCraft.Game
         // Survival HP. Creative mode keeps this pinned at MaxHealth.
         public int Health = MaxHealth;
         public int Hunger = MaxHunger;
+        public int Air = MaxAir;
         public bool IsDead => Health <= 0;
+
+        // Last-known submerged state, sampled by the renderer for HUD + survival
+        // damage. Cached on each Player.Update so callers don't re-scan the AABB.
+        public bool WasInWater;
+        public bool WasHeadInWater;
+
+        // Driven inside Update; the camera reads it via SwimBobOffset to add a
+        // gentle vertical sway while submerged. Decays back to 0 once you exit
+        // water so the camera doesn't lurch.
+        public float SwimBobPhase;
+        public float SwimBobOffset;
 
         // One-shot: set to the drop height (in blocks) whenever the player
         // transitions from airborne→grounded. The renderer reads it once per
@@ -55,17 +89,45 @@ namespace VStudioCraft.Game
         {
             bool wasOnGround = OnGround;
 
-            // Horizontal velocity is driven directly by input (snappy, Minecraft-like).
-            Velocity.X = wishHorizVel.X;
-            Velocity.Z = wishHorizVel.Z;
+            // Sample water state once per tick — both the "any contact"
+            // version (drives swim physics) and the "head submerged" version
+            // (drives breathing / drowning). Cached on the player so the
+            // renderer's HUD + damage path reuses these without re-scanning.
+            bool inWater = ScanInWater(world, fromY: Position.Y, toY: Position.Y + Height);
+            bool headInWater = ScanInWater(world,
+                fromY: Position.Y + EyeHeight - 0.1f,
+                toY:   Position.Y + EyeHeight + 0.1f);
+            WasInWater = inWater;
+            WasHeadInWater = headInWater;
 
-            Velocity.Y -= Gravity * dt;
-            if (Velocity.Y < -MaxFallSpeed) Velocity.Y = -MaxFallSpeed;
+            // Horizontal velocity is driven directly by input (snappy,
+            // Minecraft-like). In water we scale it down so swimming reads
+            // sluggish vs. walking on land.
+            float horizScale = inWater ? WaterMoveScale : 1f;
+            Velocity.X = wishHorizVel.X * horizScale;
+            Velocity.Z = wishHorizVel.Z * horizScale;
 
-            if (wantJump && OnGround)
+            // Vertical: water uses a smaller gravity and clamps both signs
+            // (drag), so you sink slowly and can't free-fall through a deep
+            // pool. Holding Space accelerates upward while submerged — the
+            // continuous accel with a soft terminal feels closer to Alpha's
+            // "tap-tap-tap to surface" than a single jump impulse would.
+            if (inWater)
             {
-                Velocity.Y = JumpSpeed;
-                OnGround = false;
+                Velocity.Y -= WaterGravity * dt;
+                if (wantJump) Velocity.Y += SwimUpAccel * dt;
+                if (Velocity.Y < -WaterMaxFall) Velocity.Y = -WaterMaxFall;
+                if (Velocity.Y >  WaterMaxRise) Velocity.Y =  WaterMaxRise;
+            }
+            else
+            {
+                Velocity.Y -= Gravity * dt;
+                if (Velocity.Y < -MaxFallSpeed) Velocity.Y = -MaxFallSpeed;
+                if (wantJump && OnGround)
+                {
+                    Velocity.Y = JumpSpeed;
+                    OnGround = false;
+                }
             }
 
             var step = Velocity * dt;
@@ -74,6 +136,23 @@ namespace VStudioCraft.Game
             MoveAxis(2, step.Z, world);
 
             UpdateFallTracking(wasOnGround, world);
+
+            // Bob phase advances while submerged; offset eases back to zero
+            // once you surface so the camera doesn't snap. Amplitude only
+            // applies when actually moving in water — standing still in
+            // shallow water shouldn't make the screen wobble.
+            if (inWater)
+            {
+                SwimBobPhase += SwimBobFrequency * dt;
+                float speedFrac = (float)Math.Min(1.0, Math.Sqrt(
+                    Velocity.X * Velocity.X + Velocity.Z * Velocity.Z) / WalkSpeed);
+                float target = (float)Math.Sin(SwimBobPhase) * SwimBobAmplitude * speedFrac;
+                SwimBobOffset += (target - SwimBobOffset) * Math.Min(1f, 8f * dt);
+            }
+            else
+            {
+                SwimBobOffset += (0f - SwimBobOffset) * Math.Min(1f, 8f * dt);
+            }
         }
 
         private void UpdateFallTracking(bool wasOnGround, World world)
@@ -89,28 +168,39 @@ namespace VStudioCraft.Game
             {
                 // Just landed. Emit the fall distance unless the player is in
                 // water — water cancels fall damage (classic Alpha rule).
+                // Re-scan at the post-move position so a one-tick plunge into
+                // water from above still cancels: WasInWater snapshots BEFORE
+                // we moved this tick, and falls fast enough to clear the
+                // surface in a single sub-step would otherwise still hurt.
                 float dist = _fallPeakY - Position.Y;
                 if (dist > 0f && !IsInWater(world)) LastFallDistance = dist;
             }
             _fallPeakY = Position.Y;
         }
 
-        public bool IsInWater(World world)
+        public bool IsInWater(World world) =>
+            ScanInWater(world, Position.Y, Position.Y + Height);
+
+        // Scans the AABB at a given Y range for any water cell (source or
+        // flowing — both count for buoyancy and breathing). Water reach was
+        // bumped to 7 so flowing cells are common; treating them identically
+        // to source water keeps swim physics sane in any flooded area.
+        private bool ScanInWater(World world, float fromY, float toY)
         {
             float minX = Position.X - HalfWidth, maxX = Position.X + HalfWidth;
-            float minY = Position.Y,              maxY = Position.Y + Height;
             float minZ = Position.Z - HalfWidth, maxZ = Position.Z + HalfWidth;
             int bx0 = (int)Math.Floor(minX);
             int bx1 = (int)Math.Floor(maxX - 1e-5f);
-            int by0 = (int)Math.Floor(minY);
-            int by1 = (int)Math.Floor(maxY - 1e-5f);
+            int by0 = (int)Math.Floor(fromY);
+            int by1 = (int)Math.Floor(toY - 1e-5f);
             int bz0 = (int)Math.Floor(minZ);
             int bz1 = (int)Math.Floor(maxZ - 1e-5f);
             for (int y = by0; y <= by1; y++)
             for (int x = bx0; x <= bx1; x++)
             for (int z = bz0; z <= bz1; z++)
             {
-                if (world.GetBlock(x, y, z) == BlockType.Water) return true;
+                var b = world.GetBlock(x, y, z);
+                if (b == BlockType.Water || b == BlockType.FlowingWater) return true;
             }
             return false;
         }
@@ -125,6 +215,7 @@ namespace VStudioCraft.Game
         public void HealFull()
         {
             Health = MaxHealth;
+            Air = MaxAir;
             LastFallDistance = 0f;
             _fallPeakY = Position.Y;
         }

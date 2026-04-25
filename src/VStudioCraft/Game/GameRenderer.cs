@@ -174,6 +174,7 @@ void main()
         private int _atlasTexture;
         private int _heartTexture;
         private int _drumstickTexture;
+        private int _bubbleTexture;
         private SkyRenderer _sky;
         private World _world;
         private ChunkJobSystem _jobs;
@@ -199,6 +200,17 @@ void main()
         // Accumulator for void-damage ticks. Ticks the player for a fixed
         // amount every half-second while they are below the kill plane.
         private float _voidTimer;
+
+        // Drowning. Air loses 2 points (one bubble) every AirDecayInterval
+        // while the head is submerged — 10 bubbles × 1.5 s = 15 s, matching
+        // Alpha's air supply. Once Air hits zero the second timer takes over
+        // and applies 2 HP of drowning damage every DrownDamageInterval.
+        // Both reset to zero the moment the head emerges, and Air refills
+        // instantly (Alpha behaviour — no sip-air-back-up sequence).
+        private const float AirDecayInterval = 1.5f;
+        private const float DrownDamageInterval = 1f;
+        private float _airDecayTimer;
+        private float _drownDamageTimer;
 
         // Fluid tick cadence. Alpha ticked water at 5 game-ticks (~0.25s) and
         // lava at 30 game-ticks (~1.5s). We share one cadence for both at
@@ -240,6 +252,7 @@ void main()
             _atlasTexture = BlockTextures.CreateAtlas();
             _heartTexture = HudTextures.CreateHeartSheet();
             _drumstickTexture = HudTextures.CreateDrumstickSheet();
+            _bubbleTexture = HudTextures.CreateBubbleSheet();
             _sky = new SkyRenderer();
             _sky.Initialize();
             _initialized = true;
@@ -369,7 +382,10 @@ void main()
                 // Creative always reads as full health so switching into
                 // survival mid-session doesn't drop you to 0 HP from a stale read.
                 if (Player.Health != Player.MaxHealth) Player.Health = Player.MaxHealth;
+                if (Player.Air    != Player.MaxAir)    Player.Air    = Player.MaxAir;
                 _voidTimer = 0f;
+                _airDecayTimer = 0f;
+                _drownDamageTimer = 0f;
             }
 
             // Consume any pending fall distance — survival already applied the
@@ -402,7 +418,8 @@ void main()
 
         // Survival damage sources wired up today: fall damage (Alpha formula
         // `max(0, distance - 3)`) and void damage (4 HP every 0.5 s below
-        // y=-16). Drowning / fire / lava / cactus are deferred — they need
+        // y=-16) and drowning (after the 15 s air supply runs out, 2 HP
+        // every 1 s). Fire / lava / cactus are deferred — they need
         // block-specific interaction hooks we don't have yet.
         private void ApplySurvivalDamage(float dt)
         {
@@ -426,6 +443,43 @@ void main()
                 _voidTimer = 0f;
             }
 
+            // Drowning. WasHeadInWater is refreshed inside Player.Update
+            // every tick, so we just consume it here. Air decays in 2-point
+            // steps so the bubble row's "10 slots × 2 each" matches the
+            // hearts/hunger pattern; once empty, drowning damage kicks in.
+            if (Player.WasHeadInWater)
+            {
+                if (Player.Air > 0)
+                {
+                    _airDecayTimer += dt;
+                    while (_airDecayTimer >= AirDecayInterval && Player.Air > 0)
+                    {
+                        _airDecayTimer -= AirDecayInterval;
+                        Player.Air -= 2;
+                        if (Player.Air <= 0)
+                        {
+                            Player.Air = 0;
+                            _drownDamageTimer = 0f;
+                        }
+                    }
+                }
+                else
+                {
+                    _drownDamageTimer += dt;
+                    while (_drownDamageTimer >= DrownDamageInterval)
+                    {
+                        _drownDamageTimer -= DrownDamageInterval;
+                        Player.TakeDamage(2);
+                    }
+                }
+            }
+            else
+            {
+                Player.Air = Player.MaxAir;
+                _airDecayTimer = 0f;
+                _drownDamageTimer = 0f;
+            }
+
             if (Player.IsDead)
             {
                 Respawn();
@@ -442,12 +496,17 @@ void main()
             Player.OnGround = false;
             Player.HealFull();
             _voidTimer = 0f;
+            _airDecayTimer = 0f;
+            _drownDamageTimer = 0f;
             SyncCameraToPlayer();
         }
 
         private void SyncCameraToPlayer()
         {
-            Camera.Position = Player.Position + new Vector3(0f, Player.EyeHeight, 0f);
+            // Add the swim-bob Y offset to the eye position when submerged.
+            // The offset is updated inside Player.Update and eases back to
+            // zero on exit, so the camera glides rather than snaps.
+            Camera.Position = Player.Position + new Vector3(0f, Player.EyeHeight + Player.SwimBobOffset, 0f);
         }
 
         private void SetWorld(World world)
@@ -908,6 +967,19 @@ void main()
             bool hgHalf = (hg & 1) != 0;
             DrawIconRow(_drumstickTexture, hungerX0, y0, iconPx, stride, count, fullHunger, hgHalf, ortho);
 
+            // Bubble row — sits one stride above the hunger row, sharing the
+            // hunger row's left anchor. Only drawn when Air < MaxAir; while
+            // surfaced (Air pinned at MaxAir) the bubbles are invisible to
+            // match Alpha's "bubbles only show when you need them" rule.
+            int air = Math.Max(0, Player.Air);
+            if (air < Player.MaxAir)
+            {
+                int fullAir = air / 2;
+                bool airHalf = (air & 1) != 0;
+                int bubbleY = y0 - iconPx - spacing - 4; // 4 px gap above the hunger row
+                DrawIconRow(_bubbleTexture, hungerX0, bubbleY, iconPx, stride, count, fullAir, airHalf, ortho);
+            }
+
             GL.Enable(EnableCap.CullFace);
             GL.Enable(EnableCap.DepthTest);
             GL.Disable(EnableCap.Blend);
@@ -1022,6 +1094,11 @@ void main()
             {
                 GL.DeleteTexture(_drumstickTexture);
                 _drumstickTexture = 0;
+            }
+            if (_bubbleTexture != 0)
+            {
+                GL.DeleteTexture(_bubbleTexture);
+                _bubbleTexture = 0;
             }
         }
     }

@@ -39,6 +39,8 @@ namespace VStudioCraft.Game
 
         public static int CreateDrumstickSheet() => CreateSheet(WriteDrumstick);
 
+        public static int CreateBubbleSheet() => CreateSheet(WriteBubble);
+
         private delegate void IconWriter(byte[] pixels, int offsetX, bool full, bool empty);
 
         private static int CreateSheet(IconWriter writer)
@@ -282,6 +284,90 @@ namespace VStudioCraft.Game
                     {
                         pixels[idx] = boneR; pixels[idx + 1] = boneG; pixels[idx + 2] = boneB;
                     }
+                }
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // ---- bubble --------------------------------------------------------
+        //
+        // A simple blue circle with an upper-left highlight. The "popping"
+        // half-frame draws a smaller circle (radius 3.5 vs 6) — reads as a
+        // shrinking last-bubble before it disappears entirely. Empty slot is
+        // fully transparent so the sprite shader's alpha discard skips it,
+        // letting the bubble row paint only the bubbles you still have.
+        //
+        // Air row only renders at all when Air < MaxAir (see GameRenderer),
+        // so the "all empty" state never blocks pixels even briefly.
+        private const float BubbleCx = 8f;
+        private const float BubbleCy = 8f;
+        private const float BubbleFullR = 6f;
+        private const float BubblePopR = 3.5f;
+
+        private static void WriteBubble(byte[] pixels, int offsetX, bool full, bool empty)
+        {
+            if (empty)
+            {
+                for (int py = 0; py < IconPx; py++)
+                for (int px = 0; px < IconPx; px++)
+                {
+                    int idx = (py * SheetWidth + offsetX + px) * 4;
+                    pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = pixels[idx + 3] = 0;
+                }
+                return;
+            }
+
+            float radius = full ? BubbleFullR : BubblePopR;
+            byte outR = 20,  outG = 30,  outB = 80;     // dark navy outline
+            byte fillR = 80, fillG = 130, fillB = 220;  // mid blue fill
+            byte hiR = 230,  hiG = 245,  hiB = 255;     // pale highlight
+
+            var inside = new bool[IconPx, IconPx];
+            for (int py = 0; py < IconPx; py++)
+            for (int px = 0; px < IconPx; px++)
+            {
+                float dx = (px + 0.5f) - BubbleCx;
+                float dy = (py + 0.5f) - BubbleCy;
+                inside[px, py] = dx * dx + dy * dy <= radius * radius;
+            }
+
+            for (int py = 0; py < IconPx; py++)
+            for (int px = 0; px < IconPx; px++)
+            {
+                int idx = (py * SheetWidth + offsetX + px) * 4;
+                if (!inside[px, py])
+                {
+                    pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = pixels[idx + 3] = 0;
+                    continue;
+                }
+
+                bool isOutline = false;
+                for (int ny = -1; ny <= 1 && !isOutline; ny++)
+                for (int nx = -1; nx <= 1 && !isOutline; nx++)
+                {
+                    if (nx == 0 && ny == 0) continue;
+                    int qx = px + nx, qy = py + ny;
+                    if (qx < 0 || qx >= IconPx || qy < 0 || qy >= IconPx || !inside[qx, qy])
+                        isOutline = true;
+                }
+                if (isOutline)
+                {
+                    pixels[idx] = outR; pixels[idx + 1] = outG; pixels[idx + 2] = outB; pixels[idx + 3] = 255;
+                    continue;
+                }
+
+                // Highlight on the upper-left quadrant — placement scales
+                // with the radius so the popping bubble still shows it.
+                bool hi = full
+                    ? ((px == 5 && py == 5) || (px == 6 && py == 5) || (px == 5 && py == 6))
+                    : (px == 7 && py == 6);
+                if (hi)
+                {
+                    pixels[idx] = hiR; pixels[idx + 1] = hiG; pixels[idx + 2] = hiB;
+                }
+                else
+                {
+                    pixels[idx] = fillR; pixels[idx + 1] = fillG; pixels[idx + 2] = fillB;
                 }
                 pixels[idx + 3] = 255;
             }
