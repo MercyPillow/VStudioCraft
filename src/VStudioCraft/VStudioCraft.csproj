@@ -82,6 +82,7 @@
     <Compile Include="Game\HotbarTextures.cs" />
     <Compile Include="Game\HudTextures.cs" />
     <Compile Include="Game\InputState.cs" />
+    <Compile Include="Game\InventoryScreen.cs" />
     <Compile Include="Game\LightCalculator.cs" />
     <Compile Include="Game\Mesh.cs" />
     <Compile Include="Game\Noise.cs" />

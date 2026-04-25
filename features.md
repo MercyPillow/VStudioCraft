@@ -187,10 +187,13 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Block icons rendered from the side-face tile via a `sampler2DArray` sprite shader (`SpriteArrayFragmentSrc`) with a faux top-light gradient so flat tiles still read as 3D-ish at hotbar size
 - Selected block name rendered above the bar using the bitmap font (CamelCase → "Flowing Water" pretty-print)
 
+**Have (continued)**
+- Inventory screen (E key) — modal panel with title bar, 3×9 main grid, and a hotbar row that mirrors the live `Input.HotbarSlots`. Same world-halt + cursor-release lifecycle as the pause menu (new `IsWorldHalted = IsPaused || IsInventoryOpen` flag in `GameRenderer`). Layout lives in `InventoryScreen` so click hit-testing slots in lockstep with rendering. Slots are display-only today — pickup/drop wires in once `ItemStack` lands.
+
 **Missing**
 - Item stack system (id + damage + count, max 64)
-- Player inventory (9 hotbar + 27 main + 4 armor + 1 cursor)
-- Inventory UI (E key)
+- Player inventory storage (9 hotbar slots are real; 27 main + 4 armor + 1 cursor still need an `ItemStack` model)
+- Inventory slot interaction (pickup, drop, split, shift-click)
 - Crafting table / furnace / chest UIs
 - Drop item (Q)
 - Pick-block (middle mouse)
@@ -284,13 +287,13 @@ per-cell metadata byte tracking remaining horizontal reach.
 ## Controls
 
 **Have**
-- WASD, Space, Ctrl (sprint), Esc (release mouse), LMB break, RMB place, 1–8 hotbar (Grass / Dirt / Stone / Sand / Torch / Dandelion / Rose / TallGrass)
+- WASD, Space, Ctrl (sprint), Esc (release mouse / close modal), LMB break, RMB place, 1–8 hotbar (Grass / Dirt / Stone / Sand / Torch / Dandelion / Rose / TallGrass)
+- E opens / closes inventory (releases mouse-look, halts world ticks; Esc also closes it)
 - F3 toggles Creative ↔ Survival (re-uses Alpha's F3 slot; debug screen pending)
 
 **Missing**
 - Shift sneak
 - Q drop
-- E inventory
 - T chat
 - F1 HUD toggle, F2 screenshot, F3 debug screen (currently used for mode toggle), F5 third person
 - Middle-click pick-block

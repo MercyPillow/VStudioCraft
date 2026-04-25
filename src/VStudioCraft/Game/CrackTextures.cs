@@ -5,8 +5,9 @@ namespace VStudioCraft.Game
 {
     // Procedural 10-frame block-break "crack" overlay. Frames 0..9 represent
     // increasing damage: frame 0 is barely scratched, frame 9 is on the verge
-    // of shattering. Stored as a Texture2DArray so the break-overlay shader
-    // can pick the active frame via a uLayer uniform without rebinding.
+    // of shattering and covers most of the tile. Stored as a Texture2DArray
+    // so the break-overlay shader can pick the active frame via a uLayer
+    // uniform without rebinding.
     //
     // Style: dark grey lines on a fully transparent background. The overlay
     // shader alpha-tests at < 0.5, so we author every pixel as either fully
@@ -16,10 +17,18 @@ namespace VStudioCraft.Game
     // is stable across runs (no flicker if a chunk re-meshes mid-break) and
     // each successive frame is a strict superset of the previous one — once
     // a crack has appeared, it doesn't move, just gets joined by new ones.
+    //
+    // Coverage targets (rough): frame 0 ≈ 8%, frame 4 ≈ 45%, frame 9 ≈ 90%.
+    // The growth is roughly linear so each break stage feels equally damaging.
     internal static class CrackTextures
     {
         public const int TileSize = 16;
         public const int FrameCount = 10;
+
+        // Number of crack segments added per frame. 4 short segments × 10 frames
+        // = 40 segments total, which (with light late-frame thickening) covers
+        // most of a 16×16 tile while keeping the scratchy line aesthetic.
+        private const int SegmentsPerFrame = 4;
 
         public static int CreateAtlas()
         {
@@ -34,14 +43,13 @@ namespace VStudioCraft.Game
             // Buffer is reused across layers; we keep the previous frame's
             // pixels so each frame is a superset of the one before.
             var pixels = new byte[TileSize * TileSize * 4];
-            // Pre-pick the cracks across all 10 frames using one master RNG so
-            // the per-frame growth is monotone. Each frame contributes a few
-            // new line segments; later frames also widen earlier ones.
+            // Single shared RNG so the segments are stable across runs and
+            // each later frame literally extends the earlier one.
             var rng = new Random(0xC4AC); // "crack"
+
             for (int frame = 0; frame < FrameCount; frame++)
             {
-                int newSegments = 1 + frame; // 1, 2, ..., 10 cumulative growth
-                for (int s = 0; s < newSegments; s++)
+                for (int s = 0; s < SegmentsPerFrame; s++)
                 {
                     DrawCrackSegment(pixels, rng, frame);
                 }
@@ -60,19 +68,19 @@ namespace VStudioCraft.Game
             return tex;
         }
 
-        // One short jagged line. We pick a random start, an axis-biased direction
-        // and a length 3..6, then walk pixel by pixel, occasionally veering one
-        // pixel sideways so the crack reads as organic rather than ruler-straight.
-        // Later frames get slightly thicker (a 50% chance of also painting the
-        // perpendicular neighbour) so the damage looks like it's growing, not
-        // just spreading.
+        // One short jagged line, 4..7 pixels long, starting in a sparsely
+        // populated region of the tile. Direction is biased to one of three
+        // axes (horizontal, vertical, diagonal) and the line veers occasionally
+        // so it reads as organic rather than ruler-straight. From frame 5
+        // onward we occasionally paint a perpendicular neighbor too, which
+        // gives the late frames enough fill to read as "almost shattered"
+        // without losing the line-based crack aesthetic.
         private static void DrawCrackSegment(byte[] pixels, Random rng, int frameIndex)
         {
-            int x = 1 + rng.Next(TileSize - 2);
-            int y = 1 + rng.Next(TileSize - 2);
-            int len = 3 + rng.Next(4); // 3..6
+            PickSparseStart(pixels, rng, out int x, out int y);
+            int len = 4 + rng.Next(4); // 4..7
 
-            // 0 = horizontal-ish, 1 = vertical-ish, 2 = diagonal
+            // 0 = horizontal, 1 = vertical, 2 = diagonal
             int axis = rng.Next(3);
             int dx, dy;
             switch (axis)
@@ -85,21 +93,25 @@ namespace VStudioCraft.Game
                     break;
             }
 
-            bool thicken = frameIndex >= 4;
+            // Late-frame thickening: from the midpoint of the animation onward,
+            // each painted pixel has a 25% chance of also painting one
+            // perpendicular neighbor. Frame 0..4 stay pure single-pixel lines.
+            bool thicken = frameIndex >= 5;
 
             for (int i = 0; i < len; i++)
             {
                 PaintCrackPixel(pixels, x, y, rng);
 
-                if (thicken && rng.Next(2) == 0)
+                if (thicken && rng.Next(4) == 0)
                 {
-                    // Smear one pixel perpendicular to the travel direction.
-                    int px = x + (dy != 0 ? 1 : 0);
-                    int py = y + (dx != 0 ? 1 : 0);
-                    PaintCrackPixel(pixels, px, py, rng);
+                    // Pick one perpendicular neighbor to also darken.
+                    int sign = rng.Next(2) == 0 ? -1 : 1;
+                    if (dy == 0)       PaintCrackPixel(pixels, x, y + sign, rng);
+                    else if (dx == 0)  PaintCrackPixel(pixels, x + sign, y, rng);
+                    else               PaintCrackPixel(pixels, x + sign, y - sign, rng); // diag → anti-diag
                 }
 
-                // Veer occasionally so the line isn't ruler-straight.
+                // Veer occasionally so the line isn't a straight ruler stroke.
                 if (rng.Next(3) == 0)
                 {
                     if (dy == 0) y += rng.Next(2) == 0 ? -1 : 1;
@@ -110,6 +122,51 @@ namespace VStudioCraft.Game
                 y += dy;
                 if (x < 0 || x >= TileSize || y < 0 || y >= TileSize) break;
             }
+        }
+
+        // Pick a starting pixel by sampling a handful of candidates and choosing
+        // the one whose 5×5 neighborhood currently has the fewest crack pixels.
+        // This spreads new segments into empty regions instead of letting them
+        // pile on top of existing cracks — which is what gives the late frames
+        // their "evenly damaged tile" look rather than a couple of dense blobs.
+        private static void PickSparseStart(byte[] pixels, Random rng, out int x, out int y)
+        {
+            const int candidates = 4;
+            int bestX = 0, bestY = 0;
+            int bestScore = int.MaxValue;
+            for (int c = 0; c < candidates; c++)
+            {
+                int cx = 2 + rng.Next(TileSize - 4);
+                int cy = 2 + rng.Next(TileSize - 4);
+                int score = NeighborhoodCoverage(pixels, cx, cy);
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestX = cx;
+                    bestY = cy;
+                }
+            }
+            x = bestX;
+            y = bestY;
+        }
+
+        // Count painted pixels in a 5×5 box around (cx, cy), clamped to bounds.
+        private static int NeighborhoodCoverage(byte[] pixels, int cx, int cy)
+        {
+            int count = 0;
+            for (int dy = -2; dy <= 2; dy++)
+            {
+                int yy = cy + dy;
+                if (yy < 0 || yy >= TileSize) continue;
+                for (int dx = -2; dx <= 2; dx++)
+                {
+                    int xx = cx + dx;
+                    if (xx < 0 || xx >= TileSize) continue;
+                    int idx = (yy * TileSize + xx) * 4;
+                    if (pixels[idx + 3] > 0) count++;
+                }
+            }
+            return count;
         }
 
         private static void PaintCrackPixel(byte[] pixels, int x, int y, Random rng)

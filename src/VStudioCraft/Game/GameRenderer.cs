@@ -268,6 +268,25 @@ void main()
             get => _isPaused;
             set => _isPaused = value;
         }
+
+        // True while the inventory screen is open (E key). Same world-halt
+        // semantics as IsPaused — the host gates AdvanceTime / UpdatePlayer
+        // / fluid ticks / break-progress on the combined IsWorldHalted flag
+        // so opening the inventory mid-mine cancels the in-flight break and
+        // freezes the world until it closes. Volatile for the same UI/render
+        // thread reasons as _isPaused.
+        private volatile bool _isInventoryOpen;
+        public bool IsInventoryOpen
+        {
+            get => _isInventoryOpen;
+            set => _isInventoryOpen = value;
+        }
+
+        // Convenience for the host: any modal UI that should freeze the
+        // world. New modals (chat overlay, options screen, world-creation
+        // dialog…) just OR themselves in here and the rest of the loop
+        // gates on this single flag.
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen;
         private SkyRenderer _sky;
         private World _world;
         private ChunkJobSystem _jobs;
@@ -421,41 +440,46 @@ void main()
         // mesh. Same inflation factor as the selection wire-cube — keeps both
         // overlays sitting at the same visual depth.
         //
-        // 36 vertices, 5 floats each (pos.xyz, uv.xy). Authored with face
-        // winding that matches Back-face culling (CCW from outside the cube).
-        // UV mapping picks (0,0) at the visual top-left of each face after the
-        // crack overlay's ortho convention; the shader does no flipping.
+        // 36 vertices, 5 floats each (pos.xyz, uv.xy). Every face is wound
+        // CCW as seen from OUTSIDE the cube so back-face culling keeps all
+        // six visible (an earlier version had -X and +X reversed, which
+        // dropped them under GL_CULL_FACE — leaving the crack overlay only on
+        // the four Y/Z faces). Each face's normal has been verified by edge
+        // cross-product. UVs span [0,1] across each face; the crack texture
+        // is abstract enough that exact orientation per-face doesn't matter
+        // visually, just that all six faces sample the active frame.
         private static TexturedCubeMesh BuildBreakCubeMesh()
         {
             const float e = 0.003f;
             float a = -e, b = 1f + e;
-            // Per-face: 6 verts (two tris), each pos.xyz + uv.xy.
-            // Layout: tri 1 (bl, br, tr), tri 2 (bl, tr, tl).
+            // Per face: tri 1 (bl, br, tr), tri 2 (bl, tr, tl).
             float[] v =
             {
-                // -X (left face) — outward normal -X, CCW seen from -X looking +X
-                a, a, b,  0,0,   a, a, a,  1,0,   a, b, a,  1,1,
-                a, a, b,  0,0,   a, b, a,  1,1,   a, b, b,  0,1,
+                // -X face (normal -X). Viewed from -X with Y up, +Z right.
+                //   bl=(a,a,a), br=(a,a,b), tr=(a,b,b), tl=(a,b,a)
+                a, a, a, 0, 0,   a, a, b, 1, 0,   a, b, b, 1, 1,
+                a, a, a, 0, 0,   a, b, b, 1, 1,   a, b, a, 0, 1,
 
-                // +X (right face) — CCW seen from +X looking -X
-                b, a, a,  0,0,   b, a, b,  1,0,   b, b, b,  1,1,
-                b, a, a,  0,0,   b, b, b,  1,1,   b, b, a,  0,1,
+                // +X face (normal +X). Viewed from +X with Y up, -Z right.
+                //   bl=(b,a,b), br=(b,a,a), tr=(b,b,a), tl=(b,b,b)
+                b, a, b, 0, 0,   b, a, a, 1, 0,   b, b, a, 1, 1,
+                b, a, b, 0, 0,   b, b, a, 1, 1,   b, b, b, 0, 1,
 
-                // -Y (bottom face) — CCW seen from below looking up
-                a, a, a,  0,0,   b, a, a,  1,0,   b, a, b,  1,1,
-                a, a, a,  0,0,   b, a, b,  1,1,   a, a, b,  0,1,
+                // -Y face (bottom, normal -Y). Viewed from below, +X right, +Z up.
+                a, a, a, 0, 0,   b, a, a, 1, 0,   b, a, b, 1, 1,
+                a, a, a, 0, 0,   b, a, b, 1, 1,   a, a, b, 0, 1,
 
-                // +Y (top face) — CCW seen from above looking down
-                a, b, b,  0,0,   b, b, b,  1,0,   b, b, a,  1,1,
-                a, b, b,  0,0,   b, b, a,  1,1,   a, b, a,  0,1,
+                // +Y face (top, normal +Y). Viewed from above, +X right, -Z up.
+                a, b, b, 0, 0,   b, b, b, 1, 0,   b, b, a, 1, 1,
+                a, b, b, 0, 0,   b, b, a, 1, 1,   a, b, a, 0, 1,
 
-                // -Z (back face) — CCW seen from -Z looking +Z
-                a, a, a,  0,0,   a, b, a,  0,1,   b, b, a,  1,1,
-                a, a, a,  0,0,   b, b, a,  1,1,   b, a, a,  1,0,
+                // -Z face (back, normal -Z). Viewed from -Z, -X right, +Y up.
+                b, a, a, 0, 0,   a, a, a, 1, 0,   a, b, a, 1, 1,
+                b, a, a, 0, 0,   a, b, a, 1, 1,   b, b, a, 0, 1,
 
-                // +Z (front face) — CCW seen from +Z looking -Z
-                b, a, b,  0,0,   b, b, b,  0,1,   a, b, b,  1,1,
-                b, a, b,  0,0,   a, b, b,  1,1,   a, a, b,  1,0,
+                // +Z face (front, normal +Z). Viewed from +Z, +X right, +Y up.
+                a, a, b, 0, 0,   b, a, b, 1, 0,   b, b, b, 1, 1,
+                a, a, b, 0, 0,   b, b, b, 1, 1,   a, b, b, 0, 1,
             };
             var m = new TexturedCubeMesh();
             m.Upload(v);
@@ -1166,7 +1190,12 @@ void main()
 
             RenderHotbar(width, height);
 
-            if (_isPaused) RenderPauseMenu(width, height);
+            // Modal overlays. Only one is shown at a time — the host
+            // never opens the inventory over an active pause menu, but
+            // we still gate on _isInventoryOpen first so a stuck flag
+            // can't double-stack the dim wash.
+            if (_isInventoryOpen) RenderInventory(width, height);
+            else if (_isPaused) RenderPauseMenu(width, height);
         }
 
         // Survival HUD layout:
@@ -1577,6 +1606,123 @@ void main()
             GL.Enable(EnableCap.CullFace);
             GL.Enable(EnableCap.DepthTest);
             GL.Disable(EnableCap.Blend);
+        }
+
+        // Inventory overlay — dim wash + panel + 3×9 main grid + 1×9 hotbar
+        // row. The bottom row mirrors the live hotbar (Input.HotbarSlots) so
+        // the player can see what they're carrying. The 27 main-grid slots
+        // are display-only placeholders today; click-through-to-storage
+        // lands here when the ItemStack model arrives (see features.md).
+        private void RenderInventory(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Dim background — same wash as the pause menu so the two
+            // modals feel like they belong to the same UI family.
+            DrawSolidQuad(0, 0, width, height,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+
+            // ---- panel ---------------------------------------------------
+            InventoryScreen.GetPanelRect(width, height,
+                out int panelX, out int panelY, out int panelW, out int panelH);
+
+            // Two-tone panel: dark fill + 2-px lighter border. Same palette
+            // as the hotbar bar so the inventory reads as the bar's bigger
+            // sibling.
+            DrawSolidQuad(panelX, panelY, panelW, panelH,
+                new Vector3(0.16f, 0.16f, 0.18f), 0.95f, ortho);
+            var border = new Vector3(0.78f, 0.82f, 0.88f);
+            DrawSolidQuad(panelX, panelY, panelW, 2, border, 1f, ortho);                       // top
+            DrawSolidQuad(panelX, panelY + panelH - 2, panelW, 2, border, 1f, ortho);          // bottom
+            DrawSolidQuad(panelX, panelY, 2, panelH, border, 1f, ortho);                       // left
+            DrawSolidQuad(panelX + panelW - 2, panelY, 2, panelH, border, 1f, ortho);          // right
+
+            // ---- title ---------------------------------------------------
+            DrawString(InventoryScreen.Title, /*scale*/InventoryScreen.TitleScale,
+                /*centerX*/width / 2,
+                /*topY*/InventoryScreen.TitleY(width, height),
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            // ---- slot wells ---------------------------------------------
+            // Solid-quad wells with a 2-px chiseled border. Drawn for every
+            // slot (main + hotbar) so the visual density matches Alpha's
+            // inventory.
+            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f); // top + left  → reads as inset
+            var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f); // bottom + right
+            for (int i = 0; i < InventoryScreen.TotalSlots; i++)
+            {
+                InventoryScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                int b = InventoryScreen.SlotBorderPx;
+                DrawSolidQuad(sx, sy, sw, sh, wellFill, 1f, ortho);
+                DrawSolidQuad(sx, sy, sw, b, wellEdgeLo, 1f, ortho);                  // top
+                DrawSolidQuad(sx, sy, b, sh, wellEdgeLo, 1f, ortho);                  // left
+                DrawSolidQuad(sx, sy + sh - b, sw, b, wellEdgeHi, 1f, ortho);         // bottom
+                DrawSolidQuad(sx + sw - b, sy, b, sh, wellEdgeHi, 1f, ortho);         // right
+            }
+
+            // ---- hotbar-row block icons --------------------------------
+            // Same shader setup as RenderHotbar (V-flipped UVs since the
+            // block atlas was authored bottom-up but our ortho is top-down).
+            BlockType[] slots = Input?.HotbarSlots;
+            if (slots != null)
+            {
+                _spriteArrayShader.Use();
+                _spriteArrayShader.SetInt("uAtlas", 0);
+                _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+                _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
+                _spriteArrayShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
+                GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+
+                int iconPad = (InventoryScreen.SlotPx - InventoryScreen.IconPx) / 2;
+                int hotbarBase = InventoryScreen.MainSlotCount; // first hotbar slot index
+                for (int i = 0; i < InventoryScreen.HotbarSlotCount; i++)
+                {
+                    if (i >= slots.Length) break;
+                    var t = slots[i];
+                    if (t == BlockType.Air) continue;
+                    int layer = BlockData.GetTileIndex(t, /*side*/2);
+                    _spriteArrayShader.SetFloat("uLayer", layer);
+                    InventoryScreen.GetSlotRect(hotbarBase + i, width, height,
+                        out int sx, out int sy, out _, out _);
+                    DrawSpriteQuadFor(_spriteArrayShader,
+                        sx + iconPad, sy + iconPad,
+                        InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
+                }
+
+                // Selected highlight on the hotbar row mirrors the in-game
+                // bar so the player can see which slot is "live" while they
+                // browse storage.
+                int selected = Input != null ? Input.HotbarIndex : -1;
+                if (selected >= 0 && selected < InventoryScreen.HotbarSlotCount)
+                {
+                    _spriteShader.Use();
+                    _spriteShader.SetInt("uSprite", 0);
+                    _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+                    _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
+                    _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
+                    GL.BindTexture(TextureTarget.Texture2D, _hotbarHighlightTexture);
+
+                    InventoryScreen.GetSlotRect(hotbarBase + selected, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    int hSize = HotbarTextures.HighlightSize * 2; // ~48 px, slightly bigger than slot
+                    int hx = sx + (sw - hSize) / 2;
+                    int hy = sy + (sh - hSize) / 2;
+                    DrawSpriteQuad(hx, hy, hSize, hSize, ortho);
+                }
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
         // Solid-colour quad at (x,y) sized (w,h) in pixels via the overlay

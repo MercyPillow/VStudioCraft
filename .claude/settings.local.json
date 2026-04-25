@@ -64,7 +64,9 @@
       "PowerShell($vs = & \"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\Installer\\\\vswhere.exe\" -latest -property installationPath; $msbuild = Join-Path $vs \"MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"; & $msbuild \"src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /p:Configuration=Debug /p:RuntimeIdentifiers=win /v:minimal /nologo /clp:ErrorsOnly)",
       "PowerShell(\\(Get-Content 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\LightCalculator.cs'\\).Length)",
       "PowerShell(\\(Get-Content \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\GameRenderer.cs\"\\).Count; \\(Get-Content \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\UI\\\\GameHostControl.xaml.cs\"\\).Count)",
-      "PowerShell(dotnet build \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" -nologo -v:m 2>&1)"
+      "PowerShell(dotnet build \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" -nologo -v:m 2>&1)",
+      "PowerShell(dotnet build \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" -nologo -v q)",
+      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\GameRenderer.cs\" | Measure-Object -Line\\).Lines)"
     ]
   }
 }

@@ -248,7 +248,10 @@ namespace VStudioCraft.UI
                     long t0 = Stopwatch.GetTimestamp();
 
                     bool changed = false;
-                    bool paused = _renderer.IsPaused;
+                    // Either pause menu OR inventory halts world ticks +
+                    // swallows queued clicks. Single-flag check so a future
+                    // modal (chat, options) just ORs into IsWorldHalted.
+                    bool paused = _renderer.IsWorldHalted;
                     if (!paused)
                     {
                         if (_input.BreakPressed)
@@ -428,7 +431,19 @@ namespace VStudioCraft.UI
                         Dispatcher.BeginInvoke(new Action(UpdateStatus));
                     }
                     break;
-                case Keys.Escape: TogglePause(); break;
+                case Keys.E:
+                    // Open / close inventory. Esc also closes it (handled
+                    // below) so the player has the same dismiss key as
+                    // every other modal.
+                    ToggleInventory();
+                    break;
+                case Keys.Escape:
+                    // Inventory takes precedence — Esc dismisses it without
+                    // also flipping the pause menu. Otherwise, normal pause
+                    // toggle.
+                    if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
+                    else TogglePause();
+                    break;
             }
             e.Handled = true;
         }
@@ -454,12 +469,34 @@ namespace VStudioCraft.UI
             }
         }
 
+        // Open / close the inventory screen. Same lifecycle as TogglePause:
+        // releases the mouse-look on open (cursor becomes visible so the
+        // player can browse slots) and re-captures it on close. Held keys
+        // are cleared on open so a W that was down at the moment of opening
+        // doesn't make the player walk through the screen.
+        private void ToggleInventory()
+        {
+            if (_renderer == null) return;
+            if (_renderer.IsInventoryOpen)
+            {
+                _renderer.IsInventoryOpen = false;
+                CaptureMouseLook();
+                return;
+            }
+            // Don't stack modals — if the pause menu is up, ignore E. The
+            // player can press Esc first and then E.
+            if (_renderer.IsPaused) return;
+            _renderer.IsInventoryOpen = true;
+            ReleaseMouseLook();
+            _input.Clear();
+        }
+
         private void GlOnMouseWheel(object sender, MouseEventArgs e)
         {
-            // Cycling the hotbar while the menu is up would be confusing; the
+            // Cycling the hotbar while a modal is up would be confusing; the
             // bar isn't even visually focal then. Number keys still work for
             // direct selection if the user wants it for some reason.
-            if (_renderer != null && _renderer.IsPaused) return;
+            if (_renderer != null && _renderer.IsWorldHalted) return;
 
             _wheelAccum += e.Delta;
             int slotCount = _input.HotbarSlots.Length;
@@ -493,6 +530,15 @@ namespace VStudioCraft.UI
         private void GlOnMouseDown(object sender, MouseEventArgs e)
         {
             _gl.Focus();
+
+            // Inventory open: swallow the click so it doesn't re-capture
+            // the cursor or fire a place/break action under the panel. Slot
+            // interaction (pickup / drop / split) lands here when the
+            // ItemStack model arrives — for now it's display-only.
+            if (_renderer != null && _renderer.IsInventoryOpen)
+            {
+                return;
+            }
 
             // Paused: clicks hit-test the pause menu. We swallow them either
             // way so the click never re-captures the cursor or fires a place/
@@ -608,9 +654,11 @@ namespace VStudioCraft.UI
 
         private void GlOnMouseMove(object sender, MouseEventArgs e)
         {
-            // While paused, track the cursor so the renderer can highlight
-            // the button under it. Mouse-look stays released.
-            if (_renderer != null && _renderer.IsPaused)
+            // While any modal is up, track the cursor so the renderer can
+            // highlight the button / slot under it. Mouse-look stays
+            // released. (Inventory has no hover state today, but plumbing
+            // the coords through means it's free when slot-picking lands.)
+            if (_renderer != null && _renderer.IsWorldHalted)
             {
                 var (px, py) = ToPhysicalCoord(e.X, e.Y);
                 _input.MenuMouseX = px;
