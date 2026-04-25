@@ -189,8 +189,9 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Selected block name rendered above the bar using the bitmap font (CamelCase → "Flowing Water" pretty-print)
 
 **Have (continued)**
-- Inventory screen (E key) — modal panel with title bar, 3×9 main grid, and a hotbar row backed by the live `Input.Inventory`. Same world-halt + cursor-release lifecycle as the pause menu (`IsWorldHalted = IsPaused || IsInventoryOpen` flag in `GameRenderer`). Layout lives in `InventoryScreen` so click hit-testing tracks rendering exactly.
-- `ItemStack` (BlockType + Count, max 64, Air/0 = Empty) and `Inventory` (27 main + 9 hotbar + 1 cursor). The hotbar shares slot indices 27..35 with the in-world bar so a single `Slots[]` array drives both views.
+- Inventory screen (E key) — modal panel with title bar, 4×9 main grid, and a hotbar row backed by the live `Input.Inventory`. Panel chrome is bumped ~20% over the old hotbar dimensions (55-px slots, 44-px icons) so it reads as the bar's bigger sibling. Same world-halt + cursor-release lifecycle as the pause menu (`IsWorldHalted = IsPaused || IsInventoryOpen` flag in `GameRenderer`). Layout lives in `InventoryScreen` so click hit-testing tracks rendering exactly.
+- Creative-mode inventory variant — when `GameMode == Creative`, the main grid is replaced with a search bar at the top + scrollable catalog of every placeable BlockType (`CreativeCatalog`, excludes Air / FlowingWater / FlowingLava). Type to filter (case-insensitive substring match against the friendly name); mouse wheel / PageUp / PageDown scroll through overflow rows; clicking a catalog tile fills the cursor with a full stack (RMB picks half). The hotbar row stays live below so the player can see (and click into) their loadout while picking. Survival mode keeps the standard 4×9 grid + hotbar with the normal pick/drop/swap rules.
+- `ItemStack` (BlockType + Count, max 64, Air/0 = Empty) and `Inventory` (36 main + 9 hotbar + 1 cursor = 45 slots). The hotbar shares slot indices 36..44 with the in-world bar so a single `Slots[]` array drives both views.
 - Inventory slot click handling — left-click runs Alpha's standard pick / drop / swap / merge exchange between the cursor stack and the clicked slot (via `Inventory.HandleLeftClickSlot`). Cursor stack follows the mouse and renders above every slot.
 - Stack-count digits drawn in the bottom-right of each non-empty slot (`DrawStackCount` — scale-2 bitmap font, dark drop-shadow). Hotbar HUD shows them too.
 - Block drops on break (survival): the broken block spawns a 0.25-block `DroppedItem` that bobs + spins, falls under gravity, settles on the floor, and gets picked up when the player walks within 1.5 blocks (`TickDrops`). `Inventory.TryAdd` runs Alpha's two-pass merge-then-fill (hotbar first, then main grid), with leftover staying in the world for re-pickup.
@@ -203,7 +204,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Crafting table / furnace / chest UIs (no inventory beyond the player)
 - Drop item via Q (only the GUI-toss path is wired)
 - Pick-block (middle mouse)
-- Armor slots (4 slots — the `Inventory` is 27+9 today; armor is unmodelled)
+- Armor slots (4 slots — the `Inventory` is 36+9 today; armor is unmodelled)
 - Drop-vs-drop merging on the floor (each break spawns a fresh drop; they don't coalesce)
 
 ## Items (actual items, not blocks)

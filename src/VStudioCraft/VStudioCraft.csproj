@@ -73,6 +73,7 @@
     <Compile Include="Game\Camera.cs" />
     <Compile Include="Game\Chunk.cs" />
     <Compile Include="Game\CrackTextures.cs" />
+    <Compile Include="Game\CreativeCatalog.cs" />
     <Compile Include="Game\ChunkJobSystem.cs" />
     <Compile Include="Game\ChunkMesher.cs" />
     <Compile Include="Game\DroppedItem.cs" />

@@ -83,6 +83,7 @@ namespace VStudioCraft.UI
             _gl.Resize += GlOnResize;
             _gl.KeyDown += GlOnKeyDown;
             _gl.KeyUp += GlOnKeyUp;
+            _gl.KeyPress += GlOnKeyPress;
             _gl.MouseDown += GlOnMouseDown;
             _gl.MouseUp += GlOnMouseUp;
             _gl.MouseMove += GlOnMouseMove;
@@ -422,6 +423,50 @@ namespace VStudioCraft.UI
         {
             _input.KeyDown(e.KeyCode);
 
+            // Creative inventory open → search bar has focus. Only Esc /
+            // Backspace / digit-hotbar shortcuts get game treatment; every
+            // other printable key flows through KeyPress into the search
+            // text. The early-return swallows E so typing "earth" doesn't
+            // close the panel after the first letter.
+            bool creativeInventoryTyping = _renderer != null
+                && _renderer.IsInventoryOpen
+                && _renderer.GameMode == GameMode.Creative;
+            if (creativeInventoryTyping)
+            {
+                switch (e.KeyCode)
+                {
+                    case Keys.Escape:
+                        ToggleInventory();
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.Back:
+                        if (_input.InventorySearchText.Length > 0)
+                        {
+                            _input.InventorySearchText =
+                                _input.InventorySearchText.Substring(0, _input.InventorySearchText.Length - 1);
+                            _input.InventoryScrollRows = 0;
+                        }
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.PageUp:
+                        _input.InventoryScrollRows = Math.Max(0, _input.InventoryScrollRows - 4);
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.PageDown:
+                        _input.InventoryScrollRows += 4;   // renderer clamps
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    // Fall through for everything else — KeyPress (below)
+                    // collects printable characters into the search bar.
+                }
+                e.Handled = true;
+                return;
+            }
+
             switch (e.KeyCode)
             {
                 // Number keys just flip the render-thread-visible hotbar
@@ -466,6 +511,31 @@ namespace VStudioCraft.UI
             e.Handled = true;
         }
 
+        // KeyPress fires only for printable characters (post-IME, post-
+        // shift mapping). Used by the creative inventory's search bar:
+        // every printable key the player types while the catalog is open
+        // appends to InventorySearchText. KeyDown handles the structural
+        // keys (Esc / Backspace / PageUp/Down) above.
+        private void GlOnKeyPress(object sender, System.Windows.Forms.KeyPressEventArgs e)
+        {
+            if (_renderer == null) return;
+            if (!_renderer.IsInventoryOpen) return;
+            if (_renderer.GameMode != GameMode.Creative) return;
+
+            char c = e.KeyChar;
+            // Ignore control chars (Backspace, Enter, etc.) — KeyDown
+            // handled the ones we care about. Printable ASCII + space pass
+            // through; the bitmap font is upper-case-only, so we keep the
+            // raw char and the renderer normalises to upper at draw time.
+            if (c < 32 || c == 127) return;
+            // Cap search length so a runaway keystroke can't blow the bar.
+            if (_input.InventorySearchText.Length >= 32) return;
+
+            _input.InventorySearchText += c;
+            _input.InventoryScrollRows = 0; // any edit resets scroll to top
+            e.Handled = true;
+        }
+
         private void TogglePause()
         {
             if (_renderer == null) return;
@@ -502,6 +572,10 @@ namespace VStudioCraft.UI
             if (_renderer.IsInventoryOpen)
             {
                 _renderer.IsInventoryOpen = false;
+                // Clear creative-mode catalog state so the next open starts
+                // fresh — otherwise the search text persists across sessions
+                // and the panel would re-open mid-filter.
+                _input.ResetInventorySearch();
                 CaptureMouseLook();
                 return;
             }
@@ -509,12 +583,35 @@ namespace VStudioCraft.UI
             // player can press Esc first and then E.
             if (_renderer.IsPaused) return;
             _renderer.IsInventoryOpen = true;
+            _input.ResetInventorySearch();
             ReleaseMouseLook();
             _input.Clear();
         }
 
         private void GlOnMouseWheel(object sender, MouseEventArgs e)
         {
+            // Creative inventory open: wheel scrolls the catalog instead
+            // of cycling the hotbar. One row per notch matches the catalog
+            // grid's vertical step. Renderer clamps the value to the
+            // filtered list length each frame so we don't have to know it
+            // here.
+            if (_renderer != null && _renderer.IsInventoryOpen
+                && _renderer.GameMode == GameMode.Creative)
+            {
+                _wheelAccum += e.Delta;
+                while (_wheelAccum >= 120)
+                {
+                    _wheelAccum -= 120;
+                    _input.InventoryScrollRows = Math.Max(0, _input.InventoryScrollRows - 1);
+                }
+                while (_wheelAccum <= -120)
+                {
+                    _wheelAccum += 120;
+                    _input.InventoryScrollRows += 1;
+                }
+                return;
+            }
+
             // Cycling the hotbar while a modal is up would be confusing; the
             // bar isn't even visually focal then. Number keys still work for
             // direct selection if the user wants it for some reason.

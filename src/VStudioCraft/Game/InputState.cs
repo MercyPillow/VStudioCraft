@@ -25,8 +25,8 @@ namespace VStudioCraft.Game
         // for instant break); survival ignores it and uses BreakHeld instead.
         public bool BreakHeld;
 
-        // Player-owned 36-slot inventory + cursor. Hotbar lives at slot
-        // indices 27..35 (matching InventoryScreen). The render thread reads
+        // Player-owned 45-slot inventory + cursor. Hotbar lives at slot
+        // indices 36..44 (matching InventoryScreen). The render thread reads
         // Slots[i] every frame to draw the bar / inventory; the UI thread
         // writes them in response to picks/drops/clicks. Reads + writes of
         // an ItemStack (two int-sized fields) aren't atomic on x86/x64, so
@@ -47,6 +47,22 @@ namespace VStudioCraft.Game
         public int InventoryClickButton;
         public int InventoryClickX;
         public int InventoryClickY;
+
+        // Creative-mode catalog state. Both fields are written by the host
+        // (UI thread) and read by the renderer (render thread) — same
+        // single-int / reference-assignment model as the existing
+        // InventoryClick* fields, no lock needed for the brief tear window.
+        //
+        // SearchText: current contents of the search bar. The host appends
+        //   typed characters in GlOnKeyPress and prunes the last on
+        //   Backspace. Renderer reads this each frame to filter the catalog.
+        // ScrollRows: how many catalog rows are scrolled past the top of
+        //   the visible window. Mouse wheel events while the creative
+        //   inventory is open mutate this; clamping to the filtered list
+        //   length happens on the render side because the host doesn't
+        //   know how many rows the current filter produced.
+        public string InventorySearchText = string.Empty;
+        public int InventoryScrollRows;
 
         public InputState()
         {
@@ -105,6 +121,15 @@ namespace VStudioCraft.Game
             BreakPressed = PlacePressed = false;
             BreakHeld = false;
             InventoryClickButton = 0;
+        }
+
+        // Reset the creative catalog UI state. Called when the inventory
+        // closes so the next open starts with a fresh, unfiltered, top-of-
+        // catalog view.
+        public void ResetInventorySearch()
+        {
+            InventorySearchText = string.Empty;
+            InventoryScrollRows = 0;
         }
     }
 }

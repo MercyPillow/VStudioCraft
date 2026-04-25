@@ -1262,16 +1262,56 @@ void main()
             }
         }
 
-        // Inventory click dispatcher. Hits a slot under (mx, my) and
-        // routes through the Inventory's standard exchange rules. A click
-        // outside the panel with a non-empty cursor tosses the cursor
-        // stack into the world as a drop — same effect as Alpha's
-        // outside-panel discard.
+        // Inventory click dispatcher. Survival routes through the slot
+        // exchange rules; creative replaces the main grid with a catalog
+        // tile-pick that fills the cursor with a full stack of the picked
+        // block. Both modes still toss the cursor on outside-panel clicks
+        // (Alpha-style discard).
         public void HandleInventoryClick(int button, int mx, int my, int screenW, int screenH)
         {
             if (Input == null) return;
-            int slot = InventoryScreen.HitTest(screenW, screenH, mx, my);
             var inv = Input.Inventory;
+
+            if (GameMode == GameMode.Creative)
+            {
+                // Hotbar row is still a real slot — click it to drop the
+                // cursor / pick the slot up / swap, same rules as survival.
+                int hotSlot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my);
+                if (hotSlot >= 0)
+                {
+                    inv.HandleLeftClickSlot(hotSlot);
+                    return;
+                }
+
+                // Catalog tile click → fill cursor with a full stack.
+                int tile = InventoryScreen.HitTestCatalogTile(screenW, screenH, mx, my);
+                if (tile >= 0)
+                {
+                    var filtered = CreativeCatalog.Filter(Input.InventorySearchText ?? string.Empty);
+                    int absolute = Input.InventoryScrollRows * InventoryScreen.Cols + tile;
+                    if (absolute >= 0 && absolute < filtered.Count)
+                    {
+                        // RMB picks half a stack so the player can split a
+                        // catalog grab on the fly; LMB grabs the cap.
+                        int count = button == 2 ? ItemStack.MaxCount / 2 : ItemStack.MaxCount;
+                        inv.Cursor = new ItemStack(filtered[absolute], count);
+                    }
+                    return;
+                }
+
+                // Search bar click is a no-op for now — focus is implicit
+                // (any key press while the inventory is open types into the
+                // bar). Swallow it so it doesn't toss the cursor stack.
+                if (InventoryScreen.HitTestSearchBar(screenW, screenH, mx, my))
+                    return;
+
+                // Outside everything → toss the cursor.
+                if (!inv.Cursor.IsEmpty) TossCursorStack();
+                return;
+            }
+
+            // Survival: full slot exchange against main + hotbar.
+            int slot = InventoryScreen.HitTest(screenW, screenH, mx, my);
             if (slot >= 0)
             {
                 // For now both buttons run the same exchange — the right-
@@ -2296,10 +2336,14 @@ void main()
             GL.Disable(EnableCap.Blend);
         }
 
-        // Inventory overlay — dim wash + panel + 3×9 main grid + 1×9 hotbar
-        // row. Both rows are live: every slot reads from Input.Inventory.Slots
-        // and renders the block icon + stack-count digits. The cursor stack
-        // (held while moving items between slots) follows MenuMouseX/Y so
+        // Inventory overlay — dim wash + panel + main grid + hotbar row.
+        // Survival mode draws a 4×9 main grid + the hotbar; creative mode
+        // replaces the main grid with a search bar + scrollable catalog of
+        // every placeable BlockType (see RenderCreativeInventoryBody). The
+        // hotbar row stays live in both modes. Every survival slot reads
+        // from Input.Inventory.Slots and renders the block icon + stack-
+        // count digits; creative catalog tiles read from CreativeCatalog.
+        // The cursor stack (held while moving items) follows MenuMouseX/Y so
         // the player can see what they're carrying mid-drag.
         private void RenderInventory(int width, int height)
         {
@@ -2331,106 +2375,22 @@ void main()
             DrawSolidQuad(panelX + panelW - 2, panelY, 2, panelH, border, 1f, ortho);          // right
 
             // ---- title ---------------------------------------------------
-            DrawString(InventoryScreen.Title, /*scale*/InventoryScreen.TitleScale,
+            string title = GameMode == GameMode.Creative ? "CREATIVE INVENTORY" : InventoryScreen.Title;
+            DrawString(title, /*scale*/InventoryScreen.TitleScale,
                 /*centerX*/width / 2,
                 /*topY*/InventoryScreen.TitleY(width, height),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
-            // ---- slot wells ---------------------------------------------
-            // Solid-quad wells with a 2-px chiseled border. Drawn for every
-            // slot (main + hotbar) so the visual density matches Alpha's
-            // inventory.
-            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
-            var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f); // top + left  → reads as inset
-            var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f); // bottom + right
-            for (int i = 0; i < InventoryScreen.TotalSlots; i++)
-            {
-                InventoryScreen.GetSlotRect(i, width, height,
-                    out int sx, out int sy, out int sw, out int sh);
-                int b = InventoryScreen.SlotBorderPx;
-                DrawSolidQuad(sx, sy, sw, sh, wellFill, 1f, ortho);
-                DrawSolidQuad(sx, sy, sw, b, wellEdgeLo, 1f, ortho);                  // top
-                DrawSolidQuad(sx, sy, b, sh, wellEdgeLo, 1f, ortho);                  // left
-                DrawSolidQuad(sx, sy + sh - b, sw, b, wellEdgeHi, 1f, ortho);         // bottom
-                DrawSolidQuad(sx + sw - b, sy, b, sh, wellEdgeHi, 1f, ortho);         // right
-            }
-
-            // ---- block icons (every non-empty slot) --------------------
-            // Cube blocks render as 3-face isometric icons; cross-sprites
-            // (torch / flowers / tall grass) keep the flat sprite path so
-            // their X-shaped tile reads correctly. Slot indices match
-            // Inventory.Slots[] exactly, so no remap is needed.
-            var inv = Input?.Inventory;
-            int iconPad = (InventoryScreen.SlotPx - InventoryScreen.IconPx) / 2;
-            int hotbarBase = InventoryScreen.MainSlotCount;
-
-            if (inv != null)
-            {
-                for (int i = 0; i < InventoryScreen.TotalSlots; i++)
-                {
-                    var stack = inv.Slots[i];
-                    if (stack.IsEmpty) continue;
-                    InventoryScreen.GetSlotRect(i, width, height,
-                        out int sx, out int sy, out _, out _);
-                    int xp = sx + iconPad;
-                    int yp = sy + iconPad;
-                    if (BlockData.IsCubeShape(stack.Type))
-                    {
-                        RenderBlockIcon3D(stack.Type, xp, yp,
-                            InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
-                    }
-                    else
-                    {
-                        DrawFlatSpriteIcon(stack.Type, xp, yp,
-                            InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
-                    }
-                }
-                // RenderBlockIcon3D toggles cull state; reset to the HUD
-                // pass baseline before the highlight + count passes.
-                GL.Disable(EnableCap.CullFace);
-            }
-
-            // ---- selected hotbar highlight -----------------------------
-            // Mirror the in-game bar so the player can see which hotbar
-            // slot is "live" while they browse storage.
-            int selected = Input != null ? Input.HotbarIndex : -1;
-            if (selected >= 0 && selected < InventoryScreen.HotbarSlotCount)
-            {
-                _spriteShader.Use();
-                _spriteShader.SetInt("uSprite", 0);
-                _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
-                _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
-                _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
-                GL.BindTexture(TextureTarget.Texture2D, _hotbarHighlightTexture);
-
-                InventoryScreen.GetSlotRect(hotbarBase + selected, width, height,
-                    out int sx, out int sy, out int sw, out int sh);
-                int hSize = HotbarTextures.HighlightSize * 2; // ~48 px, slightly bigger than slot
-                int hx = sx + (sw - hSize) / 2;
-                int hy = sy + (sh - hSize) / 2;
-                DrawSpriteQuad(hx, hy, hSize, hSize, ortho);
-            }
-
-            // ---- per-slot stack counts ---------------------------------
-            // Drawn after icons + highlight so digits sit on top of both.
-            // Stacks of 1 don't show a count (Alpha behaviour, keeps the
-            // grid visually quiet for fresh pickups).
-            if (inv != null)
-            {
-                for (int i = 0; i < InventoryScreen.TotalSlots; i++)
-                {
-                    var stack = inv.Slots[i];
-                    if (stack.IsEmpty || stack.Count <= 1) continue;
-                    InventoryScreen.GetSlotRect(i, width, height,
-                        out int sx, out int sy, out int sw, out int sh);
-                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
-                }
-            }
+            if (GameMode == GameMode.Creative)
+                RenderCreativeInventoryBody(width, height, ortho);
+            else
+                RenderSurvivalInventoryBody(width, height, ortho);
 
             // ---- cursor stack (follows the mouse) ----------------------
             // Rendered last so it floats above every slot. Position is
             // anchored to the cursor centre so the icon doesn't lurch
             // when the player drags from a slot's edge to its centre.
+            var inv = Input?.Inventory;
             if (inv != null && !inv.Cursor.IsEmpty && Input != null)
             {
                 int cx = Input.MenuMouseX;
@@ -2466,6 +2426,316 @@ void main()
             GL.Disable(EnableCap.Blend);
             GL.BindTexture(TextureTarget.Texture2D, 0);
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Survival inventory body — the original 4×9 main grid + hotbar
+        // row, every slot a real ItemStack from Inventory.Slots[].
+        private void RenderSurvivalInventoryBody(int width, int height, Matrix4 ortho)
+        {
+            // ---- slot wells ---------------------------------------------
+            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
+            var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
+            for (int i = 0; i < InventoryScreen.TotalSlots; i++)
+            {
+                InventoryScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                DrawSlotWell(sx, sy, sw, sh, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+            }
+
+            // ---- block icons (every non-empty slot) --------------------
+            var inv = Input?.Inventory;
+            int iconPad = (InventoryScreen.SlotPx - InventoryScreen.IconPx) / 2;
+            int hotbarBase = InventoryScreen.MainSlotCount;
+
+            if (inv != null)
+            {
+                for (int i = 0; i < InventoryScreen.TotalSlots; i++)
+                {
+                    var stack = inv.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    InventoryScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, ortho);
+                }
+                GL.Disable(EnableCap.CullFace);
+            }
+
+            // ---- selected hotbar highlight -----------------------------
+            int selected = Input != null ? Input.HotbarIndex : -1;
+            if (selected >= 0 && selected < InventoryScreen.HotbarSlotCount)
+            {
+                DrawHotbarSelectionHighlight(hotbarBase + selected, width, height, ortho);
+            }
+
+            // ---- per-slot stack counts ---------------------------------
+            if (inv != null)
+            {
+                for (int i = 0; i < InventoryScreen.TotalSlots; i++)
+                {
+                    var stack = inv.Slots[i];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    InventoryScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+            }
+        }
+
+        // Creative inventory body — search bar + scrollable catalog where
+        // the main grid would be in survival, plus the live hotbar row at
+        // the bottom. Catalog clicks fill the cursor with a stack; hotbar
+        // slots still play the standard left-click swap rules so the
+        // player can pull a chosen catalog item onto a specific bar slot.
+        private void RenderCreativeInventoryBody(int width, int height, Matrix4 ortho)
+        {
+            var inv = Input?.Inventory;
+            string searchText = Input?.InventorySearchText ?? string.Empty;
+            int scrollRows = Input?.InventoryScrollRows ?? 0;
+
+            // ---- search bar ---------------------------------------------
+            InventoryScreen.GetSearchBarRect(width, height,
+                out int sbx, out int sby, out int sbw, out int sbh);
+            DrawSolidQuad(sbx, sby, sbw, sbh,
+                new Vector3(0.10f, 0.10f, 0.12f), 1f, ortho);
+            // Inset border: dark inner ring so the bar reads like a text field.
+            var sbBorder = new Vector3(0.55f, 0.60f, 0.66f);
+            DrawSolidQuad(sbx, sby, sbw, 1, sbBorder, 1f, ortho);
+            DrawSolidQuad(sbx, sby + sbh - 1, sbw, 1, sbBorder, 1f, ortho);
+            DrawSolidQuad(sbx, sby, 1, sbh, sbBorder, 1f, ortho);
+            DrawSolidQuad(sbx + sbw - 1, sby, 1, sbh, sbBorder, 1f, ortho);
+
+            int sbScale = 2;
+            int sbGlyphW = HotbarTextures.GlyphCellW * sbScale;
+            int sbGlyphH = HotbarTextures.GlyphCellH * sbScale;
+            int sbTextY = sby + (sbh - sbGlyphH) / 2;
+
+            string display = string.IsNullOrEmpty(searchText) ? "Search..." : searchText.ToUpperInvariant();
+            var sbTint = string.IsNullOrEmpty(searchText)
+                ? new Vector4(0.55f, 0.58f, 0.64f, 1f)   // placeholder grey
+                : new Vector4(1f, 1f, 1f, 1f);
+            DrawDigits(display, sbx + 6, sbTextY, sbGlyphW, sbGlyphH, sbTint, ortho);
+
+            // Caret blink — visible while there's any text and ~0.5 s on/off.
+            // Keyed off _timeOfDay so it ticks with the world clock without
+            // needing a new field. (Inventory is open for short windows;
+            // any cadence reads as "alive".)
+            bool caretOn = ((int)(_timeOfDay * 200f) & 1) == 0;
+            if (caretOn)
+            {
+                int caretX = sbx + 6 + (string.IsNullOrEmpty(searchText) ? 0 : searchText.Length * sbGlyphW);
+                DrawSolidQuad(caretX, sbTextY, 2, sbGlyphH, new Vector3(1f, 1f, 1f), 1f, ortho);
+            }
+
+            // ---- catalog grid -------------------------------------------
+            InventoryScreen.GetCatalogRect(width, height,
+                out int cx, out int cy, out int cw, out int ch);
+
+            // Catalog area background — same well palette as a slot, but
+            // one big rect so the grid floats inside it.
+            DrawSolidQuad(cx - 2, cy - 2, cw + 4, ch + 4,
+                new Vector3(0.10f, 0.10f, 0.12f), 1f, ortho);
+            DrawSolidQuad(cx, cy, cw, ch, new Vector3(0.20f, 0.20f, 0.22f), 1f, ortho);
+
+            var filtered = CreativeCatalog.Filter(searchText);
+            int totalRows = (filtered.Count + InventoryScreen.Cols - 1) / InventoryScreen.Cols;
+            int maxScroll = System.Math.Max(0, totalRows - InventoryScreen.CatalogRows);
+            if (scrollRows > maxScroll) scrollRows = maxScroll;
+            if (scrollRows < 0) scrollRows = 0;
+
+            // Push the clamped scroll back into Input so the click code
+            // sees a consistent value next frame.
+            if (Input != null) Input.InventoryScrollRows = scrollRows;
+
+            int iconPad = (InventoryScreen.SlotPx - InventoryScreen.IconPx) / 2;
+            var catalogWellFill   = new Vector3(0.30f, 0.30f, 0.32f);
+            var catalogEdgeLo     = new Vector3(0.08f, 0.08f, 0.10f);
+            var catalogEdgeHi     = new Vector3(0.50f, 0.50f, 0.55f);
+
+            int hoverTile = -1;
+            int mxh = Input?.MenuMouseX ?? -1;
+            int myh = Input?.MenuMouseY ?? -1;
+            if (mxh >= 0)
+            {
+                hoverTile = InventoryScreen.HitTestCatalogTile(width, height, mxh, myh);
+            }
+
+            for (int row = 0; row < InventoryScreen.CatalogRows; row++)
+            {
+                for (int col = 0; col < InventoryScreen.Cols; col++)
+                {
+                    int tx = cx + col * InventoryScreen.SlotPx;
+                    int ty = cy + row * InventoryScreen.SlotPx;
+                    int tile = row * InventoryScreen.Cols + col;
+                    int absolute = (scrollRows + row) * InventoryScreen.Cols + col;
+
+                    bool inRange = absolute < filtered.Count;
+                    var fill = inRange ? catalogWellFill : new Vector3(0.18f, 0.18f, 0.20f);
+                    DrawSlotWell(tx, ty, InventoryScreen.SlotPx, InventoryScreen.SlotPx,
+                        fill, catalogEdgeLo, catalogEdgeHi, ortho);
+
+                    // Hover ring on the live tile under the mouse.
+                    if (inRange && tile == hoverTile)
+                    {
+                        var hi = new Vector3(1f, 1f, 1f);
+                        int b = InventoryScreen.SlotBorderPx;
+                        DrawSolidQuad(tx, ty, InventoryScreen.SlotPx, b, hi, 1f, ortho);
+                        DrawSolidQuad(tx, ty + InventoryScreen.SlotPx - b, InventoryScreen.SlotPx, b, hi, 1f, ortho);
+                        DrawSolidQuad(tx, ty, b, InventoryScreen.SlotPx, hi, 1f, ortho);
+                        DrawSolidQuad(tx + InventoryScreen.SlotPx - b, ty, b, InventoryScreen.SlotPx, hi, 1f, ortho);
+                    }
+                }
+            }
+
+            // Catalog icons (skip empty trailing tiles).
+            for (int row = 0; row < InventoryScreen.CatalogRows; row++)
+            {
+                for (int col = 0; col < InventoryScreen.Cols; col++)
+                {
+                    int absolute = (scrollRows + row) * InventoryScreen.Cols + col;
+                    if (absolute >= filtered.Count) continue;
+                    int tx = cx + col * InventoryScreen.SlotPx;
+                    int ty = cy + row * InventoryScreen.SlotPx;
+                    DrawSlotIcon(filtered[absolute], tx + iconPad, ty + iconPad, ortho);
+                }
+            }
+            // RenderBlockIcon3D toggles cull state.
+            GL.Disable(EnableCap.CullFace);
+
+            // ---- scrollbar ----------------------------------------------
+            // Thin track on the right edge of the catalog, with a thumb
+            // sized to the visible window. Purely decorative — the wheel
+            // drives the actual scroll — but a useful visual cue when the
+            // catalog overflows.
+            if (totalRows > InventoryScreen.CatalogRows)
+            {
+                int trackW = 4;
+                int trackX = cx + cw - trackW - 2;
+                int trackY = cy + 2;
+                int trackH = ch - 4;
+                DrawSolidQuad(trackX, trackY, trackW, trackH,
+                    new Vector3(0.12f, 0.12f, 0.14f), 1f, ortho);
+
+                int thumbH = System.Math.Max(8,
+                    trackH * InventoryScreen.CatalogRows / totalRows);
+                int thumbY = trackY +
+                    (maxScroll == 0 ? 0 : (trackH - thumbH) * scrollRows / maxScroll);
+                DrawSolidQuad(trackX, thumbY, trackW, thumbH,
+                    new Vector3(0.62f, 0.66f, 0.72f), 1f, ortho);
+            }
+
+            // ---- hotbar wells + icons -----------------------------------
+            // Always visible so the player can see (and click into) their
+            // current loadout while picking from the catalog.
+            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
+            var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
+            int hotbarBase = InventoryScreen.MainSlotCount;
+            for (int i = hotbarBase; i < InventoryScreen.TotalSlots; i++)
+            {
+                InventoryScreen.GetSlotRect(i, width, height,
+                    out int hsx, out int hsy, out int hsw, out int hsh);
+                DrawSlotWell(hsx, hsy, hsw, hsh, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+            }
+            if (inv != null)
+            {
+                for (int i = hotbarBase; i < InventoryScreen.TotalSlots; i++)
+                {
+                    var stack = inv.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    InventoryScreen.GetSlotRect(i, width, height,
+                        out int hsx, out int hsy, out _, out _);
+                    DrawSlotIcon(stack.Type, hsx + iconPad, hsy + iconPad, ortho);
+                }
+                GL.Disable(EnableCap.CullFace);
+            }
+
+            int selected = Input != null ? Input.HotbarIndex : -1;
+            if (selected >= 0 && selected < InventoryScreen.HotbarSlotCount)
+            {
+                DrawHotbarSelectionHighlight(hotbarBase + selected, width, height, ortho);
+            }
+
+            if (inv != null)
+            {
+                for (int i = hotbarBase; i < InventoryScreen.TotalSlots; i++)
+                {
+                    var stack = inv.Slots[i];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    InventoryScreen.GetSlotRect(i, width, height,
+                        out int hsx, out int hsy, out int hsw, out int hsh);
+                    DrawStackCount(stack.Count, hsx, hsy, hsw, hsh, ortho);
+                }
+            }
+
+            // ---- catalog hover tooltip ----------------------------------
+            // Show the friendly name of the catalog tile under the cursor
+            // along the bottom of the panel — quick way to confirm what the
+            // player's about to pick without re-reading the search text.
+            if (hoverTile >= 0)
+            {
+                int absolute = (scrollRows + hoverTile / InventoryScreen.Cols) * InventoryScreen.Cols
+                             + hoverTile % InventoryScreen.Cols;
+                if (absolute < filtered.Count)
+                {
+                    string label = CreativeCatalog.FriendlyName(filtered[absolute]);
+                    InventoryScreen.GetPanelRect(width, height,
+                        out int ppx, out int ppy, out int ppw, out int pph);
+                    DrawString(label, /*scale*/2,
+                        /*centerX*/ppx + ppw / 2,
+                        /*topY*/ppy + pph - HotbarTextures.GlyphCellH * 2 - 4,
+                        new Vector4(1f, 1f, 1f, 1f), ortho);
+                }
+            }
+        }
+
+        // Slot well + chiseled border helper (extracted so survival and
+        // creative bodies share the exact same look).
+        private void DrawSlotWell(int x, int y, int w, int h,
+            Vector3 fill, Vector3 edgeLo, Vector3 edgeHi, Matrix4 ortho)
+        {
+            int b = InventoryScreen.SlotBorderPx;
+            DrawSolidQuad(x, y, w, h, fill, 1f, ortho);
+            DrawSolidQuad(x, y, w, b, edgeLo, 1f, ortho);                 // top
+            DrawSolidQuad(x, y, b, h, edgeLo, 1f, ortho);                 // left
+            DrawSolidQuad(x, y + h - b, w, b, edgeHi, 1f, ortho);         // bottom
+            DrawSolidQuad(x + w - b, y, b, h, edgeHi, 1f, ortho);         // right
+        }
+
+        // Block icon helper — picks 3-face cube vs flat sprite based on
+        // the block shape, same logic the survival path used inline.
+        private void DrawSlotIcon(BlockType type, int xp, int yp, Matrix4 ortho)
+        {
+            if (BlockData.IsCubeShape(type))
+            {
+                RenderBlockIcon3D(type, xp, yp,
+                    InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
+            }
+            else
+            {
+                DrawFlatSpriteIcon(type, xp, yp,
+                    InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
+            }
+        }
+
+        // Selection highlight on a hotbar slot — same sprite the in-game
+        // bar uses, drawn slightly oversize so it reads as a frame around
+        // the slot.
+        private void DrawHotbarSelectionHighlight(int slotIndex, int width, int height, Matrix4 ortho)
+        {
+            _spriteShader.Use();
+            _spriteShader.SetInt("uSprite", 0);
+            _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
+            _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
+            GL.BindTexture(TextureTarget.Texture2D, _hotbarHighlightTexture);
+
+            InventoryScreen.GetSlotRect(slotIndex, width, height,
+                out int sx, out int sy, out int sw, out int sh);
+            int hSize = HotbarTextures.HighlightSize * 2;
+            int hx = sx + (sw - hSize) / 2;
+            int hy = sy + (sh - hSize) / 2;
+            DrawSpriteQuad(hx, hy, hSize, hSize, ortho);
         }
 
         // Draw a flat block-tile sprite to a HUD pixel rect. Used for

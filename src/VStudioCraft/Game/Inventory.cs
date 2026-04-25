@@ -2,12 +2,17 @@ using System;
 
 namespace VStudioCraft.Game
 {
-    // 36-slot player inventory + 1 cursor. Slot indexing matches the
+    // 45-slot player inventory + 1 cursor. Slot indexing matches the
     // InventoryScreen panel layout exactly so a slot rect from
     // InventoryScreen.GetSlotRect maps directly to Slots[i] without
     // a translation table:
-    //   0..26  — main grid (3×9, top-down row-major)
-    //   27..35 — hotbar row
+    //   0..35  — main grid (4×9, top-down row-major)
+    //   36..44 — hotbar row
+    //
+    // Constants here MUST stay in lock-step with InventoryScreen.MainRows /
+    // Cols / TotalSlots — the renderer indexes Slots[] using slot rectangles
+    // pulled from the screen layout, and a mismatch would walk past the end
+    // of Slots[].
     //
     // The cursor stack lives outside the slot range and follows the
     // mouse while the inventory screen is open. Click handling routes
@@ -16,9 +21,9 @@ namespace VStudioCraft.Game
     // consumes them once per frame).
     internal sealed class Inventory
     {
-        public const int MainCount = 27;
+        public const int MainCount = 36;   // 4 rows × 9 cols
         public const int HotbarCount = 9;
-        public const int TotalSlots = MainCount + HotbarCount;
+        public const int TotalSlots = MainCount + HotbarCount;  // 45
         public const int HotbarStart = MainCount;
 
         public readonly ItemStack[] Slots = new ItemStack[TotalSlots];
