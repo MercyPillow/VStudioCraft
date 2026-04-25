@@ -496,7 +496,16 @@ namespace VStudioCraft.UI
                     // Open / close inventory. Esc also closes it (handled
                     // below) so the player has the same dismiss key as
                     // every other modal.
+                    //
+                    // SuppressKeyPress (not just Handled) is REQUIRED here:
+                    // KeyDown flips IsInventoryOpen to true, but WinForms
+                    // still fires a KeyPress for the same physical 'e'
+                    // unless we suppress it explicitly. Without this, the
+                    // creative-mode search bar would receive an 'e' the
+                    // moment the panel opens — pre-typing the very key
+                    // that opened it.
                     ToggleInventory();
+                    e.SuppressKeyPress = true;
                     break;
                 case Keys.Escape:
                     // Modal precedence: inventory > options > pause. Esc
@@ -506,6 +515,7 @@ namespace VStudioCraft.UI
                     if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
                     else if (_renderer != null && _renderer.IsOptionsOpen) _renderer.IsOptionsOpen = false;
                     else TogglePause();
+                    e.SuppressKeyPress = true;
                     break;
             }
             e.Handled = true;

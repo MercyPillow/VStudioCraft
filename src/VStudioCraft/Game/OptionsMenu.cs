@@ -9,6 +9,10 @@ namespace VStudioCraft.Game
     // its value from GameRenderer.HungerEnabled and a click flips it.
     // Hidden when the world's GameMode is Creative (the bar is survival-
     // only) — we still draw the row but with a disabled visual.
+    //
+    // Pixel sizes are base values fed through UiScale (see UiScale.cs)
+    // so the panel grows with the viewport and stays readable at 1080p+
+    // without making the click rects drift away from where they're drawn.
     internal static class OptionsMenu
     {
         public enum ActionId
@@ -18,12 +22,25 @@ namespace VStudioCraft.Game
             ToggleHunger,
         }
 
-        public const int RowWidth   = 380;
-        public const int RowHeight  = 40;
-        public const int RowGap     = 12;
-        public const int SectionGap = 26;
+        private const int RowWidthBase   = 380;
+        private const int RowHeightBase  = 40;
+        private const int RowGapBase     = 12;
+        private const int SectionGapBase = 26;
         // Vertical distance from the title baseline down to the first row.
-        public const int TitleGap   = 36;
+        private const int TitleGapBase   = 36;
+        // Title at scale 3 in the bitmap font (24 px tall at 1×).
+        private const int TitleFontScaleBase = 3;
+
+        public static int RowWidth(int viewW, int viewH)   => UiScale.S(RowWidthBase, viewW, viewH);
+        public static int RowHeight(int viewW, int viewH)  => UiScale.S(RowHeightBase, viewW, viewH);
+        public static int RowGap(int viewW, int viewH)     => UiScale.S(RowGapBase, viewW, viewH);
+        public static int SectionGap(int viewW, int viewH) => UiScale.S(SectionGapBase, viewW, viewH);
+        public static int TitleGap(int viewW, int viewH)   => UiScale.S(TitleGapBase, viewW, viewH);
+        public static int TitleFontScale(int viewW, int viewH)
+        {
+            int s = (int)(TitleFontScaleBase * UiScale.For(viewW, viewH) + 0.5f);
+            return s < 1 ? 1 : s;
+        }
 
         public struct Row
         {
@@ -52,23 +69,28 @@ namespace VStudioCraft.Game
                 new Row { Id = ActionId.Back,         Label = "BACK" },
             };
 
+            int rowW   = RowWidth(screenW, screenH);
+            int rowH   = RowHeight(screenW, screenH);
+            int rowGap = RowGap(screenW, screenH);
+            int secGap = SectionGap(screenW, screenH);
+
             // Total height = rows + inter-row gaps + one extra section-gap
             // before the BACK button (the visual break between options and
             // dismiss).
             int n = labels.Length;
-            int totalH = n * RowHeight + (n - 1) * RowGap + (SectionGap - RowGap);
+            int totalH = n * rowH + (n - 1) * rowGap + (secGap - rowGap);
             int startY = (screenH - totalH) / 2;
-            int x = (screenW - RowWidth) / 2;
+            int x = (screenW - rowW) / 2;
 
             int cursorY = startY;
             for (int i = 0; i < n; i++)
             {
-                if (i == n - 1) cursorY += SectionGap - RowGap; // extra gap before BACK
+                if (i == n - 1) cursorY += secGap - rowGap; // extra gap before BACK
                 labels[i].X = x;
                 labels[i].Y = cursorY;
-                labels[i].W = RowWidth;
-                labels[i].H = RowHeight;
-                cursorY += RowHeight + RowGap;
+                labels[i].W = rowW;
+                labels[i].H = rowH;
+                cursorY += rowH + rowGap;
             }
             return labels;
         }
@@ -88,12 +110,12 @@ namespace VStudioCraft.Game
         }
 
         // Y of the title text's top edge, sitting just above the first row.
-        // Title is drawn at scale 3 (HotbarTextures.GlyphCellH * 3 px tall).
         public static int TitleY(int screenW, int screenH, bool hungerEnabled, bool isSurvival)
         {
             var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival);
             int firstY = rows[0].Y;
-            return firstY - TitleGap - HotbarTextures.GlyphCellH * 3;
+            int titleScale = TitleFontScale(screenW, screenH);
+            return firstY - TitleGap(screenW, screenH) - HotbarTextures.GlyphCellH * titleScale;
         }
 
         private static string HungerLabel(bool on) =>

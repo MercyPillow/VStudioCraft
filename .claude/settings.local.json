@@ -73,7 +73,10 @@
       "PowerShell(dotnet build \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" -nologo -v:minimal 2>&1)",
       "PowerShell($nuget = if \\($env:NUGET_PACKAGES\\) { $env:NUGET_PACKAGES } else { Join-Path $env:USERPROFILE \".nuget\\\\packages\" }; $core = Join-Path $nuget \"conemu.core\"; if \\(Test-Path $core\\) { Get-ChildItem $core -Recurse -File | Select-Object -First 30 FullName | Format-Table -AutoSize | Out-String } else { Write-Output \"not found at $core\" })",
       "PowerShell(dotnet build C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj -nologo -clp:NoSummary -v:m 2>&1)",
-      "PowerShell(& \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj /t:Restore,Build /nologo /clp:NoSummary /v:m 2>&1 | Select-Object -Last 30)"
+      "PowerShell(& \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj /t:Restore,Build /nologo /clp:NoSummary /v:m 2>&1 | Select-Object -Last 30)",
+      "PowerShell($msb = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"; & $msb \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\ClaudeStudio\\\\ClaudeStudio.sln\" /p:Configuration=Debug /v:minimal /nologo)",
+      "PowerShell(& \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Restore,Build /p:Configuration=Debug /v:minimal /nologo)",
+      "PowerShell(& \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Build /p:Configuration=Debug /v:minimal /nologo /clp:ErrorsOnly)"
     ]
   }
 }

@@ -22,74 +22,115 @@ namespace VStudioCraft.Game
     // renderer: GameRenderer.HandleInventoryClick branches on game mode and
     // dispatches to either the survival slot rules or the creative catalog
     // pick.
+    //
+    // All pixel sizes are *base* values — the renderer pipes them through
+    // UiScale.For(viewW, viewH) so the panel grows with the viewport and
+    // looks consistent at fullscreen / 1080p / 1440p instead of stranded in
+    // the centre at its tool-window design size. Hit-tests use the same
+    // scaled values, so a click on a row-3 slot in a fullscreen window
+    // hits the same slot it visually covers.
     internal static class InventoryScreen
     {
         public const int Cols = 9;
         public const int MainRows = 4;
 
-        // Slot pixel size — bumped from the previous 46-px well by ~20% so
-        // the larger panel reads as one tier up from the hotbar without
-        // making icons feel cramped. Icon size keeps the same ratio so a
-        // block icon in the inventory and on the hotbar render at
-        // proportional sizes.
-        public const int SlotPx = 55;
-        public const int IconPx = 44;
-        public const int SlotBorderPx = 2;
+        // ---- base (scale=1) pixel sizes ---------------------------------
+        // These are NOT used directly by callers — they're the inputs to the
+        // scaled accessors below. The "20% larger than the hotbar" sizing
+        // and the original 46/37 hotbar metrics it was derived from both
+        // live here in one place so any future global resize is a single
+        // edit.
+        private const int SlotPxBase       = 55;
+        private const int IconPxBase       = 44;
+        private const int SlotBorderPxBase = 2;
+        private const int HotbarGapBase    = 10;
+        private const int PanelPadXBase    = 17;
+        private const int PanelPadYBase    = 17;
+        private const int TitleScaleBase   = 2;
+        private const int TitleGapBase     = 14;
+        private const int SearchBarHeightBase = 26;
+        private const int SearchBarGapBase    = 8;
+        // Gap between the inventory panel's bottom edge and the on-screen
+        // hotbar's top edge. The panel anchors to the hotbar (not the
+        // viewport centre) so the spatial relationship between the
+        // inventory-row icons and the bar stays consistent at every
+        // window size — this used to drift because the panel was screen-
+        // centred while the hotbar floated at a fixed margin from the
+        // bottom edge.
+        private const int HotbarGapAboveBase = 40;
 
-        // Vertical breathing room between the bottom of the main grid and
-        // the top of the hotbar row. Reads as "those 9 slots are the
-        // hotbar" without needing a separator line. Scaled with SlotPx.
-        public const int HotbarGap = 10;
-
-        // Outer panel padding around the slot grid (excluding the title row).
-        public const int PanelPadX = 17;
-        public const int PanelPadY = 17;
-
-        // Title region above the grid: scale-2 glyph (16 px) plus 14 px
-        // breathing room below it before the first slot row.
-        public const int TitleScale = 2;
-        public const int TitleHeight = HotbarTextures.GlyphCellH * TitleScale; // 16
-        public const int TitleGap = 14;
-
+        // ---- non-pixel layout constants (no scaling) --------------------
         public const int MainSlotCount = Cols * MainRows;        // 36
         public const int HotbarSlotCount = Cols;                 // 9
         public const int TotalSlots = MainSlotCount + HotbarSlotCount; // 45
+        public const int CatalogRows = MainRows;                 // catalog covers main-grid region
 
         public const string Title = "INVENTORY";
 
-        // ---- creative-mode extras ---------------------------------------
-        // Search bar sits where the title gap would normally be — replaces
-        // the main grid entirely. CatalogRows defines how many rows of
-        // catalog tiles render before the rest scrolls; each tile is the
-        // same SlotPx as a real slot so icons line up visually.
-        public const int SearchBarHeight = 26;
-        public const int SearchBarGap   = 8;   // gap below search bar before catalog grid
-        public const int CatalogRows = MainRows; // catalog area covers the same vertical region
+        // ---- scaled pixel accessors -------------------------------------
+        // Every layout decision below funnels through these so we never
+        // mix a base value with a scaled one and produce sub-pixel drift
+        // between the panel chrome and a slot's hit-test rect.
+        public static int SlotPx(int viewW, int viewH)        => UiScale.S(SlotPxBase, viewW, viewH);
+        public static int IconPx(int viewW, int viewH)        => UiScale.S(IconPxBase, viewW, viewH);
+        public static int SlotBorderPx(int viewW, int viewH)  => UiScale.S(SlotBorderPxBase, viewW, viewH);
+        public static int HotbarGap(int viewW, int viewH)     => UiScale.S(HotbarGapBase, viewW, viewH);
+        public static int PanelPadX(int viewW, int viewH)     => UiScale.S(PanelPadXBase, viewW, viewH);
+        public static int PanelPadY(int viewW, int viewH)     => UiScale.S(PanelPadYBase, viewW, viewH);
+        public static int TitleGap(int viewW, int viewH)      => UiScale.S(TitleGapBase, viewW, viewH);
+        public static int SearchBarHeight(int viewW, int viewH) => UiScale.S(SearchBarHeightBase, viewW, viewH);
+        public static int SearchBarGap(int viewW, int viewH)  => UiScale.S(SearchBarGapBase, viewW, viewH);
+
+        // Title glyph multiplier — the bitmap font ships at 8 px per cell;
+        // base scale 2 keeps it readable, growing with the viewport so a
+        // 4K panel doesn't have a postage-stamp title bar. Rounded so we
+        // never hit a 0× scale on tiny viewports.
+        public static int TitleScale(int viewW, int viewH)
+        {
+            int s = (int)(TitleScaleBase * UiScale.For(viewW, viewH) + 0.5f);
+            return s < 1 ? 1 : s;
+        }
+        public static int TitleHeight(int viewW, int viewH)
+            => HotbarTextures.GlyphCellH * TitleScale(viewW, viewH);
 
         // ---- panel geometry ----------------------------------------------
 
-        private static int GridWidthPx  => SlotPx * Cols;
-        private static int GridHeightPx => SlotPx * MainRows + HotbarGap + SlotPx;
+        private static int GridWidthPx(int viewW, int viewH)
+            => SlotPx(viewW, viewH) * Cols;
+        private static int GridHeightPx(int viewW, int viewH)
+            => SlotPx(viewW, viewH) * MainRows + HotbarGap(viewW, viewH) + SlotPx(viewW, viewH);
 
-        public static int PanelWidth  => GridWidthPx + PanelPadX * 2;
-        public static int PanelHeight => PanelPadY + TitleHeight + TitleGap
-                                       + GridHeightPx + PanelPadY;
+        public static int PanelWidth(int viewW, int viewH)
+            => GridWidthPx(viewW, viewH) + PanelPadX(viewW, viewH) * 2;
+        public static int PanelHeight(int viewW, int viewH)
+            => PanelPadY(viewW, viewH) + TitleHeight(viewW, viewH) + TitleGap(viewW, viewH)
+             + GridHeightPx(viewW, viewH) + PanelPadY(viewW, viewH);
 
-        // Top-left corner of the panel, screen-centred.
+        // Top-left corner of the panel. Horizontally screen-centred,
+        // vertically anchored so the panel's bottom edge sits a fixed
+        // (UiScale-aware) gap above the on-screen hotbar's top edge.
+        // This ties the inventory's spatial position to the hotbar so
+        // the two never drift apart when the viewport resizes.
         public static void GetPanelRect(int screenW, int screenH,
             out int x, out int y, out int w, out int h)
         {
-            w = PanelWidth;
-            h = PanelHeight;
+            w = PanelWidth(screenW, screenH);
+            h = PanelHeight(screenW, screenH);
             x = (screenW - w) / 2;
-            y = (screenH - h) / 2;
+            int hotbarTop = HotbarLayout.BarTopY(screenW, screenH);
+            int gap = UiScale.S(HotbarGapAboveBase, screenW, screenH);
+            y = hotbarTop - gap - h;
+            // Tiny-window safety: if the panel is taller than the space
+            // above the hotbar, fall back to the top of the viewport so
+            // we don't render off-screen with negative y.
+            if (y < 0) y = 0;
         }
 
         // Title is centred horizontally; this returns the Y of its top edge.
         public static int TitleY(int screenW, int screenH)
         {
             GetPanelRect(screenW, screenH, out _, out int py, out _, out _);
-            return py + PanelPadY;
+            return py + PanelPadY(screenW, screenH);
         }
 
         // Slot rect for slotIndex 0..(TotalSlots-1).
@@ -100,23 +141,27 @@ namespace VStudioCraft.Game
             out int x, out int y, out int w, out int h)
         {
             GetPanelRect(screenW, screenH, out int px, out int py, out _, out _);
-            int gridX0 = px + PanelPadX;
-            int gridY0 = py + PanelPadY + TitleHeight + TitleGap;
+            int slot = SlotPx(screenW, screenH);
+            int padX = PanelPadX(screenW, screenH);
+            int padY = PanelPadY(screenW, screenH);
+            int gap  = HotbarGap(screenW, screenH);
+            int gridX0 = px + padX;
+            int gridY0 = py + padY + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
 
             int col = slotIndex % Cols;
             if (slotIndex < MainSlotCount)
             {
                 int row = slotIndex / Cols;
-                x = gridX0 + col * SlotPx;
-                y = gridY0 + row * SlotPx;
+                x = gridX0 + col * slot;
+                y = gridY0 + row * slot;
             }
             else
             {
-                x = gridX0 + col * SlotPx;
-                y = gridY0 + MainRows * SlotPx + HotbarGap;
+                x = gridX0 + col * slot;
+                y = gridY0 + MainRows * slot + gap;
             }
-            w = SlotPx;
-            h = SlotPx;
+            w = slot;
+            h = slot;
         }
 
         public static bool IsHotbarSlot(int slotIndex) => slotIndex >= MainSlotCount;
@@ -141,10 +186,10 @@ namespace VStudioCraft.Game
             out int x, out int y, out int w, out int h)
         {
             GetPanelRect(screenW, screenH, out int px, out int py, out _, out _);
-            x = px + PanelPadX;
-            y = py + PanelPadY + TitleHeight + TitleGap;
-            w = GridWidthPx;
-            h = SearchBarHeight;
+            x = px + PanelPadX(screenW, screenH);
+            y = py + PanelPadY(screenW, screenH) + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
+            w = GridWidthPx(screenW, screenH);
+            h = SearchBarHeight(screenW, screenH);
         }
 
         // Catalog grid rect — sits below the search bar, fills the rest of
@@ -155,16 +200,16 @@ namespace VStudioCraft.Game
             out int x, out int y, out int w, out int h)
         {
             GetPanelRect(screenW, screenH, out int px, out int py, out _, out _);
-            int gridY0 = py + PanelPadY + TitleHeight + TitleGap;
-            int catalogTop = gridY0 + SearchBarHeight + SearchBarGap;
-            x = px + PanelPadX;
+            int gridY0 = py + PanelPadY(screenW, screenH) + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
+            int catalogTop = gridY0 + SearchBarHeight(screenW, screenH) + SearchBarGap(screenW, screenH);
+            x = px + PanelPadX(screenW, screenH);
             y = catalogTop;
-            w = GridWidthPx;
+            w = GridWidthPx(screenW, screenH);
             // Bottom of catalog = top of hotbar row - HotbarGap. The catalog
             // therefore takes up the rows it has, minus the search-bar's
             // intrusion. Compute from the survival main-grid height instead
             // of redeclaring it.
-            int mainBottom = gridY0 + MainRows * SlotPx;
+            int mainBottom = gridY0 + MainRows * SlotPx(screenW, screenH);
             h = mainBottom - catalogTop;
         }
 
@@ -176,8 +221,9 @@ namespace VStudioCraft.Game
         {
             GetCatalogRect(screenW, screenH, out int cx, out int cy, out int cw, out int ch);
             if (mx < cx || mx >= cx + cw || my < cy || my >= cy + ch) return -1;
-            int col = (mx - cx) / SlotPx;
-            int row = (my - cy) / SlotPx;
+            int slot = SlotPx(screenW, screenH);
+            int col = (mx - cx) / slot;
+            int row = (my - cy) / slot;
             if (col < 0 || col >= Cols || row < 0 || row >= CatalogRows) return -1;
             return row * Cols + col;
         }

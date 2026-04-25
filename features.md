@@ -239,6 +239,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Sprite shader + procedural `HudTextures` sheet (reusable brick for all future HUD icons)
 - Pause menu (`GAME MENU`): BACK TO GAME / OPTIONS / SAVE / QUIT, with hover highlight and bitmap-font labels
 - Options sub-menu (opened from pause-menu OPTIONS): SURVIVAL section with HUNGER BAR toggle (disabled in Creative). Esc pops Options back to the pause menu; BACK button does the same. Setting persists per-world in the save header.
+- Viewport-aware UI scaling (`UiScale`): hotbar, survival HUD icons, inventory panel + slots, pause / options menus, and bitmap-font labels all multiply their base pixel sizes by a factor derived from viewport height (720 px reference, clamped 1.0×–2.0×). Tool-window size keeps the original look; fullscreen / 1080p+ grows the chrome and click rects together so layout and hit-testing stay in lockstep. The crosshair is intentionally exempt and stays at a fixed pixel size as an aiming reticle.
 
 **Missing**
 - Dynamic hunger decay + food items. Hunger sub-setting and EatFood scaffold (flat-heal vs. refill branch) exist; eating items, hunger drain on activity, and the food UX itself are pending.

@@ -81,6 +81,7 @@
     <Compile Include="Game\GameMode.cs" />
     <Compile Include="Game\FluidTick.cs" />
     <Compile Include="Game\GameRenderer.cs" />
+    <Compile Include="Game\HotbarLayout.cs" />
     <Compile Include="Game\HotbarTextures.cs" />
     <Compile Include="Game\HudTextures.cs" />
     <Compile Include="Game\InputState.cs" />
@@ -100,6 +101,7 @@
     <Compile Include="Game\SkyTextures.cs" />
     <Compile Include="Game\TerrainGenerator.cs" />
     <Compile Include="Game\TexturedCubeMesh.cs" />
+    <Compile Include="Game\UiScale.cs" />
     <Compile Include="Game\World.cs" />
     <Compile Include="Game\WorldSaveFormat.cs" />
     <Compile Include="PackageGuids.cs" />

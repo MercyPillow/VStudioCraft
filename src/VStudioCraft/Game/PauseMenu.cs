@@ -4,6 +4,11 @@ namespace VStudioCraft.Game
     // buttons) and the UI thread (which hit-tests clicks against them). Keeping
     // the layout in one place means the two threads can never disagree about
     // where a button is — the rectangles are derived from the same constants.
+    //
+    // Pixel sizes are *base* values; both the renderer and hit-test go
+    // through GetButton (which scales them via UiScale.S using the current
+    // viewport size), so the buttons grow with a fullscreen window and the
+    // click rects always match what the player sees.
     internal static class PauseMenu
     {
         public enum ActionId
@@ -15,11 +20,24 @@ namespace VStudioCraft.Game
             Quit,
         }
 
-        public const int ButtonWidth  = 320;
-        public const int ButtonHeight = 40;
-        public const int ButtonGap    = 12;
+        // Base (scale=1) sizes — fed through UiScale at lookup time.
+        private const int ButtonWidthBase  = 320;
+        private const int ButtonHeightBase = 40;
+        private const int ButtonGapBase    = 12;
         // Vertical distance from the title baseline down to the first button.
-        public const int TitleGap     = 36;
+        private const int TitleGapBase     = 36;
+        // Title rendered at scale 3 over the bitmap font (24 px tall at 1×).
+        private const int TitleFontScaleBase = 3;
+
+        public static int ButtonWidth(int viewW, int viewH)  => UiScale.S(ButtonWidthBase, viewW, viewH);
+        public static int ButtonHeight(int viewW, int viewH) => UiScale.S(ButtonHeightBase, viewW, viewH);
+        public static int ButtonGap(int viewW, int viewH)    => UiScale.S(ButtonGapBase, viewW, viewH);
+        public static int TitleGap(int viewW, int viewH)     => UiScale.S(TitleGapBase, viewW, viewH);
+        public static int TitleFontScale(int viewW, int viewH)
+        {
+            int s = (int)(TitleFontScaleBase * UiScale.For(viewW, viewH) + 0.5f);
+            return s < 1 ? 1 : s;
+        }
 
         public struct Button
         {
@@ -53,15 +71,18 @@ namespace VStudioCraft.Game
         public static Button GetButton(int index, int screenW, int screenH)
         {
             int n = Order.Length;
-            int totalH = n * ButtonHeight + (n - 1) * ButtonGap;
+            int bw = ButtonWidth(screenW, screenH);
+            int bh = ButtonHeight(screenW, screenH);
+            int gap = ButtonGap(screenW, screenH);
+            int totalH = n * bh + (n - 1) * gap;
             int startY = (screenH - totalH) / 2;
-            int x = (screenW - ButtonWidth) / 2;
+            int x = (screenW - bw) / 2;
             return new Button
             {
                 X = x,
-                Y = startY + index * (ButtonHeight + ButtonGap),
-                W = ButtonWidth,
-                H = ButtonHeight,
+                Y = startY + index * (bh + gap),
+                W = bw,
+                H = bh,
                 Id = Order[index],
                 Label = Labels[index],
             };
@@ -79,14 +100,17 @@ namespace VStudioCraft.Game
         }
 
         // Y of the title text's top edge, sitting just above the first button.
-        // The title is drawn at scale 3 (24 px tall), so we pull back enough
-        // for both the gap and the title height.
-        public static int TitleY(int screenH)
+        // Title scales with the viewport (TitleFontScale), so the gap+height
+        // both grow together.
+        public static int TitleY(int screenW, int screenH)
         {
             int n = Order.Length;
-            int totalH = n * ButtonHeight + (n - 1) * ButtonGap;
+            int bh = ButtonHeight(screenW, screenH);
+            int gap = ButtonGap(screenW, screenH);
+            int totalH = n * bh + (n - 1) * gap;
             int startY = (screenH - totalH) / 2;
-            return startY - TitleGap - HotbarTextures.GlyphCellH * 3;
+            int titleScale = TitleFontScale(screenW, screenH);
+            return startY - TitleGap(screenW, screenH) - HotbarTextures.GlyphCellH * titleScale;
         }
     }
 }

@@ -1595,12 +1595,16 @@ void main()
         // UI survives because the status bar lives outside the GL viewport).
         private void RenderSurvivalHud(int width, int height)
         {
-            const int iconPx = 20;           // on-screen size (Alpha's 9px upscaled for readability)
-            const int spacing = 2;
-            const int stride = iconPx + spacing;
+            // Base sizes match Alpha's 9-px source upscaled to a 20-px tile
+            // for readability. Both icon size and spacing ride UiScale so a
+            // fullscreen window doesn't strand the heart row at the same
+            // pixel size as a small one.
+            int iconPx = UiScale.S(20, width, height);
+            int spacing = UiScale.S(2, width, height);
+            int stride = iconPx + spacing;
             const int count = 10;
             int totalW = stride * count - spacing;
-            int y0 = height - iconPx - 24;   // 24 px bottom margin
+            int y0 = height - iconPx - UiScale.S(24, width, height);   // bottom margin scales too
 
             // Right-edge of the heart row sits on the left third-line.
             int heartsRightEdge = width / 3;
@@ -1647,7 +1651,7 @@ void main()
             {
                 int fullAir = air / 2;
                 bool airHalf = (air & 1) != 0;
-                int bubbleY = y0 - iconPx - spacing - 4; // 4 px gap above the hunger row
+                int bubbleY = y0 - iconPx - spacing - UiScale.S(4, width, height); // small gap above the hunger row, scaled
                 DrawIconRow(_bubbleTexture, hungerX0, bubbleY, iconPx, stride, count, fullAir, airHalf, ortho);
             }
 
@@ -1905,11 +1909,23 @@ void main()
             _multiFaceCubeShader.SetInt("uAtlas", 0);
             _multiFaceCubeShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
             SetCubeFaceLayers(_multiFaceCubeShader, type);
-            // Uniform shade across all faces — matches RenderDrops, so
-            // a hotbar icon reads as the same cube as the world drop
-            // (which the user explicitly asked for).
-            SetCubeFaceShade(_multiFaceCubeShader,
-                /*top*/1f, /*side*/1f, /*bottom*/1f);
+            // Per-face shading so the three visible faces of the iso
+            // cube read as distinct surfaces even on uniform-tile blocks
+            // like cobblestone or planks. After yaw -45° + pitch +30°
+            // the visible faces are:
+            //   index 3 (+Y) → TOP   — brightest
+            //   index 5 (+Z) → LEFT  — middle
+            //   index 1 (+X) → RIGHT — darkest
+            // The other three faces (-X / -Z / -Y) are back-face culled
+            // and never sampled, so their shade values don't matter.
+            // Drops keep uniform 1.0 shading because they spin and would
+            // otherwise flicker brightness as faces rotate.
+            _multiFaceCubeShader.SetFloat("uFaceShade[0]", 1f);   // -X (hidden)
+            _multiFaceCubeShader.SetFloat("uFaceShade[1]", 0.6f); // +X right
+            _multiFaceCubeShader.SetFloat("uFaceShade[2]", 1f);   // -Y (hidden)
+            _multiFaceCubeShader.SetFloat("uFaceShade[3]", 1f);   // +Y top
+            _multiFaceCubeShader.SetFloat("uFaceShade[4]", 1f);   // -Z (hidden)
+            _multiFaceCubeShader.SetFloat("uFaceShade[5]", 0.8f); // +Z left
             _multiFaceCubeShader.SetMatrix4("uMVP", mvp);
 
             GL.ActiveTexture(TextureUnit.Texture0);
@@ -1960,6 +1976,10 @@ void main()
 
         private void RenderCrosshair(int width, int height)
         {
+            // Crosshair mesh is built once at h=8/w=1 in pixel units. We
+            // deliberately do NOT pipe this through UiScale — the crosshair
+            // is an aiming reticle, not chrome, and players want it the
+            // same pixel size regardless of viewport / fullscreen state.
             var proj = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
             var model = Matrix4.CreateTranslation(width * 0.5f, height * 0.5f, 0f);
             var mvp = model * proj;
@@ -2000,17 +2020,17 @@ void main()
         // look for retro pixel HUDs at non-integer zoom.
         private void RenderHotbar(int width, int height)
         {
-            const float Scale = 2.3f;                                   // 2× + 15%
-            int BarPx = (int)(HotbarTextures.BarWidth * Scale);         // ~419
-            int BarH  = (int)(HotbarTextures.BarHeight * Scale);        // ~51
-            int SlotPx = (int)(HotbarTextures.SlotInner * Scale);       // ~46
-            int IconPx = (int)(HotbarTextures.IconInner * Scale);       // ~37
-            int HighlightPx = (int)(HotbarTextures.HighlightSize * Scale); // ~55
-            int FramePx = (int)(1 * Scale);                             // ~2 (1px frame scaled)
-            const int BottomMargin = 28; // lifts the bar off the very edge of the window
-
-            int barX = (width - BarPx) / 2;
-            int barY = height - BarH - BottomMargin;
+            // All bar / slot / icon / highlight rectangles come from a
+            // single source-pixel scale via HotbarLayout. That keeps the
+            // bar's 182:22 aspect locked, and keeps the icons aligned
+            // with the slot wells visible on the bar texture at *any*
+            // viewport size — the previous code rounded each dimension
+            // independently and so the slot pitch drifted out of sync
+            // with the bar's actual width at non-integer scales.
+            int BarPx = HotbarLayout.BarPx(width, height);
+            int BarH  = HotbarLayout.BarH(width, height);
+            int barX  = HotbarLayout.BarX(width, height);
+            int barY  = HotbarLayout.BarTopY(width, height);
 
             var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
 
@@ -2037,25 +2057,21 @@ void main()
             // flat sprite path since their tile is an X, not a cube.
             var inv = Input?.Inventory;
             int selected = Input != null ? Input.HotbarIndex : 0;
-            // Slot 0 starts inside the bar's 1-px frame (FramePx scales with the bar).
-            int firstSlotX = barX + FramePx;
-            int slotY = barY + FramePx;
-            int iconPad = (SlotPx - IconPx) / 2;
 
             for (int i = 0; i < HotbarTextures.SlotCount; i++)
             {
                 if (inv == null) break;
                 var stack = inv.Slots[Inventory.HotbarStart + i];
                 if (stack.IsEmpty) continue;
-                int xp = firstSlotX + i * SlotPx + iconPad;
-                int yp = slotY + iconPad;
+                HotbarLayout.GetIconRect(i, width, height,
+                    out int xp, out int yp, out int iw, out int ih);
                 if (BlockData.IsCubeShape(stack.Type))
                 {
-                    RenderBlockIcon3D(stack.Type, xp, yp, IconPx, IconPx, ortho);
+                    RenderBlockIcon3D(stack.Type, xp, yp, iw, ih, ortho);
                 }
                 else
                 {
-                    DrawFlatSpriteIcon(stack.Type, xp, yp, IconPx, IconPx, ortho);
+                    DrawFlatSpriteIcon(stack.Type, xp, yp, iw, ih, ortho);
                 }
             }
             // RenderBlockIcon3D toggles CullFace; restore the HUD pass
@@ -2072,12 +2088,9 @@ void main()
                 _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
                 GL.BindTexture(TextureTarget.Texture2D, _hotbarHighlightTexture);
 
-                // Centre the (slightly oversize) highlight on the slot's centre.
-                int slotCx = firstSlotX + selected * SlotPx + SlotPx / 2;
-                int slotCy = barY + BarH / 2;
-                int hx = slotCx - HighlightPx / 2;
-                int hy = slotCy - HighlightPx / 2;
-                DrawSpriteQuad(hx, hy, HighlightPx, HighlightPx, ortho);
+                HotbarLayout.GetHighlightRect(selected, width, height,
+                    out int hx, out int hy, out int hw, out int hh);
+                DrawSpriteQuad(hx, hy, hw, hh, ortho);
             }
 
             // ---- stack-count digits --------------------------------------
@@ -2090,9 +2103,9 @@ void main()
                 {
                     var stack = inv.Slots[Inventory.HotbarStart + i];
                     if (stack.IsEmpty || stack.Count <= 1) continue;
-                    int xp = firstSlotX + i * SlotPx;
-                    int yp = slotY;
-                    DrawStackCount(stack.Count, xp, yp, SlotPx, SlotPx, ortho);
+                    HotbarLayout.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
                 }
             }
 
@@ -2103,8 +2116,9 @@ void main()
                 if (!stack.IsEmpty)
                 {
                     string label = FriendlyName(stack.Type);
-                    DrawString(label, /*scale*/2, /*centerX*/width / 2,
-                        /*topY*/barY - HotbarTextures.GlyphCellH * 2 - 4,
+                    int labelScale = System.Math.Max(1, UiScale.S(2, width, height));
+                    DrawString(label, /*scale*/labelScale, /*centerX*/width / 2,
+                        /*topY*/barY - HotbarTextures.GlyphCellH * labelScale - UiScale.S(4, width, height),
                         new Vector4(1f, 1f, 1f, 1f), ortho);
                 }
             }
@@ -2241,7 +2255,10 @@ void main()
             int mx = Input?.MenuMouseX ?? -1;
             int my = Input?.MenuMouseY ?? -1;
 
-            // Buttons.
+            // Buttons. Border thickness and label font scale ride UiScale
+            // so the chrome reads as one tier with the button rect itself.
+            int btnBorder = UiScale.S(2, width, height);
+            int btnLabelScale = System.Math.Max(1, UiScale.S(2, width, height));
             for (int i = 0; i < PauseMenu.Count; i++)
             {
                 var b = PauseMenu.GetButton(i, width, height);
@@ -2252,25 +2269,26 @@ void main()
                     : new Vector3(0.16f, 0.20f, 0.26f);
                 DrawSolidQuad(b.X, b.Y, b.W, b.H, fill, 0.95f, ortho);
 
-                // 2-px frame around the button — light edge so the button
-                // reads as a tile even when not hovered.
+                // Frame around the button — light edge so the button reads
+                // as a tile even when not hovered. Thickness scales with UI.
                 Vector3 border = hover
                     ? new Vector3(1f, 1f, 1f)
                     : new Vector3(0.78f, 0.82f, 0.88f);
-                DrawSolidQuad(b.X, b.Y, b.W, 2, border, 1f, ortho);                    // top
-                DrawSolidQuad(b.X, b.Y + b.H - 2, b.W, 2, border, 1f, ortho);          // bottom
-                DrawSolidQuad(b.X, b.Y, 2, b.H, border, 1f, ortho);                    // left
-                DrawSolidQuad(b.X + b.W - 2, b.Y, 2, b.H, border, 1f, ortho);          // right
+                DrawSolidQuad(b.X, b.Y, b.W, btnBorder, border, 1f, ortho);                            // top
+                DrawSolidQuad(b.X, b.Y + b.H - btnBorder, b.W, btnBorder, border, 1f, ortho);          // bottom
+                DrawSolidQuad(b.X, b.Y, btnBorder, b.H, border, 1f, ortho);                            // left
+                DrawSolidQuad(b.X + b.W - btnBorder, b.Y, btnBorder, b.H, border, 1f, ortho);          // right
 
-                // Centred label inside the button. Glyphs are 6×8 cells, scale 2.
-                int labelTopY = b.Y + (b.H - HotbarTextures.GlyphCellH * 2) / 2;
-                DrawString(b.Label, /*scale*/2, /*centerX*/b.X + b.W / 2,
+                // Centred label inside the button. Glyphs are 6×8 cells.
+                int labelTopY = b.Y + (b.H - HotbarTextures.GlyphCellH * btnLabelScale) / 2;
+                DrawString(b.Label, /*scale*/btnLabelScale, /*centerX*/b.X + b.W / 2,
                     /*topY*/labelTopY, new Vector4(1f, 1f, 1f, 1f), ortho);
             }
 
             // Title above the button stack.
-            DrawString("GAME MENU", /*scale*/3, /*centerX*/width / 2,
-                /*topY*/PauseMenu.TitleY(height),
+            DrawString("GAME MENU", /*scale*/PauseMenu.TitleFontScale(width, height),
+                /*centerX*/width / 2,
+                /*topY*/PauseMenu.TitleY(width, height),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             GL.Enable(EnableCap.CullFace);
@@ -2301,6 +2319,8 @@ void main()
 
             bool isSurvival = GameMode == GameMode.Survival;
             var rows = OptionsMenu.BuildRows(width, height, HungerEnabled, isSurvival);
+            int rowBorder = UiScale.S(2, width, height);
+            int rowLabelScale = System.Math.Max(1, UiScale.S(2, width, height));
 
             for (int i = 0; i < rows.Length; i++)
             {
@@ -2310,8 +2330,8 @@ void main()
                 {
                     // Section heading — no fill, no border. Slightly muted
                     // grey so it reads as a label distinct from buttons.
-                    int labelTopY = r.Y + (r.H - HotbarTextures.GlyphCellH * 2) / 2;
-                    DrawString(r.Label, /*scale*/2,
+                    int labelTopY = r.Y + (r.H - HotbarTextures.GlyphCellH * rowLabelScale) / 2;
+                    DrawString(r.Label, /*scale*/rowLabelScale,
                         /*centerX*/r.X + r.W / 2, labelTopY,
                         new Vector4(0.78f, 0.82f, 0.88f, 1f), ortho);
                     continue;
@@ -2328,27 +2348,28 @@ void main()
                 float alpha = r.IsDisabled ? 0.7f : 0.95f;
                 DrawSolidQuad(r.X, r.Y, r.W, r.H, fill, alpha, ortho);
 
-                // 2-px frame around the button.
+                // Frame around the button — thickness scales with UI.
                 Vector3 border;
                 if (r.IsDisabled)       border = new Vector3(0.40f, 0.42f, 0.46f);
                 else if (hover)         border = new Vector3(1f, 1f, 1f);
                 else                    border = new Vector3(0.78f, 0.82f, 0.88f);
-                DrawSolidQuad(r.X, r.Y, r.W, 2, border, 1f, ortho);
-                DrawSolidQuad(r.X, r.Y + r.H - 2, r.W, 2, border, 1f, ortho);
-                DrawSolidQuad(r.X, r.Y, 2, r.H, border, 1f, ortho);
-                DrawSolidQuad(r.X + r.W - 2, r.Y, 2, r.H, border, 1f, ortho);
+                DrawSolidQuad(r.X, r.Y, r.W, rowBorder, border, 1f, ortho);
+                DrawSolidQuad(r.X, r.Y + r.H - rowBorder, r.W, rowBorder, border, 1f, ortho);
+                DrawSolidQuad(r.X, r.Y, rowBorder, r.H, border, 1f, ortho);
+                DrawSolidQuad(r.X + r.W - rowBorder, r.Y, rowBorder, r.H, border, 1f, ortho);
 
                 Vector4 textCol = r.IsDisabled
                     ? new Vector4(0.55f, 0.58f, 0.62f, 1f)
                     : new Vector4(1f, 1f, 1f, 1f);
-                int btnLabelTopY = r.Y + (r.H - HotbarTextures.GlyphCellH * 2) / 2;
-                DrawString(r.Label, /*scale*/2,
+                int btnLabelTopY = r.Y + (r.H - HotbarTextures.GlyphCellH * rowLabelScale) / 2;
+                DrawString(r.Label, /*scale*/rowLabelScale,
                     /*centerX*/r.X + r.W / 2, btnLabelTopY,
                     textCol, ortho);
             }
 
             // Title above the row stack.
-            DrawString("OPTIONS", /*scale*/3, /*centerX*/width / 2,
+            DrawString("OPTIONS", /*scale*/OptionsMenu.TitleFontScale(width, height),
+                /*centerX*/width / 2,
                 /*topY*/OptionsMenu.TitleY(width, height, HungerEnabled, isSurvival),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
@@ -2390,14 +2411,15 @@ void main()
             DrawSolidQuad(panelX, panelY, panelW, panelH,
                 new Vector3(0.16f, 0.16f, 0.18f), 0.95f, ortho);
             var border = new Vector3(0.78f, 0.82f, 0.88f);
-            DrawSolidQuad(panelX, panelY, panelW, 2, border, 1f, ortho);                       // top
-            DrawSolidQuad(panelX, panelY + panelH - 2, panelW, 2, border, 1f, ortho);          // bottom
-            DrawSolidQuad(panelX, panelY, 2, panelH, border, 1f, ortho);                       // left
-            DrawSolidQuad(panelX + panelW - 2, panelY, 2, panelH, border, 1f, ortho);          // right
+            int pb = InventoryScreen.SlotBorderPx(width, height);
+            DrawSolidQuad(panelX, panelY, panelW, pb, border, 1f, ortho);                       // top
+            DrawSolidQuad(panelX, panelY + panelH - pb, panelW, pb, border, 1f, ortho);         // bottom
+            DrawSolidQuad(panelX, panelY, pb, panelH, border, 1f, ortho);                       // left
+            DrawSolidQuad(panelX + panelW - pb, panelY, pb, panelH, border, 1f, ortho);         // right
 
             // ---- title ---------------------------------------------------
             string title = GameMode == GameMode.Creative ? "CREATIVE INVENTORY" : InventoryScreen.Title;
-            DrawString(title, /*scale*/InventoryScreen.TitleScale,
+            DrawString(title, /*scale*/InventoryScreen.TitleScale(width, height),
                 /*centerX*/width / 2,
                 /*topY*/InventoryScreen.TitleY(width, height),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
@@ -2416,7 +2438,7 @@ void main()
             {
                 int cx = Input.MenuMouseX;
                 int cy = Input.MenuMouseY;
-                int iconSize = InventoryScreen.IconPx;
+                int iconSize = InventoryScreen.IconPx(width, height);
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
 
@@ -2435,7 +2457,7 @@ void main()
                 // visual parity with in-slot counts.
                 if (inv.Cursor.Count > 1)
                 {
-                    int frame = InventoryScreen.SlotPx;
+                    int frame = InventoryScreen.SlotPx(width, height);
                     int frameX = cx - frame / 2;
                     int frameY = cy - frame / 2;
                     DrawStackCount(inv.Cursor.Count, frameX, frameY, frame, frame, ortho);
@@ -2461,12 +2483,12 @@ void main()
             {
                 InventoryScreen.GetSlotRect(i, width, height,
                     out int sx, out int sy, out int sw, out int sh);
-                DrawSlotWell(sx, sy, sw, sh, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+                DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
             }
 
             // ---- block icons (every non-empty slot) --------------------
             var inv = Input?.Inventory;
-            int iconPad = (InventoryScreen.SlotPx - InventoryScreen.IconPx) / 2;
+            int iconPad = (InventoryScreen.SlotPx(width, height) - InventoryScreen.IconPx(width, height)) / 2;
             int hotbarBase = InventoryScreen.MainSlotCount;
 
             if (inv != null)
@@ -2477,7 +2499,7 @@ void main()
                     if (stack.IsEmpty) continue;
                     InventoryScreen.GetSlotRect(i, width, height,
                         out int sx, out int sy, out _, out _);
-                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, ortho);
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
                 }
                 GL.Disable(EnableCap.CullFace);
             }
@@ -2526,16 +2548,17 @@ void main()
             DrawSolidQuad(sbx, sby, 1, sbh, sbBorder, 1f, ortho);
             DrawSolidQuad(sbx + sbw - 1, sby, 1, sbh, sbBorder, 1f, ortho);
 
-            int sbScale = 2;
+            int sbScale = InventoryScreen.TitleScale(width, height);
             int sbGlyphW = HotbarTextures.GlyphCellW * sbScale;
             int sbGlyphH = HotbarTextures.GlyphCellH * sbScale;
             int sbTextY = sby + (sbh - sbGlyphH) / 2;
+            int sbTextPad = UiScale.S(6, width, height);
 
             string display = string.IsNullOrEmpty(searchText) ? "Search..." : searchText.ToUpperInvariant();
             var sbTint = string.IsNullOrEmpty(searchText)
                 ? new Vector4(0.55f, 0.58f, 0.64f, 1f)   // placeholder grey
                 : new Vector4(1f, 1f, 1f, 1f);
-            DrawDigits(display, sbx + 6, sbTextY, sbGlyphW, sbGlyphH, sbTint, ortho);
+            DrawDigits(display, sbx + sbTextPad, sbTextY, sbGlyphW, sbGlyphH, sbTint, ortho);
 
             // Caret blink — visible while there's any text and ~0.5 s on/off.
             // Keyed off _timeOfDay so it ticks with the world clock without
@@ -2544,8 +2567,8 @@ void main()
             bool caretOn = ((int)(_timeOfDay * 200f) & 1) == 0;
             if (caretOn)
             {
-                int caretX = sbx + 6 + (string.IsNullOrEmpty(searchText) ? 0 : searchText.Length * sbGlyphW);
-                DrawSolidQuad(caretX, sbTextY, 2, sbGlyphH, new Vector3(1f, 1f, 1f), 1f, ortho);
+                int caretX = sbx + sbTextPad + (string.IsNullOrEmpty(searchText) ? 0 : searchText.Length * sbGlyphW);
+                DrawSolidQuad(caretX, sbTextY, UiScale.S(2, width, height), sbGlyphH, new Vector3(1f, 1f, 1f), 1f, ortho);
             }
 
             // ---- catalog grid -------------------------------------------
@@ -2553,8 +2576,12 @@ void main()
                 out int cx, out int cy, out int cw, out int ch);
 
             // Catalog area background — same well palette as a slot, but
-            // one big rect so the grid floats inside it.
-            DrawSolidQuad(cx - 2, cy - 2, cw + 4, ch + 4,
+            // one big rect so the grid floats inside it. The 2-px gutter
+            // around the well grows with UiScale so it stays a visible
+            // outline at fullscreen.
+            int catalogGutter = UiScale.S(2, width, height);
+            DrawSolidQuad(cx - catalogGutter, cy - catalogGutter,
+                cw + catalogGutter * 2, ch + catalogGutter * 2,
                 new Vector3(0.10f, 0.10f, 0.12f), 1f, ortho);
             DrawSolidQuad(cx, cy, cw, ch, new Vector3(0.20f, 0.20f, 0.22f), 1f, ortho);
 
@@ -2568,7 +2595,7 @@ void main()
             // sees a consistent value next frame.
             if (Input != null) Input.InventoryScrollRows = scrollRows;
 
-            int iconPad = (InventoryScreen.SlotPx - InventoryScreen.IconPx) / 2;
+            int iconPad = (InventoryScreen.SlotPx(width, height) - InventoryScreen.IconPx(width, height)) / 2;
             var catalogWellFill   = new Vector3(0.30f, 0.30f, 0.32f);
             var catalogEdgeLo     = new Vector3(0.08f, 0.08f, 0.10f);
             var catalogEdgeHi     = new Vector3(0.50f, 0.50f, 0.55f);
@@ -2585,25 +2612,25 @@ void main()
             {
                 for (int col = 0; col < InventoryScreen.Cols; col++)
                 {
-                    int tx = cx + col * InventoryScreen.SlotPx;
-                    int ty = cy + row * InventoryScreen.SlotPx;
+                    int tx = cx + col * InventoryScreen.SlotPx(width, height);
+                    int ty = cy + row * InventoryScreen.SlotPx(width, height);
                     int tile = row * InventoryScreen.Cols + col;
                     int absolute = (scrollRows + row) * InventoryScreen.Cols + col;
 
                     bool inRange = absolute < filtered.Count;
                     var fill = inRange ? catalogWellFill : new Vector3(0.18f, 0.18f, 0.20f);
-                    DrawSlotWell(tx, ty, InventoryScreen.SlotPx, InventoryScreen.SlotPx,
-                        fill, catalogEdgeLo, catalogEdgeHi, ortho);
+                    DrawSlotWell(tx, ty, InventoryScreen.SlotPx(width, height), InventoryScreen.SlotPx(width, height),
+                        width, height, fill, catalogEdgeLo, catalogEdgeHi, ortho);
 
                     // Hover ring on the live tile under the mouse.
                     if (inRange && tile == hoverTile)
                     {
                         var hi = new Vector3(1f, 1f, 1f);
-                        int b = InventoryScreen.SlotBorderPx;
-                        DrawSolidQuad(tx, ty, InventoryScreen.SlotPx, b, hi, 1f, ortho);
-                        DrawSolidQuad(tx, ty + InventoryScreen.SlotPx - b, InventoryScreen.SlotPx, b, hi, 1f, ortho);
-                        DrawSolidQuad(tx, ty, b, InventoryScreen.SlotPx, hi, 1f, ortho);
-                        DrawSolidQuad(tx + InventoryScreen.SlotPx - b, ty, b, InventoryScreen.SlotPx, hi, 1f, ortho);
+                        int b = InventoryScreen.SlotBorderPx(width, height);
+                        DrawSolidQuad(tx, ty, InventoryScreen.SlotPx(width, height), b, hi, 1f, ortho);
+                        DrawSolidQuad(tx, ty + InventoryScreen.SlotPx(width, height) - b, InventoryScreen.SlotPx(width, height), b, hi, 1f, ortho);
+                        DrawSolidQuad(tx, ty, b, InventoryScreen.SlotPx(width, height), hi, 1f, ortho);
+                        DrawSolidQuad(tx + InventoryScreen.SlotPx(width, height) - b, ty, b, InventoryScreen.SlotPx(width, height), hi, 1f, ortho);
                     }
                 }
             }
@@ -2615,9 +2642,9 @@ void main()
                 {
                     int absolute = (scrollRows + row) * InventoryScreen.Cols + col;
                     if (absolute >= filtered.Count) continue;
-                    int tx = cx + col * InventoryScreen.SlotPx;
-                    int ty = cy + row * InventoryScreen.SlotPx;
-                    DrawSlotIcon(filtered[absolute], tx + iconPad, ty + iconPad, ortho);
+                    int tx = cx + col * InventoryScreen.SlotPx(width, height);
+                    int ty = cy + row * InventoryScreen.SlotPx(width, height);
+                    DrawSlotIcon(filtered[absolute], tx + iconPad, ty + iconPad, width, height, ortho);
                 }
             }
             // RenderBlockIcon3D toggles cull state.
@@ -2630,14 +2657,15 @@ void main()
             // catalog overflows.
             if (totalRows > InventoryScreen.CatalogRows)
             {
-                int trackW = 4;
-                int trackX = cx + cw - trackW - 2;
-                int trackY = cy + 2;
-                int trackH = ch - 4;
+                int trackW = UiScale.S(4, width, height);
+                int trackInset = UiScale.S(2, width, height);
+                int trackX = cx + cw - trackW - trackInset;
+                int trackY = cy + trackInset;
+                int trackH = ch - trackInset * 2;
                 DrawSolidQuad(trackX, trackY, trackW, trackH,
                     new Vector3(0.12f, 0.12f, 0.14f), 1f, ortho);
 
-                int thumbH = System.Math.Max(8,
+                int thumbH = System.Math.Max(UiScale.S(8, width, height),
                     trackH * InventoryScreen.CatalogRows / totalRows);
                 int thumbY = trackY +
                     (maxScroll == 0 ? 0 : (trackH - thumbH) * scrollRows / maxScroll);
@@ -2656,7 +2684,7 @@ void main()
             {
                 InventoryScreen.GetSlotRect(i, width, height,
                     out int hsx, out int hsy, out int hsw, out int hsh);
-                DrawSlotWell(hsx, hsy, hsw, hsh, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+                DrawSlotWell(hsx, hsy, hsw, hsh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
             }
             if (inv != null)
             {
@@ -2666,7 +2694,7 @@ void main()
                     if (stack.IsEmpty) continue;
                     InventoryScreen.GetSlotRect(i, width, height,
                         out int hsx, out int hsy, out _, out _);
-                    DrawSlotIcon(stack.Type, hsx + iconPad, hsy + iconPad, ortho);
+                    DrawSlotIcon(stack.Type, hsx + iconPad, hsy + iconPad, width, height, ortho);
                 }
                 GL.Disable(EnableCap.CullFace);
             }
@@ -2702,20 +2730,23 @@ void main()
                     string label = CreativeCatalog.FriendlyName(filtered[absolute]);
                     InventoryScreen.GetPanelRect(width, height,
                         out int ppx, out int ppy, out int ppw, out int pph);
-                    DrawString(label, /*scale*/2,
+                    int tipScale = InventoryScreen.TitleScale(width, height);
+                    DrawString(label, /*scale*/tipScale,
                         /*centerX*/ppx + ppw / 2,
-                        /*topY*/ppy + pph - HotbarTextures.GlyphCellH * 2 - 4,
+                        /*topY*/ppy + pph - HotbarTextures.GlyphCellH * tipScale - UiScale.S(4, width, height),
                         new Vector4(1f, 1f, 1f, 1f), ortho);
                 }
             }
         }
 
         // Slot well + chiseled border helper (extracted so survival and
-        // creative bodies share the exact same look).
-        private void DrawSlotWell(int x, int y, int w, int h,
+        // creative bodies share the exact same look). The viewport size is
+        // threaded in so the border thickness scales with UiScale alongside
+        // the slot's own dimensions.
+        private void DrawSlotWell(int x, int y, int w, int h, int viewW, int viewH,
             Vector3 fill, Vector3 edgeLo, Vector3 edgeHi, Matrix4 ortho)
         {
-            int b = InventoryScreen.SlotBorderPx;
+            int b = InventoryScreen.SlotBorderPx(viewW, viewH);
             DrawSolidQuad(x, y, w, h, fill, 1f, ortho);
             DrawSolidQuad(x, y, w, b, edgeLo, 1f, ortho);                 // top
             DrawSolidQuad(x, y, b, h, edgeLo, 1f, ortho);                 // left
@@ -2724,18 +2755,18 @@ void main()
         }
 
         // Block icon helper — picks 3-face cube vs flat sprite based on
-        // the block shape, same logic the survival path used inline.
-        private void DrawSlotIcon(BlockType type, int xp, int yp, Matrix4 ortho)
+        // the block shape, same logic the survival path used inline. Takes
+        // viewport size so the icon dimension matches the active UiScale.
+        private void DrawSlotIcon(BlockType type, int xp, int yp, int viewW, int viewH, Matrix4 ortho)
         {
+            int icon = InventoryScreen.IconPx(viewW, viewH);
             if (BlockData.IsCubeShape(type))
             {
-                RenderBlockIcon3D(type, xp, yp,
-                    InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
+                RenderBlockIcon3D(type, xp, yp, icon, icon, ortho);
             }
             else
             {
-                DrawFlatSpriteIcon(type, xp, yp,
-                    InventoryScreen.IconPx, InventoryScreen.IconPx, ortho);
+                DrawFlatSpriteIcon(type, xp, yp, icon, icon, ortho);
             }
         }
 
@@ -2753,7 +2784,7 @@ void main()
 
             InventoryScreen.GetSlotRect(slotIndex, width, height,
                 out int sx, out int sy, out int sw, out int sh);
-            int hSize = HotbarTextures.HighlightSize * 2;
+            int hSize = UiScale.S(HotbarTextures.HighlightSize * 2, width, height);
             int hx = sx + (sw - hSize) / 2;
             int hy = sy + (sh - hSize) / 2;
             DrawSpriteQuad(hx, hy, hSize, hSize, ortho);
