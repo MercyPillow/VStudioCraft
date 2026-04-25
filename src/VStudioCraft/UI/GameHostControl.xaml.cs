@@ -55,6 +55,21 @@ namespace VStudioCraft.UI
 
         public event Action Modified;
 
+        // Raised when the player clicks "Save" in the pause menu. Hosts (the
+        // standalone window or the VS editor pane) hook this to drive the
+        // save-as dialog or persist to a known path. If no subscriber and a
+        // path is already known, we silently save to it.
+        public event Action SaveRequested;
+        // Raised when the player clicks "Quit" in the pause menu. Hosts hook
+        // this to close the window / editor. If no subscriber, we close the
+        // owning WPF Window as a fallback.
+        public event Action QuitRequested;
+
+        // Mouse-wheel ticks accumulate here on the UI thread; we cycle the
+        // hotbar one slot per 120-unit notch (Windows convention). UI-thread
+        // only, no synchronisation needed.
+        private int _wheelAccum;
+
         public GameHostControl()
         {
             InitializeComponent();
@@ -71,6 +86,7 @@ namespace VStudioCraft.UI
             _gl.MouseDown += GlOnMouseDown;
             _gl.MouseUp += GlOnMouseUp;
             _gl.MouseMove += GlOnMouseMove;
+            _gl.MouseWheel += GlOnMouseWheel;
             _gl.MouseEnter += (_, __) => _gl?.Focus();
             _gl.LostFocus += (_, __) => { ReleaseMouseLook(); _input.Clear(); };
             Host.Child = _gl;
@@ -232,14 +248,25 @@ namespace VStudioCraft.UI
                     long t0 = Stopwatch.GetTimestamp();
 
                     bool changed = false;
-                    if (_input.BreakPressed)
+                    bool paused = _renderer.IsPaused;
+                    if (!paused)
                     {
-                        changed |= _renderer.TryBreak();
-                        _input.BreakPressed = false;
+                        if (_input.BreakPressed)
+                        {
+                            changed |= _renderer.TryBreak();
+                            _input.BreakPressed = false;
+                        }
+                        if (_input.PlacePressed)
+                        {
+                            changed |= _renderer.TryPlace(_input.SelectedBlock);
+                            _input.PlacePressed = false;
+                        }
                     }
-                    if (_input.PlacePressed)
+                    else
                     {
-                        changed |= _renderer.TryPlace(_input.SelectedBlock);
+                        // Drop any clicks queued from before the pause so they
+                        // don't fire the moment we resume.
+                        _input.BreakPressed = false;
                         _input.PlacePressed = false;
                     }
                     if (changed)
@@ -248,10 +275,18 @@ namespace VStudioCraft.UI
                         if (cb != null) Dispatcher.BeginInvoke(cb);
                     }
 
+                    // Streaming + mesh uploads keep running while paused so any
+                    // chunks already in flight finish their handoff (cheap,
+                    // no world-state mutation). World updates — day cycle,
+                    // fluid ticks, player movement, survival timers — all
+                    // gate on !paused.
                     _renderer.UpdateStreaming();
                     _renderer.ProcessDirtyChunks(3);
-                    _renderer.AdvanceTime(dt);
-                    UpdatePlayer(dt);
+                    if (!paused)
+                    {
+                        _renderer.AdvanceTime(dt);
+                        UpdatePlayer(dt);
+                    }
 
                     long t1 = Stopwatch.GetTimestamp();
 
@@ -320,7 +355,7 @@ namespace VStudioCraft.UI
             StatusText.Text =
                 $"{name}  |  FPS {_fps}  |  game {_gameMs:F2} / render {_renderMs:F2} / swap {_swapMs:F2} ms  " +
                 $"|  Mode: {mode}{hpBadge}  " +
-                $"(LMB/RMB break/place, WASD+Space+Ctrl move, F3 toggle mode, Esc uncapture)  " +
+                $"(LMB/RMB break/place, WASD+Space+Ctrl move, wheel/1-9 hotbar, F3 toggle mode, Esc pause)  " +
                 $"|  GPU: {_glRenderer} [{_glVendor}]  |  GL {_glVersion}";
         }
 
@@ -393,9 +428,60 @@ namespace VStudioCraft.UI
                         Dispatcher.BeginInvoke(new Action(UpdateStatus));
                     }
                     break;
-                case Keys.Escape: ReleaseMouseLook(); break;
+                case Keys.Escape: TogglePause(); break;
             }
             e.Handled = true;
+        }
+
+        private void TogglePause()
+        {
+            if (_renderer == null) return;
+            if (_renderer.IsPaused)
+            {
+                _renderer.IsPaused = false;
+                // Resume the look-capture so the player drops straight back
+                // into the game without an extra click.
+                CaptureMouseLook();
+            }
+            else
+            {
+                _renderer.IsPaused = true;
+                ReleaseMouseLook();
+                // Drop held movement keys — otherwise the player would stay
+                // walking the moment they unpause if they had W down when
+                // they hit Esc.
+                _input.Clear();
+            }
+        }
+
+        private void GlOnMouseWheel(object sender, MouseEventArgs e)
+        {
+            // Cycling the hotbar while the menu is up would be confusing; the
+            // bar isn't even visually focal then. Number keys still work for
+            // direct selection if the user wants it for some reason.
+            if (_renderer != null && _renderer.IsPaused) return;
+
+            _wheelAccum += e.Delta;
+            int slotCount = _input.HotbarSlots.Length;
+            if (slotCount <= 0) return;
+
+            // 120 units per notch is the Windows convention. Scroll up
+            // (positive Delta) moves the selection LEFT, scroll down moves
+            // RIGHT — matches Minecraft's hotbar feel.
+            while (_wheelAccum >= 120)
+            {
+                _wheelAccum -= 120;
+                int idx = _input.HotbarIndex - 1;
+                if (idx < 0) idx = slotCount - 1;
+                _input.HotbarIndex = idx;
+            }
+            while (_wheelAccum <= -120)
+            {
+                _wheelAccum += 120;
+                int idx = _input.HotbarIndex + 1;
+                if (idx >= slotCount) idx = 0;
+                _input.HotbarIndex = idx;
+            }
         }
 
         private void GlOnKeyUp(object sender, KeyEventArgs e)
@@ -407,6 +493,21 @@ namespace VStudioCraft.UI
         private void GlOnMouseDown(object sender, MouseEventArgs e)
         {
             _gl.Focus();
+
+            // Paused: clicks hit-test the pause menu. We swallow them either
+            // way so the click never re-captures the cursor or fires a place/
+            // break action under the menu.
+            if (_renderer != null && _renderer.IsPaused)
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    var (px, py) = ToPhysicalCoord(e.X, e.Y);
+                    var (pw, ph) = GetPhysicalSize();
+                    var act = PauseMenu.HitTest(pw, ph, px, py);
+                    HandlePauseMenuAction(act);
+                }
+                return;
+            }
 
             if (!_mouseCaptured)
             {
@@ -422,12 +523,92 @@ namespace VStudioCraft.UI
             else if (e.Button == MouseButtons.Right) _input.PlacePressed = true;
         }
 
+        private void HandlePauseMenuAction(PauseMenu.ActionId act)
+        {
+            switch (act)
+            {
+                case PauseMenu.ActionId.BackToGame:
+                    TogglePause();
+                    break;
+                case PauseMenu.ActionId.Options:
+                    // Placeholder — keeps the slot in the menu and feels
+                    // clickable, but no options surface yet. Hooks in here
+                    // when an options panel is added.
+                    break;
+                case PauseMenu.ActionId.Save:
+                    RaiseSaveRequested();
+                    break;
+                case PauseMenu.ActionId.Quit:
+                    RaiseQuitRequested();
+                    break;
+                case PauseMenu.ActionId.None:
+                    break;
+            }
+        }
+
+        private void RaiseSaveRequested()
+        {
+            var cb = SaveRequested;
+            if (cb != null)
+            {
+                Dispatcher.BeginInvoke(cb);
+            }
+            else if (!string.IsNullOrEmpty(_worldPath))
+            {
+                // Fallback: silently save to the path we already know.
+                SaveToFile(_worldPath);
+            }
+            // Otherwise do nothing — no path, no host hook.
+        }
+
+        private void RaiseQuitRequested()
+        {
+            var cb = QuitRequested;
+            if (cb != null)
+            {
+                Dispatcher.BeginInvoke(cb);
+                return;
+            }
+            // Fallback: close the owning WPF window. Works for the standalone
+            // shell and most VSIX docking hosts (which respond to Window.Close
+            // by closing the editor frame).
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                var win = System.Windows.Window.GetWindow(this);
+                win?.Close();
+            }));
+        }
+
+        // Convert a WinForms client-pixel mouse coordinate to the physical
+        // pixel space used by the renderer. WPF/WinForms can hand us logical
+        // pixels under per-monitor DPI; the renderer always works in physical
+        // pixels (GetClientRect via win32). This keeps hover / hit-tests in
+        // sync with the rendered button rects regardless of DPI scaling.
+        private (int x, int y) ToPhysicalCoord(int logX, int logY)
+        {
+            var (pw, ph) = GetPhysicalSize();
+            int cw = _gl?.ClientSize.Width ?? pw;
+            int ch = _gl?.ClientSize.Height ?? ph;
+            if (cw <= 0 || ch <= 0) return (logX, logY);
+            return ((int)((long)logX * pw / cw), (int)((long)logY * ph / ch));
+        }
+
         private void GlOnMouseUp(object sender, MouseEventArgs e)
         {
         }
 
         private void GlOnMouseMove(object sender, MouseEventArgs e)
         {
+            // While paused, track the cursor so the renderer can highlight
+            // the button under it. Mouse-look stays released.
+            if (_renderer != null && _renderer.IsPaused)
+            {
+                var (px, py) = ToPhysicalCoord(e.X, e.Y);
+                _input.MenuMouseX = px;
+                _input.MenuMouseY = py;
+                return;
+            }
+
             if (!_mouseCaptured) return;
 
             var rect = _gl.RectangleToScreen(_gl.ClientRectangle);

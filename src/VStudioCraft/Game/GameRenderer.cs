@@ -213,6 +213,18 @@ void main()
         // Set once by the host after construction and never reassigned, so
         // no synchronisation is required for the reference itself.
         public InputState Input { get; set; }
+
+        // True while the game is paused (Esc / pause menu open). The render
+        // loop skips world updates (day cycle, fluid ticks, player movement,
+        // survival timers) but still draws the world + pause overlay so the
+        // menu can be drawn on top. Volatile so the render thread sees the
+        // UI thread's flip without locking.
+        private volatile bool _isPaused;
+        public bool IsPaused
+        {
+            get => _isPaused;
+            set => _isPaused = value;
+        }
         private SkyRenderer _sky;
         private World _world;
         private ChunkJobSystem _jobs;
@@ -965,6 +977,8 @@ void main()
             }
 
             RenderHotbar(width, height);
+
+            if (_isPaused) RenderPauseMenu(width, height);
         }
 
         // Survival HUD layout:
@@ -1286,6 +1300,77 @@ void main()
                 DrawSpriteQuadFor(_spriteShader, x, topY, glyphW, glyphH, ortho);
                 x += glyphW;
             }
+        }
+
+        // Pause overlay — dim wash + 4 buttons + title. Drawn last each frame
+        // when _isPaused is set, so the world + hotbar still render behind.
+        // Hover highlight is driven by Input.MenuMouseX/Y, which the host
+        // updates on every WPF mouse-move while paused (in physical pixels).
+        private void RenderPauseMenu(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Dim background — semi-transparent black wash over the whole
+            // viewport. Reads as 'paused' without hiding the world entirely.
+            DrawSolidQuad(0, 0, width, height,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+
+            int mx = Input?.MenuMouseX ?? -1;
+            int my = Input?.MenuMouseY ?? -1;
+
+            // Buttons.
+            for (int i = 0; i < PauseMenu.Count; i++)
+            {
+                var b = PauseMenu.GetButton(i, width, height);
+                bool hover = mx >= b.X && mx < b.X + b.W && my >= b.Y && my < b.Y + b.H;
+
+                Vector3 fill = hover
+                    ? new Vector3(0.42f, 0.55f, 0.72f)
+                    : new Vector3(0.16f, 0.20f, 0.26f);
+                DrawSolidQuad(b.X, b.Y, b.W, b.H, fill, 0.95f, ortho);
+
+                // 2-px frame around the button — light edge so the button
+                // reads as a tile even when not hovered.
+                Vector3 border = hover
+                    ? new Vector3(1f, 1f, 1f)
+                    : new Vector3(0.78f, 0.82f, 0.88f);
+                DrawSolidQuad(b.X, b.Y, b.W, 2, border, 1f, ortho);                    // top
+                DrawSolidQuad(b.X, b.Y + b.H - 2, b.W, 2, border, 1f, ortho);          // bottom
+                DrawSolidQuad(b.X, b.Y, 2, b.H, border, 1f, ortho);                    // left
+                DrawSolidQuad(b.X + b.W - 2, b.Y, 2, b.H, border, 1f, ortho);          // right
+
+                // Centred label inside the button. Glyphs are 6×8 cells, scale 2.
+                int labelTopY = b.Y + (b.H - HotbarTextures.GlyphCellH * 2) / 2;
+                DrawString(b.Label, /*scale*/2, /*centerX*/b.X + b.W / 2,
+                    /*topY*/labelTopY, new Vector4(1f, 1f, 1f, 1f), ortho);
+            }
+
+            // Title above the button stack.
+            DrawString("GAME MENU", /*scale*/3, /*centerX*/width / 2,
+                /*topY*/PauseMenu.TitleY(height),
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        // Solid-colour quad at (x,y) sized (w,h) in pixels via the overlay
+        // shader. Caller is responsible for blend / depth / cull state.
+        private void DrawSolidQuad(int x, int y, int w, int h,
+            Vector3 color, float alpha, Matrix4 ortho)
+        {
+            var model = Matrix4.CreateScale(w, h, 1f) * Matrix4.CreateTranslation(x, y, 0f);
+            _overlayShader.Use();
+            _overlayShader.SetMatrix4("uMVP", model * ortho);
+            _overlayShader.SetVector3("uColor", color);
+            _overlayShader.SetFloat("uAlpha", alpha);
+            _unitQuadMesh.Draw();
         }
 
         private void DrawSpriteQuad(int x, int y, int w, int h, Matrix4 ortho)

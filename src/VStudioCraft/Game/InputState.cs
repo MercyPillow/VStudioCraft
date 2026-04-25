@@ -38,6 +38,14 @@ namespace VStudioCraft.Game
             BlockType.Planks,
         };
 
+        // Last known mouse position over the GLControl in physical pixels,
+        // tracked while the game is paused so the renderer can highlight the
+        // pause-menu button under the cursor. Single-int writes are atomic on
+        // x86/x64; the renderer reads each frame for hover and the worst case
+        // (a frame with a torn coord) just shows highlight 1 frame stale.
+        public int MenuMouseX;
+        public int MenuMouseY;
+
         // Block currently held — what TryPlace places, what the status text
         // shows. Slot index is clamped on read so an out-of-range index never
         // crashes (in practice it's always 0..8).

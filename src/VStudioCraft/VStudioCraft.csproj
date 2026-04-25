@@ -85,6 +85,7 @@
     <Compile Include="Game\Mesh.cs" />
     <Compile Include="Game\Noise.cs" />
     <Compile Include="Game\OverlayMesh.cs" />
+    <Compile Include="Game\PauseMenu.cs" />
     <Compile Include="Game\Player.cs" />
     <Compile Include="Game\Raycast.cs" />
     <Compile Include="Game\Shader.cs" />

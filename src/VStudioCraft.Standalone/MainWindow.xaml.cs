@@ -16,6 +16,11 @@ namespace VStudioCraft.Standalone
             InitializeComponent();
             Loaded += OnWindowLoaded;
             Closing += (_, __) => Host.Shutdown();
+            // Pause-menu hooks. Save reuses the standard Save / Save-As path
+            // so the user gets a dialog when there's no current world file.
+            // Quit closes the window, mirroring the File → Exit menu item.
+            Host.SaveRequested += () => OnSave(this, null);
+            Host.QuitRequested += () => Close();
         }
 
         private void OnWindowLoaded(object sender, RoutedEventArgs e)
