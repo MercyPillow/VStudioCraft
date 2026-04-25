@@ -355,7 +355,7 @@ namespace VStudioCraft.UI
             StatusText.Text =
                 $"{name}  |  FPS {_fps}  |  game {_gameMs:F2} / render {_renderMs:F2} / swap {_swapMs:F2} ms  " +
                 $"|  Mode: {mode}{hpBadge}  " +
-                $"(LMB/RMB break/place, WASD+Space+Ctrl move, wheel/1-9 hotbar, F3 toggle mode, Esc pause)  " +
+                $"(LMB/RMB break/place, WASD+Space move, Shift sprint, wheel/1-9 hotbar, F3 toggle mode, Esc pause)  " +
                 $"|  GPU: {_glRenderer} [{_glVendor}]  |  GL {_glVersion}";
         }
 
@@ -375,7 +375,7 @@ namespace VStudioCraft.UI
             if (_input.IsDown(Keys.A)) wish -= rightH;
             if (wish.LengthSquared > 0f) wish = Vector3.Normalize(wish);
 
-            float speed = _input.IsDown(Keys.ControlKey) ? Player.SprintSpeed : Player.WalkSpeed;
+            float speed = _input.IsDown(Keys.ShiftKey) ? Player.SprintSpeed : Player.WalkSpeed;
             bool wantJump = _input.IsDown(Keys.Space);
 
             _renderer.UpdatePlayer(dt, wish * speed, wantJump);
