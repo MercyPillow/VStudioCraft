@@ -1869,6 +1869,14 @@ void main()
             GL.Enable(EnableCap.CullFace);
             GL.CullFace(CullFaceMode.Back);
             _breakCubeMesh.Draw();
+            // Restore the HUD pass baseline. The hotbar / inventory loops
+            // mix cube-shape blocks (which need cull) with cross-sprite
+            // items (torches, flowers, tall grass — which use a unit quad
+            // through DrawFlatSpriteIcon). Leaving cull enabled here would
+            // back-face-cull the next iteration's flat sprite quad and
+            // make the torch / flower invisible. Self-contained state in
+            // and out keeps the caller free of cleanup.
+            GL.Disable(EnableCap.CullFace);
 
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
