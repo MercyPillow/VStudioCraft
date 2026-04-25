@@ -67,6 +67,12 @@ namespace VStudioCraft.Game
         // thread; if we ever multi-thread it this becomes a TLS field.
         private static readonly List<(Chunk c, int lx, int y, int lz, byte block, byte meta)> _writes
             = new List<(Chunk, int, int, int, byte, byte)>(256);
+        // Drain queue: cells whose upstream feed is gone this tick. Stored as a
+        // separate list (not folded into _writes) because they have different
+        // apply semantics — drains FORCE the cell to Air regardless of current
+        // contents, while spread writes only fill genuinely-empty cells.
+        private static readonly List<(Chunk c, int lx, int y, int lz, int group)> _drains
+            = new List<(Chunk, int, int, int, int)>(64);
         private static readonly HashSet<Chunk> _producedWrites = new HashSet<Chunk>();
         private static readonly HashSet<Chunk> _producedLavaWrites = new HashSet<Chunk>();
         private static readonly List<Chunk> _activeChunks = new List<Chunk>(64);
@@ -77,6 +83,7 @@ namespace VStudioCraft.Game
         public static TickResult Tick(World world)
         {
             _writes.Clear();
+            _drains.Clear();
             _producedWrites.Clear();
             _producedLavaWrites.Clear();
             _activeChunks.Clear();
@@ -96,10 +103,10 @@ namespace VStudioCraft.Game
                 ScanChunk(chunk, world);
             }
 
-            // Apply staged writes. We accept that two sources writing into
-            // the same cell may overwrite each other — last-write-wins, which
-            // produces the slight visual jitter you see in Alpha when two
-            // streams meet (acceptable for V1).
+            // Apply staged spread writes first. We accept that two sources
+            // writing into the same cell may overwrite each other —
+            // last-write-wins, which produces the slight visual jitter you
+            // see in Alpha when two streams meet (acceptable for V1).
             for (int wi = 0; wi < _writes.Count; wi++)
             {
                 var w = _writes[wi];
@@ -111,6 +118,25 @@ namespace VStudioCraft.Game
                 w.c.RawBlocks[idx] = w.block;
                 w.c.RawMeta[idx] = w.meta;
                 w.c.IsModified = true;
+            }
+
+            // Apply drain writes second. A drained cell pre-tick was a
+            // flowing fluid with no upstream feeder — spread can't have
+            // re-filled it (spread targets only pre-tick-air cells), so the
+            // ordering question reduces to: do we want a flowing cell to
+            // become Air this tick? Yes. The wave of drained cells advances
+            // outward by one cell per tick, matching Alpha's "water recedes
+            // step by step" feel after a source is removed.
+            for (int di = 0; di < _drains.Count; di++)
+            {
+                var d = _drains[di];
+                int idx = Chunk.Index(d.lx, d.y, d.lz);
+                d.c.RawBlocks[idx] = (byte)BlockType.Air;
+                d.c.RawMeta[idx] = 0;
+                d.c.IsModified = true;
+                d.c.HasActiveFluid = true;
+                _producedWrites.Add(d.c);
+                if (d.group == 2) _producedLavaWrites.Add(d.c);
             }
 
             // Build the result sets. Chunks that produced no writes AND
@@ -161,9 +187,23 @@ namespace VStudioCraft.Game
                 if (group == 0) continue;
 
                 bool isSource = (b == BlockType.Water || b == BlockType.Lava);
+                bool isFalling = !isSource && (meta[idx] & 0x10) != 0;
                 int reach = isSource
                     ? (group == 1 ? WaterReach : LavaReach)
                     : (meta[idx] & 0x0F);
+
+                // Orphan check: a non-source flowing cell with no upstream
+                // feeder converts to Air. The wave of "no feeder anymore"
+                // propagates one cell per tick, which is the visible Alpha
+                // behaviour when you break a source — the puddle recedes.
+                if (!isSource)
+                {
+                    if (!HasFeeder(chunk, world, x, y, z, group, isFalling, reach))
+                    {
+                        _drains.Add((chunk, x, y, z, group));
+                        continue;
+                    }
+                }
 
                 BlockType flowing = group == 1 ? BlockType.FlowingWater : BlockType.FlowingLava;
 
@@ -242,6 +282,76 @@ namespace VStudioCraft.Game
             int nidx = Chunk.Index(xx, y, zz);
             if (nc.RawBlocks[nidx] != (byte)BlockType.Air) return;
             StageWrite(nc, xx, y, zz, (byte)flowing, outMeta, group);
+        }
+
+        // Does this flowing cell have an upstream fluid feeder right now?
+        // Sources never call this (they're self-feeding by definition). The
+        // check looks one step "uphill" along the spread graph:
+        //   - For falling cells: only the cell directly above counts. If it
+        //     isn't a same-family fluid, the column has been broken upstream
+        //     and this cell drains.
+        //   - For non-falling spread cells: the cell directly above (vertical
+        //     fall feeds horizontal spread) OR a horizontal neighbour with
+        //     strictly greater reach (non-falling) OR an adjacent source.
+        // We deliberately reject falling neighbours as a horizontal feeder —
+        // a falling stream shouldn't sustain a sideways puddle on its own;
+        // only the cell where the stream lands does that.
+        private static bool HasFeeder(
+            Chunk chunk, World world,
+            int x, int y, int z, int group, bool falling, int reach)
+        {
+            // Vertical feeder: any same-family fluid directly above.
+            if (y < Chunk.SizeY - 1)
+            {
+                int aboveIdx = Chunk.Index(x, y + 1, z);
+                if (BlockData.FluidGroup((BlockType)chunk.RawBlocks[aboveIdx]) == group)
+                    return true;
+            }
+
+            // Falling cells care only about the column above them.
+            if (falling) return false;
+
+            return HasHorizFeeder(chunk, world, x, y, z, +1,  0, group, reach)
+                || HasHorizFeeder(chunk, world, x, y, z, -1,  0, group, reach)
+                || HasHorizFeeder(chunk, world, x, y, z,  0, +1, group, reach)
+                || HasHorizFeeder(chunk, world, x, y, z,  0, -1, group, reach);
+        }
+
+        private static bool HasHorizFeeder(
+            Chunk chunk, World world,
+            int x, int y, int z, int dx, int dz,
+            int group, int reach)
+        {
+            int nlx = x + dx, nlz = z + dz;
+            Chunk target = chunk;
+            int idx;
+            if ((uint)nlx < Chunk.SizeX && (uint)nlz < Chunk.SizeZ)
+            {
+                idx = Chunk.Index(nlx, y, nlz);
+            }
+            else
+            {
+                int ncx = chunk.ChunkX, ncz = chunk.ChunkZ;
+                int xx = nlx, zz = nlz;
+                if (nlx < 0)              { ncx--; xx = Chunk.SizeX - 1; }
+                else if (nlx >= Chunk.SizeX) { ncx++; xx = 0; }
+                if (nlz < 0)              { ncz--; zz = Chunk.SizeZ - 1; }
+                else if (nlz >= Chunk.SizeZ) { ncz++; zz = 0; }
+                target = world.GetChunk(ncx, ncz);
+                if (target == null) return false;
+                idx = Chunk.Index(xx, y, zz);
+            }
+
+            var b = (BlockType)target.RawBlocks[idx];
+            if (BlockData.FluidGroup(b) != group) return false;
+            // Sources are always feeders.
+            if (b == BlockType.Water || b == BlockType.Lava) return true;
+            // Flowing neighbour must be non-falling AND strictly fresher
+            // (greater reach) to feed us — otherwise two equal-reach cells
+            // could prop each other up and survive the source's removal.
+            byte nbMeta = target.RawMeta[idx];
+            if ((nbMeta & 0x10) != 0) return false;          // falling, not a horiz feeder
+            return (nbMeta & 0x0F) > reach;
         }
     }
 }

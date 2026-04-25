@@ -74,6 +74,78 @@ namespace VStudioCraft.Game
             // Model pass — scan for non-cube blocks and emit per-block sprite
             // geometry into the opaque stream (alpha-tested via shader discard).
             EmitModels(chunk, baseX, baseZ);
+
+            // Fluid surface lids — for each non-falling flowing-fluid cell with
+            // air directly above we drop the cube sweep's full-cube top face
+            // (handled inside Sweep) and emit a custom inset top quad here at
+            // a y proportional to the cell's remaining reach. This gives the
+            // pond / cliff-base visual of "less water = thinner slab" without
+            // the mesher needing to special-case shrunken-cell side faces.
+            EmitFluidSurfaceLids(chunk, baseX, baseZ);
+        }
+
+        // Top-exposed flowing fluid cell? Source cells and falling cells stay
+        // full-height (sources are full-cubes by definition; falling cells
+        // visually need to fill the column they're streaming through, otherwise
+        // a waterfall reads as floating disconnected slabs).
+        internal static bool IsSurfaceFluid(Chunk chunk, int lx, int y, int lz)
+        {
+            int idx = Chunk.Index(lx, y, lz);
+            var t = (BlockType)chunk.RawBlocks[idx];
+            if (t != BlockType.FlowingWater && t != BlockType.FlowingLava) return false;
+            if ((chunk.RawMeta[idx] & 0x10) != 0) return false;  // falling
+            // Above out-of-world counts as air — surface.
+            if (y + 1 >= Chunk.SizeY) return true;
+            var above = (BlockType)chunk.RawBlocks[Chunk.Index(lx, y + 1, lz)];
+            return above == BlockType.Air;
+        }
+
+        // y position of the inset top face for a surface fluid cell. Reach
+        // 0..6 maps to height 1/8..7/8 — far-from-source dribbles read as a
+        // shallow puddle, fresh-from-source spread reads almost full.
+        private static float SurfaceFluidHeight(byte meta)
+        {
+            int reach = meta & 0x0F;
+            return (reach + 1) * (1f / 8f);
+        }
+
+        private void EmitFluidSurfaceLids(Chunk chunk, int baseX, int baseZ)
+        {
+            for (int x = 0; x < Chunk.SizeX; x++)
+            for (int y = 0; y < Chunk.SizeY; y++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                if (!IsSurfaceFluid(chunk, x, y, z)) continue;
+                int idx = Chunk.Index(x, y, z);
+                var t = (BlockType)chunk.RawBlocks[idx];
+                float topY = y + SurfaceFluidHeight(chunk.RawMeta[idx]);
+
+                int layer = BlockData.GetTileIndex(t, 0);  // top tile
+                // Light at the air cell above (or full sky if at world top).
+                int lightPacked = (y + 1 < Chunk.SizeY)
+                    ? LightAt(chunk, x, y + 1, z)
+                    : 15 * 16;
+                bool transparent = (t == BlockType.FlowingWater);
+                EmitFluidLidQuad(x + baseX, topY, z + baseZ, layer, lightPacked, transparent);
+            }
+        }
+
+        private void EmitFluidLidQuad(float wx, float topY, float wz, int layer, int lightPacked, bool transparent)
+        {
+            int curVertFloats = transparent ? _tVertFloats : _vertFloats;
+            uint baseIdx = (uint)(curVertFloats / Mesh.FloatsPerVertex);
+            float light = lightPacked;
+            // CCW from above so back-face culling keeps the lid visible from the sky.
+            AppendVert(transparent, wx + 0f, topY, wz + 0f, 0f, 0f, 0f, 1f, 0f, layer, light);
+            AppendVert(transparent, wx + 1f, topY, wz + 0f, 1f, 0f, 0f, 1f, 0f, layer, light);
+            AppendVert(transparent, wx + 1f, topY, wz + 1f, 1f, 1f, 0f, 1f, 0f, layer, light);
+            AppendVert(transparent, wx + 0f, topY, wz + 1f, 0f, 1f, 0f, 1f, 0f, layer, light);
+            AppendIndex(transparent, baseIdx + 0);
+            AppendIndex(transparent, baseIdx + 1);
+            AppendIndex(transparent, baseIdx + 2);
+            AppendIndex(transparent, baseIdx + 0);
+            AppendIndex(transparent, baseIdx + 2);
+            AppendIndex(transparent, baseIdx + 3);
         }
 
         // Cross-sprite "X" model: two perpendicular vertical quads through the
@@ -312,6 +384,20 @@ namespace VStudioCraft.Game
                         (a != (byte)BlockType.Air && b != (byte)BlockType.Air &&
                          BlockData.FluidGroup((BlockType)a) != 0 &&
                          BlockData.FluidGroup((BlockType)a) == BlockData.FluidGroup((BlockType)b)));
+                    // Surface flowing-fluid cells get a custom inset top face
+                    // emitted in EmitFluidSurfaceLids; suppress the cube sweep's
+                    // top face for this cell so the two don't z-fight. We only
+                    // do this for the +Y top direction — side and bottom faces
+                    // stay full-height in the cube sweep, which is the V1
+                    // tradeoff (a thin "lip" can show against non-fluid shore
+                    // blocks; interior pool surfaces are unaffected because
+                    // their side faces are skipped by internalTransparent).
+                    if (axis == 1 && dir > 0 && aCube
+                        && (uint)cx < Chunk.SizeX && (uint)cy < Chunk.SizeY && (uint)cz < Chunk.SizeZ
+                        && IsSurfaceFluid(chunk, cx, cy, cz))
+                    {
+                        aCube = false;
+                    }
                     if (!aAir && aCube && !bOpaque && !internalTransparent)
                     {
                         // Face of block `a` visible, pointing in `dir`. Light is
