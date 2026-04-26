@@ -757,20 +757,26 @@ namespace VStudioCraft.Game
 
         // Drop eligibility rule for a block broken with the given tool
         // (which may be Air / a non-tool stack). Mirrors Alpha:
-        //   * If the block has a required kind (e.g. pickaxe for stone),
-        //     the tool's kind must match.
-        //   * If the block has a required tier, the tool's material tier
-        //     must be at or above it.
+        //   * Blocks with no required tier (dirt, sand, gravel, wood,
+        //     planks, leaves, ...) always drop, even bare-handed —
+        //     RequiredKind on those is just a "preferred for speed"
+        //     hint that SpeedMultiplier reads. Bare-hand mining is
+        //     slow but yields the block.
+        //   * Blocks with a required tier (stone, ores, obsidian, the
+        //     metal blocks) gate the drop on tool kind + tier: the
+        //     tool must be the right kind (pickaxe in practice) AND
+        //     its material tier must be at or above the block's.
         // Returns true if the break should drop an item; false means
         // "broke but yielded nothing" (the silent-stone outcome).
         public static bool CanHarvest(BlockType tool, BlockType block)
         {
+            int reqTier = RequiredTier(block);
+            if (reqTier <= 0) return true;
             var required = RequiredKind(block);
-            if (required == ToolKind.None) return true;
             var kind = GetKind(tool);
             if (kind != required) return false;
             int tier = Tier(GetMaterial(tool));
-            return tier >= RequiredTier(block);
+            return tier >= reqTier;
         }
 
         // Translate a block being broken into the BlockType that should
