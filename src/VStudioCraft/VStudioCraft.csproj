@@ -79,10 +79,13 @@
     <Compile Include="Game\CraftingScreen.cs" />
     <Compile Include="Game\CreativeCatalog.cs" />
     <Compile Include="Game\ChunkJobSystem.cs" />
+    <Compile Include="Game\AudioEngine.cs" />
+    <Compile Include="Game\BlockMaterial.cs" />
     <Compile Include="Game\ChunkMesher.cs" />
     <Compile Include="Game\ChestScreen.cs" />
     <Compile Include="Game\ChestTileEntity.cs" />
     <Compile Include="Game\DroppedItem.cs" />
+    <Compile Include="Game\SfxBank.cs" />
     <Compile Include="Game\Frustum.cs" />
     <Compile Include="Game\FurnaceRecipes.cs" />
     <Compile Include="Game\FurnaceScreen.cs" />
@@ -146,6 +149,18 @@
     <None Include="source.extension.vsixmanifest">
       <SubType>Designer</SubType>
     </None>
+  </ItemGroup>
+  <!-- Native OpenAL Soft binary (renamed from soft_oal.dll). Bundled with
+       the VSIX so the audio engine works on hosts that don't have OpenAL
+       installed system-wide (true of every clean Visual Studio install).
+       AudioEngine.Initialize calls LoadLibrary on this exact path before
+       touching any AL DllImport, so the runtime loader picks up our copy
+       even though the extension folder isn't on the standard search path. -->
+  <ItemGroup>
+    <Content Include="Native\openal32.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.VisualStudio.SDK">

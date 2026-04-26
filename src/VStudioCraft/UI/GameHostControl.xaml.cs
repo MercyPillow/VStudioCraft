@@ -214,6 +214,13 @@ namespace VStudioCraft.UI
             _renderer.Input = _input;
             _renderer.InitializeGraphics();
 
+            // Bring up the audio engine + procedural SFX bank alongside
+            // graphics. Both are idempotent and defensive — if OpenAL isn't
+            // present on this host (no openal32.dll) the engine falls into
+            // a silent state and SfxBank.Play* calls become no-ops, so the
+            // game still runs without sound.
+            VStudioCraft.Game.SfxBank.Initialize();
+
             _glVersion = GL.GetString(StringName.Version) ?? "unknown";
             _glRenderer = GL.GetString(StringName.Renderer) ?? "unknown";
             _glVendor = GL.GetString(StringName.Vendor) ?? "unknown";
@@ -548,6 +555,11 @@ namespace VStudioCraft.UI
             finally
             {
                 try { _renderer?.Dispose(); } catch { }
+                // Tear down the AL device alongside the GL context — the
+                // tool window may be closed and reopened (or the game loop
+                // restarted), and AudioEngine.Initialize() is idempotent
+                // so it'll bring a fresh context back up next launch.
+                try { VStudioCraft.Game.AudioEngine.Shutdown(); } catch { }
                 try { _gl?.Context?.MakeCurrent(null); } catch { }
                 _contextDetached.Set();
             }
@@ -964,6 +976,11 @@ namespace VStudioCraft.UI
                     _input.InventoryClickShift =
                         (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
                     _input.InventoryClickButton = e.Button == MouseButtons.Left ? 1 : 2;
+                    // Audible feedback for every modal click — hit or miss.
+                    // Misses still produce a meaningful action (cursor-stack
+                    // toss-out, RMB single-deposit on empty space) so the
+                    // click feedback is correct regardless of slot hit-test.
+                    VStudioCraft.Game.SfxBank.PlayClick();
 
                     // Start an RMB drag. The initial click is dispatched
                     // via InventoryClickButton above (full RMB rules — may
@@ -1030,6 +1047,10 @@ namespace VStudioCraft.UI
 
         private void HandlePauseMenuAction(PauseMenu.ActionId act)
         {
+            // Audible feedback for any actionable hit. None = click missed
+            // every button (clicked dead space inside the menu) — staying
+            // silent there matches the visual feedback (no button highlight).
+            if (act != PauseMenu.ActionId.None) VStudioCraft.Game.SfxBank.PlayClick();
             switch (act)
             {
                 case PauseMenu.ActionId.BackToGame:
@@ -1060,6 +1081,9 @@ namespace VStudioCraft.UI
         private void HandleOptionsMenuAction(OptionsMenu.ActionId act)
         {
             if (_renderer == null) return;
+            // Same rule as the pause menu: only chirp on actionable hits so
+            // dead-space clicks (section headings, padding) stay silent.
+            if (act != OptionsMenu.ActionId.None) VStudioCraft.Game.SfxBank.PlayClick();
             switch (act)
             {
                 case OptionsMenu.ActionId.Back:

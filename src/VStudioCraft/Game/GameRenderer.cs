@@ -488,6 +488,22 @@ void main()
         // amount every half-second while they are below the kill plane.
         private float _voidTimer;
 
+        // Previous-frame "feet in water" snapshot — diffed against the
+        // current frame's Player.WasInWater to fire a single splash SFX
+        // on the surface-entry transition (not every frame the player is
+        // submerged). Reset to false on Reset/Load.
+        private bool _wasSubmergedPrev;
+
+        // Distance walked horizontally while OnGround since the last
+        // step SFX fired. Resets when a step plays; accumulates from
+        // |horizontal velocity| × dt while grounded. The threshold lives
+        // in the step-emit logic in UpdatePlayer.
+        private float _stepDistance;
+        // Block the step SFX last sampled — hold the type so the next
+        // step plays the same material when the foot lifts and falls.
+        // Refreshed each tick from the cell directly under the player.
+        private BlockType _stepUnderfoot;
+
         // Drowning. Air loses 2 points (one bubble) every AirDecayInterval
         // while the head is submerged — 10 bubbles × 1.5 s = 15 s, matching
         // Alpha's air supply. Once Air hits zero the second timer takes over
@@ -711,6 +727,9 @@ void main()
             Player.HealFull();
             _spawnPos = Player.Position;
             _voidTimer = 0f;
+            _wasSubmergedPrev = false;
+            _stepDistance = 0f;
+            _stepUnderfoot = BlockType.Air;
             Camera.Yaw = 0f;
             Camera.Pitch = -0.1f;
             SyncCameraToPlayer();
@@ -732,6 +751,9 @@ void main()
             Player.LastFallDistance = 0f;
             _spawnPos = Player.Position;
             _voidTimer = 0f;
+            _wasSubmergedPrev = false;
+            _stepDistance = 0f;
+            _stepUnderfoot = BlockType.Air;
             Camera.Yaw = header.CameraYaw;
             Camera.Pitch = header.CameraPitch;
             Camera.ClampPitch();
@@ -783,10 +805,73 @@ void main()
                 _hungerRegenTimer = 0f;
             }
 
+            // Fall thud fires on any landing >= 2 blocks regardless of mode —
+            // creative players still want feedback when they hit the ground
+            // after dropping from a hovered position. The 2-block floor
+            // skips routine walking-off-a-step noise (which the per-step
+            // sound covers separately) without requiring damage to register.
+            if (Player.LastFallDistance >= 2.0f)
+            {
+                SfxBank.PlayFall(Player.LastFallDistance);
+            }
             // Consume any pending fall distance — survival already applied the
             // damage above; creative ignores it. Either way, clear so the next
             // landing starts fresh.
             Player.LastFallDistance = 0f;
+
+            // Water-enter splash. Track the previous frame's submerged
+            // state in _wasSubmergedPrev; on the false→true edge fire a
+            // single splash. We use feet-in-water (not head) because Alpha
+            // splashes when you touch the surface, not when you submerge.
+            if (Player.WasInWater && !_wasSubmergedPrev)
+            {
+                SfxBank.PlayWaterEnter();
+            }
+            _wasSubmergedPrev = Player.WasInWater;
+
+            // Footsteps. We accumulate horizontal-distance travelled while
+            // OnGround and emit one step SFX per StepIntervalBlocks of
+            // ground covered. The interval is tuned to feel like Alpha at
+            // baseline walking speed (~4.3 m/s, step ~0.43 s) — maps to
+            // ~1.85 blocks/step. Sprinting (faster horizontal speed)
+            // naturally produces more frequent steps because the
+            // accumulator fills faster, matching Alpha's behaviour.
+            //
+            // The step's material follows the block directly under the
+            // player's feet. We sample at (px, floor(py - 0.05), pz) so a
+            // standing player on a grass block reads BlockType.Grass — the
+            // 0.05 epsilon avoids the player's own AABB-bottom Y reading
+            // back as Air. While in water, we suppress steps entirely; the
+            // splash + ambient water tint sells the underwater state, and
+            // a "footstep on stone" SFX while swimming would feel wrong.
+            if (Player.OnGround && !Player.WasInWater && _world != null)
+            {
+                // Horizontal speed only — vertical bounce-on-stairs noise
+                // shouldn't drive step cadence.
+                var v = Player.Velocity;
+                float horizSpeed = (float)Math.Sqrt(v.X * v.X + v.Z * v.Z);
+                _stepDistance += horizSpeed * dt;
+                const float StepIntervalBlocks = 1.85f;
+                while (_stepDistance >= StepIntervalBlocks)
+                {
+                    _stepDistance -= StepIntervalBlocks;
+                    int fx = (int)Math.Floor(Player.Position.X);
+                    int fy = (int)Math.Floor(Player.Position.Y - 0.05f);
+                    int fz = (int)Math.Floor(Player.Position.Z);
+                    var under = _world.GetBlock(fx, fy, fz);
+                    _stepUnderfoot = under;
+                    SfxBank.PlayStep(under);
+                }
+            }
+            else
+            {
+                // Reset the accumulator while airborne or in water so a
+                // brief jump doesn't carry partial-step state into the
+                // landing tick (the landing already gets the fall-thud
+                // SFX above; double-emitting a step on top of it sounds
+                // muddy).
+                _stepDistance = 0f;
+            }
 
             // Fluid tick — every FluidTickInterval seconds drive a single
             // pass of source-driven outflow. The tick itself self-gates on
@@ -1229,7 +1314,9 @@ void main()
                     _isChestOpen = false;
                 }
             }
-            return _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
+            bool ok = _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
+            if (ok) SfxBank.PlayBreak(t);
+            return ok;
         }
 
         // Drives the survival break-progress timer. Called every frame from
@@ -1351,6 +1438,7 @@ void main()
                     }
                 }
                 _world.SetBlock(bx, by, bz, BlockType.Air);
+                SfxBank.PlayBreak(brokenType);
                 SpawnBreakDrop(bx, by, bz, brokenType, heldType);
                 if (spilled != null)
                 {
@@ -1529,6 +1617,7 @@ void main()
                     var ce = _world.GetOrCreateChestEntity(px, py, pz);
                     ce.Facing = FacingTowardPlayer(Camera.Forward);
                 }
+                SfxBank.PlayPlace(t);
             }
             if (placed && GameMode == GameMode.Survival)
             {
@@ -1727,6 +1816,13 @@ void main()
                     if (dx * dx + dy * dy + dz * dz <= pr2)
                     {
                         var leftover = inv.TryAdd(d.Stack);
+                        // Pickup SFX whenever ANY of the stack landed in
+                        // the inventory — full or partial. Skipping it on
+                        // partial pickups would feel like the click
+                        // failed even though half a stack went in.
+                        bool anyAbsorbed = leftover.Count != d.Stack.Count
+                                            || leftover.IsEmpty;
+                        if (anyAbsorbed) SfxBank.PlayPickup();
                         if (leftover.IsEmpty)
                         {
                             _drops.RemoveAt(i);

@@ -289,18 +289,23 @@ clipping at ~3.5 rows).
 ## Audio
 
 **Have**
-- Nothing.
+- OpenAL backend (`AudioEngine`, OpenTK 3.3.3 bindings) with a 16-source pool and round-robin eviction. Defensive init: if `openal32.dll` is missing on the host (locked-down VS extension environments), the engine falls into a permanently-muted state and the renderer keeps working without sound.
+- Procedural SFX bank (`SfxBank`) — every cue is synthesised at startup as 22 050 Hz mono 16-bit PCM with seeded white-noise + IIR filters (LowPass / HighPass / BandPass) + attack-decay envelopes. No embedded audio assets ship in the VSIX.
+- Per-material categorisation (`BlockMaterial`: Stone / Wood / Dirt / Sand / Glass / Cloth / Leaves) drives break / place / step variants for every solid block.
+- Block break + place sounds, fired from both creative and survival paths in `GameRenderer.TryBreak` / `UpdateBreakProgress` / `TryPlace`.
+- Per-material footsteps emitted by a horizontal-distance accumulator (`StepIntervalBlocks ≈ 1.85`) on `GameRenderer.UpdatePlayer`; suspended while airborne or submerged. Material picked from the block under the player's feet.
+- Fall thud (60 Hz body sine + LP-noise impact) when `Player.LastFallDistance ≥ 2 blocks`, gain scales linearly 0.3 → 1.0 across 0…12 blocks.
+- Water-entry splash (BP noise 300–2500 Hz with 8 Hz amplitude warble), fired on the `!WasSubmergedPrev → WasInWater` edge.
+- Pickup chime (rising sine 600 → 950 Hz, 100 ms) when an inventory absorption succeeds in `TickDrops`.
+- UI click on every actionable pause / options menu hit and on every modal mouse-down (inventory, crafting, furnace, chest).
+- Per-call pitch jitter (±6 %) on every cue so repeat plays don't loop the same waveform.
 
 **Missing**
 - Background music tracks
 - Ambient cave noises
-- Block-specific step sounds
-- Block-break + place sounds
 - Hit/grunt player sounds
 - Mob sounds
-- Splash sound on water entry
 - Fire crackle, lava pop
-- UI click on button press
 
 ## Rendering details
 
@@ -405,11 +410,6 @@ order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
 
-### Tier 1 — Survival gameplay loop (the biggest "feels like Minecraft" gaps)
-
-1. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron. (The ItemType layer + ingredient set this depends on already shipped — see _Items_ → Have.) **Status**: Crafting table ✓, Furnace ✓ (with placement-time directionality — front face follows the placer), Chest ✓ (8-plank U recipe, 27-slot inventory, placement-time directionality, save v7, spill-on-break) — **Tier 1 #1 complete**.
-2. **Sound** — Audio backend (OpenAL via OpenTK, or NAudio) + an SFX bank: per-material step, block break, block place, attack hit, fall thud, water splash, UI click, ambient cave drip. Music tracks last. Surprisingly large feel-improvement vs. effort.
-
 ### Tier 2 — Visible world polish (each item improves every frame)
 
 4. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
@@ -441,7 +441,7 @@ The audited Alpha items the codebase doesn't yet have, ordered so each entry can
 22. **Compass (345)** — Held item; small overlay arrow on the hotbar slot points toward world spawn from anywhere on the map. Recipe: 4 iron ingot + 1 redstone (gates on Tier 8's redstone item; until then it ships as a creative-catalog-only entry).
 23. **Fishing Rod (346) + cast/reel mechanic** — RMB casts a line entity that lands at the cursor's reach distance; second RMB reels it in. After a random delay (~5–30 s), the line catches a Raw Porkchop (Alpha 1.1.2 fishing rod technically pre-dates Raw Cod's introduction in 1.2.0, so the era pull was a bit anything-goes — we'll match by pulling Raw Porkchop or Raw Beef).
 24. **Painting (321)** — RMB on a wall places a painting entity; auto-sizes to the largest available rectangle (1×1 / 2×1 / 4×3 etc.). Sprite atlas of ~25 small paintings rendered as flat quads inside the wall plane.
-25. **Music Discs ("13" / "cat", IDs 2256/2257) + Jukebox block** — Pair of one-track items playable in a Jukebox block (RMB inserts the disc, plays once, ejects). Depends on Tier 1 #2 sound. Note: the Jukebox block itself was added in Alpha 1.0.14 alongside the discs, so it's an Alpha 1.1.2 block we don't currently have — gets added with this item.
+25. **Music Discs ("13" / "cat", IDs 2256/2257) + Jukebox block** — Pair of one-track items playable in a Jukebox block (RMB inserts the disc, plays once, ejects). Reuses the shipped audio backend (one streaming AL source, dedicated channel for music). Note: the Jukebox block itself was added in Alpha 1.0.14 alongside the discs, so it's an Alpha 1.1.2 block we don't currently have — gets added with this item.
 26. **Sugar cane block + Paper (339) + Book (340)** — Sugar cane grows next to water on grass/dirt/sand; breaking it yields the cane item. Paper = 3 sugar cane in a row; Book = 3 paper. Bookshelf already exists as a block, so 3 books + 6 planks → bookshelf is a real V1 use.
 
 ### Tier 5 — Controls + UX parity (small, every-session improvements)
