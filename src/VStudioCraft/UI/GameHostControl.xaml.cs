@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -44,6 +45,18 @@ namespace VStudioCraft.UI
         private string _glVendor = "init";
 
         private bool _mouseCaptured;
+
+        // Modal RMB-drag state. While `_rmbDragActive` is true, MouseMove
+        // hit-tests the slot under the cursor and (if not already painted
+        // for this drag) paints it into `_rmbDragPainted` and enqueues a
+        // drag-deposit on InputState for the render thread to apply. Each
+        // slot only deposits once per drag — once painted, re-entering it
+        // is a no-op so the player can wiggle without dumping extras.
+        // Cleared on RMB MouseUp and on every modal close path (Esc / E /
+        // pause / focus-lost) so a stale drag never carries between
+        // sessions of an open modal.
+        private bool _rmbDragActive;
+        private readonly HashSet<int> _rmbDragPainted = new HashSet<int>();
 
         private string _pendingLoadPath;
         private int _pendingSeed;
@@ -98,7 +111,16 @@ namespace VStudioCraft.UI
             _gl.MouseMove += GlOnMouseMove;
             _gl.MouseWheel += GlOnMouseWheel;
             _gl.MouseEnter += (_, __) => _gl?.Focus();
-            _gl.LostFocus += (_, __) => { ReleaseMouseLook(); _input.Clear(); };
+            _gl.LostFocus += (_, __) =>
+            {
+                ReleaseMouseLook();
+                _input.Clear();
+                // Mouse events stop arriving when focus drops — abort
+                // any in-flight RMB drag so it doesn't paint stale
+                // slots when focus returns.
+                _rmbDragActive = false;
+                _rmbDragPainted.Clear();
+            };
             Host.Child = _gl;
 
             Loaded += (_, __) => _gl?.Focus();
@@ -344,6 +366,32 @@ namespace VStudioCraft.UI
                             _input.InventoryClickShift);
                         _input.InventoryClickButton = 0;
                         _input.InventoryClickShift = false;
+                    }
+
+                    // Drain RMB drag-deposit queue — the host paints one
+                    // slot per MouseMove crossing, and we apply them all
+                    // here in arrival order. The renderer's HandleDrag-
+                    // Deposit methods deposit one item from the cursor
+                    // into the slot if it's empty or same-type, and skip
+                    // it (no swap) if it holds a foreign type. Doing this
+                    // after the single-shot click drain means the initial
+                    // RMB-down is applied before any subsequent paints.
+                    var deposits = _input.DrainDragDeposits();
+                    if (deposits.Length > 0)
+                    {
+                        if (_renderer.IsCraftingOpen)
+                        {
+                            for (int i = 0; i < deposits.Length; i++)
+                                _renderer.HandleCraftingDragDeposit(deposits[i]);
+                        }
+                        else if (_renderer.IsInventoryOpen)
+                        {
+                            for (int i = 0; i < deposits.Length; i++)
+                                _renderer.HandleInventoryDragDeposit(deposits[i]);
+                        }
+                        // If both flags are false (modal closed mid-frame),
+                        // the deposits are silently dropped — they were
+                        // tied to the now-defunct modal session anyway.
                     }
 
                     // Q-drop one-shots. Three sources by context:
@@ -708,6 +756,9 @@ namespace VStudioCraft.UI
                 // fresh — otherwise the search text persists across sessions
                 // and the panel would re-open mid-filter.
                 _input.ResetInventorySearch();
+                // Drop any in-flight RMB drag (see CloseCrafting comment).
+                _rmbDragActive = false;
+                _rmbDragPainted.Clear();
                 CaptureMouseLook();
                 return;
             }
@@ -739,6 +790,10 @@ namespace VStudioCraft.UI
         {
             if (_renderer == null) return;
             _renderer.CloseCrafting();
+            // Drop any in-flight RMB drag — a drag started inside the
+            // crafting panel shouldn't carry over to the next modal.
+            _rmbDragActive = false;
+            _rmbDragPainted.Clear();
             CaptureMouseLook();
         }
 
@@ -826,6 +881,21 @@ namespace VStudioCraft.UI
                     _input.InventoryClickShift =
                         (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
                     _input.InventoryClickButton = e.Button == MouseButtons.Left ? 1 : 2;
+
+                    // Start an RMB drag. The initial click is dispatched
+                    // via InventoryClickButton above (full RMB rules — may
+                    // swap on a foreign-type slot). MouseMove will paint
+                    // subsequent slots one item at a time. Pre-paint the
+                    // initial slot so a wiggle back to it after a move
+                    // doesn't double-deposit.
+                    if (e.Button == MouseButtons.Right && !_input.InventoryClickShift)
+                    {
+                        _rmbDragActive = true;
+                        _rmbDragPainted.Clear();
+                        var (pw, ph) = GetPhysicalSize();
+                        int slot = HitTestActiveModalSlot(px, py, pw, ph);
+                        if (slot >= 0) _rmbDragPainted.Add(slot);
+                    }
                 }
                 return;
             }
@@ -996,6 +1066,15 @@ namespace VStudioCraft.UI
             // button doesn't have a parallel hold state — placement is a
             // one-shot fired by BreakPressed-equivalent on click.
             if (e.Button == MouseButtons.Left) _input.BreakHeld = false;
+            // RMB-up ends the modal drag-deposit (if any). Painted-slot
+            // set is cleared so the next RMB-press starts with a fresh
+            // canvas. Any deposits already enqueued for the render
+            // thread stay queued — they'll drain on the next frame.
+            if (e.Button == MouseButtons.Right)
+            {
+                _rmbDragActive = false;
+                _rmbDragPainted.Clear();
+            }
         }
 
         private void GlOnMouseMove(object sender, MouseEventArgs e)
@@ -1009,6 +1088,24 @@ namespace VStudioCraft.UI
                 var (px, py) = ToPhysicalCoord(e.X, e.Y);
                 _input.MenuMouseX = px;
                 _input.MenuMouseY = py;
+
+                // RMB-drag spread: while RMB is held over the modal,
+                // each new slot the cursor enters gets one item from
+                // the cursor stack. The render thread does the actual
+                // deposit + cap-checks; the host just dedupes by slot
+                // so the queue doesn't grow on every pixel of motion
+                // within the same slot.
+                if (_rmbDragActive
+                    && _renderer != null
+                    && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen))
+                {
+                    var (pw, ph) = GetPhysicalSize();
+                    int slot = HitTestActiveModalSlot(px, py, pw, ph);
+                    if (slot >= 0 && _rmbDragPainted.Add(slot))
+                    {
+                        _input.EnqueueDragDeposit(slot);
+                    }
+                }
                 return;
             }
 
@@ -1025,6 +1122,30 @@ namespace VStudioCraft.UI
             // Snap back to center so we can always accumulate relative motion.
             WfCursor.Position = center;
             WfCursor.Clip = rect;
+        }
+
+        // Hit-test the slot under (mx,my) in whichever modal is active.
+        // Returns -1 if no slot, the slot index in the active panel's
+        // index space otherwise:
+        //   • Crafting open  → 0..54 (CraftingScreen.HitTest)
+        //   • Inventory open + survival → 0..44 (InventoryScreen.HitTest)
+        //   • Inventory open + creative → hotbar slot index (HitTestHotbar)
+        // Creative catalog tiles are intentionally excluded — drag-spread
+        // doesn't make sense on the read-only catalog.
+        private int HitTestActiveModalSlot(int mx, int my, int pw, int ph)
+        {
+            if (_renderer == null) return -1;
+            if (_renderer.IsCraftingOpen)
+            {
+                return CraftingScreen.HitTest(pw, ph, mx, my);
+            }
+            if (_renderer.IsInventoryOpen)
+            {
+                if (_renderer.GameMode == VStudioCraft.Game.GameMode.Creative)
+                    return InventoryScreen.HitTestHotbar(pw, ph, mx, my, /*creative*/true);
+                return InventoryScreen.HitTest(pw, ph, mx, my);
+            }
+            return -1;
         }
 
         private void CaptureMouseLook()

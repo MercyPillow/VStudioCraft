@@ -53,6 +53,21 @@ namespace VStudioCraft.Game
         // from the render thread would race with the UI thread.
         public bool InventoryClickShift;
 
+        // RMB drag-deposit queue. While the player holds RMB and drags
+        // the cursor across modal slots (inventory or crafting), the
+        // host paints each newly-entered slot with one item from the
+        // cursor stack. Multiple slot crossings can happen between
+        // render frames (mouse moves several times faster than the
+        // 60Hz drain), so we accumulate slot indices in a queue
+        // rather than the single-shot InventoryClickButton field.
+        // Slot index meaning is panel-dependent: when the inventory
+        // is open these are Inventory.Slots indices (0..44 — survival
+        // path) or hotbar indices (creative path); when crafting is
+        // open these are CraftingScreen slot indices (0..54). The
+        // renderer reads its own _is*Open flag at drain time to pick
+        // the right interpretation, so the queue itself is opaque.
+        private readonly Queue<int> _dragDeposits = new Queue<int>();
+
         // Q-drop one-shots. Q with no modifier drops 1 from the selected
         // hotbar slot; Shift+Q drops the whole stack. Both are consumed by
         // the renderer between frames and reset to false.
@@ -121,12 +136,38 @@ namespace VStudioCraft.Game
             lock (_lock) { dx = _mouseDx; dy = _mouseDy; _mouseDx = 0; _mouseDy = 0; }
         }
 
+        // Append a slot index to the drag-deposit queue. Called by the
+        // host on MouseMove when the RMB-drag state crosses into a new
+        // unpainted slot. Lock-protected because the render thread
+        // drains it (single-thread reader + single-thread writer is
+        // still racy on the underlying array head/tail pointers).
+        public void EnqueueDragDeposit(int slotIndex)
+        {
+            lock (_lock) _dragDeposits.Enqueue(slotIndex);
+        }
+
+        // Drain the drag-deposit queue, returning the pending slot
+        // indices in arrival order. Safe to call when the queue is
+        // empty (returns an empty array). Called by the render thread
+        // once per frame after the single-shot click drain.
+        public int[] DrainDragDeposits()
+        {
+            lock (_lock)
+            {
+                if (_dragDeposits.Count == 0) return System.Array.Empty<int>();
+                var arr = _dragDeposits.ToArray();
+                _dragDeposits.Clear();
+                return arr;
+            }
+        }
+
         public void Clear()
         {
             lock (_lock)
             {
                 _down.Clear();
                 _mouseDx = _mouseDy = 0;
+                _dragDeposits.Clear();
             }
             MouseLookActive = false;
             BreakPressed = PlacePressed = false;

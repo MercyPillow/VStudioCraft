@@ -1563,6 +1563,74 @@ void main()
             }
         }
 
+        // RMB-drag deposit into an inventory slot. Drops one item from
+        // the cursor stack if the destination is empty or holds the
+        // same kind; foreign-type slots are skipped (no swap during
+        // drag — that's only the single-RMB rule). Slot index space
+        // matches whichever code path queued it: survival passes a raw
+        // Inventory.Slots index, creative passes a hotbar slot index
+        // (HitTestHotbar already returns Inventory.Slots-space, so no
+        // remap needed).
+        public void HandleInventoryDragDeposit(int slotIndex)
+        {
+            if (Input == null) return;
+            var inv = Input.Inventory;
+            if (inv.Cursor.IsEmpty) return;
+            if (slotIndex < 0 || slotIndex >= Inventory.TotalSlots) return;
+            DepositOneFromCursor(ref inv.Slots[slotIndex], inv);
+        }
+
+        // RMB-drag deposit into a crafting-panel slot. Slot 0..8 hits
+        // the input grid; 9 (output) is skipped (read-only); 10..54
+        // routes to the player inventory via InventoryIndexFor. After
+        // any grid mutation the output stack is recomputed from the
+        // recipe registry.
+        public void HandleCraftingDragDeposit(int slotIndex)
+        {
+            if (Input == null) return;
+            var inv = Input.Inventory;
+            if (inv.Cursor.IsEmpty) return;
+
+            if (slotIndex >= 0 && slotIndex < CraftingScreen.GridSlotCount)
+            {
+                DepositOneFromCursor(ref _craftingGrid[slotIndex], inv);
+                _craftingOutput = CraftingRecipes.Match(_craftingGrid);
+                return;
+            }
+            if (slotIndex == CraftingScreen.OutputSlot) return;
+
+            int invIdx = CraftingScreen.InventoryIndexFor(slotIndex);
+            if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
+            DepositOneFromCursor(ref inv.Slots[invIdx], inv);
+        }
+
+        // Shared "drop one from cursor" primitive used by both drag-
+        // deposit handlers. Empty slot → place a single item; same-
+        // type slot under cap → increment; foreign-type or capped slot
+        // → no-op. Preserves cursor durability when seeding a new
+        // slot so a damaged tool drag still carries wear.
+        private static void DepositOneFromCursor(ref ItemStack slot, Inventory inv)
+        {
+            var cursor = inv.Cursor;
+            if (cursor.IsEmpty) return;
+            if (slot.IsEmpty)
+            {
+                slot = new ItemStack(cursor.Type, 1, cursor.Durability);
+                cursor.Count--;
+                inv.Cursor = cursor.Count > 0 ? cursor : ItemStack.Empty;
+                return;
+            }
+            if (slot.SameKindAs(cursor))
+            {
+                if (slot.Count >= slot.MaxStackSize) return;
+                slot.Count++;
+                cursor.Count--;
+                inv.Cursor = cursor.Count > 0 ? cursor : ItemStack.Empty;
+                return;
+            }
+            // Foreign type — skip; drag never swaps.
+        }
+
         // ----- Crafting screen click handling --------------------------
         // Mirrors HandleInventoryClick's contract: the host queues clicks
         // via _input on MouseDown, the render thread drains the queue
