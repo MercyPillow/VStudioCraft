@@ -102,6 +102,30 @@ namespace VStudioCraft.Game
             return above == BlockType.Air;
         }
 
+        // Same predicate as IsSurfaceFluid but tolerates (lx, lz) outside the
+        // center chunk's local range, fetching from the supplied neighbour
+        // chunks. The cube sweep walks `slice` from 0..dAxis inclusive so the
+        // source cell can be at lx=-1 / lx=Chunk.SizeX along its swept axis
+        // — without this overload, surface-fluid cells that live one cell
+        // across a chunk boundary fail the bounds-guarded IsSurfaceFluid call,
+        // suppression is skipped, and the cube sweep emits a full-height side
+        // face that overlaps the trapezoid the owning chunk drew on its own
+        // edge. Visible as a square block of water sticking up out of a
+        // shallow flow exactly where chunk seams sit.
+        private static bool IsSurfaceFluidOrNeighbor(
+            Chunk chunk, int lx, int y, int lz,
+            Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos)
+        {
+            byte raw = BlockOrNeighbor(chunk, lx, y, lz, nxNeg, nxPos, nzNeg, nzPos);
+            if (raw != (byte)BlockType.FlowingWater && raw != (byte)BlockType.FlowingLava)
+                return false;
+            byte meta = MetaOrNeighbor(chunk, lx, y, lz, nxNeg, nxPos, nzNeg, nzPos);
+            if ((meta & 0x10) != 0) return false;            // falling
+            if (y + 1 >= Chunk.SizeY) return true;           // top of world → surface
+            byte above = BlockOrNeighbor(chunk, lx, y + 1, lz, nxNeg, nxPos, nzNeg, nzPos);
+            return above == (byte)BlockType.Air;
+        }
+
         // y position of the inset top face for a surface fluid cell. Reach
         // 0..6 maps to height 1/8..7/8 — far-from-source dribbles read as a
         // shallow puddle, fresh-from-source spread reads almost full.
@@ -602,9 +626,15 @@ namespace VStudioCraft.Game
                     //     lid (so the end-cap is not full-height).
                     //   Bottom / opaque-neighbour faces: cube sweep handles
                     //     those unchanged.
+                    // Use the neighbour-aware predicate: along the swept axis
+                    // the source cell may live one step into the adjacent
+                    // chunk (slice 0 / slice dAxis). Without that, a surface-
+                    // fluid cell pressed against a chunk seam loses its
+                    // suppression in the neighbour's sweep and the neighbour
+                    // emits a full-height side face on top of the owning
+                    // chunk's trapezoid.
                     if (aCube
-                        && (uint)cx < Chunk.SizeX && (uint)cy < Chunk.SizeY && (uint)cz < Chunk.SizeZ
-                        && IsSurfaceFluid(chunk, cx, cy, cz))
+                        && IsSurfaceFluidOrNeighbor(chunk, cx, cy, cz, nxNeg, nxPos, nzNeg, nzPos))
                     {
                         if (axis == 1 && dir > 0)
                             aCube = false;   // top — always replaced
