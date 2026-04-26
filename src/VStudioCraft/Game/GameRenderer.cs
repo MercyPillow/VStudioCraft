@@ -1217,12 +1217,12 @@ void main()
         public bool TryPlace(BlockType t)
         {
             if (_world == null) return false;
-            // Tools can't be placed — RMB on a tool stack is a no-op.
-            // Guard runs before the survival check so creative-mode
-            // RMB on a tool also does nothing (otherwise the cube
-            // shape branch below would attempt to place the tool's
-            // BlockType id as a block).
-            if (BlockData.IsTool(t)) return false;
+            // Tools and items can't be placed — RMB on either is a
+            // no-op. Guard runs before the survival check so creative-
+            // mode RMB on a tool / stick / ingot also does nothing
+            // (otherwise the cube shape branch below would attempt to
+            // place the non-block id as a world cell).
+            if (BlockData.IsTool(t) || BlockData.IsItem(t)) return false;
             // In survival, you can only place blocks you actually have. The
             // call site already passes Input.SelectedBlock as `t`, so this
             // is mainly belt-and-braces against an empty hotbar slot
@@ -1283,24 +1283,55 @@ void main()
             // of the right material tier (CanHarvest matches Alpha rules).
             if (!ToolData.CanHarvest(tool, type)) return;
 
-            // Stone → cobblestone (when harvest-eligible). Other blocks
-            // drop themselves for now; furnace-smelt items will hook in
-            // later when crafting / smelting lands.
-            BlockType dropType = ToolData.DropFor(type);
+            // Stone → cobblestone, CoalOre → Coal item, DiamondOre →
+            // Diamond gem (handled in DropFor). Two blocks have
+            // probabilistic / multi-count drops that don't fit the
+            // single-output DropFor signature, so we resolve them here:
+            //
+            //   * Gravel — 10% chance to drop Flint (matching Alpha's
+            //     1-in-10 flint odds), otherwise drops the gravel block
+            //     itself. Flint is the only item drop; the other 90%
+            //     stays a normal gravel block.
+            //   * Clay — drops 4 ClayBall items per block, never the
+            //     clay block itself (matching Alpha — clay blocks are
+            //     consumed into ingredients on harvest). Iron / gold
+            //     ores still drop the ore block until furnace smelting
+            //     lands in Tier 1 #1.
+            BlockType dropType;
+            int dropCount = 1;
+            if (type == BlockType.Gravel)
+            {
+                dropType = (_dropRng.Next(10) == 0) ? BlockType.Flint : BlockType.Gravel;
+            }
+            else if (type == BlockType.Clay)
+            {
+                dropType = BlockType.ClayBall;
+                dropCount = 4;
+            }
+            else
+            {
+                dropType = ToolData.DropFor(type);
+            }
             if (dropType == BlockType.Air) return;
 
             var rng = _dropRng;
-            float jx = ((float)rng.NextDouble() - 0.5f) * 2f;   // -1..1
-            float jz = ((float)rng.NextDouble() - 0.5f) * 2f;
-            var d = new DroppedItem
+            // Spawn one DroppedItem per unit so stacks fan out a bit
+            // when broken (matches Alpha — clay blocks scatter their 4
+            // balls instead of dropping them as a single merged stack).
+            for (int n = 0; n < dropCount; n++)
             {
-                Position = new Vector3(bx + 0.5f, by + 0.5f, bz + 0.5f),
-                Velocity = new Vector3(jx, 3.5f, jz),
-                Stack = new ItemStack(dropType, 1),
-                AgeSec = 0f,
-                PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
-            };
-            _drops.Add(d);
+                float jx = ((float)rng.NextDouble() - 0.5f) * 2f;   // -1..1
+                float jz = ((float)rng.NextDouble() - 0.5f) * 2f;
+                var d = new DroppedItem
+                {
+                    Position = new Vector3(bx + 0.5f, by + 0.5f, bz + 0.5f),
+                    Velocity = new Vector3(jx, 3.5f, jz),
+                    Stack = new ItemStack(dropType, 1),
+                    AgeSec = 0f,
+                    PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+                };
+                _drops.Add(d);
+            }
         }
 
         private readonly System.Random _dropRng = new System.Random(0xD0E5);

@@ -68,6 +68,88 @@ namespace VStudioCraft.Game
         IronAxe       = 55,
         DiamondAxe    = 56,
         GoldAxe       = 57,
+
+        // Items — non-placeable, non-tool inventory entries (the Alpha
+        // 1.1.2 "ingredient" set: sticks, coal, ingots, gem, flint, clay
+        // ball + brick, bowl). Same trick as tools: live in the BlockType
+        // id space so ItemStack / Inventory / save plumbing stays
+        // unchanged. Alpha numeric ids (256+) are preserved as comments
+        // and exposed via ItemType.AlphaId for future save-format work.
+        // BlockData.IsItem range-checks this slice the way IsTool does
+        // for tools; renderers / placement / mesher all fall through
+        // identically (non-solid, non-cube, non-opaque, flat-sprite icon).
+        Stick      = 58, // Alpha 280
+        Coal       = 59, // Alpha 263
+        IronIngot  = 60, // Alpha 265
+        GoldIngot  = 61, // Alpha 266
+        Diamond    = 62, // Alpha 264
+        Flint      = 63, // Alpha 318
+        ClayBall   = 64, // Alpha 337
+        ClayBrick  = 65, // Alpha 336
+        Bowl       = 66, // Alpha 281
+    }
+
+    // Parallel "ItemType" surface — a static class rather than a
+    // standalone enum because the underlying values still live in the
+    // BlockType id space (so existing ItemStack / Inventory / save code
+    // doesn't fork). Use ItemType.Stick at call sites that want to read
+    // "I'm spawning a Stick *item*"; functionally identical to
+    // BlockType.Stick. AlphaId / Name centralise the metadata that's
+    // specifically item-shaped (numeric Alpha id, display name).
+    internal static class ItemType
+    {
+        public const BlockType Stick     = BlockType.Stick;
+        public const BlockType Coal      = BlockType.Coal;
+        public const BlockType IronIngot = BlockType.IronIngot;
+        public const BlockType GoldIngot = BlockType.GoldIngot;
+        public const BlockType Diamond   = BlockType.Diamond;
+        public const BlockType Flint     = BlockType.Flint;
+        public const BlockType ClayBall  = BlockType.ClayBall;
+        public const BlockType ClayBrick = BlockType.ClayBrick;
+        public const BlockType Bowl      = BlockType.Bowl;
+
+        // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
+        // -1 for non-items. Not yet used at runtime — kept for the
+        // save-format work in Tier 9 #49 (autosave / backup) and for
+        // future multiplayer-protocol parity (Tier 9 #51).
+        public static int AlphaId(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Stick:     return 280;
+                case BlockType.Coal:      return 263;
+                case BlockType.IronIngot: return 265;
+                case BlockType.GoldIngot: return 266;
+                case BlockType.Diamond:   return 264;
+                case BlockType.Flint:     return 318;
+                case BlockType.ClayBall:  return 337;
+                case BlockType.ClayBrick: return 336;
+                case BlockType.Bowl:      return 281;
+                default:                  return -1;
+            }
+        }
+
+        // Friendly display name with a space between the Camel-case
+        // halves where the auto-splitter in CreativeCatalog wouldn't
+        // catch it ("IronIngot" → "Iron Ingot"). For uniformity the
+        // item names go through a single source of truth here so the
+        // creative catalog, hotbar label, and tooltips all agree.
+        public static string Name(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Stick:     return "Stick";
+                case BlockType.Coal:      return "Coal";
+                case BlockType.IronIngot: return "Iron Ingot";
+                case BlockType.GoldIngot: return "Gold Ingot";
+                case BlockType.Diamond:   return "Diamond";
+                case BlockType.Flint:     return "Flint";
+                case BlockType.ClayBall:  return "Clay Ball";
+                case BlockType.ClayBrick: return "Clay Brick";
+                case BlockType.Bowl:      return "Bowl";
+                default:                  return t.ToString();
+            }
+        }
     }
 
     internal static class BlockData
@@ -86,7 +168,7 @@ namespace VStudioCraft.Game
         // in via a separate per-tick fluid-contact check, not via collision.
         public static bool IsSolid(BlockType t)
         {
-            if (IsTool(t)) return false;
+            if (IsTool(t) || IsItem(t)) return false;
             switch (t)
             {
                 case BlockType.Air:
@@ -113,6 +195,15 @@ namespace VStudioCraft.Game
         public static bool IsTool(BlockType t)
             => (byte)t >= (byte)BlockType.WoodSword && (byte)t <= (byte)BlockType.GoldAxe;
 
+        // True if this BlockType id refers to a non-placeable, non-tool
+        // inventory item (Stick, Coal, ingots, gem, Flint, ClayBall /
+        // Brick, Bowl). Same range-check pattern as IsTool — items
+        // occupy the contiguous slice [Stick..Bowl]. Renderers,
+        // placement, mesher, and inventory branches use this to take
+        // the "flat sprite, no world cell" path identically to tools.
+        public static bool IsItem(BlockType t)
+            => (byte)t >= (byte)BlockType.Stick && (byte)t <= (byte)BlockType.Bowl;
+
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
         // skipped (you raycast through both); torches and future cross-sprite
@@ -122,7 +213,7 @@ namespace VStudioCraft.Game
         // matches Alpha (you can't punch out a fluid source by clicking it).
         public static bool IsRaycastTarget(BlockType t)
         {
-            if (IsTool(t)) return false;
+            if (IsTool(t) || IsItem(t)) return false;
             switch (t)
             {
                 case BlockType.Air:
@@ -142,7 +233,7 @@ namespace VStudioCraft.Game
         // emitted by a separate model-pass in ChunkMesher.
         public static bool IsCubeShape(BlockType t)
         {
-            if (IsTool(t)) return false;
+            if (IsTool(t) || IsItem(t)) return false;
             switch (t)
             {
                 case BlockType.Torch:
@@ -168,7 +259,7 @@ namespace VStudioCraft.Game
         // IsAlphaTestedCube).
         public static bool IsOpaque(BlockType t)
         {
-            if (IsTool(t)) return false;
+            if (IsTool(t) || IsItem(t)) return false;
             switch (t)
             {
                 case BlockType.Air:
@@ -243,7 +334,7 @@ namespace VStudioCraft.Game
         // a sub-cell volume so light still flows through their cell.
         public static bool IsLightTransparent(BlockType t)
         {
-            if (IsTool(t)) return true;
+            if (IsTool(t) || IsItem(t)) return true;
             switch (t)
             {
                 case BlockType.Air:
@@ -452,6 +543,15 @@ namespace VStudioCraft.Game
                 case BlockType.IronAxe:        return BlockTextures.TileIronAxe;
                 case BlockType.DiamondAxe:     return BlockTextures.TileDiamondAxe;
                 case BlockType.GoldAxe:        return BlockTextures.TileGoldAxe;
+                case BlockType.Stick:          return BlockTextures.TileStick;
+                case BlockType.Coal:           return BlockTextures.TileCoal;
+                case BlockType.IronIngot:      return BlockTextures.TileIronIngot;
+                case BlockType.GoldIngot:      return BlockTextures.TileGoldIngot;
+                case BlockType.Diamond:        return BlockTextures.TileDiamond;
+                case BlockType.Flint:          return BlockTextures.TileFlint;
+                case BlockType.ClayBall:       return BlockTextures.TileClayBall;
+                case BlockType.ClayBrick:      return BlockTextures.TileClayBrick;
+                case BlockType.Bowl:           return BlockTextures.TileBowl;
                 default:
                     return BlockTextures.TileStone;
             }
@@ -665,10 +765,13 @@ namespace VStudioCraft.Game
             switch (block)
             {
                 case BlockType.Stone: return BlockType.Cobblestone;
-                // Note: vanilla Alpha drops the ore block itself, not the
-                // refined item — that mirrors our current "no smelting"
-                // state. When furnace ticking lands, swap these to
-                // raw-iron / raw-gold / coal items.
+                // Ore-to-item drops. Vanilla Alpha drops the *item* form
+                // for coal and diamond ores (no smelting needed); iron
+                // and gold ores drop the ore block and require furnace
+                // smelting (Tier 1 #1) to become ingots, so they keep
+                // dropping themselves until the furnace tick lands.
+                case BlockType.CoalOre:    return BlockType.Coal;
+                case BlockType.DiamondOre: return BlockType.Diamond;
                 default: return block;
             }
         }

@@ -20,13 +20,18 @@ namespace VStudioCraft.Game
         public const int TileSize = 16;
         // Layers 0..37 are blocks (sourced from terrain.png in alpha mode,
         // procedurally generated otherwise). Layers 38..57 are tool icons
-        // (always sourced from alpha_tools.png — there's no procedural
-        // tool art, so when alpha textures are unavailable they fall
-        // through to the magenta "missing tile" placeholder via the
-        // bounds check in CopyTile). Material order matches BlockType
+        // and 58..66 are non-tool ingredient items (Stick, Coal, ingots,
+        // Diamond, Flint, ClayBall/Brick, Bowl). In alpha-textures mode
+        // the entire 38..66 range is sliced out of a single alpha_tools.png
+        // (Alpha packs tools and ingredients together at canonical Notch
+        // coordinates); in procedural mode both ranges are synthesised
+        // directly. Material order in the tool slice matches BlockType
         // enum: wood, stone, iron, diamond, gold.
-        public const int LayerCount = 58;
+        public const int LayerCount = 67;
         public const int BlockLayerCount = 38;
+        public const int ToolLayerCount = 20;
+        public const int ItemLayerCount = 9;
+        public const int FirstItemLayer = BlockLayerCount + ToolLayerCount; // 58
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -91,6 +96,20 @@ namespace VStudioCraft.Game
         public const int TileDiamondAxe     = 56;
         public const int TileGoldAxe        = 57;
 
+        // Item layer indices (58..66). Always procedural — no PNG source
+        // in either alpha terrain.png or alpha_tools.png. Order matches
+        // BlockType enum: stick, coal, iron/gold ingot, diamond, flint,
+        // clay ball/brick, bowl.
+        public const int TileStick     = 58;
+        public const int TileCoal      = 59;
+        public const int TileIronIngot = 60;
+        public const int TileGoldIngot = 61;
+        public const int TileDiamond   = 62;
+        public const int TileFlint     = 63;
+        public const int TileClayBall  = 64;
+        public const int TileClayBrick = 65;
+        public const int TileBowl      = 66;
+
         // A 2D texture array — one layer per tile. Greedy meshing can emit merged
         // quads with UVs exceeding [0,1]; with a layered texture and Repeat wrap the
         // fragment shader just samples texelFetch-equivalent `texture(array, vec3(fract(uv), layer))`.
@@ -153,6 +172,11 @@ namespace VStudioCraft.Game
             // path is still available via CreateAtlasFromAlphaTerrain
             // for players who prefer the canon Alpha art.
             GenerateProceduralToolLayers(layerPixels);
+
+            // Item layers — always procedural (neither alpha PNG has
+            // entries for the ingredient set). Same path used by the
+            // alpha-textures atlas in CreateAtlasFromAlphaTerrain.
+            GenerateProceduralItemLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -429,6 +453,309 @@ namespace VStudioCraft.Game
             SetPixel(pixels, 12, 5, loC.r, loC.g, loC.b);
         }
 
+        // Walk item layers 58..66 and paint a 16×16 sprite per item.
+        // Same shape as GenerateProceduralToolLayers: clear the layer
+        // buffer, dispatch to the per-item generator, upload via
+        // TexSubImage3D into the bound Texture2DArray. Items don't share
+        // a base layout the way tools do (every tool reuses the diagonal
+        // wood handle), so each generator is self-contained — sticks
+        // are a vertical brown bar, coal is a black blob, ingots are
+        // small loaf rectangles, etc. All 9 sprites are designed to
+        // read at hotbar / inventory slot scales.
+        private static void GenerateProceduralItemLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TileStick,     GenerateStickItem);
+            UploadItem(layerPixels, TileCoal,      GenerateCoalItem);
+            UploadItem(layerPixels, TileIronIngot, GenerateIronIngotItem);
+            UploadItem(layerPixels, TileGoldIngot, GenerateGoldIngotItem);
+            UploadItem(layerPixels, TileDiamond,   GenerateDiamondItem);
+            UploadItem(layerPixels, TileFlint,     GenerateFlintItem);
+            UploadItem(layerPixels, TileClayBall,  GenerateClayBallItem);
+            UploadItem(layerPixels, TileClayBrick, GenerateClayBrickItem);
+            UploadItem(layerPixels, TileBowl,      GenerateBowlItem);
+        }
+
+        // Local helper mirroring UploadLayer (which is private elsewhere
+        // in this file) but scoped to the item slice. Clears the layer
+        // buffer first so item generators can assume a fully transparent
+        // background and only paint pixels they care about — matches the
+        // tool generator convention.
+        private static void UploadItem(byte[] layerPixels, int layer, Action<byte[]> generator)
+        {
+            Array.Clear(layerPixels, 0, layerPixels.Length);
+            generator(layerPixels);
+            GL.TexSubImage3D(
+                TextureTarget.Texture2DArray, 0,
+                0, 0, layer,
+                TileSize, TileSize, 1,
+                PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+        }
+
+        // Stick — a wooden bar running diagonally from lower-left to
+        // upper-right, mirroring the tool-handle silhouette so a stick
+        // reads as "the handle without the head". 1 px core with hi/lo
+        // tracks for chunky 3D feel.
+        private static void GenerateStickItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) wood   = (138, 95, 50);
+            (byte r, byte g, byte b) woodHi = (172, 125, 70);
+            (byte r, byte g, byte b) woodLo = (95, 60, 30);
+            int[] xs = { 4, 5, 6, 7, 8, 9, 10, 11 };
+            int[] ys = { 12, 11, 10, 9, 8, 7, 6, 5 };
+            for (int i = 0; i < xs.Length; i++)
+            {
+                SetPixel(pixels, xs[i], ys[i], wood.r, wood.g, wood.b);
+                if (xs[i] - 1 >= 0)
+                    SetPixel(pixels, xs[i] - 1, ys[i], woodHi.r, woodHi.g, woodHi.b);
+                if (ys[i] + 1 < TileSize)
+                    SetPixel(pixels, xs[i], ys[i] + 1, woodLo.r, woodLo.g, woodLo.b);
+            }
+            // End caps — slightly darker pommel + tip so the stick's
+            // ends read as terminations rather than running off-tile.
+            SetPixel(pixels, 3, 13, woodLo.r, woodLo.g, woodLo.b);
+            SetPixel(pixels, 12, 4, woodLo.r, woodLo.g, woodLo.b);
+        }
+
+        // Coal — irregular black lump centred in the tile, 4-shade
+        // jittered fill so it reads as a chunky charcoal blob rather
+        // than a solid black square.
+        private static void GenerateCoalItem(byte[] pixels)
+        {
+            var rng = new Random(0xC0A1);
+            // Lump silhouette — hand-drawn approximation of a roundish
+            // chunk with a few flat planes. Pixels marked 1 are interior.
+            int[,] mask = new int[TileSize, TileSize];
+            int[] rows = { 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 };
+            int[] xMin = { 0, 0, 0, 4, 3, 3, 2, 2, 3, 3, 4, 4, 5, 0, 0, 0 };
+            int[] xMax = { 0, 0, 0, 11, 12, 13, 13, 13, 13, 12, 12, 11, 10, 0, 0, 0 };
+            for (int y = 0; y < TileSize; y++)
+            {
+                if (rows[y] == 0) continue;
+                for (int x = xMin[y]; x <= xMax[y]; x++) mask[x, y] = 1;
+            }
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                if (mask[x, y] == 0) continue;
+                // Rim pixels (mask edges) get the darkest shade, body
+                // pixels jitter between 3 mid-greys so the lump looks
+                // textured instead of flat. 1-in-7 sparkle pixels add
+                // a faint highlight, evoking facet glints.
+                bool rim = mask[Math.Max(0, x - 1), y] == 0
+                        || mask[Math.Min(TileSize - 1, x + 1), y] == 0
+                        || mask[x, Math.Max(0, y - 1)] == 0
+                        || mask[x, Math.Min(TileSize - 1, y + 1)] == 0;
+                byte v;
+                if (rim) v = 18;
+                else if (rng.Next(7) == 0) v = 90;
+                else v = (byte)(40 + rng.Next(20));
+                SetPixel(pixels, x, y, v, v, v);
+            }
+        }
+
+        // Iron ingot — small pale-silver loaf, two-row band shape with
+        // a brighter top edge for 3D. Same general silhouette as a
+        // bullion bar — narrower at the top, wider at the bottom.
+        private static void GenerateIronIngotItem(byte[] pixels)
+        {
+            DrawIngot(pixels, baseR: 215, baseG: 215, baseB: 222,
+                              hiR:   245, hiG:   245, hiB:   250,
+                              loR:   145, loG:   145, loB:   158, seed: 0x1B07);
+        }
+
+        // Gold ingot — same silhouette as iron, yellow palette.
+        private static void GenerateGoldIngotItem(byte[] pixels)
+        {
+            DrawIngot(pixels, baseR: 240, baseG: 205, baseB: 60,
+                              hiR:   255, hiG:   235, hiB:   110,
+                              loR:   175, loG:   140, loB:   25, seed: 0x6011);
+        }
+
+        // Shared ingot drawer — trapezoidal bar centred in the tile,
+        // 3-shade banding. Top row sits at y=6 (narrow), middle rows
+        // y=7..9 (full body), bottom row y=10 (slightly narrower than
+        // body so the shape tapers, suggesting a moulded ingot).
+        private static void DrawIngot(byte[] pixels,
+            byte baseR, byte baseG, byte baseB,
+            byte hiR,   byte hiG,   byte hiB,
+            byte loR,   byte loG,   byte loB,
+            int seed)
+        {
+            var rng = new Random(seed);
+            // Top edge — narrow + bright.
+            for (int x = 5; x <= 10; x++) SetPixel(pixels, x, 6, hiR, hiG, hiB);
+            // Body rows.
+            for (int x = 4; x <= 11; x++) SetJittered(pixels, x, 7, baseR, baseG, baseB, 6, rng);
+            for (int x = 4; x <= 11; x++) SetJittered(pixels, x, 8, baseR, baseG, baseB, 6, rng);
+            for (int x = 4; x <= 11; x++) SetJittered(pixels, x, 9, baseR, baseG, baseB, 6, rng);
+            // Bottom edge — narrow + dark for the moulded look.
+            for (int x = 5; x <= 10; x++) SetPixel(pixels, x, 10, loR, loG, loB);
+            // Side ticks — a single dark pixel at each corner to round
+            // the silhouette and sell the trapezoid shape.
+            SetPixel(pixels, 4, 7, loR, loG, loB);
+            SetPixel(pixels, 11, 9, loR, loG, loB);
+        }
+
+        // Diamond — small cyan rhombus with a bright facet on the
+        // upper-right. 4 pixels tall, 5 pixels wide, kite-shaped to
+        // suggest a cut gem.
+        private static void GenerateDiamondItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) baseC = (90, 220, 230);
+            (byte r, byte g, byte b) hiC   = (190, 255, 255);
+            (byte r, byte g, byte b) loC   = (40, 160, 180);
+
+            // Top tip
+            SetPixel(pixels, 8, 5, hiC.r, hiC.g, hiC.b);
+            // Row 6: 3 wide
+            SetPixel(pixels, 7, 6, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 8, 6, hiC.r,   hiC.g,   hiC.b);
+            SetPixel(pixels, 9, 6, baseC.r, baseC.g, baseC.b);
+            // Row 7: 5 wide — widest band
+            SetPixel(pixels, 6, 7, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 7, 7, hiC.r,   hiC.g,   hiC.b);
+            SetPixel(pixels, 8, 7, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 9, 7, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 10,7, loC.r,   loC.g,   loC.b);
+            // Row 8: 3 wide
+            SetPixel(pixels, 7, 8, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 8, 8, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 9, 8, loC.r,   loC.g,   loC.b);
+            // Row 9: bottom tip
+            SetPixel(pixels, 8, 9, loC.r, loC.g, loC.b);
+        }
+
+        // Flint — angular dark-grey shard. Asymmetric polygon to read
+        // as a knapped flake rather than a regular shape.
+        private static void GenerateFlintItem(byte[] pixels)
+        {
+            var rng = new Random(0xF11A);
+            (byte r, byte g, byte b) baseC = (75, 75, 80);
+            (byte r, byte g, byte b) hiC   = (130, 130, 135);
+            (byte r, byte g, byte b) loC   = (40, 40, 45);
+
+            // Hand-painted shard outline. y0 is top, the shape leans
+            // right and tapers toward the bottom.
+            int[][] rows = new int[][]
+            {
+                new[] { 7, 8 },                  // y=4
+                new[] { 6, 7, 8, 9 },            // y=5
+                new[] { 5, 6, 7, 8, 9, 10 },     // y=6
+                new[] { 4, 5, 6, 7, 8, 9, 10 },  // y=7
+                new[] { 4, 5, 6, 7, 8, 9, 10, 11 }, // y=8
+                new[] { 5, 6, 7, 8, 9, 10 },     // y=9
+                new[] { 6, 7, 8, 9 },            // y=10
+                new[] { 7, 8 },                  // y=11
+            };
+            for (int i = 0; i < rows.Length; i++)
+            {
+                int y = 4 + i;
+                foreach (int x in rows[i])
+                {
+                    // Top-left edge highlights, bottom-right edge dark.
+                    bool isTopLeft = (x == rows[i][0]) || (i < 2);
+                    bool isBottomRight = (x == rows[i][rows[i].Length - 1]) || (i >= rows.Length - 2);
+                    if (isTopLeft && !isBottomRight)
+                        SetPixel(pixels, x, y, hiC.r, hiC.g, hiC.b);
+                    else if (isBottomRight)
+                        SetPixel(pixels, x, y, loC.r, loC.g, loC.b);
+                    else
+                        SetJittered(pixels, x, y, baseC.r, baseC.g, baseC.b, 8, rng);
+                }
+            }
+        }
+
+        // Clay ball — round pale-grey ball with shading. Roughly a 6×6
+        // disc anchored centre-tile with a brighter top-left highlight
+        // and a darker bottom-right shadow.
+        private static void GenerateClayBallItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) baseC = (185, 195, 210);
+            (byte r, byte g, byte b) hiC   = (220, 225, 235);
+            (byte r, byte g, byte b) loC   = (130, 145, 160);
+
+            // 6×6 disc with corners cut.
+            int cx = 8, cy = 8, r = 3;
+            for (int y = cy - r; y <= cy + r; y++)
+            for (int x = cx - r; x <= cx + r; x++)
+            {
+                int dx = x - cx, dy = y - cy;
+                if (dx * dx + dy * dy > r * r + 1) continue;
+                // Highlight on upper-left, shadow on lower-right.
+                if (dx + dy <= -2)
+                    SetPixel(pixels, x, y, hiC.r, hiC.g, hiC.b);
+                else if (dx + dy >= 3)
+                    SetPixel(pixels, x, y, loC.r, loC.g, loC.b);
+                else
+                    SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+            }
+        }
+
+        // Clay brick — small reddish-orange rectangle with mortar-grey
+        // edges. Same hue as the Bricks block tile so the ingredient
+        // visually maps to its smelt-input source.
+        private static void GenerateClayBrickItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) baseC = (180, 100, 75);
+            (byte r, byte g, byte b) hiC   = (210, 130, 100);
+            (byte r, byte g, byte b) loC   = (130, 70, 50);
+            var rng = new Random(0xB71D);
+            // Rectangle 8 wide × 4 tall, centred.
+            for (int y = 6; y <= 9; y++)
+            for (int x = 4; x <= 11; x++)
+            {
+                bool top    = (y == 6);
+                bool bottom = (y == 9);
+                bool left   = (x == 4);
+                bool right  = (x == 11);
+                if (top || left)
+                    SetPixel(pixels, x, y, hiC.r, hiC.g, hiC.b);
+                else if (bottom || right)
+                    SetPixel(pixels, x, y, loC.r, loC.g, loC.b);
+                else
+                    SetJittered(pixels, x, y, baseC.r, baseC.g, baseC.b, 10, rng);
+            }
+        }
+
+        // Bowl — wooden half-circle with a darker rim. Rendered as an
+        // open-topped vessel: rim along the top, sloped sides, flat
+        // bottom. Reads as "bowl" at hotbar size despite the small
+        // canvas.
+        private static void GenerateBowlItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) wood   = (158, 113, 60);
+            (byte r, byte g, byte b) woodHi = (190, 145, 85);
+            (byte r, byte g, byte b) woodLo = (110, 75, 35);
+            (byte r, byte g, byte b) inside = (90, 60, 28);
+
+            // Rim — top of the bowl, two pixels tall, full width.
+            for (int x = 3; x <= 12; x++)
+            {
+                SetPixel(pixels, x, 7, woodHi.r, woodHi.g, woodHi.b);
+                SetPixel(pixels, x, 8, wood.r,   wood.g,   wood.b);
+            }
+            // Hollow interior — darker brown, slight inset.
+            for (int x = 4; x <= 11; x++) SetPixel(pixels, x, 8, inside.r, inside.g, inside.b);
+            // Curved sides — sloped inward as we go down.
+            int[] leftEdge  = { 4, 5, 6 };
+            int[] rightEdge = { 11, 10, 9 };
+            int[] yRows     = { 9, 10, 11 };
+            for (int i = 0; i < yRows.Length; i++)
+            {
+                int y = yRows[i];
+                int xL = leftEdge[i];
+                int xR = rightEdge[i];
+                SetPixel(pixels, xL, y, woodLo.r, woodLo.g, woodLo.b);
+                SetPixel(pixels, xR, y, woodLo.r, woodLo.g, woodLo.b);
+                for (int x = xL + 1; x < xR; x++)
+                    SetPixel(pixels, x, y, wood.r, wood.g, wood.b);
+            }
+            // Bottom highlight — single bright pixel along the inner
+            // bottom rim so the bowl reads as concave.
+            SetPixel(pixels, 7, 11, woodHi.r, woodHi.g, woodHi.b);
+            SetPixel(pixels, 8, 11, woodHi.r, woodHi.g, woodHi.b);
+        }
+
         // Tile coordinates in Alpha 1.1.2_01's terrain.png. Format is
         // (col, row), each cell 16×16 pixels in a 16×16 grid (256×256
         // total). The embedded PNG is sliced once at atlas-build time
@@ -513,6 +840,23 @@ namespace VStudioCraft.Game
             /* TileIronAxe           */ (2, 7),
             /* TileDiamondAxe        */ (3, 7),
             /* TileGoldAxe           */ (4, 7),
+
+            // Items — coordinates into alpha_tools.png (the same 256×256
+            // sheet that holds the tool icons). Alpha 1.1.2 packs ALL
+            // craftable items into a single PNG; the columns past col 4
+            // (which holds the gold-tier tools) house the ingredient
+            // sprites. Verified against the embedded sheet: e.g. Coal
+            // at (7,0) reads pure black, Diamond at (7,3) reads cyan,
+            // GoldIngot at (7,2) reads yellow.
+            /* TileStick             */ (5, 3),
+            /* TileCoal              */ (7, 0),
+            /* TileIronIngot         */ (7, 1),
+            /* TileGoldIngot         */ (7, 2),
+            /* TileDiamond           */ (7, 3),
+            /* TileFlint             */ (6, 0),
+            /* TileClayBall          */ (9, 3),
+            /* TileClayBrick         */ (6, 1),
+            /* TileBowl              */ (7, 4),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -562,6 +906,11 @@ namespace VStudioCraft.Game
             // own cached buffer so the two atlases stay independent
             // (terrain can be hot-swappable in the future without
             // disturbing tool icons).
+            // Tool AND item layers (38..66) share alpha_tools.png as their
+            // source — Alpha packs swords/shovels/pickaxes/axes plus all
+            // ingredient sprites (coal, diamond, ingots, stick, flint,
+            // clay ball/brick, bowl) into the same 256×256 sheet, so a
+            // single decode + slice loop covers both ranges.
             UploadToolLayersFromAlphaTools(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);

@@ -4,14 +4,31 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 `src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
 Items marked **Have** exist today; items under **Missing** are the gap.
 
-Last updated after the tools + creative-inventory pass: tools (wood /
-stone / iron / gold / diamond × pickaxe / shovel / axe / sword) ship as
-20 new BlockType entries (38..57) sourced from a base64-inlined
-`alpha_tools.png`. Mining is now hardness × tool-speed gated, with
-RequiredTier drop gating, durability decrement on break, and a 3-stop
-green→yellow→red durability bar drawn across hotbar / inventory / cursor.
-Creative-inventory panel grew by the search-bar zone so all 4 catalog
-rows are fully visible (was clipping at ~3.5 rows).
+Last updated after the ItemType + ingredient-set pass: 9 non-block
+items (Stick, Coal, Iron/Gold Ingot, Diamond gem, Flint, Clay
+Ball/Brick, Bowl) ship as new BlockType entries 58..66 alongside an
+`ItemType` static-class wrapper that exposes Alpha 1.1.2 numeric ids
+(263..341) for save / network parity. `BlockData.IsItem` ranges the
+item slice the same way `IsTool` does; renderers, mesher, placement,
+and inventory all fall through identically (non-solid, non-cube,
+non-opaque, flat-sprite icon, RMB rejected). Coal Ore now drops Coal,
+Diamond Ore drops the Diamond gem, Gravel has a 10% Flint chance,
+Clay drops 4 Clay Balls. Item icons live alongside the tool icons in
+the embedded `alpha_tools.png` at canonical Notch coordinates (Coal
+(7,0), Iron Ingot (7,1), Gold Ingot (7,2), Diamond (7,3), Flint
+(6,0), Clay Brick (6,1), Stick (5,3), Clay Ball (9,3), Bowl (7,4))
+— the alpha-textures atlas slices them out in the same loop that
+already handles tools, while procedural mode synthesises 16×16
+pixel-art equivalents.
+
+Earlier: tools (wood / stone / iron / gold / diamond × pickaxe /
+shovel / axe / sword) ship as 20 BlockType entries (38..57) sourced
+from a base64-inlined `alpha_tools.png`. Mining is now hardness ×
+tool-speed gated, with RequiredTier drop gating, durability decrement
+on break, and a 3-stop green→yellow→red durability bar drawn across
+hotbar / inventory / cursor. Creative-inventory panel grew by the
+search-bar zone so all 4 catalog rows are fully visible (was
+clipping at ~3.5 rows).
 
 ---
 
@@ -220,13 +237,16 @@ rows are fully visible (was clipping at ~3.5 rows).
 - Tools: wood / stone / iron / gold / diamond × pickaxe / shovel / axe / sword. Atlas-textures mode pulls them from a base64-inlined `alpha_tools.png` (atlas layers 38..57); procedural-textures mode synthesises a 16×16 sprite per tool from code (`GenerateProceduralToolLayers` — wood handle on a diagonal + per-kind metal head with material-specific 3-shade palette). Either way the icons render through the existing `DrawFlatSpriteIcon` path so the inventory shows real 2D sprites rather than cubes.
 - Tool durability (per-stack `short` field on `ItemStack`; ticks +1 per successful break, stack clears at MaxDurability — Wood 60, Stone 132, Iron 251, Gold 33, Diamond 1562). Damaged tools never auto-stack: ItemStack equality / SameKindAs include durability.
 - Hardness-gated break time (per-block hardness × tool-class multiplier — Wood 2×, Stone 4×, Iron 6×, Diamond 8×, Gold 12×; bare-hand 1×). RequiredKind + RequiredTier in `ToolData` gate ore drops: stone-family blocks need a pickaxe of correct tier, otherwise the block breaks and yields nothing. Stone breaks into Cobblestone when harvest-eligible.
+- Non-block ItemType layer — 9 ingredient items (Stick / Coal / Iron Ingot / Gold Ingot / Diamond gem / Flint / Clay Ball / Clay Brick / Bowl) live as BlockType entries 58..66 (same id-space trick tools use). `BlockData.IsItem(t)` range-checks the slice; mesher / placement / collision / lighting all branch through it the same way they branch through `IsTool`. RMB on an item stack is rejected by `TryPlace`. The parallel `ItemType` static class exposes both the strongly-typed `BlockType` constants (`ItemType.Stick`) and Alpha 1.1.2 numeric ids (`ItemType.AlphaId(t)` returns 280 for Stick, 263 for Coal, etc.) for upcoming save / multiplayer work. Item icons live alongside the tool icons in the embedded `alpha_tools.png` at canonical Notch coordinates — Coal (7,0), Flint (6,0), Iron Ingot (7,1), Clay Brick (6,1), Gold Ingot (7,2), Stick (5,3), Diamond (7,3), Clay Ball (9,3), Bowl (7,4) — so the alpha-textures atlas slices items in the same loop that already handles tools (`UploadToolLayersFromAlphaTools` walks layers 38..66 with one decode of the PNG). Procedural mode synthesises 16×16 pixel-art equivalents (`GenerateProceduralItemLayers`).
+- Item drops: Coal Ore drops Coal (item, not the ore block) when broken with a wood-tier+ pickaxe; Diamond Ore drops the Diamond gem when broken with iron-tier+ pickaxe; Gravel has a 1-in-10 chance to drop Flint instead of the gravel block (matching Alpha); Clay always drops 4 Clay Balls (never the clay block itself). The 4 balls scatter as 4 separate `DroppedItem` entities so the pile fans out instead of stacking on the spot. Iron / Gold ores still drop the ore block until furnace smelting lands (Tier 1 #1).
 
-**Missing** — Alpha 1.1.2_01 ships 88 distinct non-block items (IDs 256–346 plus 2256/2257). We currently have 20 (the tools). This list covers the other 68. Items added in later versions (Cookie, Sugar, Bone, Bone-meal, Clock, Cake, Cocoa Beans, dyes, Ink Sac, Lapis, Map, Golden Apple, Raw/Cooked Cod, Glowstone Dust) are intentionally excluded — they're post-1.1.2_01.
+**Missing** — Alpha 1.1.2_01 ships 88 distinct non-block items (IDs 256–346 plus 2256/2257). We currently have 29 (20 tools + 9 ingredients). This list covers the remaining 59. Items added in later versions (Cookie, Sugar, Bone, Bone-meal, Clock, Cake, Cocoa Beans, dyes, Ink Sac, Lapis, Map, Golden Apple, Raw/Cooked Cod, Glowstone Dust) are intentionally excluded — they're post-1.1.2_01.
 
 - **Tools — hoes (5)**: Wooden, Stone, Iron, Diamond, Gold. The hoe row in alpha_tools.png is already in the atlas image, just not mapped to BlockType entries (row gets used once farming lands).
 - **Combat (3)**: Bow (261), Arrow (262), Flint and Steel (259).
-- **Ingredients / materials (15)**: Coal (263), Diamond gem (264), Iron Ingot (265), Gold Ingot (266), Stick (280), String (287), Feather (288), Gunpowder (289), Flint (318), Leather (334), Clay Brick item (336), Clay Ball (337), Paper (339), Book (340), Slimeball (341).
-- **Containers (5)**: Bowl (281), Bucket empty (325), Water Bucket (326), Lava Bucket (327), Milk Bucket (335).
+- **Ingredients / materials from mob drops (5)**: String (287), Feather (288), Gunpowder (289), Leather (334), Slimeball (341). Ship with their source mobs in Tier 3.
+- **Sugar-cane derivatives (2)**: Paper (339), Book (340). Ship with sugar cane in Tier 8.
+- **Containers (4)**: Bucket empty (325), Water Bucket (326), Lava Bucket (327), Milk Bucket (335).
 - **Food (5)**: Apple (260), Mushroom Stew (282), Wheat (296), Bread (297), Raw Porkchop (319), Cooked Porkchop (320).
 - **Farming (1)**: Wheat Seeds (295).
 - **Armor (20)**: Leather / Chainmail / Iron / Diamond / Gold × Helmet / Chestplate / Leggings / Boots (IDs 298–317). Chainmail is uncraftable in Alpha — only obtainable via mob drops, and even then bugged — but the item IDs exist.
@@ -387,81 +407,79 @@ multiple subsystems at once.
 
 ### Tier 1 — Survival gameplay loop (the biggest "feels like Minecraft" gaps)
 
-1. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron.
-2. **Non-block ItemType layer + minimum ingredient set** — Inventory currently treats every entry as a `BlockType`. Add a parallel `ItemType` enum so we can carry items that don't place into a world cell. First wave is the pure-ingredient set that #1's recipes need as inputs/outputs: **Stick (280)**, **Coal (263)** (drops from coal ore), **Iron Ingot (265)** + **Gold Ingot (266)** (smelt outputs), **Diamond gem (264)** (drops from diamond ore — current code drops a DiamondBlock placeholder), **Flint (318)** (~10% drop from gravel breaks), **Clay Ball (337)** (4 per clay block), **Clay Brick item (336)** (smelt clay ball), **Bowl (281)** (3 planks → 4 bowls). This is the structural foundation for #1's recipe outputs; the broader Alpha item catalogue (food, combat, armor, vehicles, music discs, etc.) ships in Tier 4.
-3. **Sound** — Audio backend (OpenAL via OpenTK, or NAudio) + an SFX bank: per-material step, block break, block place, attack hit, fall thud, water splash, UI click, ambient cave drip. Music tracks last. Surprisingly large feel-improvement vs. effort.
+1. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron. (The ItemType layer + ingredient set this depends on already shipped — see _Items_ → Have.)
+2. **Sound** — Audio backend (OpenAL via OpenTK, or NAudio) + an SFX bank: per-material step, block break, block place, attack hit, fall thud, water splash, UI click, ambient cave drip. Music tracks last. Surprisingly large feel-improvement vs. effort.
 
 ### Tier 2 — Visible world polish (each item improves every frame)
 
-4. **Animated water / lava textures** — Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
-5. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
-6. **Particle system** — Block-break puffs, water splash on entry, lava bubbles, torch smoke wisp. Reuses the existing sprite shader.
-7. **Real glass transparency** — Glass routes through the alpha-blend pass like water; faces between adjacent glass cull internally so 2-deep glass doesn't z-fight.
-8. **Hand-held item rendering (first-person)** — Held block/tool bobs in the bottom-right of the viewport with a step-sync sway. Covers ~70% of the "world feels alive" sensation.
-9. **Hurt overlay + arm-swing on attack** — Cheap, high-perceptual: red screen-tint for 250 ms on damage, plus a held-hand arm swing on LMB.
+4. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
+5. **Particle system** — Block-break puffs, water splash on entry, lava bubbles, torch smoke wisp. Reuses the existing sprite shader.
+6. **Real glass transparency** — Glass routes through the alpha-blend pass like water; faces between adjacent glass cull internally so 2-deep glass doesn't z-fight.
+7. **Hand-held item rendering (first-person)** — Held block/tool bobs in the bottom-right of the viewport with a step-sync sway. Covers ~70% of the "world feels alive" sensation.
+8. **Hurt overlay + arm-swing on attack** — Cheap, high-perceptual: red screen-tint for 250 ms on damage, plus a held-hand arm swing on LMB.
 
 ### Tier 3 — Mobs (the world stops feeling empty)
 
-10. **Entity framework + first passive mob (pig)** — AABB walker shared with `Player`, simple wandering AI (random direction every 5 s). Drops **Raw Porkchop (319)**; smelts to **Cooked Porkchop (320)** once the furnace is online.
-11. **First hostile mobs (creeper, skeleton, spider, zombie)** — A* on a 16-block window, chase/attack AI, attack hooks into the existing `Player.TakeDamage`. Brings the mob-drop ingredients into the world: creeper drops **Gunpowder (289)**, skeleton drops **Bow (261)** + **Arrow (262)**, spider drops **String (287)**. Survival now has a threat. (Bow combat itself ships in Tier 4 #18 — these drops are inert collectibles until then.)
-12. **Light-level-gated spawn loop** — Hostile spawns at light < 7, passive on grass at light ≥ 9. Per-chunk spawn cap.
-13. **Cow / sheep / chicken** — Variants of pig. Cow drops **Leather (334)** + Raw Beef (Beef wasn't added until Beta 1.8 — Alpha cows actually dropped raw porkchop alongside leather; we'll match the era). Chicken drops **Feather (288)** on death and lays **Egg (344)** every ~5 min while alive. Sheep drops Wool (block) when sheared / killed.
-14. **Player skin + third-person model** — Required for F5 + future multiplayer.
+9. **Entity framework + first passive mob (pig)** — AABB walker shared with `Player`, simple wandering AI (random direction every 5 s). Drops **Raw Porkchop (319)**; smelts to **Cooked Porkchop (320)** once the furnace is online.
+10. **First hostile mobs (creeper, skeleton, spider, zombie)** — A* on a 16-block window, chase/attack AI, attack hooks into the existing `Player.TakeDamage`. Brings the mob-drop ingredients into the world: creeper drops **Gunpowder (289)**, skeleton drops **Bow (261)** + **Arrow (262)**, spider drops **String (287)**. Survival now has a threat. (Bow combat itself ships in Tier 4 #17 — these drops are inert collectibles until then.)
+11. **Light-level-gated spawn loop** — Hostile spawns at light < 7, passive on grass at light ≥ 9. Per-chunk spawn cap.
+12. **Cow / sheep / chicken** — Variants of pig. Cow drops **Leather (334)** + Raw Beef (Beef wasn't added until Beta 1.8 — Alpha cows actually dropped raw porkchop alongside leather; we'll match the era). Chicken drops **Feather (288)** on death and lays **Egg (344)** every ~5 min while alive. Sheep drops Wool (block) when sheared / killed.
+13. **Player skin + third-person model** — Required for F5 + future multiplayer.
 
-### Tier 4 — Alpha 1.1.2 item catalogue (the 68-item gap)
+### Tier 4 — Alpha 1.1.2 item catalogue (the remaining items)
 
-The audited Alpha items the codebase doesn't yet have, ordered so each entry can ship on its own once Tier 1's `ItemType` layer + Tier 3's mobs are in place. Most are 100–500 LoC each.
+The audited Alpha items the codebase doesn't yet have, ordered so each entry can ship on its own now that the `ItemType` layer (Items → Have) and Tier 3's mobs are in place. Most are 100–500 LoC each.
 
-15. **Hoes + farming + wheat → bread + mushroom stew** — 5 hoe items (Wood/Stone/Iron/Diamond/Gold — the alpha_tools.png hoe row is already in the atlas), Farmland block (tilled grass/dirt), Wheat crop block with growth-stage metadata, Wheat Seeds (drops from breaking tall grass — already in world), Wheat (item, harvested), Bread (3 wheat → 1 bread). Mushroom Stew (bowl + 1 brown + 1 red mushroom) rounds out the food bundle since both mushroom blocks already exist. Closes the no-mob food loop.
-16. **Buckets — empty / water / lava / milk (325/326/327/335)** — RMB on a fluid source picks it up into the bucket and replaces the cell with Air; RMB on Air with a filled bucket places the source. Hooks into the existing fluid network so a placed source immediately starts the outflow tick. Milk Bucket from RMB on a cow.
-17. **Wooden Door + Iron Door (item IDs 324 / 330) + door blocks** — Two-block-tall door geometry with open/closed orientation in a metadata byte. Wooden door toggles on RMB. Iron door is inert until redstone arrives (Tier 8) — placed and visible but doesn't open from RMB.
-18. **Bow + Arrow combat + Flint and Steel (259) + Apple (260)** — Bow uses arrow ammo (skeletons drop both); fires a projectile entity through the existing voxel raycaster with damage-on-hit. Flint and Steel ignites blocks (turns them into Fire — pair with Tier 6 fire) or primes TNT. Apple drops rarely from breaking oak leaves (~0.5%).
-19. **Slime mob + Slimeball (341)** — Bouncing cube that splits into smaller copies on hit. Spawns in low-Y chunks regardless of light. Slimeball recipes (sticky pistons etc.) don't exist in Alpha 1.1.2 so the item is currently cosmetic — kept for completeness.
-20. **Armor — leather / iron / gold / diamond × 4 slots + chainmail mob-drop only + damage reduction + 4 armor slots in inventory** — 16 craftable pieces (IDs 298–301, 306–317) + 4 chainmail (IDs 302–305) that only drop from zombies/skeletons in vanilla Alpha. Armor slots extend `Inventory.TotalSlots` from 45 to 49; the inventory screen panel grows to render them in a left-side column. Damage reduction follows Alpha's flat-percentage formula (each piece reduces incoming damage by a fixed amount).
-21. **Snowball (332) + Egg (344) projectiles** — Throwable on RMB, follow ballistic arc. Snowball stacks to 16 and only damages Blazes (which don't exist in Alpha — ours is purely cosmetic). Egg has a small chance to spawn a chick on impact.
-22. **Saddle (329) + pig riding** — RMB on a pig with a saddle equips it; mount with RMB. Player rides the pig with reduced control (the Alpha pig had no input — it just wandered with the player on top, which we can match faithfully).
-23. **Compass (345)** — Held item; small overlay arrow on the hotbar slot points toward world spawn from anywhere on the map. Recipe: 4 iron ingot + 1 redstone (gates on Tier 8's redstone item; until then it ships as a creative-catalog-only entry).
-24. **Fishing Rod (346) + cast/reel mechanic** — RMB casts a line entity that lands at the cursor's reach distance; second RMB reels it in. After a random delay (~5–30 s), the line catches a Raw Porkchop (Alpha 1.1.2 fishing rod technically pre-dates Raw Cod's introduction in 1.2.0, so the era pull was a bit anything-goes — we'll match by pulling Raw Porkchop or Raw Beef).
-25. **Painting (321)** — RMB on a wall places a painting entity; auto-sizes to the largest available rectangle (1×1 / 2×1 / 4×3 etc.). Sprite atlas of ~25 small paintings rendered as flat quads inside the wall plane.
-26. **Music Discs ("13" / "cat", IDs 2256/2257) + Jukebox block** — Pair of one-track items playable in a Jukebox block (RMB inserts the disc, plays once, ejects). Depends on Tier 1 #3 sound. Note: the Jukebox block itself was added in Alpha 1.0.14 alongside the discs, so it's an Alpha 1.1.2 block we don't currently have — gets added with this item.
-27. **Sugar cane block + Paper (339) + Book (340)** — Sugar cane grows next to water on grass/dirt/sand; breaking it yields the cane item. Paper = 3 sugar cane in a row; Book = 3 paper. Bookshelf already exists as a block, so 3 books + 6 planks → bookshelf is a real V1 use.
+14. **Hoes + farming + wheat → bread + mushroom stew** — 5 hoe items (Wood/Stone/Iron/Diamond/Gold — the alpha_tools.png hoe row is already in the atlas), Farmland block (tilled grass/dirt), Wheat crop block with growth-stage metadata, Wheat Seeds (drops from breaking tall grass — already in world), Wheat (item, harvested), Bread (3 wheat → 1 bread). Mushroom Stew (bowl + 1 brown + 1 red mushroom) rounds out the food bundle since both mushroom blocks already exist. Closes the no-mob food loop.
+15. **Buckets — empty / water / lava / milk (325/326/327/335)** — RMB on a fluid source picks it up into the bucket and replaces the cell with Air; RMB on Air with a filled bucket places the source. Hooks into the existing fluid network so a placed source immediately starts the outflow tick. Milk Bucket from RMB on a cow.
+16. **Wooden Door + Iron Door (item IDs 324 / 330) + door blocks** — Two-block-tall door geometry with open/closed orientation in a metadata byte. Wooden door toggles on RMB. Iron door is inert until redstone arrives (Tier 8) — placed and visible but doesn't open from RMB.
+17. **Bow + Arrow combat + Flint and Steel (259) + Apple (260)** — Bow uses arrow ammo (skeletons drop both); fires a projectile entity through the existing voxel raycaster with damage-on-hit. Flint and Steel ignites blocks (turns them into Fire — pair with Tier 6 fire) or primes TNT. Apple drops rarely from breaking oak leaves (~0.5%).
+18. **Slime mob + Slimeball (341)** — Bouncing cube that splits into smaller copies on hit. Spawns in low-Y chunks regardless of light. Slimeball recipes (sticky pistons etc.) don't exist in Alpha 1.1.2 so the item is currently cosmetic — kept for completeness.
+19. **Armor — leather / iron / gold / diamond × 4 slots + chainmail mob-drop only + damage reduction + 4 armor slots in inventory** — 16 craftable pieces (IDs 298–301, 306–317) + 4 chainmail (IDs 302–305) that only drop from zombies/skeletons in vanilla Alpha. Armor slots extend `Inventory.TotalSlots` from 45 to 49; the inventory screen panel grows to render them in a left-side column. Damage reduction follows Alpha's flat-percentage formula (each piece reduces incoming damage by a fixed amount).
+20. **Snowball (332) + Egg (344) projectiles** — Throwable on RMB, follow ballistic arc. Snowball stacks to 16 and only damages Blazes (which don't exist in Alpha — ours is purely cosmetic). Egg has a small chance to spawn a chick on impact.
+21. **Saddle (329) + pig riding** — RMB on a pig with a saddle equips it; mount with RMB. Player rides the pig with reduced control (the Alpha pig had no input — it just wandered with the player on top, which we can match faithfully).
+22. **Compass (345)** — Held item; small overlay arrow on the hotbar slot points toward world spawn from anywhere on the map. Recipe: 4 iron ingot + 1 redstone (gates on Tier 8's redstone item; until then it ships as a creative-catalog-only entry).
+23. **Fishing Rod (346) + cast/reel mechanic** — RMB casts a line entity that lands at the cursor's reach distance; second RMB reels it in. After a random delay (~5–30 s), the line catches a Raw Porkchop (Alpha 1.1.2 fishing rod technically pre-dates Raw Cod's introduction in 1.2.0, so the era pull was a bit anything-goes — we'll match by pulling Raw Porkchop or Raw Beef).
+24. **Painting (321)** — RMB on a wall places a painting entity; auto-sizes to the largest available rectangle (1×1 / 2×1 / 4×3 etc.). Sprite atlas of ~25 small paintings rendered as flat quads inside the wall plane.
+25. **Music Discs ("13" / "cat", IDs 2256/2257) + Jukebox block** — Pair of one-track items playable in a Jukebox block (RMB inserts the disc, plays once, ejects). Depends on Tier 1 #2 sound. Note: the Jukebox block itself was added in Alpha 1.0.14 alongside the discs, so it's an Alpha 1.1.2 block we don't currently have — gets added with this item.
+26. **Sugar cane block + Paper (339) + Book (340)** — Sugar cane grows next to water on grass/dirt/sand; breaking it yields the cane item. Paper = 3 sugar cane in a row; Book = 3 paper. Bookshelf already exists as a block, so 3 books + 6 planks → bookshelf is a real V1 use.
 
 ### Tier 5 — Controls + UX parity (small, every-session improvements)
 
-28. **Q drop, middle-click pick-block, Shift sneak (edge-stop), F5 third-person** — Each ~50–100 LoC; ship together.
-29. **Right-click split, shift-click move, right-click drag spread** — Inventory ops Alpha shipped that we're missing.
-30. **Death screen with respawn button** — Replaces the current instant-respawn.
-31. **F3 debug screen** — XYZ, FPS, biome, light values, chunk count.
-32. **Item-name popup on hotbar switch** — Show the held block's name for ~2 s after a hotbar slot change (currently it's persistent above the bar).
+27. **Q drop, middle-click pick-block, Shift sneak (edge-stop), F5 third-person** — Each ~50–100 LoC; ship together.
+28. **Right-click split, shift-click move, right-click drag spread** — Inventory ops Alpha shipped that we're missing.
+29. **Death screen with respawn button** — Replaces the current instant-respawn.
+30. **F3 debug screen** — XYZ, FPS, biome, light values, chunk count.
+31. **Item-name popup on hotbar switch** — Show the held block's name for ~2 s after a hotbar slot change (currently it's persistent above the bar).
 
 ### Tier 6 — World-gen variety
 
-33. **Ravines + dungeons (cobble rooms with spawner + chest)** — Two scripted features added to the existing chunk-feature pipeline.
-34. **Surface lava lakes + underground pools + cliff-face springs**.
-35. **Fire propagation block** — Block, spread/die tick. Flint and Steel (Tier 4 #18) lights it; pairs with Tier 8 TNT priming.
-36. **Falling sand / gravel physics** — Block-update tick converts unsupported sand/gravel into a falling-block entity.
-37. **Water-meets-lava → cobblestone / stone / obsidian** — Source-vs-source contact rule in the fluid tick.
-38. **Biome system (snow / desert / forest / plains)** — `OverworldGenerator` clone using rainfall/temperature noise; per-biome surface-block + flora rules. Unlocks ice/snow blocks, cacti, pumpkin patches.
+32. **Ravines + dungeons (cobble rooms with spawner + chest)** — Two scripted features added to the existing chunk-feature pipeline.
+33. **Surface lava lakes + underground pools + cliff-face springs**.
+34. **Fire propagation block** — Block, spread/die tick. Flint and Steel (Tier 4 #17) lights it; pairs with Tier 8 TNT priming.
+35. **Falling sand / gravel physics** — Block-update tick converts unsupported sand/gravel into a falling-block entity.
+36. **Water-meets-lava → cobblestone / stone / obsidian** — Source-vs-source contact rule in the fluid tick.
+37. **Biome system (snow / desert / forest / plains)** — `OverworldGenerator` clone using rainfall/temperature noise; per-biome surface-block + flora rules. Unlocks ice/snow blocks, cacti, pumpkin patches.
 
 ### Tier 7 — Lighting + sky polish
 
-39. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
-40. **Cross-chunk light propagation** — Eliminates the small light seams at chunk borders next to torches.
-41. **Underwater fog colour swap** — Real deep-blue fog when the camera is submerged (we currently only tint the framebuffer).
-42. **Real moon phases (8-frame texture)** + **horizon gradient** + **rain / snow / lightning** + **biome sky tints**.
+38. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
+39. **Cross-chunk light propagation** — Eliminates the small light seams at chunk borders next to torches.
+40. **Underwater fog colour swap** — Real deep-blue fog when the camera is submerged (we currently only tint the framebuffer).
+41. **Real moon phases (8-frame texture)** + **horizon gradient** + **rain / snow / lightning** + **biome sky tints**.
 
 ### Tier 8 — Late-Alpha systems
 
-43. **Redstone primitives (wire + torch + lever + button + pressure plate) + Redstone Dust item (331)** — A whole creative dimension. Unblocks the Iron Door's redstone gate from Tier 4 #17 and the Compass recipe from Tier 4 #23.
-44. **TNT priming + explosion algorithm** — Ray-based blast with block-resistance. Flint and Steel from Tier 4 #18 ignites it.
-45. **Signs (post + wall) with writable text + Sign item (323)** — Tile entity with a 4-line string + in-place text editor.
-46. **Slabs + stairs** — Sub-block geometry; metadata byte and a non-cube collision shape.
-47. **Pumpkins / cacti / ice / snow blocks / fences / ladders** — Round out the block list.
+42. **Redstone primitives (wire + torch + lever + button + pressure plate) + Redstone Dust item (331)** — A whole creative dimension. Unblocks the Iron Door's redstone gate from Tier 4 #16 and the Compass recipe from Tier 4 #22.
+43. **TNT priming + explosion algorithm** — Ray-based blast with block-resistance. Flint and Steel from Tier 4 #17 ignites it.
+44. **Signs (post + wall) with writable text + Sign item (323)** — Tile entity with a 4-line string + in-place text editor.
+45. **Slabs + stairs** — Sub-block geometry; metadata byte and a non-cube collision shape.
+46. **Pumpkins / cacti / ice / snow blocks / fences / ladders** — Round out the block list.
 
 ### Tier 9 — Infrastructure + completion
 
-48. **Main menu + world select + world creation screen** — Currently we go straight from the VS tool window into a world.
-49. **Configurable key bindings + autosave + backup-on-load-failure**.
-50. **Minecart (328) + Storage Minecart (342) + Powered Minecart (343) + Boat (333) + rail blocks** — Vehicles. Minecart on rails, boat on water; each is a ridable entity. Powered Minecart has a furnace that burns coal to push it. Storage Minecart shows a chest GUI when ridden.
-51. **Multiplayer (TCP server + protocol + auth + interp)** — Alpha had this; it's a project on its own. ~3000+ LoC.
-
+47. **Main menu + world select + world creation screen** — Currently we go straight from the VS tool window into a world.
+48. **Configurable key bindings + autosave + backup-on-load-failure**.
+49. **Minecart (328) + Storage Minecart (342) + Powered Minecart (343) + Boat (333) + rail blocks** — Vehicles. Minecart on rails, boat on water; each is a ridable entity. Powered Minecart has a furnace that burns coal to push it. Storage Minecart shows a chest GUI when ridden.
+50. **Multiplayer (TCP server + protocol + auth + interp)** — Alpha had this; it's a project on its own. ~3000+ LoC.
+51. **Animated water / lava textures** — moved to be last, original attempts edited the texture, instead of animating it. -> Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
