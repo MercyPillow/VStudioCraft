@@ -35,6 +35,16 @@
       <Link>UI\GameHostControl.xaml.cs</Link>
       <DependentUpon>GameHostControl.xaml</DependentUpon>
     </Compile>
+
+    <!-- Bundled OpenAL Soft (renamed soft_oal.dll). AudioEngine.TryPreloadOpenAL
+         LoadLibrary's this from Native\ next to the assembly so OpenTK's
+         DllImport("openal32") resolves without it being on the system PATH.
+         Linked from the VSIX project's Native folder so both targets share
+         the same binary. -->
+    <Content Include="..\VStudioCraft\Native\openal32.dll">
+      <Link>Native\openal32.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>
