@@ -145,11 +145,14 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileBrownMushroom, GenerateBrownMushroom);
             UploadLayer(layerPixels, TileRedMushroom, GenerateRedMushroom);
 
-            // Tool layers come from alpha_tools.png unconditionally — there's
-            // no procedural tool art. If the tools PNG fails to decode the
-            // layers stay zero-filled (transparent), which reads as "no
-            // icon" rather than crashing the procedural atlas path.
-            UploadToolLayersFromAlphaTools(layerPixels);
+            // Tool layers — generate procedural pixel-art sprites that
+            // match the procedural block aesthetic instead of pulling
+            // from alpha_tools.png. The procedural atlas is the "no
+            // assets, just code" mode, so the tools should look like
+            // they were drawn by the same hand as the blocks. The PNG
+            // path is still available via CreateAtlasFromAlphaTerrain
+            // for players who prefer the canon Alpha art.
+            GenerateProceduralToolLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -179,6 +182,251 @@ namespace VStudioCraft.Game
                     TileSize, TileSize, 1,
                     PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
             }
+        }
+
+        // Procedural tool atlas. Walks tool layers 38..57 and synthesises
+        // a 16×16 sprite for each, deriving (kind, material) from the
+        // AlphaTileCoords entry — the (col, row) we use for slicing the
+        // PNG happens to also encode "row 4..7 = sword/shovel/pickaxe/axe"
+        // and "col 0..4 = wood/stone/iron/diamond/gold", so the same
+        // table drives both decoders. Each sprite is a wood handle
+        // running diagonally bottom-left → upper-right with a metal head
+        // at the upper-right end; the head shape branches per kind.
+        // Material colours pick the head palette so iron looks pale,
+        // gold looks yellow, etc.
+        private static void GenerateProceduralToolLayers(byte[] layerPixels)
+        {
+            for (int layer = BlockLayerCount; layer < LayerCount; layer++)
+            {
+                Array.Clear(layerPixels, 0, layerPixels.Length);
+                var (col, row) = AlphaTileCoords[layer];
+                ToolKind kind;
+                switch (row)
+                {
+                    case 4: kind = ToolKind.Sword;   break;
+                    case 5: kind = ToolKind.Shovel;  break;
+                    case 6: kind = ToolKind.Pickaxe; break;
+                    case 7: kind = ToolKind.Axe;     break;
+                    default: kind = ToolKind.Sword;  break; // unreachable for tool rows
+                }
+                ToolMaterial mat;
+                switch (col)
+                {
+                    case 0: mat = ToolMaterial.Wood;    break;
+                    case 1: mat = ToolMaterial.Stone;   break;
+                    case 2: mat = ToolMaterial.Iron;    break;
+                    case 3: mat = ToolMaterial.Diamond; break;
+                    case 4: mat = ToolMaterial.Gold;    break;
+                    default: mat = ToolMaterial.Wood;   break;
+                }
+                GenerateTool(layerPixels, kind, mat, layer);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
+        }
+
+        // Material palette for tool heads. Three shades — base, highlight,
+        // shadow — used by GenerateTool to give the head a chunky,
+        // shaded look at 16×16 instead of a flat colour blob. Wood is
+        // also used for the handle of every tool regardless of head
+        // material so the silhouette reads "tool" before "X material".
+        private static (byte r, byte g, byte b) MaterialBase(ToolMaterial m)
+        {
+            switch (m)
+            {
+                case ToolMaterial.Wood:    return (158, 113, 60);
+                case ToolMaterial.Stone:   return (130, 130, 130);
+                case ToolMaterial.Iron:    return (210, 210, 220);
+                case ToolMaterial.Gold:    return (240, 210, 70);
+                case ToolMaterial.Diamond: return (110, 225, 220);
+            }
+            return (200, 200, 200);
+        }
+        private static (byte r, byte g, byte b) MaterialHi(ToolMaterial m)
+        {
+            switch (m)
+            {
+                case ToolMaterial.Wood:    return (190, 145, 85);
+                case ToolMaterial.Stone:   return (170, 170, 170);
+                case ToolMaterial.Iron:    return (240, 240, 248);
+                case ToolMaterial.Gold:    return (255, 235, 110);
+                case ToolMaterial.Diamond: return (170, 255, 250);
+            }
+            return (235, 235, 235);
+        }
+        private static (byte r, byte g, byte b) MaterialLo(ToolMaterial m)
+        {
+            switch (m)
+            {
+                case ToolMaterial.Wood:    return (110, 75, 35);
+                case ToolMaterial.Stone:   return (88, 88, 88);
+                case ToolMaterial.Iron:    return (155, 155, 168);
+                case ToolMaterial.Gold:    return (180, 150, 30);
+                case ToolMaterial.Diamond: return (60, 165, 175);
+            }
+            return (140, 140, 140);
+        }
+
+        // Draw one tool sprite into the 16×16 layer buffer. The sprite is
+        // composed of two parts:
+        //   1. A wooden handle running diagonally from (4,11) up to
+        //      (10,5), 1 px wide with a 1-px shadow track. Same on every
+        //      tool so the silhouette reads tool-like.
+        //   2. A material-coloured head at the upper-right end, shape
+        //      branching on `kind`. Heads are drawn with three shades
+        //      (lo edge / base body / hi inner) for the chunky pixel-art
+        //      look the procedural blocks already use.
+        // `seed` is the layer index — it gives each material+kind
+        // combination its own deterministic jitter (subtle dithering on
+        // the head body) so the 20 sprites don't look like 20 colour
+        // swaps of the same drawing.
+        private static void GenerateTool(byte[] pixels, ToolKind kind, ToolMaterial material, int seed)
+        {
+            // ---- handle (wood) -----------------------------------------
+            // Diagonal stair-step from lower-left to upper-right, with a
+            // shadow line below it for depth. Handle ends in a small
+            // pommel at the lower-left corner.
+            (byte r, byte g, byte b) wood   = (138, 95, 50);
+            (byte r, byte g, byte b) woodHi = (172, 125, 70);
+            (byte r, byte g, byte b) woodLo = (95, 60, 30);
+
+            // (x, y) pairs for the handle core — runs from (4,11) to
+            // (10,5). Each step is one pixel right and one pixel up.
+            int[] hxs = { 4, 5, 6, 7, 8, 9, 10 };
+            int[] hys = { 11, 10, 9, 8, 7, 6, 5 };
+            for (int i = 0; i < hxs.Length; i++)
+            {
+                SetPixel(pixels, hxs[i], hys[i], wood.r, wood.g, wood.b);
+                // Highlight pixel above-left of handle for dim 3D.
+                if (hxs[i] - 1 >= 0)
+                    SetPixel(pixels, hxs[i] - 1, hys[i], woodHi.r, woodHi.g, woodHi.b);
+                // Shadow pixel below-right.
+                if (hys[i] + 1 < TileSize)
+                    SetPixel(pixels, hxs[i], hys[i] + 1, woodLo.r, woodLo.g, woodLo.b);
+            }
+            // Pommel cap at the handle end (3,12).
+            SetPixel(pixels, 3, 12, woodLo.r, woodLo.g, woodLo.b);
+
+            // ---- head --------------------------------------------------
+            var baseC = MaterialBase(material);
+            var hiC   = MaterialHi(material);
+            var loC   = MaterialLo(material);
+            var rng   = new Random(0x70 + seed);
+
+            switch (kind)
+            {
+                case ToolKind.Sword:   DrawSwordHead(pixels, baseC, hiC, loC, rng);   break;
+                case ToolKind.Shovel:  DrawShovelHead(pixels, baseC, hiC, loC, rng);  break;
+                case ToolKind.Pickaxe: DrawPickaxeHead(pixels, baseC, hiC, loC, rng); break;
+                case ToolKind.Axe:     DrawAxeHead(pixels, baseC, hiC, loC, rng);     break;
+            }
+        }
+
+        // Sword head: long pointed blade running along the same diagonal
+        // as the handle, with a small crossguard where the two meet.
+        // Tip at (13,2), crossguard at (10,5)/(11,4)/(9,6) etc.
+        private static void DrawSwordHead(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hiC,
+            (byte r, byte g, byte b) loC,
+            Random rng)
+        {
+            // Crossguard — two pixels straddling the joint.
+            SetPixel(pixels, 9, 4, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 11, 6, loC.r, loC.g, loC.b);
+
+            // Blade — diagonal from (10,5) up to tip (13,2). Two pixels
+            // wide for chunkiness; outer edge dim, inner edge bright.
+            int[] bxs = { 10, 11, 12, 13 };
+            int[] bys = { 5, 4, 3, 2 };
+            for (int i = 0; i < bxs.Length; i++)
+            {
+                SetPixel(pixels, bxs[i], bys[i], hiC.r, hiC.g, hiC.b);
+                if (bxs[i] + 1 < TileSize) SetPixel(pixels, bxs[i] + 1, bys[i], baseC.r, baseC.g, baseC.b);
+                if (bys[i] - 1 >= 0)       SetPixel(pixels, bxs[i], bys[i] - 1, loC.r, loC.g, loC.b);
+            }
+            // Tip pixel — single point past (13,2).
+            SetPixel(pixels, 14, 1, loC.r, loC.g, loC.b);
+        }
+
+        // Shovel head: small rectangular spade scoop above the handle joint.
+        // ~3×3 with a tapered point, sits at (10..12, 2..4).
+        private static void DrawShovelHead(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hiC,
+            (byte r, byte g, byte b) loC,
+            Random rng)
+        {
+            // Top edge / shoulders.
+            SetPixel(pixels, 10, 2, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 11, 2, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 12, 2, loC.r, loC.g, loC.b);
+            // Body.
+            SetPixel(pixels, 10, 3, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 11, 3, hiC.r, hiC.g, hiC.b);
+            SetPixel(pixels, 12, 3, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 10, 4, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 11, 4, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 12, 4, baseC.r, baseC.g, baseC.b);
+            // Tapered tip toward the handle.
+            SetPixel(pixels, 11, 5, loC.r, loC.g, loC.b);
+        }
+
+        // Pickaxe head: horizontal bar with two prongs flanking the handle
+        // joint. Sits at y=3..4 from x=8..14 with the joint at (10,5).
+        private static void DrawPickaxeHead(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hiC,
+            (byte r, byte g, byte b) loC,
+            Random rng)
+        {
+            // Top edge (highlight band).
+            for (int x = 8; x <= 14; x++)
+                SetPixel(pixels, x, 3, hiC.r, hiC.g, hiC.b);
+            // Bar body.
+            for (int x = 8; x <= 14; x++)
+                SetPixel(pixels, x, 4, baseC.r, baseC.g, baseC.b);
+            // Prong tips — curve down at both ends to suggest pick points.
+            SetPixel(pixels, 8, 5, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 14, 5, loC.r, loC.g, loC.b);
+            // End caps darker.
+            SetPixel(pixels, 8, 3, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 14, 3, loC.r, loC.g, loC.b);
+            // Top spike on the far end (visual flourish for pickaxe shape).
+            SetPixel(pixels, 13, 2, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 9, 2, loC.r, loC.g, loC.b);
+        }
+
+        // Axe head: asymmetric triangular blade widening on the far side
+        // of the handle. Sits at x=10..14, y=2..5 with the bulk at the
+        // upper-right corner.
+        private static void DrawAxeHead(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hiC,
+            (byte r, byte g, byte b) loC,
+            Random rng)
+        {
+            // Top wedge — narrow at the handle, wider at the far edge.
+            SetPixel(pixels, 12, 2, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 13, 2, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 14, 2, loC.r, loC.g, loC.b);
+            // Mid band — full width with highlight stripe.
+            SetPixel(pixels, 11, 3, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 12, 3, hiC.r, hiC.g, hiC.b);
+            SetPixel(pixels, 13, 3, hiC.r, hiC.g, hiC.b);
+            SetPixel(pixels, 14, 3, baseC.r, baseC.g, baseC.b);
+            // Bottom band — body.
+            SetPixel(pixels, 10, 4, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 11, 4, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 12, 4, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 13, 4, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 14, 4, loC.r, loC.g, loC.b);
+            // Bottom edge tapers back to the handle.
+            SetPixel(pixels, 11, 5, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 12, 5, loC.r, loC.g, loC.b);
         }
 
         // Tile coordinates in Alpha 1.1.2_01's terrain.png. Format is

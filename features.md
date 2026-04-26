@@ -217,7 +217,7 @@ rows are fully visible (was clipping at ~3.5 rows).
 ## Items (actual items, not blocks)
 
 **Have**
-- Tools: wood / stone / iron / gold / diamond × pickaxe / shovel / axe / sword. Sourced from a base64-inlined `alpha_tools.png` (atlas layers 38..57); icons render through the existing `DrawFlatSpriteIcon` path so the inventory shows real 2D sprites rather than cubes.
+- Tools: wood / stone / iron / gold / diamond × pickaxe / shovel / axe / sword. Atlas-textures mode pulls them from a base64-inlined `alpha_tools.png` (atlas layers 38..57); procedural-textures mode synthesises a 16×16 sprite per tool from code (`GenerateProceduralToolLayers` — wood handle on a diagonal + per-kind metal head with material-specific 3-shade palette). Either way the icons render through the existing `DrawFlatSpriteIcon` path so the inventory shows real 2D sprites rather than cubes.
 - Tool durability (per-stack `short` field on `ItemStack`; ticks +1 per successful break, stack clears at MaxDurability — Wood 60, Stone 132, Iron 251, Gold 33, Diamond 1562). Damaged tools never auto-stack: ItemStack equality / SameKindAs include durability.
 - Hardness-gated break time (per-block hardness × tool-class multiplier — Wood 2×, Stone 4×, Iron 6×, Diamond 8×, Gold 12×; bare-hand 1×). RequiredKind + RequiredTier in `ToolData` gate ore drops: stone-family blocks need a pickaxe of correct tier, otherwise the block breaks and yields nothing. Stone breaks into Cobblestone when harvest-eligible.
 
@@ -392,7 +392,6 @@ multiple subsystems at once.
 
 ### Tier 2 — Visible world polish (each item improves every frame)
 
-3. **Animated water / lava textures** — Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
 4. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
 5. **Particle system** — Block-break puffs, water splash on entry, lava bubbles, torch smoke wisp. Reuses the existing sprite shader.
 6. **Real glass transparency** — Glass routes through the alpha-blend pass like water; faces between adjacent glass cull internally so 2-deep glass doesn't z-fight.
