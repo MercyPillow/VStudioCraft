@@ -42,8 +42,13 @@ namespace VStudioCraft.Game
         public const int ItemLayerCount = 9;
         public const int FirstItemLayer = BlockLayerCount + ToolLayerCount; // 58
         public const int FirstTailBlockLayer = FirstItemLayer + ItemLayerCount; // 67
-        public const int TailBlockLayerCount = 2; // CraftingTableTop, CraftingTableSide
-        public const int LayerCount = FirstTailBlockLayer + TailBlockLayerCount; // 69
+        // 6 tail tiles: CraftingTableTop, CraftingTableSide, FurnaceTop,
+        // FurnaceSide, FurnaceFront, FurnaceFrontLit. Each new multi-face
+        // block gets a contiguous block of layers appended here so the
+        // tool/item slice (which assumes everything past it sources from
+        // terrain.png) stays untouched.
+        public const int TailBlockLayerCount = 6;
+        public const int LayerCount = FirstTailBlockLayer + TailBlockLayerCount; // 73
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -127,6 +132,22 @@ namespace VStudioCraft.Game
         // or a procedural generator (procedural mode), NOT alpha_tools.png.
         public const int TileCraftingTableTop  = 67;
         public const int TileCraftingTableSide = 68;
+        // Furnace face tiles. Top + bottom share one tile (a stone cap
+        // with rim), the four sides share one tile (plain stone block
+        // with iron edge banding), and the "front" face has its own
+        // pair — unlit (a dark furnace mouth) and lit (the same mouth
+        // with an orange/yellow glow). The render path swaps the side
+        // texture between FurnaceFront and FurnaceFrontLit by switching
+        // the underlying block id (Furnace ↔ LitFurnace), so we only
+        // need one block-id per state, not metadata. Without an
+        // orientation byte we draw the front on every side so the door
+        // is always visible — Alpha shows it on a single face, but
+        // metadata-orientation is a Tier 2 task and the all-faces look
+        // is unmistakable.
+        public const int TileFurnaceTop      = 69;
+        public const int TileFurnaceSide     = 70;
+        public const int TileFurnaceFront    = 71;
+        public const int TileFurnaceFrontLit = 72;
 
         // A 2D texture array — one layer per tile. Greedy meshing can emit merged
         // quads with UVs exceeding [0,1]; with a layered texture and Repeat wrap the
@@ -201,6 +222,10 @@ namespace VStudioCraft.Game
             // generators in procedural mode.
             UploadLayer(layerPixels, TileCraftingTableTop, GenerateCraftingTableTop);
             UploadLayer(layerPixels, TileCraftingTableSide, GenerateCraftingTableSide);
+            UploadLayer(layerPixels, TileFurnaceTop, GenerateFurnaceTop);
+            UploadLayer(layerPixels, TileFurnaceSide, GenerateFurnaceSide);
+            UploadLayer(layerPixels, TileFurnaceFront, GenerateFurnaceFront);
+            UploadLayer(layerPixels, TileFurnaceFrontLit, GenerateFurnaceFrontLit);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -892,6 +917,21 @@ namespace VStudioCraft.Game
             // need a third entry.
             /* TileCraftingTableTop  */ (11, 2),
             /* TileCraftingTableSide */ (11, 3),
+            // Furnace face tiles in Alpha 1.1.2's terrain.png. Side at
+            // (13,2) is the iron-banded stone wall panel. Front-off at
+            // (12,2) shows the dark furnace mouth; front-on at (13,3) is
+            // the same mouth with an orange/yellow glow lit inside.
+            // The top face is NOT present in this build's terrain.png
+            // (Alpha shipped it but the embedded resource here is missing
+            // that tile), so TileFurnaceTop is always generated
+            // procedurally — even in the alpha-textures atlas path.
+            // The (-1,-1) sentinel below documents that and trips a
+            // runtime assert if anything tries to slice it. See
+            // CreateAtlasFromAlphaTerrain for the procedural-override.
+            /* TileFurnaceTop        */ (-1, -1),
+            /* TileFurnaceSide       */ (13, 2),
+            /* TileFurnaceFront      */ (12, 2),
+            /* TileFurnaceFrontLit   */ (13, 3),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -952,8 +992,18 @@ namespace VStudioCraft.Game
             // the 0..37 range. Done after the tool slice so the loop ranges
             // stay non-overlapping. AlphaTileCoords entries for these layers
             // index into terrain.png coordinates.
+            //
+            // TileFurnaceTop is the one exception: this build's embedded
+            // terrain.png doesn't carry the furnace-top tile, so its
+            // AlphaTileCoords entry is the (-1,-1) sentinel. We skip it
+            // in the slice loop and fill it from the procedural
+            // GenerateFurnaceTop below — that generator paints a top
+            // built from the same stone-wall + iron-banding palette as
+            // the side, so the four lateral faces and the cap read as
+            // one continuous block.
             for (int layer = FirstTailBlockLayer; layer < LayerCount; layer++)
             {
+                if (layer == TileFurnaceTop) continue;
                 var (col, row) = AlphaTileCoords[layer];
                 CopyTile(bgra, srcW, srcH, col, row, layerPixels);
                 GL.TexSubImage3D(
@@ -962,6 +1012,10 @@ namespace VStudioCraft.Game
                     TileSize, TileSize, 1,
                     PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
             }
+            // Procedural furnace-top override (see comment above). Uses
+            // the same UploadLayer path as the procedural atlas — the
+            // Texture2DArray is still bound to `tex` at this point.
+            UploadLayer(layerPixels, TileFurnaceTop, GenerateFurnaceTop);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -2071,6 +2125,210 @@ namespace VStudioCraft.Game
             // Handle: y=10..11, x=14
             SetPixel(pixels, 14, 10, 80, 50, 22);
             SetPixel(pixels, 14, 11, 80, 50, 22);
+        }
+
+        // Furnace top — derived from the side palette so the cap reads
+        // as the same material as the four lateral faces. Stone-wall
+        // jitter base, iron banding around all four edges (looking down
+        // onto the block we see the rim from every direction, not just
+        // top/bottom), and a darker recessed vent hole in the centre
+        // that lets smoke out. Built deliberately to look like a 90°
+        // rotation of the side art with a vent overlay; that way an
+        // observer glancing at a furnace from above never sees a seam
+        // between the cap and the walls.
+        //
+        // This generator is invoked from BOTH atlas paths (procedural
+        // CreateAtlas and alpha-art CreateAtlasFromAlphaTerrain) because
+        // this build's embedded terrain.png is missing the furnace-top
+        // tile entirely.
+        private static void GenerateFurnaceTop(byte[] pixels)
+        {
+            // Same RNG seed shape as GenerateFurnaceSide so the noise
+            // grain looks like it came off the same stamping machine
+            // (different seed value to avoid identical pixels — that
+            // would make the top read as the side, just rotated).
+            var rng = new Random(0xF0A1);
+            // Stone-wall base — same RGB and jitter amount as
+            // GenerateFurnaceSide.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetJittered(pixels, x, y, 130, 130, 130, 14, rng);
+            }
+            // Iron banding on ALL four edges (2 px deep) — the side
+            // tile only bands top/bottom because its left/right edges
+            // tile against the next side tile. The top face has no
+            // neighbour to tile against, so the banding wraps the
+            // whole rim.
+            for (int i = 0; i < TileSize; i++)
+            {
+                // Top and bottom rows.
+                SetPixel(pixels, i, 0, 86, 86, 86);
+                SetPixel(pixels, i, 1, 100, 100, 100);
+                SetPixel(pixels, i, TileSize - 2, 100, 100, 100);
+                SetPixel(pixels, i, TileSize - 1, 86, 86, 86);
+                // Left and right columns. Skip the corners we already
+                // wrote above so the corner shade matches the
+                // top/bottom band rather than getting overwritten.
+                if (i >= 2 && i <= TileSize - 3)
+                {
+                    SetPixel(pixels, 0, i, 86, 86, 86);
+                    SetPixel(pixels, 1, i, 100, 100, 100);
+                    SetPixel(pixels, TileSize - 2, i, 100, 100, 100);
+                    SetPixel(pixels, TileSize - 1, i, 86, 86, 86);
+                }
+            }
+            // Rivet dots — three on each edge, placed at the same x/y
+            // offsets the side tile uses (3, 8, 13) so the bands read
+            // as continuous fasteners around the block.
+            for (int s = 3; s < TileSize; s += 5)
+            {
+                SetPixel(pixels, s, 0, 180, 180, 180);
+                SetPixel(pixels, s, TileSize - 1, 180, 180, 180);
+                SetPixel(pixels, 0, s, 180, 180, 180);
+                SetPixel(pixels, TileSize - 1, s, 180, 180, 180);
+            }
+            // Central vent hole — 4×4 near-black square in the middle
+            // (6..9). The smelter has to vent somewhere; this is the
+            // only Alpha cue that the top differs from a wall panel.
+            for (int y = 6; y <= 9; y++)
+            for (int x = 6; x <= 9; x++)
+            {
+                SetPixel(pixels, x, y, 24, 24, 22);
+            }
+            // Vent rim — one-pixel highlight on the upper/left edges
+            // and shadow on the lower/right so the hole reads as
+            // recessed rather than painted on. Matches the lighting
+            // direction used by other recessed details (e.g. the
+            // furnace mouth on the front face).
+            for (int x = 5; x <= 10; x++)
+            {
+                SetPixel(pixels, x, 5, 160, 160, 160);
+                SetPixel(pixels, x, 10, 80, 80, 80);
+            }
+            for (int y = 5; y <= 10; y++)
+            {
+                SetPixel(pixels, 5, y, 160, 160, 160);
+                SetPixel(pixels, 10, y, 80, 80, 80);
+            }
+        }
+
+        // Furnace side — plain stone wall with horizontal iron banding
+        // top and bottom. The banding hints at structural reinforcement
+        // and lets the side read distinct from a plain Stone block.
+        private static void GenerateFurnaceSide(byte[] pixels)
+        {
+            var rng = new Random(0xF0B2);
+            // Stone wall base.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetJittered(pixels, x, y, 130, 130, 130, 14, rng);
+            }
+            // Iron-grey horizontal bands at the top and bottom edges (2 px
+            // each). These are the "rivetted plate" detail Alpha shows on
+            // the furnace's vertical flanks — without orientation
+            // metadata they apply to all four sides, which still reads
+            // as "metal-edged stone" from any angle.
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 0, 86, 86, 86);
+                SetPixel(pixels, x, 1, 100, 100, 100);
+                SetPixel(pixels, x, TileSize - 2, 100, 100, 100);
+                SetPixel(pixels, x, TileSize - 1, 86, 86, 86);
+            }
+            // Rivet dots — three evenly-spaced highlights on each iron
+            // band so the surface reads as fastened plate.
+            for (int x = 3; x < TileSize; x += 5)
+            {
+                SetPixel(pixels, x, 0, 180, 180, 180);
+                SetPixel(pixels, x, TileSize - 1, 180, 180, 180);
+            }
+        }
+
+        // Furnace front (unlit) — stone wall with a recessed dark mouth
+        // in the lower-middle. The mouth is the smelter door; lit
+        // version below adds the orange/yellow flame glow inside.
+        // Shared base palette with the side tile so the four lateral
+        // faces blend into a single block silhouette before the door
+        // detail is overlaid.
+        private static void GenerateFurnaceFront(byte[] pixels)
+        {
+            var rng = new Random(0xF0C3);
+            // Stone wall base — same recipe as the side tile so the
+            // edges blend.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetJittered(pixels, x, y, 130, 130, 130, 14, rng);
+            }
+            // Iron rim banding (top and bottom) — keeps the four-sides
+            // silhouette consistent with FurnaceSide.
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 0, 86, 86, 86);
+                SetPixel(pixels, x, 1, 100, 100, 100);
+                SetPixel(pixels, x, TileSize - 2, 100, 100, 100);
+                SetPixel(pixels, x, TileSize - 1, 86, 86, 86);
+            }
+            // Furnace mouth — recessed dark opening at (4..11, 5..12).
+            // Two-tone: outer frame medium-dark, inner cavity near-black.
+            for (int y = 5; y <= 12; y++)
+            for (int x = 4; x <= 11; x++)
+            {
+                SetPixel(pixels, x, y, 24, 24, 22);
+            }
+            // Frame — slightly lighter ring so the cavity reads as
+            // recessed rather than painted on.
+            for (int x = 4; x <= 11; x++)
+            {
+                SetPixel(pixels, x, 5, 70, 70, 68);
+                SetPixel(pixels, x, 12, 70, 70, 68);
+            }
+            for (int y = 5; y <= 12; y++)
+            {
+                SetPixel(pixels, 4, y, 70, 70, 68);
+                SetPixel(pixels, 11, y, 70, 70, 68);
+            }
+        }
+
+        // Furnace front (lit) — same base as FurnaceFront with orange
+        // and yellow pixels filling the mouth cavity to convey active
+        // smelting. The lit-state block (BlockType.LitFurnace) swaps in
+        // when the per-position tile entity has fuel burning; switching
+        // back to Furnace clears the glow without needing a per-tick
+        // texture change.
+        private static void GenerateFurnaceFrontLit(byte[] pixels)
+        {
+            // Start with the unlit version so the frame, banding, and
+            // cavity outline all match exactly.
+            GenerateFurnaceFront(pixels);
+            var rng = new Random(0xF0D4);
+            // Fill the cavity (interior of the frame at x=5..10, y=6..11)
+            // with a flame palette: bottom-third hot orange, middle
+            // yellow, top dim red — gives the impression of flames
+            // licking up inside the mouth.
+            for (int y = 6; y <= 11; y++)
+            for (int x = 5; x <= 10; x++)
+            {
+                byte r, g, b;
+                if (y >= 9)
+                {
+                    // Hot core near the bottom — orange-red.
+                    r = 255; g = 130; b = 30;
+                }
+                else if (y >= 7)
+                {
+                    // Mid flame — yellow-orange.
+                    r = 248; g = 188; b = 60;
+                }
+                else
+                {
+                    // Top flame tips — dim red shading into smoke.
+                    r = 168; g = 60; b = 18;
+                }
+                SetJittered(pixels, x, y, r, g, b, 16, rng);
+            }
         }
 
         private static void GenerateMossyCobblestone(byte[] pixels)

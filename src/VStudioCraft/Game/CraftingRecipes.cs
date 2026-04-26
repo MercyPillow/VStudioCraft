@@ -163,6 +163,18 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Bricks, 1)));
 
+            // Furnace: 8 cobblestone in a U-shape ringing an empty middle
+            // cell. Alpha pattern is "CCC / C.C / CCC" — the hollow center
+            // is what makes it a smelter rather than just a stone block.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Cobblestone, BlockType.Cobblestone, BlockType.Cobblestone },
+                    { BlockType.Cobblestone, BlockType.Air,         BlockType.Cobblestone },
+                    { BlockType.Cobblestone, BlockType.Cobblestone, BlockType.Cobblestone },
+                },
+                new ItemStack(BlockType.Furnace, 1)));
+
             // Tools — 5 materials (wood = Planks, stone = Cobblestone,
             // iron = IronIngot, diamond = Diamond, gold = GoldIngot)
             // × 4 kinds (pickaxe / shovel / axe / sword). Material

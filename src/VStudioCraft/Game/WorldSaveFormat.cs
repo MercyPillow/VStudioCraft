@@ -9,8 +9,11 @@ namespace VStudioCraft.Game
     {
         private const uint Magic = 0x31435356;  // 'VSC1' little-endian
         // v1 = initial, v2 = per-chunk IsModified byte, v3 = GameMode + Player.Health,
-        // v4 = HungerEnabled survival sub-setting.
-        private const byte CurrentVersion = 4;
+        // v4 = HungerEnabled survival sub-setting,
+        // v5 = furnace tile entities (count + per-entity (x,y,z, input, fuel,
+        //      output, burnTime, maxBurnTime, cookProgress)),
+        // v6 = furnace facing byte appended to each entity (0=N, 1=S, 2=E, 3=W).
+        private const byte CurrentVersion = 6;
 
         public struct Header
         {
@@ -51,6 +54,32 @@ namespace VStudioCraft.Game
                     w.Write(chunk.ChunkZ);
                     w.Write((byte)(chunk.IsModified ? 1 : 0));
                     chunk.WriteTo(w);
+                }
+
+                // v5: furnace tile entities. Counted at the world level
+                // (not per-chunk) because the World owns the dictionary.
+                // For each entry we write the absolute world coord and
+                // the entity's three slots + two timers. ItemStacks are
+                // (BlockType:int, Count:int, Durability:short) — same
+                // shape used elsewhere; written as ushort/int/short to
+                // keep the on-disk size compact.
+                int feCount = 0;
+                foreach (var _ in world.FurnaceEntities) feCount++;
+                w.Write(feCount);
+                foreach (var kv in world.FurnaceEntities)
+                {
+                    w.Write(kv.Key.x);
+                    w.Write(kv.Key.y);
+                    w.Write(kv.Key.z);
+                    WriteStack(w, kv.Value.Input);
+                    WriteStack(w, kv.Value.Fuel);
+                    WriteStack(w, kv.Value.Output);
+                    w.Write(kv.Value.BurnTimeTicks);
+                    w.Write(kv.Value.MaxBurnTimeTicks);
+                    w.Write(kv.Value.CookProgressTicks);
+                    // v6: orientation byte. Default for legacy v5 saves
+                    // is North on load (see Load below).
+                    w.Write((byte)kv.Value.Facing);
                 }
             }
             if (File.Exists(path)) File.Delete(path);
@@ -120,8 +149,65 @@ namespace VStudioCraft.Game
                     chunk.ReadFrom(r);
                     world.AddChunk(chunk);
                 }
+
+                // v5: furnace tile entities. Pre-v5 saves had no furnaces
+                // (the block didn't exist), so legacy worlds load with
+                // an empty entity table. The block layer in restored
+                // chunks won't reference Furnace ids in those saves
+                // either — the BlockType range simply wasn't populated.
+                if (version >= 5)
+                {
+                    int feCount = r.ReadInt32();
+                    for (int i = 0; i < feCount; i++)
+                    {
+                        int wx = r.ReadInt32();
+                        int wy = r.ReadInt32();
+                        int wz = r.ReadInt32();
+                        var fe = world.GetOrCreateFurnaceEntity(wx, wy, wz);
+                        fe.Input  = ReadStack(r);
+                        fe.Fuel   = ReadStack(r);
+                        fe.Output = ReadStack(r);
+                        fe.BurnTimeTicks    = r.ReadInt32();
+                        fe.MaxBurnTimeTicks = r.ReadInt32();
+                        fe.CookProgressTicks = r.ReadInt32();
+                        // v6 appended a single facing byte per entity.
+                        // Pre-v6 entries default to North (the field's
+                        // default value on a freshly-created
+                        // FurnaceTileEntity). Pre-v6 worlds rendered
+                        // every side of every furnace as the front
+                        // face; under the new oriented mesher those
+                        // load with the front pointing -Z and the other
+                        // three sides showing the plain side tile. The
+                        // player can break/replace the furnace to pick
+                        // a new facing (or live with the default — it's
+                        // a cosmetic-only difference, no gameplay
+                        // impact).
+                        if (version >= 6)
+                            fe.Facing = (BlockFacing)r.ReadByte();
+                    }
+                }
+
                 return (header, world);
             }
+        }
+
+        // ItemStack on-disk shape: 2 bytes type id + 4 bytes count + 2
+        // bytes durability. Empty stacks serialise as type=Air with
+        // zero count/durability.
+        private static void WriteStack(BinaryWriter w, ItemStack s)
+        {
+            w.Write((ushort)s.Type);
+            w.Write(s.Count);
+            w.Write(s.Durability);
+        }
+
+        private static ItemStack ReadStack(BinaryReader r)
+        {
+            var type = (BlockType)r.ReadUInt16();
+            int count = r.ReadInt32();
+            short dur = r.ReadInt16();
+            if (type == BlockType.Air || count <= 0) return ItemStack.Empty;
+            return new ItemStack(type, count, dur);
         }
     }
 }

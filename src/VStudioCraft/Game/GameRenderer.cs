@@ -370,6 +370,25 @@ void main()
         private readonly ItemStack[] _craftingGrid = new ItemStack[CraftingScreen.GridSlotCount];
         private ItemStack _craftingOutput;
 
+        // True while the furnace screen is open (RMB on a Furnace or
+        // LitFurnace block). World-halt semantics match the crafting
+        // and inventory screens. Volatile for UI/render thread sync.
+        private volatile bool _isFurnaceOpen;
+        public bool IsFurnaceOpen
+        {
+            get => _isFurnaceOpen;
+            set => _isFurnaceOpen = value;
+        }
+
+        // World coordinate of the furnace the screen is bound to. Set
+        // when the player RMB-opens a furnace; the renderer reads
+        // FurnaceTileEntity state through this position so the screen
+        // always reflects live tick state (ticks continue while the
+        // screen is open in Alpha — the player can sit watching their
+        // ore smelt). When the screen closes the position is left
+        // stale and ignored until the next open.
+        private (int x, int y, int z) _furnacePos;
+
         // Per-world setting: show the hunger drumstick row + drive
         // hunger-based slow regen. Off by default (the user explicitly
         // wanted the bar gone unless they opt in). Persisted in the world
@@ -387,7 +406,7 @@ void main()
         // OR themselves in here and the rest of the loop gates on this
         // single flag. Options doesn't add to this list because it only
         // ever opens on top of the pause menu (which is already halted).
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen;
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen;
 
         // Rebuild the block atlas from whichever source the user has
         // currently selected (procedural or embedded Alpha terrain.png).
@@ -483,6 +502,16 @@ void main()
         // budget and we'll add a "has fluid" gate when it isn't.
         private const float FluidTickInterval = 0.25f;
         private float _fluidTickAccumulator;
+
+        // Furnace tick cadence. Alpha ran the world at 20Hz and the
+        // furnace's 200-tick cook time / 1600-tick coal-burn-time
+        // constants in FurnaceRecipes are calibrated to that cadence,
+        // so a 0.05s interval drives them through their intended
+        // 10s-per-smelt / 80s-per-coal in real time. Cheap: the loop
+        // touches one struct per placed furnace, and SetBlock is only
+        // called on the rare burning-state transition.
+        private const float FurnaceTickInterval = 0.05f;
+        private float _furnaceTickAccumulator;
 
         // Survival is opt-in; the existing game loop starts in Creative so we
         // don't break the creative-lite flow everybody already has. Toggled
@@ -764,6 +793,64 @@ void main()
                 foreach (var key in result.ChangedChunks)
                 {
                     _world.DirtyChunks.Add(key);
+                }
+            }
+        }
+
+        // Furnace tick driver. Pulled out of UpdatePlayer so the host
+        // can keep furnaces running while a non-pause modal is open
+        // (inventory / crafting / furnace screen) — Alpha lets the
+        // player open a furnace and watch their ore smelt without the
+        // world freezing. Pause menu still freezes furnaces fully (the
+        // host gates this call alongside TickDrops).
+        //
+        // Every FurnaceTickInterval (0.05s = 20Hz), drive smelting +
+        // fuel burn for every placed furnace. The entity's Tick()
+        // returns true when the burning visual changed; we mirror that
+        // by swapping the world block between Furnace and LitFurnace so
+        // the chunk re-meshes with the lit-front face.
+        public void TickFurnacesIfDue(float dt)
+        {
+            if (_world == null) return;
+            _furnaceTickAccumulator += dt;
+            while (_furnaceTickAccumulator >= FurnaceTickInterval)
+            {
+                _furnaceTickAccumulator -= FurnaceTickInterval;
+                TickFurnaces();
+            }
+        }
+
+        // Iterate every placed furnace and advance its state machine
+        // one game-tick. Block-state swaps are deferred into a small
+        // local list because we mutate the world during iteration —
+        // SetBlock would touch the dirty-chunk set the world owns,
+        // which is fine, but the entity dictionary is what we're
+        // iterating and we'd rather not surprise its enumerator.
+        private void TickFurnaces()
+        {
+            if (_world == null) return;
+            List<((int x, int y, int z) pos, BlockType target)> swaps = null;
+            foreach (var kv in _world.FurnaceEntities)
+            {
+                var fe = kv.Value;
+                bool changed = fe.Tick();
+                if (changed)
+                {
+                    var pos = kv.Key;
+                    var current = _world.GetBlock(pos.x, pos.y, pos.z);
+                    BlockType target = fe.IsBurning ? BlockType.LitFurnace : BlockType.Furnace;
+                    if (current != target && (current == BlockType.Furnace || current == BlockType.LitFurnace))
+                    {
+                        if (swaps == null) swaps = new List<((int, int, int), BlockType)>();
+                        swaps.Add((pos, target));
+                    }
+                }
+            }
+            if (swaps != null)
+            {
+                foreach (var s in swaps)
+                {
+                    _world.SetBlock(s.pos.x, s.pos.y, s.pos.z, s.target);
                 }
             }
         }
@@ -1101,6 +1188,22 @@ void main()
             var t = _world.GetBlock(hit.X, hit.Y, hit.Z);
             if (BlockData.Hardness(t) < 0f) return false;
             if (GameMode == GameMode.Survival) return false;
+            // Creative: drop the furnace tile entity at this cell (if any)
+            // before clearing the block. Creative breaks don't spawn drops
+            // (it's a block-replace flow, not a survival mine), so the
+            // contents are simply discarded — same way creative-removing a
+            // crafting table doesn't re-emit the materials.
+            if (t == BlockType.Furnace || t == BlockType.LitFurnace)
+            {
+                _world.RemoveFurnaceEntity(hit.X, hit.Y, hit.Z);
+                // If this furnace's UI happened to be open, close it so
+                // the player isn't left poking at a dead tile entity.
+                if (_isFurnaceOpen
+                    && _furnacePos.x == hit.X && _furnacePos.y == hit.Y && _furnacePos.z == hit.Z)
+                {
+                    _isFurnaceOpen = false;
+                }
+            }
             return _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
         }
 
@@ -1193,8 +1296,31 @@ void main()
                 // somewhere else by the time the next frame runs.
                 int bx = hit.X, by = hit.Y, bz = hit.Z;
                 var brokenType = t;
+                // Furnace tile entities: pop the entry before SetBlock so
+                // we can spill its contents as drops alongside the block
+                // drop itself. Tier-gated like any other survival break —
+                // if the player can't harvest the cobblestone shell,
+                // SpawnBreakDrop will skip the block drop, but we still
+                // want to close the screen if it was open.
+                FurnaceTileEntity spilled = null;
+                if (brokenType == BlockType.Furnace || brokenType == BlockType.LitFurnace)
+                {
+                    spilled = _world.RemoveFurnaceEntity(bx, by, bz);
+                    if (_isFurnaceOpen
+                        && _furnacePos.x == bx && _furnacePos.y == by && _furnacePos.z == bz)
+                    {
+                        _isFurnaceOpen = false;
+                    }
+                }
                 _world.SetBlock(bx, by, bz, BlockType.Air);
                 SpawnBreakDrop(bx, by, bz, brokenType, heldType);
+                if (spilled != null)
+                {
+                    foreach (var stack in spilled.SpillContents())
+                    {
+                        SpawnBreakDropStack(bx, by, bz, stack);
+                    }
+                }
                 // Tool durability tick: every successful break consumes 1
                 // point; when the tool runs out it's removed from the
                 // hotbar. Bare-hand and non-tool stacks (blocks held in
@@ -1269,6 +1395,19 @@ void main()
                     _craftingOutput = ItemStack.Empty;
                     _isCraftingOpen = true;
                     return true;
+                case BlockType.Furnace:
+                case BlockType.LitFurnace:
+                    // Furnace screen binds to the cell's persistent
+                    // FurnaceTileEntity. Get-or-create so a freshly
+                    // placed furnace gets an empty entity on first
+                    // open. The entity ticks autonomously while the
+                    // screen is open — TickFurnacesIfDue is gated on
+                    // !IsPaused, not !IsWorldHalted, exactly so this
+                    // works.
+                    _furnacePos = (hit.X, hit.Y, hit.Z);
+                    _world.GetOrCreateFurnaceEntity(hit.X, hit.Y, hit.Z);
+                    _isFurnaceOpen = true;
+                    return true;
                 default:
                     return false;
             }
@@ -1313,6 +1452,20 @@ void main()
             if (!BlockData.IsCubeShape(t) && !BlockData.IsSolid(_world.GetBlock(px, py - 1, pz)))
                 return false;
             bool placed = _world.SetBlock(px, py, pz, t);
+            if (placed)
+            {
+                // Oriented blocks: stamp their facing right after the
+                // SetBlock so the very first mesh rebuild for the chunk
+                // already has the correct front-face. Furnace is the
+                // only oriented block today; the rule is "front face
+                // points at the player who placed it" (Alpha behaviour),
+                // i.e. the cardinal opposite of Camera.Forward.
+                if (t == BlockType.Furnace)
+                {
+                    var fe = _world.GetOrCreateFurnaceEntity(px, py, pz);
+                    fe.Facing = FacingTowardPlayer(Camera.Forward);
+                }
+            }
             if (placed && GameMode == GameMode.Survival)
             {
                 // Decrement the held stack — once the slot empties, the
@@ -1320,6 +1473,22 @@ void main()
                 Input.Inventory.DecrementHotbar(Input.HotbarIndex);
             }
             return placed;
+        }
+
+        // Pick the cardinal direction whose outward normal points back at
+        // the player who placed the block. We compare |fx| vs |fz| to
+        // find the dominant horizontal axis, then negate that component
+        // (front faces the player, opposite of their look). Y is ignored
+        // — looking up/down at the block while placing still produces a
+        // valid horizontal facing because the dominant horizontal
+        // component decides.
+        private static BlockFacing FacingTowardPlayer(OpenTK.Vector3 forward)
+        {
+            float ax = System.Math.Abs(forward.X);
+            float az = System.Math.Abs(forward.Z);
+            if (ax > az)
+                return forward.X > 0 ? BlockFacing.West : BlockFacing.East;
+            return forward.Z > 0 ? BlockFacing.North : BlockFacing.South;
         }
 
         // Spawn a dropped-item entity for a block broken in survival. A
@@ -1355,8 +1524,9 @@ void main()
             //   * Clay — drops 4 ClayBall items per block, never the
             //     clay block itself (matching Alpha — clay blocks are
             //     consumed into ingredients on harvest). Iron / gold
-            //     ores still drop the ore block until furnace smelting
-            //     lands in Tier 1 #1.
+            //     ores correctly drop the ore block — the player turns
+            //     them into ingots by smelting in a furnace (see
+            //     FurnaceRecipes.Smelt).
             BlockType dropType;
             int dropCount = 1;
             if (type == BlockType.Gravel)
@@ -1392,6 +1562,27 @@ void main()
                 };
                 _drops.Add(d);
             }
+        }
+
+        // Spawn a pre-formed stack as a dropped item (used for furnace
+        // contents on break — the stack already has its kind / count, no
+        // tier or DropFor remap to apply). Adds the same upward kick +
+        // small lateral jitter as SpawnBreakDrop so the spilled stacks
+        // hop out of the broken cell instead of resting at floor level.
+        private void SpawnBreakDropStack(int bx, int by, int bz, ItemStack stack)
+        {
+            if (stack.IsEmpty) return;
+            float jx = ((float)_dropRng.NextDouble() - 0.5f) * 2f;
+            float jz = ((float)_dropRng.NextDouble() - 0.5f) * 2f;
+            var d = new DroppedItem
+            {
+                Position = new Vector3(bx + 0.5f, by + 0.5f, bz + 0.5f),
+                Velocity = new Vector3(jx, 3.5f, jz),
+                Stack = stack,
+                AgeSec = 0f,
+                PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+            };
+            _drops.Add(d);
         }
 
         private readonly System.Random _dropRng = new System.Random(0xD0E5);
@@ -1600,6 +1791,34 @@ void main()
             if (slotIndex == CraftingScreen.OutputSlot) return;
 
             int invIdx = CraftingScreen.InventoryIndexFor(slotIndex);
+            if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
+            DepositOneFromCursor(ref inv.Slots[invIdx], inv);
+        }
+
+        // RMB-drag deposit into a furnace-panel slot. 0=input, 1=fuel,
+        // 2=output (skipped — read-only), 3..47 routes to the player
+        // inventory.
+        public void HandleFurnaceDragDeposit(int slotIndex)
+        {
+            if (Input == null || _world == null) return;
+            var inv = Input.Inventory;
+            if (inv.Cursor.IsEmpty) return;
+            var fe = _world.TryGetFurnaceEntity(_furnacePos.x, _furnacePos.y, _furnacePos.z);
+            if (fe == null) return;
+
+            if (slotIndex == FurnaceScreen.InputSlot)
+            {
+                DepositOneFromCursor(ref fe.Input, inv);
+                return;
+            }
+            if (slotIndex == FurnaceScreen.FuelSlot)
+            {
+                DepositOneFromCursor(ref fe.Fuel, inv);
+                return;
+            }
+            if (slotIndex == FurnaceScreen.OutputSlot) return;
+
+            int invIdx = FurnaceScreen.InventoryIndexFor(slotIndex);
             if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
             DepositOneFromCursor(ref inv.Slots[invIdx], inv);
         }
@@ -1880,6 +2099,192 @@ void main()
                 }
             }
             return moved;
+        }
+
+        // ----- Furnace screen click handling --------------------------
+        // Same dispatch shape as HandleCraftingClick, but the three
+        // furnace slots live on the bound FurnaceTileEntity rather than
+        // a renderer-owned grid. Slot space (see FurnaceScreen.cs):
+        //   0  — input  (smelt source; cursor exchange like a normal slot)
+        //   1  — fuel   (cursor exchange like a normal slot)
+        //   2  — output (read-only — clicks pull from it; only smelting fills)
+        //   3..47 — player main + hotbar (mirrors HandleInventoryClick)
+        public void HandleFurnaceClick(int button, int mx, int my, int screenW, int screenH, bool shift)
+        {
+            if (Input == null) return;
+            if (_world == null) return;
+            var inv = Input.Inventory;
+            var fe = _world.TryGetFurnaceEntity(_furnacePos.x, _furnacePos.y, _furnacePos.z);
+            if (fe == null) return; // safety: entity vanished mid-screen — caller should also reject
+
+            int slot = FurnaceScreen.HitTest(screenW, screenH, mx, my);
+            if (slot < 0)
+            {
+                // Click outside the panel — toss cursor like inventory does.
+                if (!inv.Cursor.IsEmpty) TossCursorStack();
+                return;
+            }
+
+            // Furnace input / fuel slots — exchange with cursor like a
+            // normal inventory slot. Shift-click quick-moves the slot
+            // contents into the player inventory. Two near-identical
+            // branches because we can't cleanly take a ref to one of
+            // two fields with a conditional in older C# versions.
+            if (slot == FurnaceScreen.InputSlot)
+            {
+                if (shift)
+                {
+                    fe.Input = inv.TryAdd(fe.Input);
+                }
+                else if (button == 2) HandleRightClickSlotRef(ref fe.Input, inv);
+                else                  HandleLeftClickSlotRef(ref fe.Input, inv);
+                return;
+            }
+            if (slot == FurnaceScreen.FuelSlot)
+            {
+                if (shift)
+                {
+                    fe.Fuel = inv.TryAdd(fe.Fuel);
+                }
+                else if (button == 2) HandleRightClickSlotRef(ref fe.Fuel, inv);
+                else                  HandleLeftClickSlotRef(ref fe.Fuel, inv);
+                return;
+            }
+
+            // Output slot — read-only. LMB picks up the entire stack
+            // into the cursor (or tops up if same kind), shift-click
+            // pushes it into the player inventory.
+            if (slot == FurnaceScreen.OutputSlot)
+            {
+                if (fe.Output.IsEmpty) return;
+
+                if (shift)
+                {
+                    // Push the whole output stack into the player
+                    // inventory; whatever doesn't fit stays in the
+                    // output slot (Alpha behaviour — the smelter
+                    // doesn't drop stranded smelted items on shift-
+                    // click).
+                    var leftover = inv.TryAdd(fe.Output);
+                    fe.Output = leftover;
+                    return;
+                }
+
+                if (inv.Cursor.IsEmpty)
+                {
+                    inv.Cursor = fe.Output;
+                    fe.Output = ItemStack.Empty;
+                    return;
+                }
+                if (inv.Cursor.SameKindAs(fe.Output))
+                {
+                    int room = inv.Cursor.MaxStackSize - inv.Cursor.Count;
+                    if (room <= 0) return;
+                    int take = System.Math.Min(room, fe.Output.Count);
+                    var c = inv.Cursor;
+                    c.Count += take;
+                    inv.Cursor = c;
+                    var o = fe.Output;
+                    o.Count -= take;
+                    fe.Output = o.Count > 0 ? o : ItemStack.Empty;
+                    return;
+                }
+                // Different type on cursor: ignore (no swap into output).
+                return;
+            }
+
+            // Player main + hotbar slots — same dispatch as the
+            // inventory screen, with FurnaceScreen.InventoryIndexFor
+            // mapping the screen-space slot back to Inventory.Slots.
+            int invIdx = FurnaceScreen.InventoryIndexFor(slot);
+            if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
+            if (shift)
+            {
+                // Shift+click on an inventory slot: route into the
+                // furnace's matching slot first if the kind makes
+                // sense (smeltable → input, fuel → fuel), otherwise
+                // fall back to the regular inventory shift-click.
+                ref var src = ref inv.Slots[invIdx];
+                if (!src.IsEmpty)
+                {
+                    bool moved = TryShiftIntoFurnace(ref src, fe);
+                    if (!moved) inv.HandleShiftClickSlot(invIdx);
+                }
+            }
+            else if (button == 2)
+            {
+                inv.HandleRightClickSlot(invIdx);
+            }
+            else
+            {
+                inv.HandleLeftClickSlot(invIdx);
+            }
+        }
+
+        // Quick-move heuristic for shift-click: if the source stack is
+        // a smeltable input, top up / fill the input slot; if it's a
+        // fuel, the fuel slot; if it's neither, return false so the
+        // caller falls back to the regular cross-section move. Stays
+        // close to how Alpha routes shift-click between the furnace's
+        // own slots and the player inventory.
+        private static bool TryShiftIntoFurnace(ref ItemStack src, FurnaceTileEntity fe)
+        {
+            if (FurnaceRecipes.IsSmeltable(src.Type))
+            {
+                return TryDepositInto(ref fe.Input, ref src);
+            }
+            if (FurnaceRecipes.IsFuel(src.Type))
+            {
+                return TryDepositInto(ref fe.Fuel, ref src);
+            }
+            return false;
+        }
+
+        // Top-up-then-fill primitive: merges into `target` if same kind
+        // (respecting MaxStackSize), seeds an empty target with src.
+        // Returns true if anything moved. Mirrors the two-pass shape
+        // of TryShiftIntoGrid scoped to one slot.
+        private static bool TryDepositInto(ref ItemStack target, ref ItemStack src)
+        {
+            if (src.IsEmpty) return false;
+            if (target.IsEmpty)
+            {
+                target = src;
+                src = ItemStack.Empty;
+                return true;
+            }
+            if (target.SameKindAs(src))
+            {
+                int room = target.MaxStackSize - target.Count;
+                if (room <= 0) return false;
+                int take = System.Math.Min(room, src.Count);
+                target.Count += take;
+                src.Count -= take;
+                if (src.Count <= 0) src = ItemStack.Empty;
+                return true;
+            }
+            return false;
+        }
+
+        // Close the furnace screen. The three furnace slots STAY in
+        // the FurnaceTileEntity (Alpha behaviour — closing the screen
+        // doesn't dump the contents). Only the cursor needs handling
+        // so the player doesn't strand a held stack on the next panel.
+        public void CloseFurnace()
+        {
+            if (Input == null)
+            {
+                _isFurnaceOpen = false;
+                return;
+            }
+            var inv = Input.Inventory;
+            if (!inv.Cursor.IsEmpty)
+            {
+                var leftover = inv.TryAdd(inv.Cursor);
+                inv.Cursor = ItemStack.Empty;
+                if (!leftover.IsEmpty) ThrowStack(leftover);
+            }
+            _isFurnaceOpen = false;
         }
 
         // Close the crafting screen. Anything left in the 3×3 grid is
@@ -2277,6 +2682,7 @@ void main()
             // can't double-stack the dim wash.
             if (_isInventoryOpen) RenderInventory(width, height);
             else if (_isCraftingOpen) RenderCrafting(width, height);
+            else if (_isFurnaceOpen) RenderFurnace(width, height);
             else if (_isPaused)
             {
                 // Options is layered on top of the pause menu — draw the
@@ -2511,20 +2917,33 @@ void main()
         // Set per-face atlas layer indices on the multi-face cube shader.
         // Mesh face order is fixed by BuildBreakCubeMesh:
         //   0 = -X, 1 = +X, 2 = -Y (bottom), 3 = +Y (top), 4 = -Z, 5 = +Z.
-        // BlockData.GetTileIndex's faceKind is 0=top, 1=bottom, 2=side; we
-        // remap accordingly so a grass cube renders grass-top up top, dirt
-        // down below, and grass-side around — same as a placed block.
+        //
+        // We route every face through BlockData.GetTileIndexForOriented so
+        // oriented blocks (Furnace / LitFurnace) get the right per-face
+        // tile. For all other types the function falls back to the
+        // un-oriented GetTileIndex internally, so non-oriented blocks
+        // keep their old "side everywhere, top on top, bottom below"
+        // behaviour without a special case here.
+        //
+        // Default facing is BlockFacing.South — that puts the front tile
+        // on the +Z face. After the iso yaw -45° / pitch +30° in the
+        // inventory-icon path, +Z becomes the LEFT visible face of the
+        // hexagonal cube projection, which matches Alpha's furnace
+        // inventory icon (door on the left). Drops spin around Y so the
+        // front face rotates through every position over the spin cycle
+        // — the choice of starting facing only sets which side the
+        // viewer sees first.
         private static void SetCubeFaceLayers(Shader sh, BlockType type)
+            => SetCubeFaceLayers(sh, type, BlockFacing.South);
+
+        private static void SetCubeFaceLayers(Shader sh, BlockType type, BlockFacing facing)
         {
-            int side = BlockData.GetTileIndex(type, /*side*/2);
-            int top  = BlockData.GetTileIndex(type, /*top*/0);
-            int bot  = BlockData.GetTileIndex(type, /*bottom*/1);
-            sh.SetFloat("uLayers[0]", side); // -X
-            sh.SetFloat("uLayers[1]", side); // +X
-            sh.SetFloat("uLayers[2]", bot);  // -Y bottom
-            sh.SetFloat("uLayers[3]", top);  // +Y top
-            sh.SetFloat("uLayers[4]", side); // -Z
-            sh.SetFloat("uLayers[5]", side); // +Z
+            sh.SetFloat("uLayers[0]", BlockData.GetTileIndexForOriented(type, 0, -1, facing)); // -X
+            sh.SetFloat("uLayers[1]", BlockData.GetTileIndexForOriented(type, 0, +1, facing)); // +X
+            sh.SetFloat("uLayers[2]", BlockData.GetTileIndexForOriented(type, 1, -1, facing)); // -Y
+            sh.SetFloat("uLayers[3]", BlockData.GetTileIndexForOriented(type, 1, +1, facing)); // +Y
+            sh.SetFloat("uLayers[4]", BlockData.GetTileIndexForOriented(type, 2, -1, facing)); // -Z
+            sh.SetFloat("uLayers[5]", BlockData.GetTileIndexForOriented(type, 2, +1, facing)); // +Z
         }
 
         // Set per-face shade multipliers on the multi-face cube shader.
@@ -3370,6 +3789,262 @@ void main()
                     DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
                 }
                 int cursorFrame = CraftingScreen.SlotPx(width, height);
+                int cursorFrameX = cx - cursorFrame / 2;
+                int cursorFrameY = cy - cursorFrame / 2;
+                if (inv.Cursor.Count > 1)
+                {
+                    DrawStackCount(inv.Cursor.Count, cursorFrameX, cursorFrameY,
+                        cursorFrame, cursorFrame, ortho);
+                }
+                DrawDurabilityBar(inv.Cursor, cursorFrameX, cursorFrameY,
+                    cursorFrame, cursorFrame, width, height, ortho);
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Furnace screen. Shape mirrors RenderCrafting — dim wash,
+        // panel chrome, slot wells, slot icons, cursor — but with the
+        // 3 furnace slots (input, fuel, output) instead of the 3×3
+        // crafting grid, plus animated arrow + flame fill driven by
+        // the FurnaceTileEntity's tick state.
+        private void RenderFurnace(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            DrawSolidQuad(0, 0, width, height,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+
+            // ---- panel chrome ------------------------------------------
+            FurnaceScreen.GetPanelRect(width, height,
+                out int panelX, out int panelY, out int panelW, out int panelH);
+            DrawSolidQuad(panelX, panelY, panelW, panelH,
+                new Vector3(0.16f, 0.16f, 0.18f), 0.95f, ortho);
+            var border = new Vector3(0.78f, 0.82f, 0.88f);
+            int pb = FurnaceScreen.SlotBorderPx(width, height);
+            DrawSolidQuad(panelX, panelY, panelW, pb, border, 1f, ortho);
+            DrawSolidQuad(panelX, panelY + panelH - pb, panelW, pb, border, 1f, ortho);
+            DrawSolidQuad(panelX, panelY, pb, panelH, border, 1f, ortho);
+            DrawSolidQuad(panelX + panelW - pb, panelY, pb, panelH, border, 1f, ortho);
+
+            // ---- title -------------------------------------------------
+            DrawString(FurnaceScreen.Title, FurnaceScreen.TitleScale(width, height),
+                width / 2, FurnaceScreen.TitleY(width, height),
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            // ---- slot wells (all 48 slots) -----------------------------
+            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
+            var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
+            for (int i = 0; i < FurnaceScreen.TotalSlots; i++)
+            {
+                FurnaceScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+            }
+
+            // ---- furnace tile-entity state -----------------------------
+            FurnaceTileEntity fe = _world?.TryGetFurnaceEntity(_furnacePos.x, _furnacePos.y, _furnacePos.z);
+
+            // ---- progress arrow (input → output) -----------------------
+            // Draw a dim "empty" arrow always; overlay a bright fill
+            // proportional to cookProgress / CookTime so the player can
+            // watch the smelt advance. Same wedge shape as RenderCrafting
+            // for visual consistency.
+            FurnaceScreen.GetArrowCenter(width, height, out int acx, out int acy);
+            int arrowBarLen = UiScale.S(28, width, height);
+            int arrowBarTh  = UiScale.S(6, width, height);
+            int arrowHead   = UiScale.S(14, width, height);
+            var arrowDim    = new Vector3(0.35f, 0.35f, 0.40f);
+            var arrowFill   = new Vector3(0.92f, 0.94f, 0.98f);
+            int arrowLeftX = acx - arrowBarLen / 2;
+            // Background.
+            DrawSolidQuad(arrowLeftX, acy - arrowBarTh / 2,
+                arrowBarLen, arrowBarTh, arrowDim, 1f, ortho);
+            for (int i = 0; i < arrowHead; i++)
+            {
+                int barW = arrowHead - i;
+                if (barW <= 0) break;
+                DrawSolidQuad(acx + arrowBarLen / 2 + i, acy - barW,
+                    1, barW * 2, arrowDim, 1f, ortho);
+            }
+            // Foreground fill (left-to-right).
+            float cookT = 0f;
+            if (fe != null && FurnaceRecipes.CookTimeTicks > 0)
+                cookT = (float)fe.CookProgressTicks / FurnaceRecipes.CookTimeTicks;
+            if (cookT > 0f)
+            {
+                if (cookT > 1f) cookT = 1f;
+                int totalLen = arrowBarLen + arrowHead;
+                int filledLen = (int)(totalLen * cookT + 0.5f);
+                int barFill = filledLen <= arrowBarLen ? filledLen : arrowBarLen;
+                if (barFill > 0)
+                {
+                    DrawSolidQuad(arrowLeftX, acy - arrowBarTh / 2,
+                        barFill, arrowBarTh, arrowFill, 1f, ortho);
+                }
+                // Head fill — slice the wedge by N pixels from the left.
+                int headFill = filledLen - arrowBarLen;
+                if (headFill > 0)
+                {
+                    int hf = headFill > arrowHead ? arrowHead : headFill;
+                    for (int i = 0; i < hf; i++)
+                    {
+                        int barW = arrowHead - i;
+                        if (barW <= 0) break;
+                        DrawSolidQuad(acx + arrowBarLen / 2 + i, acy - barW,
+                            1, barW * 2, arrowFill, 1f, ortho);
+                    }
+                }
+            }
+
+            // ---- flame icon (between input and fuel slots) -------------
+            // A small upright flame: thin orange rectangle that fills
+            // bottom-up as the current fuel drains. When BurnTime is 0
+            // the flame is omitted entirely (no fire visible).
+            FurnaceScreen.GetFlameCenter(width, height, out int fcx, out int fcy);
+            int flameW = UiScale.S(14, width, height);
+            int flameH = UiScale.S(18, width, height);
+            int flameLeft = fcx - flameW / 2;
+            int flameTop  = fcy - flameH / 2;
+            // Empty flame outline (dim) so the slot's intent reads even
+            // without active fuel.
+            var flameDim  = new Vector3(0.32f, 0.18f, 0.10f);
+            var flameLow  = new Vector3(0.95f, 0.45f, 0.10f);
+            var flameHigh = new Vector3(1.00f, 0.85f, 0.20f);
+            DrawSolidQuad(flameLeft, flameTop, flameW, flameH, flameDim, 1f, ortho);
+            if (fe != null && fe.BurnTimeTicks > 0 && fe.MaxBurnTimeTicks > 0)
+            {
+                float burnT = (float)fe.BurnTimeTicks / fe.MaxBurnTimeTicks;
+                if (burnT > 1f) burnT = 1f;
+                int filledH = (int)(flameH * burnT + 0.5f);
+                if (filledH > 0)
+                {
+                    // Two-tone fill: hot-yellow upper third, orange below.
+                    int upperH = filledH / 3;
+                    int lowerH = filledH - upperH;
+                    int lowerY = flameTop + flameH - lowerH;
+                    DrawSolidQuad(flameLeft, lowerY, flameW, lowerH, flameLow, 1f, ortho);
+                    if (upperH > 0)
+                    {
+                        int upperY = lowerY - upperH;
+                        DrawSolidQuad(flameLeft, upperY, flameW, upperH, flameHigh, 1f, ortho);
+                    }
+                }
+            }
+
+            // ---- icons in furnace + inventory --------------------------
+            var inv = Input?.Inventory;
+            int iconPad = (FurnaceScreen.SlotPx(width, height) - FurnaceScreen.IconPx(width, height)) / 2;
+            if (fe != null)
+            {
+                if (!fe.Input.IsEmpty)
+                {
+                    FurnaceScreen.GetSlotRect(FurnaceScreen.InputSlot, width, height,
+                        out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(fe.Input.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+                if (!fe.Fuel.IsEmpty)
+                {
+                    FurnaceScreen.GetSlotRect(FurnaceScreen.FuelSlot, width, height,
+                        out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(fe.Fuel.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+                if (!fe.Output.IsEmpty)
+                {
+                    FurnaceScreen.GetSlotRect(FurnaceScreen.OutputSlot, width, height,
+                        out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(fe.Output.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+            }
+            if (inv != null)
+            {
+                for (int i = FurnaceScreen.InvMainStart; i < FurnaceScreen.TotalSlots; i++)
+                {
+                    int invIdx = FurnaceScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty) continue;
+                    FurnaceScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+                GL.Disable(EnableCap.CullFace);
+            }
+
+            // ---- stack counts on every visible non-empty stack --------
+            if (fe != null)
+            {
+                if (!fe.Input.IsEmpty && fe.Input.Count > 1)
+                {
+                    FurnaceScreen.GetSlotRect(FurnaceScreen.InputSlot, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(fe.Input.Count, sx, sy, sw, sh, ortho);
+                }
+                if (!fe.Fuel.IsEmpty && fe.Fuel.Count > 1)
+                {
+                    FurnaceScreen.GetSlotRect(FurnaceScreen.FuelSlot, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(fe.Fuel.Count, sx, sy, sw, sh, ortho);
+                }
+                if (!fe.Output.IsEmpty && fe.Output.Count > 1)
+                {
+                    FurnaceScreen.GetSlotRect(FurnaceScreen.OutputSlot, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(fe.Output.Count, sx, sy, sw, sh, ortho);
+                }
+            }
+            if (inv != null)
+            {
+                for (int i = FurnaceScreen.InvMainStart; i < FurnaceScreen.TotalSlots; i++)
+                {
+                    int invIdx = FurnaceScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    FurnaceScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+                // Durability bars.
+                for (int i = FurnaceScreen.InvMainStart; i < FurnaceScreen.TotalSlots; i++)
+                {
+                    int invIdx = FurnaceScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty) continue;
+                    FurnaceScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
+            }
+
+            // ---- cursor stack (follows mouse, drawn last) -------------
+            if (inv != null && !inv.Cursor.IsEmpty && Input != null)
+            {
+                int cx = Input.MenuMouseX;
+                int cy = Input.MenuMouseY;
+                int iconSize = FurnaceScreen.IconPx(width, height);
+                int ix = cx - iconSize / 2;
+                int iy = cy - iconSize / 2;
+                if (BlockData.IsCubeShape(inv.Cursor.Type))
+                {
+                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                    GL.Disable(EnableCap.CullFace);
+                }
+                else
+                {
+                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                }
+                int cursorFrame = FurnaceScreen.SlotPx(width, height);
                 int cursorFrameX = cx - cursorFrame / 2;
                 int cursorFrameY = cy - cursorFrame / 2;
                 if (inv.Cursor.Count > 1)

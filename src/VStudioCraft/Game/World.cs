@@ -19,6 +19,15 @@ namespace VStudioCraft.Game
         private readonly ConcurrentDictionary<(int x, int z), Chunk> _modified = new ConcurrentDictionary<(int x, int z), Chunk>();
         // Dirty set is only mutated on the render thread — no concurrency primitive needed.
         private readonly HashSet<(int x, int z)> _dirty = new HashSet<(int x, int z)>();
+        // Tile entities keyed on absolute world coordinate. A furnace cell
+        // and its FurnaceTileEntity entry have a 1:1 lifetime: the entry
+        // is created when the player places a Furnace and removed when the
+        // block is broken (or replaced with anything else). Keeping the
+        // dict at world-level (rather than per-chunk) means entries
+        // survive chunk unloading naturally — chunks don't need to carry
+        // a serialised tile-entity sidecar; only the dict is persisted.
+        private readonly Dictionary<(int x, int y, int z), FurnaceTileEntity> _furnaceEntities
+            = new Dictionary<(int x, int y, int z), FurnaceTileEntity>();
         private readonly Noise _noise;
 
         public int Seed { get; }
@@ -188,5 +197,49 @@ namespace VStudioCraft.Game
         {
             foreach (var k in _chunks.Keys) _dirty.Add(k);
         }
+
+        // ---- Furnace tile entities ----
+
+        // Get-or-create a FurnaceTileEntity at (wx, wy, wz). Caller must
+        // have already verified the block at the position is a Furnace
+        // or LitFurnace; this method doesn't sanity-check, it just hands
+        // back the persistent slot for that coordinate.
+        public FurnaceTileEntity GetOrCreateFurnaceEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (!_furnaceEntities.TryGetValue(key, out var fe))
+            {
+                fe = new FurnaceTileEntity();
+                _furnaceEntities[key] = fe;
+            }
+            return fe;
+        }
+
+        // Look up a FurnaceTileEntity without creating one. Returns null
+        // if no entity exists for the coordinate.
+        public FurnaceTileEntity TryGetFurnaceEntity(int wx, int wy, int wz)
+        {
+            _furnaceEntities.TryGetValue((wx, wy, wz), out var fe);
+            return fe;
+        }
+
+        // Remove the entity at the coordinate and return it (or null).
+        // Used when a furnace block is broken so the caller can spill
+        // its contents as drops.
+        public FurnaceTileEntity RemoveFurnaceEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (_furnaceEntities.TryGetValue(key, out var fe))
+            {
+                _furnaceEntities.Remove(key);
+                return fe;
+            }
+            return null;
+        }
+
+        // Iterate all (coord, entity) pairs — used by the per-tick
+        // furnace driver in GameRenderer and by save/load.
+        public IEnumerable<KeyValuePair<(int x, int y, int z), FurnaceTileEntity>> FurnaceEntities
+            => _furnaceEntities;
     }
 }

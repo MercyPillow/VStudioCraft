@@ -303,13 +303,14 @@ namespace VStudioCraft.UI
                             {
                                 changed = true;
                                 // TryInteract may have opened a modal screen
-                                // (e.g. crafting) on the render thread —
-                                // mouse-look toggling has to happen on the
-                                // UI thread, so dispatch the release once
-                                // we observe the flag transition. The
+                                // (e.g. crafting / furnace) on the render
+                                // thread — mouse-look toggling has to happen
+                                // on the UI thread, so dispatch the release
+                                // once we observe the flag transition. The
                                 // matching CaptureMouseLook on close runs
-                                // from the UI Esc handler in CloseCrafting.
-                                if (_renderer.IsCraftingOpen && _mouseCaptured)
+                                // from the UI Esc handler in CloseCrafting /
+                                // CloseFurnace.
+                                if ((_renderer.IsCraftingOpen || _renderer.IsFurnaceOpen) && _mouseCaptured)
                                 {
                                     Dispatcher.BeginInvoke(new Action(() =>
                                     {
@@ -368,6 +369,20 @@ namespace VStudioCraft.UI
                         _input.InventoryClickShift = false;
                     }
 
+                    // Same drain pattern for the furnace screen.
+                    if (_renderer.IsFurnaceOpen && _input.InventoryClickButton != 0)
+                    {
+                        var (pw0, ph0) = GetPhysicalSize();
+                        _renderer.HandleFurnaceClick(
+                            _input.InventoryClickButton,
+                            _input.InventoryClickX,
+                            _input.InventoryClickY,
+                            pw0, ph0,
+                            _input.InventoryClickShift);
+                        _input.InventoryClickButton = 0;
+                        _input.InventoryClickShift = false;
+                    }
+
                     // Drain RMB drag-deposit queue — the host paints one
                     // slot per MouseMove crossing, and we apply them all
                     // here in arrival order. The renderer's HandleDrag-
@@ -383,6 +398,11 @@ namespace VStudioCraft.UI
                         {
                             for (int i = 0; i < deposits.Length; i++)
                                 _renderer.HandleCraftingDragDeposit(deposits[i]);
+                        }
+                        else if (_renderer.IsFurnaceOpen)
+                        {
+                            for (int i = 0; i < deposits.Length; i++)
+                                _renderer.HandleFurnaceDragDeposit(deposits[i]);
                         }
                         else if (_renderer.IsInventoryOpen)
                         {
@@ -450,10 +470,17 @@ namespace VStudioCraft.UI
                         _renderer.AdvanceTime(dt);
                         UpdatePlayer(dt);
                         _renderer.TickDrops(dt);
+                        _renderer.TickFurnacesIfDue(dt);
                     }
-                    else if (!_renderer.IsPaused && _renderer.IsInventoryOpen)
+                    else if (!_renderer.IsPaused)
                     {
+                        // Non-pause modal (inventory / crafting / furnace
+                        // screen) — keep drops physics-ticking so a Q-toss
+                        // still flies, and keep furnaces smelting so a
+                        // player parked at the furnace screen sees real-
+                        // time progress (Alpha behaviour).
                         _renderer.TickDrops(dt);
+                        _renderer.TickFurnacesIfDue(dt);
                     }
 
                     long t1 = Stopwatch.GetTimestamp();
@@ -682,6 +709,7 @@ namespace VStudioCraft.UI
                     // (e.g. Esc inside Options returns to the pause menu,
                     // a second Esc returns to the game).
                     if (_renderer != null && _renderer.IsCraftingOpen) CloseCrafting();
+                    else if (_renderer != null && _renderer.IsFurnaceOpen) CloseFurnace();
                     else if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
                     else if (_renderer != null && _renderer.IsOptionsOpen) _renderer.IsOptionsOpen = false;
                     else TogglePause();
@@ -775,6 +803,11 @@ namespace VStudioCraft.UI
                 CloseCrafting();
                 return;
             }
+            if (_renderer.IsFurnaceOpen)
+            {
+                CloseFurnace();
+                return;
+            }
             _renderer.IsInventoryOpen = true;
             _input.ResetInventorySearch();
             ReleaseMouseLook();
@@ -792,6 +825,19 @@ namespace VStudioCraft.UI
             _renderer.CloseCrafting();
             // Drop any in-flight RMB drag — a drag started inside the
             // crafting panel shouldn't carry over to the next modal.
+            _rmbDragActive = false;
+            _rmbDragPainted.Clear();
+            CaptureMouseLook();
+        }
+
+        // Close the furnace screen. Mirrors CloseCrafting — the renderer
+        // handles cursor flush; we drop the RMB drag state and re-capture
+        // mouse-look. Furnace slot contents stay in the tile entity
+        // (Alpha behaviour: closing the screen doesn't dump the contents).
+        private void CloseFurnace()
+        {
+            if (_renderer == null) return;
+            _renderer.CloseFurnace();
             _rmbDragActive = false;
             _rmbDragPainted.Clear();
             CaptureMouseLook();
@@ -868,7 +914,7 @@ namespace VStudioCraft.UI
             // same _input click slot since only one can be open at a time
             // (the renderer's drain branches in RenderLoop pick the right
             // handler based on the active modal).
-            if (_renderer != null && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen))
+            if (_renderer != null && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen || _renderer.IsFurnaceOpen))
             {
                 if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
                 {
@@ -1097,7 +1143,7 @@ namespace VStudioCraft.UI
                 // within the same slot.
                 if (_rmbDragActive
                     && _renderer != null
-                    && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen))
+                    && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen || _renderer.IsFurnaceOpen))
                 {
                     var (pw, ph) = GetPhysicalSize();
                     int slot = HitTestActiveModalSlot(px, py, pw, ph);
@@ -1138,6 +1184,10 @@ namespace VStudioCraft.UI
             if (_renderer.IsCraftingOpen)
             {
                 return CraftingScreen.HitTest(pw, ph, mx, my);
+            }
+            if (_renderer.IsFurnaceOpen)
+            {
+                return FurnaceScreen.HitTest(pw, ph, mx, my);
             }
             if (_renderer.IsInventoryOpen)
             {

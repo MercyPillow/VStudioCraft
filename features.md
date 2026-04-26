@@ -34,7 +34,7 @@ clipping at ~3.5 rows).
 
 ## Blocks
 
-**Have** — 38 block IDs (`BlockType` enum)
+**Have** — 40 block IDs (`BlockType` enum)
 - Air, Grass, Dirt, Stone, Sand
 - Cobblestone, Bedrock, Gravel, Clay
 - CoalOre, IronOre, GoldOre, DiamondOre, RedstoneOre
@@ -46,8 +46,9 @@ clipping at ~3.5 rows).
 - Torch (floor placement, emits 14 block-light, cross-sprite model, alpha-tested)
 - Dandelion, Rose, BrownMushroom, RedMushroom — cross-sprite flora, non-collidable, raycast-targetable, light-transparent, scattered on grass during terrain gen
 - Crafting table (workbench) — planks-base block with a 3×3 grid texture on top and tool-silhouette sides; RMB opens the 3×3 crafting screen (`TryInteract` → `_isCraftingOpen`); axe-required tier; drops itself when broken
-- Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf)
-- 38-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
+- Furnace + LitFurnace — paired blocks at IDs 67/68 with stone-cap top, iron-banded stone-wall sides, and a recessed-mouth front face (lit variant adds an orange/yellow glow inside the mouth). Crafted from 8 cobblestone in a U-shape on the crafting bench. RMB opens the 3-slot smelter screen (input / fuel / output) overlaid on the player inventory; `FurnaceTileEntity` carries the per-block input/fuel/output stacks plus burn / cook timers and a cardinal `Facing` byte. The world ticks every entity at 20 Hz: fuel drains 1 tick/tick (Coal 1600 = 80 s, Wood 300 = 15 s, Stick 100 = 5 s), the cook-progress counter advances while burning + smeltable, and at 200 ticks (10 s) one input → one output. Entity transitions between burning and idle automatically swap the world block between Furnace and LitFurnace, so the lit-front glow is observable from outside without needing the screen open. Smelting recipes match Alpha: IronOre→IronIngot, GoldOre→GoldIngot, Sand→Glass, Cobblestone→Stone, ClayBall→ClayBrick. Breaking a furnace spills any contents as `DroppedItem`s and removes the entity. Persisted in the world save format (v6) with a count + per-entity (x, y, z, input, fuel, output, burnTime, maxBurnTime, cookProgress, facing) record. **Directionality**: at placement the front face is oriented to face the player who placed it (cardinal opposite of `Camera.Forward`); the mesher reads `FurnaceTileEntity.Facing` and routes that one side to the front tile while the other three sides show the plain side tile. The furnace-top tile is missing from the embedded `terrain.png` slot Alpha used (14, 3), so the atlas is patched at upload time to procedurally generate it from the side palette (stone-wall jitter + iron banding wrapped around all four edges + a 4×4 vent in the centre)
+- Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf; crafting-table top/side; furnace top/side/front + lit-front variant — front is selected per-face based on `FurnaceTileEntity.Facing`)
+- 38-block + 20-tool + 9-item + 6-tail-block (crafting-table top/side, furnace top/side/front/lit-front) procedural 16×16 pixel-art atlas, nearest-neighbour sampled
 - Transparent-block routing to a second alpha-blended render pass (water today)
 - Cross-sprite (X-shape) model path for non-cube blocks, alpha-tested in opaque pass via fragment-shader `discard`
 - Per-block shape category (`IsCubeShape`) and raycast/collision separation (`IsRaycastTarget` vs `IsSolid`) so torches/flowers/grass are targetable but non-collidable
@@ -75,7 +76,6 @@ clipping at ~3.5 rows).
 - Fences
 - Wooden door, iron door
 - Sign (post + wall)
-- Furnace (lit + unlit)
 - Chest (with inventory)
 - Mob spawner (cage with flame)
 - Redstone wire, redstone torch, button, lever, pressure plate
@@ -226,7 +226,7 @@ clipping at ~3.5 rows).
 - Right-click "split half" stack op in the inventory (currently both buttons run the left-click rules)
 - Right-click drag spread (Alpha distributes one item per slot you drag the cursor over while RMB is held)
 - Shift-click "move to other half" (hotbar ↔ main grid)
-- Furnace / chest UIs (crafting table is wired; furnace + chest still pending tile-entity persistent-contents work)
+- Chest UI (crafting table + furnace are wired with persistent tile-entity contents; chest still pending)
 - Drop item via Q (only the GUI-toss path is wired)
 - Pick-block (middle mouse)
 - Armor slots (4 slots — the `Inventory` is 36+9 today; armor is unmodelled)
@@ -239,7 +239,7 @@ clipping at ~3.5 rows).
 - Tool durability (per-stack `short` field on `ItemStack`; ticks +1 per successful break, stack clears at MaxDurability — Wood 60, Stone 132, Iron 251, Gold 33, Diamond 1562). Damaged tools never auto-stack: ItemStack equality / SameKindAs include durability.
 - Hardness-gated break time (per-block hardness × tool-class multiplier — Wood 2×, Stone 4×, Iron 6×, Diamond 8×, Gold 12×; bare-hand 1×). RequiredKind + RequiredTier in `ToolData` gate ore drops: stone-family blocks need a pickaxe of correct tier, otherwise the block breaks and yields nothing. Stone breaks into Cobblestone when harvest-eligible.
 - Non-block ItemType layer — 9 ingredient items (Stick / Coal / Iron Ingot / Gold Ingot / Diamond gem / Flint / Clay Ball / Clay Brick / Bowl) live as BlockType entries 58..66 (same id-space trick tools use). `BlockData.IsItem(t)` range-checks the slice; mesher / placement / collision / lighting all branch through it the same way they branch through `IsTool`. RMB on an item stack is rejected by `TryPlace`. The parallel `ItemType` static class exposes both the strongly-typed `BlockType` constants (`ItemType.Stick`) and Alpha 1.1.2 numeric ids (`ItemType.AlphaId(t)` returns 280 for Stick, 263 for Coal, etc.) for upcoming save / multiplayer work. Item icons live alongside the tool icons in the embedded `alpha_tools.png` at canonical Notch coordinates — Coal (7,0), Flint (6,0), Iron Ingot (7,1), Clay Brick (6,1), Gold Ingot (7,2), Stick (5,3), Diamond (7,3), Clay Ball (9,3), Bowl (7,4) — so the alpha-textures atlas slices items in the same loop that already handles tools (`UploadToolLayersFromAlphaTools` walks layers 38..66 with one decode of the PNG). Procedural mode synthesises 16×16 pixel-art equivalents (`GenerateProceduralItemLayers`).
-- Item drops: Coal Ore drops Coal (item, not the ore block) when broken with a wood-tier+ pickaxe; Diamond Ore drops the Diamond gem when broken with iron-tier+ pickaxe; Gravel has a 1-in-10 chance to drop Flint instead of the gravel block (matching Alpha); Clay always drops 4 Clay Balls (never the clay block itself). The 4 balls scatter as 4 separate `DroppedItem` entities so the pile fans out instead of stacking on the spot. Iron / Gold ores still drop the ore block until furnace smelting lands (Tier 1 #1).
+- Item drops: Coal Ore drops Coal (item, not the ore block) when broken with a wood-tier+ pickaxe; Diamond Ore drops the Diamond gem when broken with iron-tier+ pickaxe; Gravel has a 1-in-10 chance to drop Flint instead of the gravel block (matching Alpha); Clay always drops 4 Clay Balls (never the clay block itself). The 4 balls scatter as 4 separate `DroppedItem` entities so the pile fans out instead of stacking on the spot. Iron / Gold ores drop the ore block — players turn them into ingots by smelting in a furnace (see Blocks → Furnace).
 
 **Missing** — Alpha 1.1.2_01 ships 88 distinct non-block items (IDs 256–346 plus 2256/2257). We currently have 29 (20 tools + 9 ingredients). This list covers the remaining 59. Items added in later versions (Cookie, Sugar, Bone, Bone-meal, Clock, Cake, Cocoa Beans, dyes, Ink Sac, Lapis, Map, Golden Apple, Raw/Cooked Cod, Glowstone Dust) are intentionally excluded — they're post-1.1.2_01.
 
@@ -408,7 +408,7 @@ multiple subsystems at once.
 
 ### Tier 1 — Survival gameplay loop (the biggest "feels like Minecraft" gaps)
 
-1. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron. (The ItemType layer + ingredient set this depends on already shipped — see _Items_ → Have.)
+1. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron. (The ItemType layer + ingredient set this depends on already shipped — see _Items_ → Have.) **Status**: Crafting table ✓, Furnace ✓ (with placement-time directionality — front face follows the placer), Chest ✗ (still pending).
 2. **Sound** — Audio backend (OpenAL via OpenTK, or NAudio) + an SFX bank: per-material step, block break, block place, attack hit, fall thud, water splash, UI click, ambient cave drip. Music tracks last. Surprisingly large feel-improvement vs. effort.
 
 ### Tier 2 — Visible world polish (each item improves every frame)

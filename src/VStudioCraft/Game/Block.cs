@@ -95,6 +95,17 @@ namespace VStudioCraft.Game
         ClayBall   = 64, // Alpha 337
         ClayBrick  = 65, // Alpha 336
         Bowl       = 66, // Alpha 281
+
+        // Tail blocks — appended past the tools+items slice. Adding new
+        // block ids here doesn't shift IsTool / IsItem ranges (both are
+        // bounded above by Bowl=66), so all existing save files keep
+        // loading without a migration. Furnace is the unlit / idle state;
+        // LitFurnace is the actively-smelting variant — the tile-entity
+        // tick swaps the world cell between them as fuel burns down.
+        // Both share a tile-entity (per-position input/fuel/output stacks
+        // + cook/burn timers) keyed on world coordinate.
+        Furnace    = 67,
+        LitFurnace = 68,
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -382,6 +393,14 @@ namespace VStudioCraft.Game
             {
                 case BlockType.Torch:
                     return 14;
+                // A burning furnace casts a warm glow about half the
+                // reach of a torch in Alpha. Putting it at 13 keeps the
+                // smelt indoors lit without competing with torches as
+                // the primary cave light source. Idle (BlockType.Furnace)
+                // emits nothing — only LitFurnace, set by the smelt
+                // tick whenever there's fuel burning.
+                case BlockType.LitFurnace:
+                    return 13;
                 default:
                     return 0;
             }
@@ -417,6 +436,8 @@ namespace VStudioCraft.Game
                 case BlockType.MossyCobblestone:
                 case BlockType.Stone:
                 case BlockType.Bricks:
+                case BlockType.Furnace:
+                case BlockType.LitFurnace:
                     return 1.5f;
                 case BlockType.WoodLog:
                 case BlockType.Planks:
@@ -519,6 +540,27 @@ namespace VStudioCraft.Game
                     if (faceKind == 0) return BlockTextures.TileCraftingTableTop;
                     if (faceKind == 1) return BlockTextures.TilePlanks;
                     return BlockTextures.TileCraftingTableSide;
+                case BlockType.Furnace:
+                    // Default (un-oriented) lookup — used by inventory
+                    // icons, drop sprites, and any callsite that doesn't
+                    // know the per-block facing. Top/bottom share the
+                    // stone-cap-with-vent tile; sides show the dark
+                    // furnace mouth so the door is recognisable on the
+                    // dropped/icon form.
+                    //
+                    // The mesher uses GetTileIndexForOriented() instead
+                    // so each side picks between front/lit-front and
+                    // plain side based on the placed entity's Facing.
+                    if (faceKind == 0 || faceKind == 1) return BlockTextures.TileFurnaceTop;
+                    return BlockTextures.TileFurnaceFront;
+                case BlockType.LitFurnace:
+                    // Same layout as Furnace; sides show the lit front
+                    // tile so the player can tell at a glance that the
+                    // furnace is actively burning fuel. The world tick
+                    // swaps Furnace ↔ LitFurnace by SetBlock — there's
+                    // no animated texture path needed.
+                    if (faceKind == 0 || faceKind == 1) return BlockTextures.TileFurnaceTop;
+                    return BlockTextures.TileFurnaceFrontLit;
                 case BlockType.MossyCobblestone:
                     return BlockTextures.TileMossyCobblestone;
                 case BlockType.Obsidian:
@@ -571,6 +613,59 @@ namespace VStudioCraft.Game
                 default:
                     return BlockTextures.TileStone;
             }
+        }
+
+        // Oriented-face tile lookup. Used by the mesher when the block
+        // type has a "front" face whose orientation depends on a per-
+        // block facing (currently just Furnace / LitFurnace). For all
+        // other types the un-oriented GetTileIndex is fine and this
+        // function falls back to it.
+        //
+        // axis/dir match the mesher's sweep semantics: axis 0 = X,
+        // axis 1 = Y, axis 2 = Z; dir is +1 or -1.
+        //
+        // For furnaces:
+        //   * top/bottom faces (axis 1) → TileFurnaceTop
+        //   * the side face whose outward normal matches `facing` →
+        //     the front tile (lit or unlit per block id)
+        //   * the other three side faces → TileFurnaceSide
+        public static int GetTileIndexForOriented(
+            BlockType t, int axis, int dir, BlockFacing facing)
+        {
+            if (t != BlockType.Furnace && t != BlockType.LitFurnace)
+                return GetTileIndex(t, ChunkMesherFaceKind(axis, dir));
+
+            // Top/bottom — directionless cap tile.
+            if (axis == 1) return BlockTextures.TileFurnaceTop;
+
+            int frontTile = (t == BlockType.LitFurnace)
+                ? BlockTextures.TileFurnaceFrontLit
+                : BlockTextures.TileFurnaceFront;
+
+            // Decide whether THIS face is the front. The face's outward
+            // normal is (axis, dir); compare it to the facing's
+            // (axis, dir) signature.
+            //   North = -Z   (axis 2, dir -1)
+            //   South = +Z   (axis 2, dir +1)
+            //   East  = +X   (axis 0, dir +1)
+            //   West  = -X   (axis 0, dir -1)
+            int fAxis, fDir;
+            switch (facing)
+            {
+                case BlockFacing.East:  fAxis = 0; fDir = +1; break;
+                case BlockFacing.West:  fAxis = 0; fDir = -1; break;
+                case BlockFacing.South: fAxis = 2; fDir = +1; break;
+                default: /* North */    fAxis = 2; fDir = -1; break;
+            }
+            if (axis == fAxis && dir == fDir) return frontTile;
+            return BlockTextures.TileFurnaceSide;
+        }
+
+        private static int ChunkMesherFaceKind(int axis, int dir)
+        {
+            // Match ChunkMesher.FaceKindFor: top=0, bottom=1, side=2.
+            if (axis == 1) return dir > 0 ? 0 : 1;
+            return 2;
         }
     }
 
@@ -667,6 +762,8 @@ namespace VStudioCraft.Game
                 case BlockType.CoalOre:
                 case BlockType.Bricks:
                 case BlockType.Sponge: // not really, but a stone pick feels right
+                case BlockType.Furnace:
+                case BlockType.LitFurnace:
                     return 1;
                 case BlockType.IronOre:
                 case BlockType.IronBlock:
@@ -708,6 +805,8 @@ namespace VStudioCraft.Game
                 case BlockType.GoldBlock:
                 case BlockType.IronBlock:
                 case BlockType.DiamondBlock:
+                case BlockType.Furnace:
+                case BlockType.LitFurnace:
                     return ToolKind.Pickaxe;
                 case BlockType.Dirt:
                 case BlockType.Grass:
@@ -791,10 +890,16 @@ namespace VStudioCraft.Game
                 // Ore-to-item drops. Vanilla Alpha drops the *item* form
                 // for coal and diamond ores (no smelting needed); iron
                 // and gold ores drop the ore block and require furnace
-                // smelting (Tier 1 #1) to become ingots, so they keep
-                // dropping themselves until the furnace tick lands.
+                // smelting to become ingots — the furnace tick (now
+                // landed) consumes the ore block and produces an ingot.
                 case BlockType.CoalOre:    return BlockType.Coal;
                 case BlockType.DiamondOre: return BlockType.Diamond;
+                // A broken LitFurnace drops the un-lit Furnace item — the
+                // burning state is part of the tile entity, not the
+                // dropped item. Tile-entity teardown (in GameRenderer)
+                // also spills any in-progress contents as separate
+                // drops, so the player keeps anything they had cooking.
+                case BlockType.LitFurnace: return BlockType.Furnace;
                 default: return block;
             }
         }

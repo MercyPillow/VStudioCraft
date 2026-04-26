@@ -51,6 +51,13 @@ namespace VStudioCraft.Game
                 case BlockType.Air:
                 case BlockType.FlowingWater:
                 case BlockType.FlowingLava:
+                // LitFurnace is the runtime "actively burning" state of a
+                // Furnace cell — the tile-entity tick swaps a placed
+                // Furnace into LitFurnace whenever its fuel slot is
+                // active, and back out when the burn timer drains. The
+                // player shouldn't ever hold a LitFurnace stack; the
+                // catalog entry is Furnace.
+                case BlockType.LitFurnace:
                     return false;
                 default:
                     return true;

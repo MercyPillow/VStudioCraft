@@ -64,12 +64,12 @@ namespace VStudioCraft.Game
             var nzPos = world.GetChunk(chunk.ChunkX, chunk.ChunkZ + 1);
 
             // Six sweeps: axis X then Y then Z, each direction (+/-).
-            Sweep(chunk, 0, +1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
-            Sweep(chunk, 0, -1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
-            Sweep(chunk, 1, +1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
-            Sweep(chunk, 1, -1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
-            Sweep(chunk, 2, +1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
-            Sweep(chunk, 2, -1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
+            Sweep(world, chunk, 0, +1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
+            Sweep(world, chunk, 0, -1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
+            Sweep(world, chunk, 1, +1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
+            Sweep(world, chunk, 1, -1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
+            Sweep(world, chunk, 2, +1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
+            Sweep(world, chunk, 2, -1, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
 
             // Model pass — scan for non-cube blocks and emit per-block sprite
             // geometry into the opaque stream (alpha-tested via shader discard).
@@ -552,6 +552,7 @@ namespace VStudioCraft.Game
         // Dimensions along (u, v, axis). We slice perpendicular to `axis` and tile faces
         // in the (u, v) plane. u = (axis+1)%3, v = (axis+2)%3.
         private void Sweep(
+            World world,
             Chunk chunk, int axis, int dir,
             Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos,
             int baseX, int baseZ)
@@ -651,7 +652,24 @@ namespace VStudioCraft.Game
                         // partly in cave-shadow and partly in sun would merge into
                         // one quad with a single intermediate brightness.
                         int faceKind = FaceKindFor(axis, dir);
-                        int layer = BlockData.GetTileIndex((BlockType)a, faceKind);
+                        int layer;
+                        if (a == (byte)BlockType.Furnace || a == (byte)BlockType.LitFurnace)
+                        {
+                            // Oriented furnace face: world-space coord of the source
+                            // cell is needed to look up the entity's facing. cx/cy/cz
+                            // are local to `chunk`; convert back to absolute coords.
+                            int wx = cx + baseX;
+                            int wy = cy;
+                            int wz = cz + baseZ;
+                            BlockFacing facing = BlockFacing.North;
+                            var fe = world.TryGetFurnaceEntity(wx, wy, wz);
+                            if (fe != null) facing = fe.Facing;
+                            layer = BlockData.GetTileIndexForOriented((BlockType)a, axis, dir, facing);
+                        }
+                        else
+                        {
+                            layer = BlockData.GetTileIndex((BlockType)a, faceKind);
+                        }
                         int lightPacked = LightOrNeighbor(chunk, nx, ny, nz, nxNeg, nxPos, nzNeg, nzPos);
 
                         // Layout, all in the positive int range (sign bit reserved

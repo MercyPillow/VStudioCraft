@@ -82,6 +82,9 @@
     <Compile Include="Game\ChunkMesher.cs" />
     <Compile Include="Game\DroppedItem.cs" />
     <Compile Include="Game\Frustum.cs" />
+    <Compile Include="Game\FurnaceRecipes.cs" />
+    <Compile Include="Game\FurnaceScreen.cs" />
+    <Compile Include="Game\FurnaceTileEntity.cs" />
     <Compile Include="Game\GameMode.cs" />
     <Compile Include="Game\FluidTick.cs" />
     <Compile Include="Game\GameRenderer.cs" />
