@@ -56,7 +56,6 @@ clipping at ~3.5 rows).
 - Per-block shape category (`IsCubeShape`) and raycast/collision separation (`IsRaycastTarget` vs `IsSolid`) so torches/flowers/grass are targetable but non-collidable
 
 **Missing**
-- Glass with real transparency (currently opaque placeholder)
 - Ice (slippery, melts in light)
 - Snow layer + snow block
 - Torch wall placement (floor torches work; wall variants need a metadata byte for orientation)
@@ -415,7 +414,6 @@ multiple subsystems at once.
 
 4. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
 5. **Particle system** — Block-break puffs, water splash on entry, lava bubbles, torch smoke wisp. Reuses the existing sprite shader.
-6. **Real glass transparency** — Glass routes through the alpha-blend pass like water; faces between adjacent glass cull internally so 2-deep glass doesn't z-fight.
 7. **Hand-held item rendering (first-person)** — Held block/tool bobs in the bottom-right of the viewport with a step-sync sway. Covers ~70% of the "world feels alive" sensation.
 8. **Hurt overlay + arm-swing on attack** — Cheap, high-perceptual: red screen-tint for 250 ms on damage, plus a held-hand arm swing on LMB.
 
