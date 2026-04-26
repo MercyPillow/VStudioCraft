@@ -130,6 +130,45 @@ namespace VStudioCraft.Game
                 d.c.IsModified = true;
                 d.c.HasActiveFluid = true;
                 _producedWrites.Add(d.c);
+
+                // If this drained cell sat on a chunk boundary, the cell
+                // across that boundary (in the neighbour chunk) was very
+                // likely depending on us as its horizontal feeder. We need
+                // the neighbour to scan next tick so it notices the feeder
+                // is gone and drains too — otherwise the receding-water
+                // wave stalls at the chunk seam. Without this, a settled
+                // neighbour chunk that produced no writes on tick 1 (when
+                // the source was first broken) self-deactivates and never
+                // re-engages, so the flow sitting in the neighbour chunk
+                // stays put forever even after the originating chunk has
+                // fully drained.
+                // Only flip the neighbour's active flag — don't add it to
+                // _producedWrites, because no block in the neighbour changed
+                // this tick (we'd otherwise trigger a needless remesh +
+                // relight on a chunk that's still visually identical). Next
+                // tick the neighbour will scan and either drain a cell of
+                // its own (which DOES go through _producedWrites + dirty)
+                // or stay quiet and self-deactivate again.
+                if (d.lx == 0)
+                {
+                    var n = world.GetChunk(d.c.ChunkX - 1, d.c.ChunkZ);
+                    if (n != null) n.HasActiveFluid = true;
+                }
+                else if (d.lx == Chunk.SizeX - 1)
+                {
+                    var n = world.GetChunk(d.c.ChunkX + 1, d.c.ChunkZ);
+                    if (n != null) n.HasActiveFluid = true;
+                }
+                if (d.lz == 0)
+                {
+                    var n = world.GetChunk(d.c.ChunkX, d.c.ChunkZ - 1);
+                    if (n != null) n.HasActiveFluid = true;
+                }
+                else if (d.lz == Chunk.SizeZ - 1)
+                {
+                    var n = world.GetChunk(d.c.ChunkX, d.c.ChunkZ + 1);
+                    if (n != null) n.HasActiveFluid = true;
+                }
             }
 
             // Build the result set. Chunks that produced no writes AND
