@@ -107,19 +107,27 @@ namespace VStudioCraft.Game
              + GridHeightPx(viewW, viewH) + PanelPadY(viewW, viewH);
 
         // Top-left corner of the panel. Horizontally screen-centred,
-        // vertically anchored so the panel's bottom edge sits a fixed
-        // (UiScale-aware) gap above the on-screen hotbar's top edge.
-        // This ties the inventory's spatial position to the hotbar so
-        // the two never drift apart when the viewport resizes.
+        // vertically screen-centred too — but with a floor: the panel's
+        // bottom edge must never get closer than HotbarGapAboveBase
+        // (UiScale-aware) to the on-screen hotbar's top edge. On normal
+        // viewports the screen centre sits well above the hotbar so the
+        // panel just centres; on short viewports the clamp kicks in and
+        // pushes the panel up so it never collides with the bar.
         public static void GetPanelRect(int screenW, int screenH,
             out int x, out int y, out int w, out int h)
         {
             w = PanelWidth(screenW, screenH);
             h = PanelHeight(screenW, screenH);
             x = (screenW - w) / 2;
+
+            // Preferred: screen-centred.
+            int centeredY = (screenH - h) / 2;
+            // Floor: bottom edge no lower than (hotbarTop - gap).
             int hotbarTop = HotbarLayout.BarTopY(screenW, screenH);
             int gap = UiScale.S(HotbarGapAboveBase, screenW, screenH);
-            y = hotbarTop - gap - h;
+            int maxY = hotbarTop - gap - h;
+
+            y = centeredY < maxY ? centeredY : maxY;
             // Tiny-window safety: if the panel is taller than the space
             // above the hotbar, fall back to the top of the viewport so
             // we don't render off-screen with negative y.

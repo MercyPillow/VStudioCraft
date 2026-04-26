@@ -76,7 +76,8 @@
       "PowerShell(& \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj /t:Restore,Build /nologo /clp:NoSummary /v:m 2>&1 | Select-Object -Last 30)",
       "PowerShell($msb = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"; & $msb \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\ClaudeStudio\\\\ClaudeStudio.sln\" /p:Configuration=Debug /v:minimal /nologo)",
       "PowerShell(& \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Restore,Build /p:Configuration=Debug /v:minimal /nologo)",
-      "PowerShell(& \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Build /p:Configuration=Debug /v:minimal /nologo /clp:ErrorsOnly)"
+      "PowerShell(& \"${env:ProgramFiles}\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /t:Build /p:Configuration=Debug /v:minimal /nologo /clp:ErrorsOnly)",
+      "PowerShell(cd \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\"; git status; git --% log --oneline -10)"
     ]
   }
 }
