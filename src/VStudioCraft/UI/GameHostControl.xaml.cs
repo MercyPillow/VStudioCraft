@@ -714,6 +714,16 @@ namespace VStudioCraft.UI
             // Don't stack modals — if the pause menu is up, ignore E. The
             // player can press Esc first and then E.
             if (_renderer.IsPaused) return;
+            // Crafting screen open: E dismisses it the same way it
+            // dismisses the inventory (the player's instinct is "E
+            // closes the panel I'm in"). Mirror Esc's path so the grid
+            // contents flush back into the inventory and mouse-look
+            // re-captures.
+            if (_renderer.IsCraftingOpen)
+            {
+                CloseCrafting();
+                return;
+            }
             _renderer.IsInventoryOpen = true;
             _input.ResetInventorySearch();
             ReleaseMouseLook();
@@ -794,12 +804,16 @@ namespace VStudioCraft.UI
         {
             _gl.Focus();
 
-            // Inventory open: route the click into InputState as a
-            // one-shot. The render thread reads (button, x, y) once per
-            // frame in RenderLoop and dispatches to the renderer's
-            // HandleInventoryClick — keeps every Inventory mutation on
-            // the render thread without needing a lock around Slots[].
-            if (_renderer != null && _renderer.IsInventoryOpen)
+            // Inventory or crafting open: route the click into InputState
+            // as a one-shot. The render thread reads (button, x, y) once
+            // per frame in RenderLoop and dispatches to the renderer's
+            // HandleInventoryClick / HandleCraftingClick — keeps every
+            // Inventory + grid mutation on the render thread without
+            // needing a lock around Slots[]. Both modal screens share the
+            // same _input click slot since only one can be open at a time
+            // (the renderer's drain branches in RenderLoop pick the right
+            // handler based on the active modal).
+            if (_renderer != null && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen))
             {
                 if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
                 {

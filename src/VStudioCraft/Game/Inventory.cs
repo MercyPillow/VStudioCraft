@@ -155,6 +155,57 @@ namespace VStudioCraft.Game
             slot = cursor;
         }
 
+        // Right-click slot exchange (Alpha rules):
+        //   cursor empty + slot empty  → no-op
+        //   cursor empty + slot full   → pick HALF (round up so 1→1, 5→3, 6→3)
+        //   cursor full  + slot empty  → drop ONE from cursor into slot
+        //   cursor full  + slot, same type → drop ONE from cursor into slot
+        //                                    (slot count caps at MaxStackSize)
+        //   cursor full  + slot, different type → swap (same as LMB)
+        // Tools (MaxStackSize=1) round up to 1 on the half-pick, so a
+        // single damaged pickaxe RMB still hops onto the cursor cleanly.
+        public void HandleRightClickSlot(int slotIndex)
+        {
+            if (slotIndex < 0 || slotIndex >= TotalSlots) return;
+            ref var slot = ref Slots[slotIndex];
+            var cursor = Cursor;
+
+            if (cursor.IsEmpty)
+            {
+                if (slot.IsEmpty) return;
+                int half = (slot.Count + 1) / 2;   // ceil(half)
+                Cursor = new ItemStack(slot.Type, half, slot.Durability);
+                slot.Count -= half;
+                if (slot.Count <= 0) slot = ItemStack.Empty;
+                return;
+            }
+
+            if (slot.IsEmpty)
+            {
+                // Drop one item from cursor — preserve durability so a
+                // tool dropped 1-at-a-time still carries its wear.
+                slot = new ItemStack(cursor.Type, 1, cursor.Durability);
+                cursor.Count--;
+                Cursor = cursor.Count > 0 ? cursor : ItemStack.Empty;
+                return;
+            }
+
+            if (slot.SameKindAs(cursor))
+            {
+                if (slot.Count >= slot.MaxStackSize) return; // slot capped
+                slot.Count++;
+                cursor.Count--;
+                Cursor = cursor.Count > 0 ? cursor : ItemStack.Empty;
+                return;
+            }
+
+            // Different types — swap (same as LMB so the player can
+            // always extract a slot's stack with a single right click
+            // when they're holding something else).
+            Cursor = slot;
+            slot = cursor;
+        }
+
         // Shift+click transfer (Alpha quick-move). If the clicked slot is on
         // the hotbar, the stack is pushed into the main grid; if it's on the
         // main grid, it's pushed onto the hotbar. The destination range is

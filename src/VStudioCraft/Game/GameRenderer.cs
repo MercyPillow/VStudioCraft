@@ -1508,8 +1508,9 @@ void main()
                 int hotSlot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my, /*creative*/true);
                 if (hotSlot >= 0)
                 {
-                    if (shift) inv.HandleShiftClickSlot(hotSlot);
-                    else       inv.HandleLeftClickSlot(hotSlot);
+                    if (shift)            inv.HandleShiftClickSlot(hotSlot);
+                    else if (button == 2) inv.HandleRightClickSlot(hotSlot);
+                    else                  inv.HandleLeftClickSlot(hotSlot);
                     return;
                 }
 
@@ -1544,13 +1545,14 @@ void main()
             int slot = InventoryScreen.HitTest(screenW, screenH, mx, my);
             if (slot >= 0)
             {
-                // For now both buttons run the same exchange — the right-
-                // click "split" semantics arrive when we add more granular
-                // stack ops. Single button covers the user's request
-                // (move items between hotbar and main). Shift+click bypasses
-                // the slot exchange and quick-moves to the opposite range.
-                if (shift) inv.HandleShiftClickSlot(slot);
-                else       inv.HandleLeftClickSlot(slot);
+                // LMB = full pick / drop / swap / merge.
+                // RMB = pick-half / drop-one (Alpha rules — see
+                //       Inventory.HandleRightClickSlot for the table).
+                // Shift+click bypasses both and quick-moves to the
+                // opposite range (hotbar ↔ main grid).
+                if (shift)            inv.HandleShiftClickSlot(slot);
+                else if (button == 2) inv.HandleRightClickSlot(slot);
+                else                  inv.HandleLeftClickSlot(slot);
                 return;
             }
             // Outside the panel: drop the cursor stack into the world.
@@ -1600,6 +1602,10 @@ void main()
                     // (TryAdd already prefers hotbar then main grid).
                     var leftover = inv.TryAdd(_craftingGrid[slot]);
                     _craftingGrid[slot] = leftover;
+                }
+                else if (button == 2)
+                {
+                    HandleRightClickSlotRef(ref _craftingGrid[slot], inv);
                 }
                 else
                 {
@@ -1683,6 +1689,10 @@ void main()
                     if (!moved) inv.HandleShiftClickSlot(invIdx);
                 }
             }
+            else if (button == 2)
+            {
+                inv.HandleRightClickSlot(invIdx);
+            }
             else
             {
                 inv.HandleLeftClickSlot(invIdx);
@@ -1724,6 +1734,44 @@ void main()
                 return;
             }
             // Different type — swap.
+            inv.Cursor = slot;
+            slot = cursor;
+        }
+
+        // Right-click counterpart for crafting-grid cells. Same table
+        // as Inventory.HandleRightClickSlot — pick half on empty cursor,
+        // drop one on held cursor (or swap on different-type held).
+        // Kept in sync with the inventory version so a player's RMB
+        // intuition reads the same in either panel.
+        private static void HandleRightClickSlotRef(ref ItemStack slot, Inventory inv)
+        {
+            var cursor = inv.Cursor;
+            if (cursor.IsEmpty)
+            {
+                if (slot.IsEmpty) return;
+                int half = (slot.Count + 1) / 2;
+                inv.Cursor = new ItemStack(slot.Type, half, slot.Durability);
+                slot.Count -= half;
+                if (slot.Count <= 0) slot = ItemStack.Empty;
+                return;
+            }
+            if (slot.IsEmpty)
+            {
+                slot = new ItemStack(cursor.Type, 1, cursor.Durability);
+                cursor.Count--;
+                inv.Cursor = cursor.Count > 0 ? cursor : ItemStack.Empty;
+                return;
+            }
+            if (slot.SameKindAs(cursor))
+            {
+                if (slot.Count >= slot.MaxStackSize) return;
+                slot.Count++;
+                cursor.Count--;
+                inv.Cursor = cursor.Count > 0 ? cursor : ItemStack.Empty;
+                return;
+            }
+            // Different type — swap (matches LMB so RMB on a foreign
+            // slot still extracts its contents in one click).
             inv.Cursor = slot;
             slot = cursor;
         }
