@@ -217,11 +217,12 @@ namespace VStudioCraft.Game
 
                 BlockType flowing = group == 1 ? BlockType.FlowingWater : BlockType.FlowingLava;
 
-                // Vertical fall — highest priority. Tracks whether this cell
-                // is currently over air so we know to skip its horizontal
-                // spread below (water at a cliff edge / mid-fall shouldn't
-                // fan out — it just drops into the gap).
+                // Inspect the cell below. We need three pieces of info:
+                //   belowAir       — drop another falling cell into it
+                //   belowSameFluid — falling streams join the pool here
+                //   (otherwise   — solid ground; treat normally)
                 bool belowAir = false;
+                bool belowSameFluid = false;
                 if (y > 0)
                 {
                     int belowIdx = Chunk.Index(x, y - 1, z);
@@ -232,6 +233,10 @@ namespace VStudioCraft.Game
                         byte fallMeta = (byte)((FluidReach & 0x0F) | 0x10); // bit 4 = falling
                         StageWrite(chunk, x, y - 1, z, (byte)flowing, fallMeta, group);
                     }
+                    else if (BlockData.FluidGroup(below) == group)
+                    {
+                        belowSameFluid = true;
+                    }
                 }
 
                 // No solid ground below → no horizontal spread. This covers
@@ -241,8 +246,31 @@ namespace VStudioCraft.Game
                 // cliff stops fanning out and just becomes a waterfall).
                 // Once the falling column lands on solid ground, the landed
                 // cell will see solid below on its NEXT tick and resume
-                // normal horizontal spread out to WaterReach (4 cells).
+                // normal horizontal spread.
                 if (belowAir) continue;
+
+                // Same-fluid directly below → never fan out horizontally.
+                // The body below covers its own surface (its top layer
+                // spreads on its own); letting this cell paint another
+                // ring on top of it just floods outward one extra cell
+                // per tick. Without this guard you see three symptoms:
+                //   1. A falling stream lands on a pool and the impact
+                //      cell re-spreads at reach=7 across the surface,
+                //      then those new cells repeat next tick — the
+                //      "expanding flood" the player sees.
+                //   2. A source placed on top of a body (e.g. on the
+                //      ocean surface) fans out at reach=7 across the
+                //      water surface as a duplicated film.
+                //   3. A non-falling flowing cell that has settled with
+                //      same-fluid below would do the same as #2 on its
+                //      next tick.
+                // The cell itself stays — it still occupies its slot —
+                // it just stops generating new horizontal neighbours.
+                // The rule is intentionally agnostic to source/flowing
+                // and to falling/non-falling: the only thing that
+                // matters is "is there already a body below me", and if
+                // yes, I am redundant for surface coverage.
+                if (belowSameFluid) continue;
 
                 if (reach <= 0) continue;
                 int outReach = reach - 1;

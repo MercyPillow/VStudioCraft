@@ -94,7 +94,9 @@
       "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /p:Configuration=Debug /v:minimal /nologo /t:Build 2>&1)",
       "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /p:Configuration=Debug /v:minimal /nologo /clp:ErrorsOnly 2>&1)",
       "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /p:Configuration=Debug /v:minimal /nologo 2>&1)",
-      "PowerShell($out = & \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /p:Configuration=Debug /v:minimal /nologo 2>&1; \"exit=$LASTEXITCODE\"; $out | Select-Object -Last 3)"
+      "PowerShell($out = & \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /p:Configuration=Debug /v:minimal /nologo 2>&1; \"exit=$LASTEXITCODE\"; $out | Select-Object -Last 3)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /v:minimal /nologo)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" /v:minimal /nologo /p:RunAnalyzers=false)"
     ]
   }
 }
