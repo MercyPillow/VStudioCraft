@@ -58,6 +58,16 @@ namespace VStudioCraft.Game
                 // player shouldn't ever hold a LitFurnace stack; the
                 // catalog entry is Furnace.
                 case BlockType.LitFurnace:
+                // Wall-torch BlockTypes (TorchEast/West/South/North) are
+                // runtime-only orientation variants of the floor torch —
+                // the placement code picks the variant from the raycast
+                // hit's face normal. The player should only see / hold
+                // BlockType.Torch in inventories; breaking a wall torch
+                // also drops generic Torch (see BlockData.DropFor).
+                case BlockType.TorchEast:
+                case BlockType.TorchWest:
+                case BlockType.TorchSouth:
+                case BlockType.TorchNorth:
                     return false;
                 default:
                     return true;

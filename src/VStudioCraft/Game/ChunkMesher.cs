@@ -351,8 +351,116 @@ namespace VStudioCraft.Game
 
                 int layer = BlockData.GetTileIndex(t, 2);
                 int lightPacked = LightAt(chunk, x, y, z);
-                EmitCrossSprite(x + baseX, y, z + baseZ, layer, lightPacked);
+                if (BlockData.IsWallTorch(t))
+                {
+                    // Tilted billboard variant — the cross sprite is rotated
+                    // and translated so the base sits flush against the
+                    // wall and the tip leans out into the cell. Same atlas
+                    // tile as a floor torch; geometry differs only.
+                    EmitWallTorchSprite(x + baseX, y, z + baseZ, t, layer, lightPacked);
+                }
+                else
+                {
+                    EmitCrossSprite(x + baseX, y, z + baseZ, layer, lightPacked);
+                }
             }
+        }
+
+        // Wall-torch model: two perpendicular tilted planes (cross-sprite)
+        // through a shaft running from a base anchor on the wall surface to
+        // a tip pulled toward the cell centre. Differences from the floor
+        // torch: the shaft is tilted ~30° away from the wall (matches Alpha
+        // 1.1.2's wall-torch lean), and the cross is offset toward the
+        // mounting wall so the base is visually attached to it.
+        //
+        // The mounting wall is the cell face opposite the torch's facing
+        // direction. e.g. TorchEast (faces +X) is mounted on the cell's
+        // -X face. Vertices that poke into the wall block are occluded by
+        // its solid cube faces — a slight overshoot is intentional so the
+        // base reads as "embedded" rather than floating in front of the
+        // wall with a visible gap.
+        //
+        // Each plane is emitted twice (front + back winding) so back-face
+        // culling doesn't hide either side, matching EmitCrossSprite. The
+        // normal is forced to +Y so per-axis face shading picks the
+        // brightest (top) bias — same trick as the floor torch.
+        private void EmitWallTorchSprite(float wx, float wy, float wz, BlockType type, int layer, int lightPacked)
+        {
+            BlockFacing f = BlockData.WallTorchFacing(type);
+            float dx = 0f, dz = 0f;
+            switch (f)
+            {
+                case BlockFacing.East:  dx = +1f; break;
+                case BlockFacing.West:  dx = -1f; break;
+                case BlockFacing.South: dz = +1f; break;
+                default:                dz = -1f; break; // North
+            }
+
+            // Base anchor on the wall (offset 0.05 from the wall face to
+            // avoid z-fight) and tip pulled toward the cell centre. The
+            // 0.7-unit shaft + ~0.4-unit horizontal tilt gives the
+            // recognisable "torch leaning off a wall" silhouette without
+            // crossing into the opposite-cell airspace.
+            float bx = wx + 0.5f - dx * 0.45f;
+            float by = wy + 0.2f;
+            float bz = wz + 0.5f - dz * 0.45f;
+            float tx = wx + 0.5f - dx * 0.05f;
+            float ty = wy + 0.9f;
+            float tz = wz + 0.5f - dz * 0.05f;
+
+            // Half-width of the cross sprite (the torch tile is rendered
+            // 0.5 units across — same effective scale as floor torches).
+            const float halfW = 0.25f;
+
+            // Width axis: perpendicular to facing, horizontal. Runs along
+            // ±Z for east/west torches, along ±X for north/south torches.
+            float wdx = -dz * halfW, wdz = dx * halfW;
+
+            // Shaft vector (base → tip).
+            float sx = tx - bx, sy = ty - by, sz = tz - bz;
+
+            // Depth axis: perpendicular to both shaft and width via cross
+            // product (with width's unit-length form). Provides the second
+            // cross-sprite plane that gives the torch volume when viewed
+            // along the wall's normal direction.
+            float wux = -dz, wuz = dx; // unit-length width
+            float dpx = sy * wuz;                  // sy*wuz - sz*0
+            float dpy = sz * wux - sx * wuz;
+            float dpz = -sy * wux;                 // sx*0 - sy*wux
+            float dLen = (float)Math.Sqrt(dpx * dpx + dpy * dpy + dpz * dpz);
+            if (dLen > 1e-6f) { dpx /= dLen; dpy /= dLen; dpz /= dLen; }
+            dpx *= halfW; dpy *= halfW; dpz *= halfW;
+
+            const float nx = 0f, ny = 1f, nz = 0f;
+
+            // Plane A: shaft × width (the broad face seen along the wall).
+            EmitCrossQuad(
+                bx - wdx, by, bz - wdz,  0f, 0f,
+                bx + wdx, by, bz + wdz,  1f, 0f,
+                tx + wdx, ty, tz + wdz,  1f, 1f,
+                tx - wdx, ty, tz - wdz,  0f, 1f,
+                nx, ny, nz, layer, lightPacked);
+            EmitCrossQuad( // back side
+                bx + wdx, by, bz + wdz,  0f, 0f,
+                bx - wdx, by, bz - wdz,  1f, 0f,
+                tx - wdx, ty, tz - wdz,  1f, 1f,
+                tx + wdx, ty, tz + wdz,  0f, 1f,
+                nx, ny, nz, layer, lightPacked);
+
+            // Plane B: shaft × depth (the narrow face seen looking back at
+            // the wall along the facing direction).
+            EmitCrossQuad(
+                bx - dpx, by - dpy, bz - dpz,  0f, 0f,
+                bx + dpx, by + dpy, bz + dpz,  1f, 0f,
+                tx + dpx, ty + dpy, tz + dpz,  1f, 1f,
+                tx - dpx, ty - dpy, tz - dpz,  0f, 1f,
+                nx, ny, nz, layer, lightPacked);
+            EmitCrossQuad( // back side
+                bx + dpx, by + dpy, bz + dpz,  0f, 0f,
+                bx - dpx, by - dpy, bz - dpz,  1f, 0f,
+                tx - dpx, ty - dpy, tz - dpz,  1f, 1f,
+                tx + dpx, ty + dpy, tz + dpz,  0f, 1f,
+                nx, ny, nz, layer, lightPacked);
         }
 
         private void EmitCrossSprite(float wx, float wy, float wz, int layer, int lightPacked)

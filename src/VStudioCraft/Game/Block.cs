@@ -115,6 +115,25 @@ namespace VStudioCraft.Game
         // (two adjacent chests merging into a 54-slot inventory) is not
         // implemented; each chest is independent.
         Chest      = 69,
+
+        // Wall-torch variants. The default Torch (id 30) is the floor
+        // placement; the four cardinal wall variants encode their own
+        // "facing" directly in the BlockType so we don't need a per-cell
+        // metadata byte (chunk metadata is already used by the fluid sim
+        // and isn't persisted, which would lose torch orientation across
+        // save/load). Same id-space trick the tools / items / furnace /
+        // chest blocks use: appended past the tail so existing saves
+        // load identically. Facing semantics match BlockFacing — the
+        // cardinal direction the torch's flame POINTS (i.e. away from
+        // the supporting wall, into the air). All four variants share
+        // the floor torch's tile, drop a generic Torch when broken,
+        // and emit the same 14 light. The mesher branches in EmitModels
+        // to draw a tilted billboard against the wall instead of the
+        // upright X cross used for the floor variant.
+        TorchEast  = 70, // mounted on west wall, points east  (+X)
+        TorchWest  = 71, // mounted on east wall, points west  (-X)
+        TorchSouth = 72, // mounted on north wall, points south (+Z)
+        TorchNorth = 73, // mounted on south wall, points north (-Z)
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -197,6 +216,7 @@ namespace VStudioCraft.Game
         public static bool IsSolid(BlockType t)
         {
             if (IsTool(t) || IsItem(t)) return false;
+            if (IsTorch(t)) return false;
             switch (t)
             {
                 case BlockType.Air:
@@ -204,7 +224,6 @@ namespace VStudioCraft.Game
                 case BlockType.FlowingWater:
                 case BlockType.Lava:
                 case BlockType.FlowingLava:
-                case BlockType.Torch:
                 case BlockType.Dandelion:
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
@@ -212,6 +231,51 @@ namespace VStudioCraft.Game
                     return false;
                 default:
                     return true;
+            }
+        }
+
+        // True for any torch placement — floor or wall. Used by the mesher
+        // (cross-sprite vs tilted-wall-billboard branch), placement, drops,
+        // and torch-fall (ScanTorchFallAround) so a single helper covers
+        // every variant. Floor-only callers should compare against
+        // BlockType.Torch directly.
+        public static bool IsTorch(BlockType t)
+            => t == BlockType.Torch || IsWallTorch(t);
+
+        // True only for the wall-mounted variants. The mesher uses this to
+        // pick the tilted billboard model and the placement code uses it
+        // to read the BlockFacing back out of the block id (TorchFacing).
+        public static bool IsWallTorch(BlockType t)
+            => t == BlockType.TorchEast || t == BlockType.TorchWest
+            || t == BlockType.TorchSouth || t == BlockType.TorchNorth;
+
+        // Cardinal direction a wall torch's flame points (i.e. away from
+        // the wall it's attached to). For floor torches and non-torches
+        // the return value is meaningless — callers should gate on
+        // IsWallTorch first.
+        public static BlockFacing WallTorchFacing(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.TorchEast:  return BlockFacing.East;
+                case BlockType.TorchWest:  return BlockFacing.West;
+                case BlockType.TorchSouth: return BlockFacing.South;
+                case BlockType.TorchNorth: return BlockFacing.North;
+                default:                   return BlockFacing.North;
+            }
+        }
+
+        // Inverse of WallTorchFacing: build the wall-torch BlockType for a
+        // given facing. Used by TryPlace to translate the raycast hit's
+        // face normal into the appropriate wall variant.
+        public static BlockType WallTorchFor(BlockFacing facing)
+        {
+            switch (facing)
+            {
+                case BlockFacing.East:  return BlockType.TorchEast;
+                case BlockFacing.West:  return BlockType.TorchWest;
+                case BlockFacing.South: return BlockType.TorchSouth;
+                default:                return BlockType.TorchNorth;
             }
         }
 
@@ -262,9 +326,9 @@ namespace VStudioCraft.Game
         public static bool IsCubeShape(BlockType t)
         {
             if (IsTool(t) || IsItem(t)) return false;
+            if (IsTorch(t)) return false;
             switch (t)
             {
-                case BlockType.Torch:
                 case BlockType.Dandelion:
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
@@ -288,6 +352,7 @@ namespace VStudioCraft.Game
         public static bool IsOpaque(BlockType t)
         {
             if (IsTool(t) || IsItem(t)) return false;
+            if (IsTorch(t)) return false;
             switch (t)
             {
                 case BlockType.Air:
@@ -302,7 +367,8 @@ namespace VStudioCraft.Game
                 // beneath them (so the grass under a torch loses its top face)
                 // AND the four side neighbours (so you see through into the
                 // chunk because their facing wall didn't get a quad emitted).
-                case BlockType.Torch:
+                // Torches (floor + wall) are handled by the IsTorch early-out
+                // above so we don't list them here per-variant.
                 case BlockType.Dandelion:
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
@@ -363,6 +429,7 @@ namespace VStudioCraft.Game
         public static bool IsLightTransparent(BlockType t)
         {
             if (IsTool(t) || IsItem(t)) return true;
+            if (IsTorch(t)) return true;
             switch (t)
             {
                 case BlockType.Air:
@@ -372,7 +439,6 @@ namespace VStudioCraft.Game
                 case BlockType.FlowingLava:
                 case BlockType.Glass:
                 case BlockType.Leaves:
-                case BlockType.Torch:
                 case BlockType.Dandelion:
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
@@ -398,10 +464,14 @@ namespace VStudioCraft.Game
         // brightness to neighbours.
         public static int LightEmission(BlockType t)
         {
+            // All torch placements (floor + 4 wall variants) emit 14 — same
+            // value Alpha used so a torch reaches ~14 cells before fading
+            // out. The IsTorch early-out covers every variant with one check
+            // so adding another mounted orientation later doesn't need a
+            // case here.
+            if (IsTorch(t)) return 14;
             switch (t)
             {
-                case BlockType.Torch:
-                    return 14;
                 // A burning furnace casts a warm glow about half the
                 // reach of a torch in Alpha. Putting it at 13 keeps the
                 // smelt indoors lit without competing with torches as
@@ -425,6 +495,7 @@ namespace VStudioCraft.Game
         // the timer and breaks instantly on click.
         public static float Hardness(BlockType t)
         {
+            if (IsTorch(t)) return 0f;
             switch (t)
             {
                 case BlockType.Bedrock:
@@ -595,6 +666,10 @@ namespace VStudioCraft.Game
                 case BlockType.Wool:
                     return BlockTextures.TileWool;
                 case BlockType.Torch:
+                case BlockType.TorchEast:
+                case BlockType.TorchWest:
+                case BlockType.TorchSouth:
+                case BlockType.TorchNorth:
                     return BlockTextures.TileTorch;
                 case BlockType.Dandelion:
                     return BlockTextures.TileDandelion;
@@ -941,6 +1016,15 @@ namespace VStudioCraft.Game
                 // also spills any in-progress contents as separate
                 // drops, so the player keeps anything they had cooking.
                 case BlockType.LitFurnace: return BlockType.Furnace;
+                // All wall-torch variants drop the generic floor-torch
+                // item — the orientation only matters while the block is
+                // placed in the world. Picking it back up gives you a
+                // fungible Torch you can place however you like next.
+                case BlockType.TorchEast:
+                case BlockType.TorchWest:
+                case BlockType.TorchSouth:
+                case BlockType.TorchNorth:
+                    return BlockType.Torch;
                 default: return block;
             }
         }

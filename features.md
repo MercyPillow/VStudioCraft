@@ -4,13 +4,27 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 `src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
 Items marked **Have** exist today; items under **Missing** are the gap.
 
-Last updated after the ItemType + ingredient-set pass: 9 non-block
-items (Stick, Coal, Iron/Gold Ingot, Diamond gem, Flint, Clay
-Ball/Brick, Bowl) ship as new BlockType entries 58..66 alongside an
-`ItemType` static-class wrapper that exposes Alpha 1.1.2 numeric ids
-(263..341) for save / network parity. `BlockData.IsItem` ranges the
-item slice the same way `IsTool` does; renderers, mesher, placement,
-and inventory all fall through identically (non-solid, non-cube,
+Last updated after the Tier 2 visible-polish pass: wall torches +
+torch-fall (id-space orientation at BlockType 70..73 — chunk metadata
+isn't persisted, so orientation lives in the id; 5-cell unsupported
+sweep after every break), a 256-particle system reusing the existing
+multi-face cube shader (block-break puffs / water splash / lava
+bubbles / torch smoke, ambient emission at 10 Hz across a 6-block
+sweep), first-person held-item rendering in the bottom-right (3-face
+iso for cubes, flat sprite for tools/items/torches/flora) with a
+sin(πt) arm-swing animation off `Player.SwingTimer`, and a 0.45 s
+red hurt overlay driven by `Player.HurtTimer` (refreshed on every
+`TakeDamage` so all damage paths — fall / void / drowning / future
+contact damage — get the flash). All four Tier 2 roadmap items
+shipped together.
+
+Earlier: ItemType + ingredient-set pass — 9 non-block items (Stick,
+Coal, Iron/Gold Ingot, Diamond gem, Flint, Clay Ball/Brick, Bowl)
+ship as new BlockType entries 58..66 alongside an `ItemType`
+static-class wrapper that exposes Alpha 1.1.2 numeric ids (263..341)
+for save / network parity. `BlockData.IsItem` ranges the item slice
+the same way `IsTool` does; renderers, mesher, placement, and
+inventory all fall through identically (non-solid, non-cube,
 non-opaque, flat-sprite icon, RMB rejected). Coal Ore now drops Coal,
 Diamond Ore drops the Diamond gem, Gravel has a 10% Flint chance,
 Clay drops 4 Clay Balls. Item icons live alongside the tool icons in
@@ -44,7 +58,7 @@ clipping at ~3.5 rows).
 - GoldBlock, IronBlock, DiamondBlock
 - Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Wool
 - Glass — alpha-tested cube (binary alpha): non-opaque so neighbours' faces against it survive, internal glass-vs-glass faces deliberately retained so a stack of glass shows the inner pane (otherwise the stack would collapse into a hollow shell). Routes through the opaque stream's `discard` shader (alpha < 0.5) rather than the alpha-blended transparent stream — correct technique for binary-alpha textures, no back-to-front sort cost. Light propagates through it (`IsLightTransparent`).
-- Torch (floor placement, emits 14 block-light, cross-sprite model, alpha-tested)
+- Torch — floor + wall placement, emits 14 block-light, cross-sprite model, alpha-tested. Wall orientation lives in the BlockType id-space (TorchEast / TorchWest / TorchSouth / TorchNorth at ids 70..73) rather than per-cell metadata, since chunk metadata isn't persisted; placement reads the raycast hit's face normal and routes to the matching variant (a hit on a +X face places a TorchEast etc., a +Y floor hit places the regular Torch, a -Y ceiling hit is rejected). The mesher emits a tilted billboard for wall variants — base offset 0.45 toward the wall + lifted 0.2, tip offset 0.05 from cell centre + lifted 0.9 — using a depth axis from the cross product of the shaft and width vectors so two perpendicular cross-sprite planes flicker correctly. Breaking any wall variant drops a generic Torch (`BlockData.DropFor`) so the player only ever sees / holds one torch item. **Torch-fall**: after every break that removes a block, the renderer scans the 5 cells that could have a torch leaning on the broken cell (the cell above + four horizontal neighbours pointing inward) and pops any unsupported torch into a drop. Bounded recursion is safe because torches don't act as supports themselves.
 - Dandelion, Rose, BrownMushroom, RedMushroom — cross-sprite flora, non-collidable, raycast-targetable, light-transparent, scattered on grass during terrain gen
 - Crafting table (workbench) — planks-base block with a 3×3 grid texture on top and tool-silhouette sides; RMB opens the 3×3 crafting screen (`TryInteract` → `_isCraftingOpen`); axe-required tier; drops itself when broken
 - Furnace + LitFurnace — paired blocks at IDs 67/68 with stone-cap top, iron-banded stone-wall sides, and a recessed-mouth front face (lit variant adds an orange/yellow glow inside the mouth). Crafted from 8 cobblestone in a U-shape on the crafting bench. RMB opens the 3-slot smelter screen (input / fuel / output) overlaid on the player inventory; `FurnaceTileEntity` carries the per-block input/fuel/output stacks plus burn / cook timers and a cardinal `Facing` byte. The world ticks every entity at 20 Hz: fuel drains 1 tick/tick (Coal 1600 = 80 s, Wood 300 = 15 s, Stick 100 = 5 s), the cook-progress counter advances while burning + smeltable, and at 200 ticks (10 s) one input → one output. Entity transitions between burning and idle automatically swap the world block between Furnace and LitFurnace, so the lit-front glow is observable from outside without needing the screen open. Smelting recipes match Alpha: IronOre→IronIngot, GoldOre→GoldIngot, Sand→Glass, Cobblestone→Stone, ClayBall→ClayBrick. Breaking a furnace spills any contents as `DroppedItem`s and removes the entity. Persisted in the world save format (v6) with a count + per-entity (x, y, z, input, fuel, output, burnTime, maxBurnTime, cookProgress, facing) record. **Directionality**: at placement the front face is oriented to face the player who placed it (cardinal opposite of `Camera.Forward`); the mesher reads `FurnaceTileEntity.Facing` and routes that one side to the front tile while the other three sides show the plain side tile. The furnace-top tile is missing from the embedded `terrain.png` slot Alpha used (14, 3), so the atlas is patched at upload time to procedurally generate it from the side palette (stone-wall jitter + iron banding wrapped around all four edges + a 4×4 vent in the centre)
@@ -58,8 +72,6 @@ clipping at ~3.5 rows).
 **Missing**
 - Ice (slippery, melts in light)
 - Snow layer + snow block
-- Torch wall placement (floor torches work; wall variants need a metadata byte for orientation)
-- Torch fall on block-below removal (no block-update tick yet)
 - TNT priming on activation (block exists but is inert)
 - Ladder
 - Sugar cane / reeds
@@ -190,6 +202,8 @@ clipping at ~3.5 rows).
 - Drowning damage (2 HP every 1 s once air runs out)
 - Void damage (4 HP every 0.5 s below y=-16)
 - Respawn on death (teleport to spawn, restore full HP + air)
+- Hand-held item rendering in first-person — the currently-selected hotbar stack renders as a HUD-layer gizmo in the bottom-right corner (`RenderHeldItem`). Cube-shaped blocks use the same 3-face iso renderer as the inventory icons (`RenderBlockIcon3D`); tools, items, torches, and flora use the flat-sprite path (`DrawFlatSpriteIcon`). Empty hotbar slots render nothing. Drives the swing animation off `Player.SwingTimer`.
+- Arm-swing animation — `Player.TriggerSwing()` resets a 0.30 s decay timer; the held-item gizmo applies a sin(πt) half-pulse pose that dips the icon down + slightly inward at peak and eases it back to rest. Triggered on every block-break attempt (`TryBreak`) and continuously while LMB is held — once the timer drains the next held-frame retriggers, so chopping a long-mining block animates the whole way through.
 
 **Missing**
 - Damage from suffocation, lava, fire, cactus
@@ -197,8 +211,6 @@ clipping at ~3.5 rows).
 - Sneak (Shift) — prevents falling off edges
 - Ladder climb
 - On-fire state
-- Hand-held item rendering in first-person
-- Arm swing animation on attack
 - Third-person camera (F5)
 - Death screen with respawn button (currently instant respawn)
 
@@ -274,13 +286,13 @@ clipping at ~3.5 rows).
 
 **Have (cont.)**
 - Tool-durability bar on item icons (3-stop green→yellow→red ramp pinned to the bottom of every slot — hotbar HUD, inventory grid, creative hotbar row, and cursor stack while dragging). Hidden on pristine tools so a fresh pickaxe doesn't show a green stripe.
+- Hurt overlay — full-screen red wash (`RenderHurtOverlay`) when the player takes damage. `Player.TakeDamage` refreshes a 0.45 s `HurtTimer`; the overlay's alpha ramps from 0.40 down to 0 over the timer's life so the flash is brightest the frame it triggers and fades smoothly. All damage paths (fall, void, drowning, future contact damage) route through `TakeDamage` so the single hook covers everything.
 
 **Missing**
 - Dynamic hunger decay + food items. Hunger sub-setting and EatFood scaffold (flat-heal vs. refill branch) exist; eating items, hunger drain on activity, and the food UX itself are pending.
 - Armor row
 - Item-name popup (Alpha shows the held item's name briefly when you switch hotbar slots; we only show it persistently)
 - Chat overlay
-- Hurt overlay / red flash on damage taken (Alpha tints the screen red for ~250 ms when the player loses HP)
 - Death screen with respawn button (currently we instant-respawn — see Player → Missing)
 - F3 debug screen
 - More Options (render distance, brightness, controls…)
@@ -319,14 +331,14 @@ clipping at ~3.5 rows).
 - Dedicated render thread owning the GL context
 - Off-thread meshing via `ChunkJobSystem`
 - Distance-based chunk unload with hysteresis
+- Particle system (`ParticleSystem`) — 256-particle pool with ring-buffer eviction. Each particle is a tumbling tinted cube rendered through the existing `_multiFaceCubeShader` + `_breakCubeMesh` (no separate billboard shader) with per-particle uTint that fades to zero over the last 30% of life. Update applies gravity (-20 m/s² capped) + drag in-place with a compaction pass. Spawn helpers cover the canonical Alpha cues: `SpawnBreakBurst` (8 particles tinted from the broken block's side tile, fired on every successful break + at each progress milestone of a long mine), `SpawnSplash` (10 water-tinted particles on the `!WasInWater → WasInWater` edge), `SpawnLavaBubble` (orange tint, no gravity — emitted from lava cells in a 6-block sweep at 10 Hz with 5% per-cell probability), `SpawnTorchSmoke` (dim grey wisp at 3% per-cell probability under the same sweep). Update + ambient emission gated through `TickDrops` so a paused world freezes the particle field; cleared on world transition.
+- First-person held-item renderer (`RenderHeldItem`) — the player's selected hotbar stack draws as a HUD-layer gizmo in the bottom-right corner with a sin(πt) swing animation (see Player → Have). Layered before the survival HUD + hotbar so the chrome sits on top, matching Alpha's behaviour where the held tool is partially hidden behind the hotbar.
 
 **Missing**
 - Animated textures (water ripple, lava churn, fire, portal, destroy stages 0–9)
 - Block-break progress overlay (10-frame crack texture)
 - Dropped-item sprite
-- First-person held-item / arm renderer
 - Tile-entity rendering (chest lid animation, furnace fire, sign text)
-- Particle system (block-hit puffs, smoke, fire, drip, splash)
 - Underwater fog colour swap (we only tint the framebuffer today; real Alpha uses a deep-blue fog uniform underwater)
 - GUI texture sheet rendering
 
@@ -409,13 +421,15 @@ Tiered so each one is a coherent swim lane — pick a tier, ship the items in
 order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
-
+	
 ### Tier 2 — Visible world polish (each item improves every frame)
 
-4. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
-5. **Particle system** — Block-break puffs, water splash on entry, lava bubbles, torch smoke wisp. Reuses the existing sprite shader.
-7. **Hand-held item rendering (first-person)** — Held block/tool bobs in the bottom-right of the viewport with a step-sync sway. Covers ~70% of the "world feels alive" sensation.
-8. **Hurt overlay + arm-swing on attack** — Cheap, high-perceptual: red screen-tint for 250 ms on damage, plus a held-hand arm swing on LMB.
+All Tier 2 items shipped — see Blocks (wall torches + torch-fall), Rendering (particle system + first-person held-item), Player (held-item gizmo + arm-swing), and HUD (hurt overlay).
+
+4. ~~**Wall torches + torch-fall**~~ — id-space orientation (TorchEast/West/South/North at 70..73, no chunk metadata since metadata isn't persisted) + a 5-cell unsupported-torch sweep after every break. **Done.**
+5. ~~**Particle system**~~ — 256-particle pool with tumbling-cube primitives through the existing multi-face shader; covers break puffs, water splash, lava bubbles, torch smoke. **Done.**
+7. ~~**Hand-held item rendering (first-person)**~~ — bottom-right gizmo using the iso 3-face renderer for cubes and the flat-sprite path for tools/items, with sin(πt) swing animation. **Done.**
+8. ~~**Hurt overlay + arm-swing on attack**~~ — 0.45 s red wash via `Player.HurtTimer` on `TakeDamage`; arm swing via `Player.SwingTimer` triggered on every `TryBreak` and continuously while LMB is held. **Done.**
 
 ### Tier 3 — Mobs (the world stops feeling empty)
 

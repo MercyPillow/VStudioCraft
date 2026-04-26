@@ -89,6 +89,13 @@ namespace VStudioCraft.Game
         {
             bool wasOnGround = OnGround;
 
+            // Tick the cosmetic timers down (hurt flash + arm swing).
+            // Both clamp at zero — TakeDamage / TriggerSwing refresh them
+            // on demand. Doing it here means they auto-clear even if the
+            // renderer ever forgets to read them.
+            if (HurtTimer  > 0f) { HurtTimer  -= dt; if (HurtTimer  < 0f) HurtTimer  = 0f; }
+            if (SwingTimer > 0f) { SwingTimer -= dt; if (SwingTimer < 0f) SwingTimer = 0f; }
+
             // Sample water state once per tick — both the "any contact"
             // version (drives swim physics) and the "head submerged" version
             // (drives breathing / drowning). Cached on the player so the
@@ -205,11 +212,42 @@ namespace VStudioCraft.Game
             return false;
         }
 
+        // Seconds remaining on the red hurt-flash overlay. TakeDamage
+        // refreshes it to HurtFlashSeconds; the renderer reads it each
+        // frame to draw a fading red full-screen wash. Decremented by the
+        // per-frame Update so it auto-clears even if the player isn't
+        // paying attention to TakeDamage callsites.
+        public float HurtTimer { get; set; }
+        public const float HurtFlashSeconds = 0.45f;
+
+        // Seconds remaining on the arm-swing animation. Triggered on a
+        // successful melee attack / break action via TriggerSwing. The
+        // first-person held-item renderer reads this each frame to map
+        // it to a swing-arc transform on the bottom-right gizmo. Like
+        // HurtTimer, decremented in Update so a stuck non-zero value
+        // resolves on its own.
+        public float SwingTimer { get; set; }
+        public const float SwingDurationSeconds = 0.30f;
+
         public void TakeDamage(int amount)
         {
             if (amount <= 0 || Health <= 0) return;
             Health -= amount;
             if (Health < 0) Health = 0;
+            // Flash even if the damage didn't kill — the red wash gives
+            // the player feedback that something hurt them. Refresh on
+            // every hit so multiple consecutive hits stay flashed.
+            HurtTimer = HurtFlashSeconds;
+        }
+
+        // Kick off the held-item swing animation. Called from the game's
+        // attack / break paths the moment LMB is pressed (or the
+        // continuous break gets a fresh target). Refreshing the timer
+        // lets a held-LMB sweep keep the arm swinging continuously
+        // rather than holding mid-swing.
+        public void TriggerSwing()
+        {
+            SwingTimer = SwingDurationSeconds;
         }
 
         // Heal counterpart to TakeDamage. Caps at MaxHealth and is a no-op

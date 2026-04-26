@@ -306,6 +306,19 @@ void main()
         private readonly System.Collections.Generic.List<DroppedItem> _drops
             = new System.Collections.Generic.List<DroppedItem>();
 
+        // Cosmetic particle system. Block breaks, water splashes, and the
+        // ambient lava-bubble / torch-smoke emitters all push into this.
+        // Update + Render are driven from UpdatePlayer / Render; particles
+        // are not persisted (the visual is sub-second and reseeding the
+        // pool on world load is the right behaviour). See ParticleSystem.cs
+        // for the pool semantics + spawn helpers.
+        private readonly ParticleSystem _particles = new ParticleSystem();
+        // Throttle counter for ambient emitters — scanning the full
+        // ambient radius every frame at 60+ fps would burn frames on
+        // GetBlock calls. We sweep one slice per frame and let the
+        // probabilistic spawn keep the visible density right.
+        private float _ambientParticleAccum;
+
         // Input state shared with the host. The render thread reads
         // Inventory / HotbarIndex from this every frame to paint the bar.
         // Set once by the host after construction and never reassigned, so
@@ -789,6 +802,17 @@ void main()
             // its own next frame, no harm done.
             UpdateBreakProgress(dt);
 
+            // Continuous arm-swing while LMB is held — refresh the timer as
+            // soon as the previous swing finishes, so a hold cycles
+            // through swing → reset → swing → reset. Press-edge clicks
+            // already trigger one swing in TryBreak; this keeps the
+            // animation alive during hold-LMB sweeps without the renderer
+            // double-triggering on the same frame.
+            if (Input != null && Input.BreakHeld && Player.SwingTimer <= 0f)
+            {
+                Player.TriggerSwing();
+            }
+
             if (GameMode == GameMode.Survival)
             {
                 ApplySurvivalDamage(dt);
@@ -826,6 +850,11 @@ void main()
             if (Player.WasInWater && !_wasSubmergedPrev)
             {
                 SfxBank.PlayWaterEnter();
+                // Splash particles — emitted at the player's feet on the
+                // water surface. WasInWater triggers when the player's
+                // bounding-box bottom dips into a water cell, so feet
+                // position is the correct spawn site.
+                _particles.SpawnSplash(Player.Position.X, Player.Position.Y, Player.Position.Z);
             }
             _wasSubmergedPrev = Player.WasInWater;
 
@@ -1100,6 +1129,10 @@ void main()
             // coordinates — drop them so a world swap doesn't leave stale
             // floating items at coordinates that may no longer be loaded.
             _drops.Clear();
+            // Same reasoning for cosmetic particles — a leftover lava
+            // bubble from the previous world would float in mid-air at
+            // the new world's matching coordinates.
+            _particles.Clear();
 
             _world = world;
             _world.MarkAllDirty();
@@ -1277,6 +1310,11 @@ void main()
         public bool TryBreak()
         {
             if (_world == null) return false;
+            // Swing the arm even if the click misses — matches Alpha 1.1.2
+            // where every LMB tap animates the held tool/hand regardless
+            // of whether anything was hit. Click-and-hold cycles get a
+            // continuous swing via the LMB-held branch in UpdatePlayer.
+            Player.TriggerSwing();
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit)) return false;
             // Bedrock (and any future hardness<0 block) is unbreakable in
             // both modes — the click is silently ignored. Creative still
@@ -1315,7 +1353,20 @@ void main()
                 }
             }
             bool ok = _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
-            if (ok) SfxBank.PlayBreak(t);
+            if (ok)
+            {
+                SfxBank.PlayBreak(t);
+                // Cosmetic break-puff burst — uses the broken block's side
+                // tile so a stone break sprays grey, a dirt break brown,
+                // etc. Spawned BEFORE the torch-fall scan so the puffs
+                // for cascading torches (broken because their support
+                // just vanished) come after the parent break's.
+                _particles.SpawnBreakBurst(t, hit.X, hit.Y, hit.Z);
+                // Torch-fall: a freshly-Air'd cell may have been the
+                // support for an adjacent torch (floor torch above, or a
+                // wall torch on a horizontal neighbour facing back at us).
+                ScanTorchFallAround(hit.X, hit.Y, hit.Z);
+            }
             return ok;
         }
 
@@ -1439,7 +1490,15 @@ void main()
                 }
                 _world.SetBlock(bx, by, bz, BlockType.Air);
                 SfxBank.PlayBreak(brokenType);
+                // Cosmetic break-puff burst (see Tier 2 #5). Sourced from
+                // the broken block's side tile.
+                _particles.SpawnBreakBurst(brokenType, bx, by, bz);
                 SpawnBreakDrop(bx, by, bz, brokenType, heldType);
+                // Torch-fall: see ScanTorchFallAround comment. Runs after
+                // the drop spawn so the survival drop list is in source
+                // order (broken block first, then any unsupported
+                // torches that fell from the same break).
+                ScanTorchFallAround(bx, by, bz);
                 if (spilled != null)
                 {
                     foreach (var stack in spilled.SpillContents())
@@ -1588,12 +1647,52 @@ void main()
             if (existing != BlockType.Air
                 && existing != BlockType.Water && existing != BlockType.FlowingWater
                 && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
-            // Cross-sprite blocks need a solid block beneath them to attach
-            // to. Torches: floor-only for now (wall attachment needs block
-            // metadata). Flowers/mushrooms/tall grass: same rule.
-            if (!BlockData.IsCubeShape(t) && !BlockData.IsSolid(_world.GetBlock(px, py - 1, pz)))
-                return false;
-            bool placed = _world.SetBlock(px, py, pz, t);
+            // Cross-sprite blocks need a solid surface to attach to.
+            // Torches branch on the hit-face normal: clicking the top of a
+            // block places a floor torch; clicking a side face places a
+            // wall torch with facing = hit-normal direction (so the
+            // flame points away from the wall it sticks to). Clicking
+            // the underside is rejected — Alpha 1.1.2 has no ceiling
+            // torches and we follow suit.
+            //
+            // Other non-cube blocks (flowers, mushrooms, tall grass when
+            // it ships) keep the floor-only rule — they don't have wall
+            // variants, so a side-face click on those needs a different
+            // attachment we don't model yet.
+            BlockType placedType = t;
+            if (t == BlockType.Torch)
+            {
+                if (hit.Ny == 1)
+                {
+                    // Floor torch — same rule as before.
+                    if (!BlockData.IsSolid(_world.GetBlock(px, py - 1, pz))) return false;
+                }
+                else if (hit.Ny == -1)
+                {
+                    // Ceiling — unsupported.
+                    return false;
+                }
+                else
+                {
+                    // Side face → pick the wall variant whose facing is
+                    // the hit normal. The block we raycast onto is the
+                    // wall (it's at hit.X/Y/Z by construction); it's
+                    // already known solid because IsRaycastTarget +
+                    // hit.Nx/Nz ≠ 0 implies a cube face was hit.
+                    BlockFacing facing;
+                    if (hit.Nx == 1)       facing = BlockFacing.East;
+                    else if (hit.Nx == -1) facing = BlockFacing.West;
+                    else if (hit.Nz == 1)  facing = BlockFacing.South;
+                    else                   facing = BlockFacing.North;
+                    if (!BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))) return false;
+                    placedType = BlockData.WallTorchFor(facing);
+                }
+            }
+            else if (!BlockData.IsCubeShape(t))
+            {
+                if (!BlockData.IsSolid(_world.GetBlock(px, py - 1, pz))) return false;
+            }
+            bool placed = _world.SetBlock(px, py, pz, placedType);
             if (placed)
             {
                 // Oriented blocks: stamp their facing right after the
@@ -1642,6 +1741,151 @@ void main()
             if (ax > az)
                 return forward.X > 0 ? BlockFacing.West : BlockFacing.East;
             return forward.Z > 0 ? BlockFacing.North : BlockFacing.South;
+        }
+
+        // After a cell becomes non-solid (typically Air via a break), check
+        // the 5 neighbour cells that might host a torch supported by THIS
+        // cell: the floor torch directly above, plus a wall torch in each
+        // horizontal neighbour whose facing-opposite (wall direction)
+        // points back at us. Each unsupported torch is broken in place;
+        // in survival a generic Torch drop is spawned via the standard
+        // SpawnBreakDrop path so the player can pick it back up.
+        //
+        // Recursion is bounded — torches aren't solid, so a falling
+        // torch's own neighbours can't have torches that depend on it.
+        // Called from the player-driven break paths (creative + survival);
+        // the fluid sim path doesn't unsupport torches in classic Alpha
+        // (fluids never replace solid blocks, only Air / non-collidable),
+        // so it skips the scan.
+        // Sample a small radius around the camera each frame and
+        // probabilistically emit ambient particles for environmental
+        // cues: lava bubbles rising from lava cells, smoke wisps from
+        // torch tips. The radius is small (R=6) because particle visual
+        // density only matters within a few blocks of the player —
+        // particles further away would be too small to read against
+        // the world.
+        //
+        // The sweep is throttled by an interval accumulator so we only
+        // do the full GetBlock loop ~10× per second, not per-frame.
+        // That keeps the per-frame cost flat regardless of FPS while
+        // keeping visible density steady (each tick emits a fixed
+        // probability per cell).
+        private void EmitAmbientParticles(float dt)
+        {
+            if (_world == null) return;
+            const float TickInterval = 0.10f; // 10 Hz
+            _ambientParticleAccum += dt;
+            if (_ambientParticleAccum < TickInterval) return;
+            _ambientParticleAccum -= TickInterval;
+            // Hard-cap per-tick spawns so a player standing in a lava
+            // pool doesn't fill the pool every tick. The probability
+            // gate gives us a soft cap on average, but the hard cap is
+            // a defensive against large lava lakes / torch chandeliers.
+            const int MaxPerTick = 6;
+            int emitted = 0;
+
+            int cx = (int)System.Math.Floor(Camera.Position.X);
+            int cy = (int)System.Math.Floor(Camera.Position.Y);
+            int cz = (int)System.Math.Floor(Camera.Position.Z);
+            const int R = 6;
+            for (int dx = -R; dx <= R && emitted < MaxPerTick; dx++)
+            for (int dy = -R; dy <= R && emitted < MaxPerTick; dy++)
+            for (int dz = -R; dz <= R && emitted < MaxPerTick; dz++)
+            {
+                int x = cx + dx, y = cy + dy, z = cz + dz;
+                var t = _world.GetBlock(x, y, z);
+                if (t == BlockType.Lava || t == BlockType.FlowingLava)
+                {
+                    // Only the top of a lava cell looks alive — skip cells
+                    // with another lava block above (interior of a lake).
+                    var above = _world.GetBlock(x, y + 1, z);
+                    if (above == BlockType.Lava || above == BlockType.FlowingLava) continue;
+                    // ~5% per cell per tick → a single lava cell emits
+                    // ~one bubble every two seconds; a 5x5 lava pool
+                    // emits ~one per tick.
+                    if (_dropRng.NextDouble() < 0.05)
+                    {
+                        _particles.SpawnLavaBubble(x, y, z);
+                        emitted++;
+                    }
+                }
+                else if (BlockData.IsTorch(t))
+                {
+                    // Smoke wisp emitted from the flame tip. Floor
+                    // torches have their tip at (x+0.5, y+0.85, z+0.5);
+                    // wall torches lean toward their facing, so we offset
+                    // the smoke spawn in that direction to match.
+                    float fx = x + 0.5f, fy = y + 0.85f, fz = z + 0.5f;
+                    if (BlockData.IsWallTorch(t))
+                    {
+                        var f = BlockData.WallTorchFacing(t);
+                        switch (f)
+                        {
+                            case BlockFacing.East:  fx += 0.4f; break;
+                            case BlockFacing.West:  fx -= 0.4f; break;
+                            case BlockFacing.South: fz += 0.4f; break;
+                            case BlockFacing.North: fz -= 0.4f; break;
+                        }
+                    }
+                    // ~3% per cell per tick — a single torch puffs ~one
+                    // smoke every ~3 seconds, gentle enough to not draw
+                    // attention away from the flame itself.
+                    if (_dropRng.NextDouble() < 0.03)
+                    {
+                        _particles.SpawnTorchSmoke(fx, fy, fz);
+                        emitted++;
+                    }
+                }
+            }
+        }
+
+        private void ScanTorchFallAround(int wx, int wy, int wz)
+        {
+            TryFallTorchAt(wx,     wy + 1, wz);     // floor torch above
+            TryFallTorchAt(wx + 1, wy,     wz);     // TorchEast (wall on -X)
+            TryFallTorchAt(wx - 1, wy,     wz);     // TorchWest (wall on +X)
+            TryFallTorchAt(wx,     wy,     wz + 1); // TorchSouth (wall on -Z)
+            TryFallTorchAt(wx,     wy,     wz - 1); // TorchNorth (wall on +Z)
+        }
+
+        private void TryFallTorchAt(int x, int y, int z)
+        {
+            var t = _world.GetBlock(x, y, z);
+            if (!BlockData.IsTorch(t)) return;
+
+            bool supported;
+            if (t == BlockType.Torch)
+            {
+                // Floor torch: needs a solid block directly below.
+                supported = BlockData.IsSolid(_world.GetBlock(x, y - 1, z));
+            }
+            else
+            {
+                // Wall torch: support cell is in the opposite-facing
+                // direction (wall side). For TorchEast (faces +X) the
+                // wall is at x-1, etc.
+                var f = BlockData.WallTorchFacing(t);
+                int sx = x, sy = y, sz = z;
+                switch (f)
+                {
+                    case BlockFacing.East:  sx -= 1; break;
+                    case BlockFacing.West:  sx += 1; break;
+                    case BlockFacing.South: sz -= 1; break;
+                    default:                sz += 1; break; // North
+                }
+                supported = BlockData.IsSolid(_world.GetBlock(sx, sy, sz));
+            }
+            if (supported) return;
+
+            // Detach. SetBlock to Air, then drop a generic Torch in
+            // survival (DropFor maps wall variants → BlockType.Torch).
+            // Creative deletes the torch silently to match how creative
+            // breaks work elsewhere.
+            _world.SetBlock(x, y, z, BlockType.Air);
+            if (GameMode == GameMode.Survival)
+            {
+                SpawnBreakDrop(x, y, z, t, BlockType.Air);
+            }
         }
 
         // Spawn a dropped-item entity for a block broken in survival. A
@@ -1746,6 +1990,17 @@ void main()
         public void TickDrops(float dt)
         {
             if (_world == null || Input == null) return;
+
+            // Particle physics + ambient emitters share the same gating as
+            // drops — they keep advancing while only the inventory is open
+            // (so a splash kicked off as the player jumped into water
+            // before opening the inventory finishes its arc) but freeze
+            // hard during a real pause. The Update sweep + ambient pass
+            // run before the early-out below so particles continue to
+            // tick even when the drop list is empty.
+            _particles.Update(dt);
+            EmitAmbientParticles(dt);
+
             if (_drops.Count == 0) return;
 
             // Player body centre — drop pickup uses sphere distance from
@@ -2967,9 +3222,28 @@ void main()
             }
 
             RenderDrops(width, height);
+            // Cosmetic particles (block-break puffs, splashes, torch
+            // smoke, lava bubbles). Drawn after drops so they layer
+            // visually on top of any drop they overlap. Comes before
+            // the break overlay so the puffs from a freshly-broken
+            // block appear in front of the residual crack overlay's
+            // last frame.
+            RenderParticles(width, height);
             RenderBreakOverlay(width, height);
+            // Red hurt-flash full-screen wash. Layered before the
+            // selection outline + crosshair so the player's HUD chrome
+            // stays readable through the flash. Auto-fades via Player's
+            // HurtTimer (set by TakeDamage, decremented in Update).
+            RenderHurtOverlay(width, height);
             RenderSelectionOutline(width, height);
             RenderCrosshair(width, height);
+
+            // First-person held-item gizmo. Layered before the survival HUD
+            // / hotbar in the render order so the chrome sits on top —
+            // Alpha hides the held tool behind the hotbar at the bottom of
+            // the screen the same way. Drives the arm-swing animation off
+            // Player.SwingTimer (TriggerSwing called from break + attack).
+            RenderHeldItem(width, height);
 
             if (GameMode == GameMode.Survival)
             {
@@ -3130,6 +3404,52 @@ void main()
             GL.Disable(EnableCap.Blend);
         }
 
+        // Full-screen red wash that fades out over Player.HurtFlashSeconds
+        // after a TakeDamage call. Peak alpha is ~0.4 so the world stays
+        // visible through the wash — matches Alpha 1.1.2's "tinted, not
+        // blacked-out" hurt feedback. Skipped when the timer is zero so
+        // the no-damage path is a single branch.
+        //
+        // Order: drawn after particles (so a damage hit + break burst
+        // don't visually mask each other) and before the selection
+        // outline / crosshair / HUD (so the chrome stays legible through
+        // the wash and the player can still see what they're hovering
+        // when they get hit).
+        private void RenderHurtOverlay(int width, int height)
+        {
+            float t = Player.HurtTimer;
+            if (t <= 0f) return;
+
+            // Linear fade from peak alpha at t=HurtFlashSeconds down to 0
+            // when the timer expires. At 0.45s lifetime + 0.4 peak alpha
+            // the flash is visible for ~quarter-second of clear red and
+            // then ramps off.
+            float lifeFrac = t / Player.HurtFlashSeconds;
+            if (lifeFrac > 1f) lifeFrac = 1f;
+            float alpha = lifeFrac * 0.40f;
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+            var scale = Matrix4.CreateScale(width, height, 1f);
+            var mvp = scale * ortho;
+
+            _overlayShader.Use();
+            _overlayShader.SetMatrix4("uMVP", mvp);
+            // Alpha-style hurt red — saturated but slightly desaturated
+            // toward orange so it doesn't read as "danger HUD" against
+            // the blue sky.
+            _overlayShader.SetVector3("uColor", new Vector3(0.85f, 0.10f, 0.10f));
+            _overlayShader.SetFloat("uAlpha", alpha);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+            _unitQuadMesh.Draw();
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
         // Draws the 10-frame crack overlay around the block currently being
         // broken. Frame index = floor(progress * 10) clamped to [0, 9] so the
         // last frame holds for one tick before the block actually breaks.
@@ -3217,6 +3537,89 @@ void main()
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
+        // Draw every live particle as a tiny tumbling cube. Reuses the
+        // drops' multi-face cube pipeline: all 6 faces of a particle pull
+        // the same atlas layer (the source block's side tile, or water
+        // / lava / torch tile depending on the spawn helper that created
+        // it), and a per-particle tint colours torch smoke (dim grey) /
+        // lava bubbles (warm orange) without authoring new tiles.
+        //
+        // Alpha fades over the last 30% of life so particles vanish
+        // smoothly instead of popping out. Blending is enabled for the
+        // fade; depth-test stays on so particles correctly sort against
+        // the world (a particle behind a wall is hidden, not drawn over
+        // the wall through alpha).
+        //
+        // Called after RenderDrops so particles draw on top of any
+        // dropped items they overlap — visually similar layering to
+        // Alpha, where particles always read as foreground specks.
+        private void RenderParticles(int width, int height)
+        {
+            int n = _particles.Count;
+            if (n == 0) return;
+
+            _multiFaceCubeShader.Use();
+            _multiFaceCubeShader.SetInt("uAtlas", 0);
+            // Uniform shade across all 6 faces — particles don't need
+            // the iso-icon's faux directional light because they're
+            // tumbling in random orientations anyway.
+            SetCubeFaceShade(_multiFaceCubeShader, 1f, 1f, 1f);
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+            var view = Camera.GetView();
+            var proj = Camera.GetProjection(width, height);
+
+            // The break-cube mesh spans [0,1]^3 (with a tiny inflation we
+            // don't care about here). Centre it on origin so the spin
+            // happens around the particle's centre instead of a corner.
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+
+            int lastLayer = -1;
+            var pool = _particles.Pool;
+            for (int i = 0; i < n; i++)
+            {
+                var p = pool[i];
+
+                // Per-particle layer (set on all 6 faces). Avoid resetting
+                // the uLayers uniforms when consecutive particles share
+                // the same tile — break bursts spawn 8 same-tile
+                // particles in a row, which is the common case.
+                if (p.TileLayer != lastLayer)
+                {
+                    for (int f = 0; f < 6; f++)
+                        _multiFaceCubeShader.SetFloat("uLayers[" + f + "]", p.TileLayer);
+                    lastLayer = p.TileLayer;
+                }
+
+                // Fade out over the last 30% of lifetime. life ramps 0..1
+                // across the particle's age; alpha = 1 above 0.7, then
+                // linear to 0 at lifetime end.
+                float life = p.Age / p.Lifetime;
+                float alpha = 1f;
+                if (life > 0.7f) alpha = (1f - life) / 0.3f;
+                if (alpha < 0f) alpha = 0f;
+                _multiFaceCubeShader.SetVector4("uTint",
+                    new Vector4(p.TintR, p.TintG, p.TintB, alpha));
+
+                float angle = p.Age * p.SpinRate;
+                var rot = Matrix4.CreateFromAxisAngle(p.SpinAxis, angle);
+                var sizeScale = Matrix4.CreateScale(p.Size * 2f); // Size = half-extent
+                var trans = Matrix4.CreateTranslation(p.Position.X, p.Position.Y, p.Position.Z);
+                var model = localCentre * sizeScale * rot * trans;
+                _multiFaceCubeShader.SetMatrix4("uMVP", model * view * proj);
+                _breakCubeMesh.Draw();
+            }
+
+            // Restore the default tint so other multi-face users (drop
+            // overlay, iso icons) don't inherit the last particle's tint.
+            _multiFaceCubeShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
         // Set per-face atlas layer indices on the multi-face cube shader.
         // Mesh face order is fixed by BuildBreakCubeMesh:
         //   0 = -X, 1 = +X, 2 = -Y (bottom), 3 = +Y (top), 4 = -Z, 5 = +Z.
@@ -3263,6 +3666,89 @@ void main()
             sh.SetFloat("uFaceShade[3]", top);
             sh.SetFloat("uFaceShade[4]", side);
             sh.SetFloat("uFaceShade[5]", side);
+        }
+
+        // First-person held-item gizmo: draws the currently selected
+        // hotbar stack in the bottom-right of the viewport with a
+        // sine-eased swing arc when the player attacks. Cube-shaped
+        // blocks reuse the iso-3D path (same look as the hotbar slot),
+        // so a held cobblestone reads as a corner-on cube; tools /
+        // items / cross-sprite blocks fall through to the flat sprite
+        // path and render as a 2D billboard. Empty hands draw nothing
+        // for now — there's no fist sprite yet.
+        //
+        // Swing animation: a half-sine pulse over Player.SwingDurationSeconds
+        // pushes the icon down + slightly inset, then returns it to the
+        // resting pose. Intensity is calibrated so a single swing reads
+        // as a confident chop rather than a stiff lurch.
+        //
+        // Layered before the survival HUD / hotbar in the render order so
+        // the chrome sits on top — Alpha hides the held tool behind the
+        // hotbar at the bottom of the screen the same way.
+        private void RenderHeldItem(int width, int height)
+        {
+            if (Input == null) return;
+            var stack = Input.Inventory.GetHotbar(Input.HotbarIndex);
+            if (stack.IsEmpty) return;
+
+            // Scale the gizmo with the viewport but cap so it doesn't
+            // dominate small windows. UiScale.S returns the base pixel
+            // size scaled up for high-DPI / large viewports; the cap
+            // (height/4) keeps the gizmo from eating the entire bottom
+            // of a small window.
+            int iconPx = UiScale.S(96, width, height);
+            int cap = height / 4;
+            if (iconPx > cap) iconPx = cap;
+
+            int marginRight  = UiScale.S(20, width, height);
+            // Lift above the hotbar so the gizmo doesn't overlap it. The
+            // hotbar sits ~bottom of the viewport with its own margin;
+            // 72 px (scaled) clears it on every reasonable window size.
+            int marginBottom = UiScale.S(72, width, height);
+
+            // Swing pose. swingProgress runs 0 → 1 across the swing's
+            // lifetime (0 = just triggered, 1 = back to rest). A sin(πt)
+            // pulse gives a smooth half-cycle peaking at swingProgress=0.5.
+            float swingProgress = 0f;
+            if (Player.SwingTimer > 0f && Player.SwingDurationSeconds > 0f)
+            {
+                swingProgress = 1f - (Player.SwingTimer / Player.SwingDurationSeconds);
+                if (swingProgress < 0f) swingProgress = 0f;
+                else if (swingProgress > 1f) swingProgress = 1f;
+            }
+            float swingPhase = (float)System.Math.Sin(swingProgress * System.Math.PI);
+
+            // Y dip — the gizmo dives down + slightly out toward the
+            // bottom-right corner during the swing's mid-frame, then
+            // pulls back. Pixel-level so the motion is visible at any
+            // viewport size.
+            int yDip = (int)(swingPhase * iconPx * 0.40f);
+            int xDip = (int)(swingPhase * iconPx * 0.10f);
+
+            int x0 = width  - iconPx - marginRight  + xDip;
+            int y0 = height - iconPx - marginBottom + yDip;
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            // HUD pass: depth-test off so the gizmo sits on top of the
+            // world. Blend on for the iso cube's alpha-tested faces (no-
+            // op for opaque blocks but harmless to leave enabled).
+            GL.Disable(EnableCap.DepthTest);
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+            if (BlockData.IsCubeShape(stack.Type))
+            {
+                RenderBlockIcon3D(stack.Type, x0, y0, iconPx, iconPx, ortho);
+            }
+            else
+            {
+                // Tools, items, torches, flowers — anything that isn't a
+                // cube — use the flat sprite path. Side tile is the
+                // canonical "what does this look like in inventory" view
+                // for non-cube blocks; tools/items have dedicated tiles.
+                DrawFlatSpriteIcon(stack.Type, x0, y0, iconPx, iconPx, ortho);
+            }
         }
 
         // Render a 3-face block icon (top + two sides) into a pixel
