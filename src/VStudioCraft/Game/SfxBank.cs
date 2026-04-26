@@ -57,6 +57,14 @@ namespace VStudioCraft.Game
             // here so SfxBank can be standalone (synthesise + upload
             // without the caller having to remember the order).
             AudioEngine.Initialize();
+
+            // Apply persisted user volume preferences before any sound
+            // can fire. Both knobs default to 1.0 on a clean install so
+            // first-launch users hear something — but anyone who muted
+            // last session stays muted across restarts.
+            AudioEngine.MasterGain = Settings.MasterVolume;
+            AudioEngine.MusicGain  = Settings.MusicVolume;
+
             if (!AudioEngine.IsAvailable) return; // silent fallback
 
             _buffers[(int)Sfx.BreakStone]  = Up(SynthBreakStone(seed: 1001));

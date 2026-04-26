@@ -52,6 +52,18 @@ namespace VStudioCraft.Game
             set => _masterGain = value < 0f ? 0f : (value > 1f ? 1f : value);
         }
 
+        // Music volume — kept here so a future jukebox / music streaming
+        // path has a single, settings-bound knob to read. SFX paths
+        // (PlayOneShot) ignore this; they only obey MasterGain. Music
+        // playback is expected to multiply MusicGain * MasterGain so
+        // dropping master also drops music.
+        private static float _musicGain = 1.0f;
+        public static float MusicGain
+        {
+            get => _musicGain;
+            set => _musicGain = value < 0f ? 0f : (value > 1f ? 1f : value);
+        }
+
         // Idempotent. Safe to call from the renderer's init path; any
         // subsequent call is a cheap early-out.
         public static void Initialize()

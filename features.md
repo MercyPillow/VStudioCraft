@@ -42,7 +42,8 @@ clipping at ~3.5 rows).
 - Water (source) + FlowingWater (spread cell, water-tinted) — both transparent, share fluid family for face culling
 - Lava (source) + FlowingLava (spread cell) — shares the water tick code path verbatim (same reach, same drain rules); emission left at 0 so a flowing lava stream doesn't force per-tick relights and stutter the render thread
 - GoldBlock, IronBlock, DiamondBlock
-- Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Glass (opaque placeholder), Wool
+- Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Wool
+- Glass — alpha-tested cube (binary alpha): non-opaque so neighbours' faces against it survive, internal glass-vs-glass faces deliberately retained so a stack of glass shows the inner pane (otherwise the stack would collapse into a hollow shell). Routes through the opaque stream's `discard` shader (alpha < 0.5) rather than the alpha-blended transparent stream — correct technique for binary-alpha textures, no back-to-front sort cost. Light propagates through it (`IsLightTransparent`).
 - Torch (floor placement, emits 14 block-light, cross-sprite model, alpha-tested)
 - Dandelion, Rose, BrownMushroom, RedMushroom — cross-sprite flora, non-collidable, raycast-targetable, light-transparent, scattered on grass during terrain gen
 - Crafting table (workbench) — planks-base block with a 3×3 grid texture on top and tool-silhouette sides; RMB opens the 3×3 crafting screen (`TryInteract` → `_isCraftingOpen`); axe-required tier; drops itself when broken
@@ -269,7 +270,7 @@ clipping at ~3.5 rows).
 - Bubble sprites for the air row — full circle / shrunken popping bubble / transparent empty; row only renders while air < max
 - Sprite shader + procedural `HudTextures` sheet (reusable brick for all future HUD icons)
 - Pause menu (`GAME MENU`): BACK TO GAME / OPTIONS / SAVE / QUIT, with hover highlight and bitmap-font labels
-- Options sub-menu (opened from pause-menu OPTIONS): SURVIVAL section with HUNGER BAR toggle (disabled in Creative). Esc pops Options back to the pause menu; BACK button does the same. Setting persists per-world in the save header.
+- Options sub-menu (opened from pause-menu OPTIONS): SURVIVAL section with HUNGER BAR toggle (disabled in Creative); GRAPHICS section with ALPHA TEXTURES toggle; AUDIO section with `ALL SOUND` and `MUSIC` percentage sliders (click-to-set, drag-to-adjust). Esc pops Options back to the pause menu; BACK button does the same. Hunger persists per-world in the save header; alpha-textures + audio volumes persist per-user in `HKCU\Software\VStudioCraft`.
 - Viewport-aware UI scaling (`UiScale`): hotbar, survival HUD icons, inventory panel + slots, pause / options menus, and bitmap-font labels all multiply their base pixel sizes by a factor derived from viewport height (720 px reference, clamped 1.0×–2.0×). Tool-window size keeps the original look; fullscreen / 1080p+ grows the chrome and click rects together so layout and hit-testing stay in lockstep. The crosshair is intentionally exempt and stays at a fixed pixel size as an aiming reticle.
 
 **Have (cont.)**
@@ -283,13 +284,13 @@ clipping at ~3.5 rows).
 - Hurt overlay / red flash on damage taken (Alpha tints the screen red for ~250 ms when the player loses HP)
 - Death screen with respawn button (currently we instant-respawn — see Player → Missing)
 - F3 debug screen
-- More Options (render distance, brightness, controls, audio…)
+- More Options (render distance, brightness, controls…)
 - Main menu + world select + world creation screen
 
 ## Audio
 
 **Have**
-- OpenAL backend (`AudioEngine`, OpenTK 3.3.3 bindings) with a 16-source pool and round-robin eviction. Defensive init: if `openal32.dll` is missing on the host (locked-down VS extension environments), the engine falls into a permanently-muted state and the renderer keeps working without sound.
+- OpenAL backend (`AudioEngine`, OpenTK 3.3.3 bindings) with a 16-source pool and round-robin eviction. **OpenAL Soft 1.23.1 (`openal32.dll`) is bundled inside the VSIX** at `Native\openal32.dll`; `AudioEngine.Initialize` `LoadLibrary`s it from the extension folder before any AL DllImport, so audio works on hosts with no system-wide OpenAL install (the default for clean Visual Studio machines). Defensive init still applies: if `LoadLibrary` or `AudioContext()` fails for any reason, the engine falls into a permanently-muted state with the failure reason exposed via `AudioEngine.InitFailureReason` for future diagnostics, and the renderer keeps working without sound.
 - Procedural SFX bank (`SfxBank`) — every cue is synthesised at startup as 22 050 Hz mono 16-bit PCM with seeded white-noise + IIR filters (LowPass / HighPass / BandPass) + attack-decay envelopes. No embedded audio assets ship in the VSIX.
 - Per-material categorisation (`BlockMaterial`: Stone / Wood / Dirt / Sand / Glass / Cloth / Leaves) drives break / place / step variants for every solid block.
 - Block break + place sounds, fired from both creative and survival paths in `GameRenderer.TryBreak` / `UpdateBreakProgress` / `TryPlace`.

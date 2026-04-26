@@ -3757,7 +3757,10 @@ void main()
 
             bool isSurvival = GameMode == GameMode.Survival;
             bool useReal = Settings.UseRealTextures;
-            var rows = OptionsMenu.BuildRows(width, height, HungerEnabled, isSurvival, useReal);
+            float masterVol = AudioEngine.MasterGain;
+            float musicVol  = AudioEngine.MusicGain;
+            var rows = OptionsMenu.BuildRows(width, height, HungerEnabled, isSurvival, useReal,
+                                             masterVol, musicVol);
             int rowBorder = UiScale.S(2, width, height);
             int rowLabelScale = System.Math.Max(1, UiScale.S(2, width, height));
 
@@ -3801,15 +3804,45 @@ void main()
                     ? new Vector4(0.55f, 0.58f, 0.62f, 1f)
                     : new Vector4(1f, 1f, 1f, 1f);
                 int btnLabelTopY = r.Y + (r.H - HotbarTextures.GlyphCellH * rowLabelScale) / 2;
-                DrawString(r.Label, /*scale*/rowLabelScale,
-                    /*centerX*/r.X + r.W / 2, btnLabelTopY,
-                    textCol, ortho);
+
+                if (r.IsSlider)
+                {
+                    // Filled portion of the slider track. Draw it INSIDE
+                    // the existing border (already painted above) so the
+                    // frame stays crisp at full and zero values.
+                    int innerX = r.X + rowBorder;
+                    int innerY = r.Y + rowBorder;
+                    int innerW = r.W - 2 * rowBorder;
+                    int innerH = r.H - 2 * rowBorder;
+                    int filledW = (int)(innerW * r.Value + 0.5f);
+                    if (filledW > 0)
+                    {
+                        Vector3 fillBar = hover
+                            ? new Vector3(0.55f, 0.78f, 1.00f)
+                            : new Vector3(0.32f, 0.55f, 0.85f);
+                        DrawSolidQuad(innerX, innerY, filledW, innerH, fillBar, 0.85f, ortho);
+                    }
+                    // Compose label as "ALL SOUND: 75%" so the user sees
+                    // the active value without needing to count tick marks.
+                    int pct = (int)(r.Value * 100f + 0.5f);
+                    string sliderLabel = r.Label + ": " + pct.ToString() + "%";
+                    DrawString(sliderLabel, /*scale*/rowLabelScale,
+                        /*centerX*/r.X + r.W / 2, btnLabelTopY,
+                        textCol, ortho);
+                }
+                else
+                {
+                    DrawString(r.Label, /*scale*/rowLabelScale,
+                        /*centerX*/r.X + r.W / 2, btnLabelTopY,
+                        textCol, ortho);
+                }
             }
 
             // Title above the row stack.
             DrawString("OPTIONS", /*scale*/OptionsMenu.TitleFontScale(width, height),
                 /*centerX*/width / 2,
-                /*topY*/OptionsMenu.TitleY(width, height, HungerEnabled, isSurvival, useReal),
+                /*topY*/OptionsMenu.TitleY(width, height, HungerEnabled, isSurvival, useReal,
+                                           masterVol, musicVol),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             GL.Enable(EnableCap.CullFace);

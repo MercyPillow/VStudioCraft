@@ -58,6 +58,12 @@ namespace VStudioCraft.UI
         private bool _rmbDragActive;
         private readonly HashSet<int> _rmbDragPainted = new HashSet<int>();
 
+        // Options-menu slider drag latch. Set on a slider mouse-down,
+        // consumed by MouseMove to keep updating the value while the
+        // user drags, cleared on MouseUp or any options-menu dismiss.
+        // ActionId.None means "no drag in progress".
+        private OptionsMenu.ActionId _optionsSliderDrag = OptionsMenu.ActionId.None;
+
         private string _pendingLoadPath;
         private int _pendingSeed;
         private bool _pendingIsLoad;
@@ -743,7 +749,11 @@ namespace VStudioCraft.UI
                     else if (_renderer != null && _renderer.IsFurnaceOpen) CloseFurnace();
                     else if (_renderer != null && _renderer.IsChestOpen) CloseChest();
                     else if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
-                    else if (_renderer != null && _renderer.IsOptionsOpen) _renderer.IsOptionsOpen = false;
+                    else if (_renderer != null && _renderer.IsOptionsOpen)
+                    {
+                        _renderer.IsOptionsOpen = false;
+                        _optionsSliderDrag = OptionsMenu.ActionId.None;
+                    }
                     else TogglePause();
                     e.SuppressKeyPress = true;
                     break;
@@ -786,6 +796,7 @@ namespace VStudioCraft.UI
                 // that was open on top, so a future re-pause starts on the
                 // top-level pause menu rather than mid-Options.
                 _renderer.IsOptionsOpen = false;
+                _optionsSliderDrag = OptionsMenu.ActionId.None;
                 // Resume the look-capture so the player drops straight back
                 // into the game without an extra click.
                 CaptureMouseLook();
@@ -1013,10 +1024,22 @@ namespace VStudioCraft.UI
                     if (_renderer.IsOptionsOpen)
                     {
                         bool isSurvival = _renderer.GameMode == VStudioCraft.Game.GameMode.Survival;
-                        var oact = OptionsMenu.HitTest(pw, ph, px, py,
+                        float masterVol = VStudioCraft.Game.AudioEngine.MasterGain;
+                        float musicVol  = VStudioCraft.Game.AudioEngine.MusicGain;
+                        var hit = OptionsMenu.HitTestEx(pw, ph, px, py,
                             _renderer.HungerEnabled, isSurvival,
-                            VStudioCraft.Game.Settings.UseRealTextures);
-                        HandleOptionsMenuAction(oact);
+                            VStudioCraft.Game.Settings.UseRealTextures,
+                            masterVol, musicVol);
+                        HandleOptionsMenuAction(hit.Id, hit.SliderValue);
+                        // Latch slider drag: while LMB is held over a
+                        // slider, mouse-moves should keep updating the
+                        // value. The MouseMove handler reads this latch
+                        // and re-fires the action with the new X.
+                        if (hit.Id == OptionsMenu.ActionId.SetMasterVolume ||
+                            hit.Id == OptionsMenu.ActionId.SetMusicVolume)
+                        {
+                            _optionsSliderDrag = hit.Id;
+                        }
                     }
                     else
                     {
@@ -1078,16 +1101,24 @@ namespace VStudioCraft.UI
         // GameRenderer property in place; BACK pops the layer. Section
         // headings and disabled rows already short-circuit inside
         // OptionsMenu.HitTest, so we only ever see actionable IDs here.
-        private void HandleOptionsMenuAction(OptionsMenu.ActionId act)
+        private void HandleOptionsMenuAction(OptionsMenu.ActionId act, float sliderValue)
         {
             if (_renderer == null) return;
             // Same rule as the pause menu: only chirp on actionable hits so
             // dead-space clicks (section headings, padding) stay silent.
-            if (act != OptionsMenu.ActionId.None) VStudioCraft.Game.SfxBank.PlayClick();
+            // Sliders are explicitly excluded — a dragging slider would
+            // emit a stream of clicks that masks every SFX it's mixing.
+            if (act != OptionsMenu.ActionId.None
+                && act != OptionsMenu.ActionId.SetMasterVolume
+                && act != OptionsMenu.ActionId.SetMusicVolume)
+            {
+                VStudioCraft.Game.SfxBank.PlayClick();
+            }
             switch (act)
             {
                 case OptionsMenu.ActionId.Back:
                     _renderer.IsOptionsOpen = false;
+                    _optionsSliderDrag = OptionsMenu.ActionId.None;
                     break;
                 case OptionsMenu.ActionId.ToggleHunger:
                     _renderer.HungerEnabled = !_renderer.HungerEnabled;
@@ -1113,6 +1144,19 @@ namespace VStudioCraft.UI
                     VStudioCraft.Game.BlockTextures.PrewarmEmbeddedTerrain();
                     var rendererRef = _renderer;
                     _renderQueue.Enqueue(() => rendererRef.RebuildBlockAtlas());
+                    break;
+                case OptionsMenu.ActionId.SetMasterVolume:
+                    // Apply immediately so subsequent SFX play at the new
+                    // gain (the next test-click on the slider itself is a
+                    // no-op for click feedback, but block-break / steps /
+                    // pickup all multiply through MasterGain). Persist to
+                    // HKCU so the value survives a restart.
+                    VStudioCraft.Game.AudioEngine.MasterGain = sliderValue;
+                    VStudioCraft.Game.Settings.MasterVolume  = sliderValue;
+                    break;
+                case OptionsMenu.ActionId.SetMusicVolume:
+                    VStudioCraft.Game.AudioEngine.MusicGain = sliderValue;
+                    VStudioCraft.Game.Settings.MusicVolume  = sliderValue;
                     break;
                 case OptionsMenu.ActionId.None:
                     break;
@@ -1172,7 +1216,14 @@ namespace VStudioCraft.UI
             // resets break-progress as soon as it sees this clear. Right
             // button doesn't have a parallel hold state — placement is a
             // one-shot fired by BreakPressed-equivalent on click.
-            if (e.Button == MouseButtons.Left) _input.BreakHeld = false;
+            if (e.Button == MouseButtons.Left)
+            {
+                _input.BreakHeld = false;
+                // Releasing LMB ends any in-progress slider drag. The
+                // value already in AudioEngine + Settings is the final
+                // value (last MouseMove wrote it).
+                _optionsSliderDrag = OptionsMenu.ActionId.None;
+            }
             // RMB-up ends the modal drag-deposit (if any). Painted-slot
             // set is cleared so the next RMB-press starts with a fresh
             // canvas. Any deposits already enqueued for the render
@@ -1211,6 +1262,41 @@ namespace VStudioCraft.UI
                     if (slot >= 0 && _rmbDragPainted.Add(slot))
                     {
                         _input.EnqueueDragDeposit(slot);
+                    }
+                }
+
+                // Options-menu slider drag: re-evaluate the slider hit
+                // using the current cursor X. We re-fire HitTestEx on
+                // the row matching the latched action so the user can
+                // drag *off* the row vertically and still keep updating
+                // (clamped to the row's X range internally) — matches
+                // the convention every desktop slider follows.
+                if (_optionsSliderDrag != OptionsMenu.ActionId.None
+                    && _renderer != null && _renderer.IsOptionsOpen)
+                {
+                    var (pw, ph) = GetPhysicalSize();
+                    bool isSurvival = _renderer.GameMode == VStudioCraft.Game.GameMode.Survival;
+                    float masterVol = VStudioCraft.Game.AudioEngine.MasterGain;
+                    float musicVol  = VStudioCraft.Game.AudioEngine.MusicGain;
+                    var rows = OptionsMenu.BuildRows(pw, ph,
+                        _renderer.HungerEnabled, isSurvival,
+                        VStudioCraft.Game.Settings.UseRealTextures,
+                        masterVol, musicVol);
+                    for (int i = 0; i < rows.Length; i++)
+                    {
+                        var r = rows[i];
+                        if (!r.IsSlider || r.Id != _optionsSliderDrag) continue;
+                        // Same edge-inset logic as HitTestEx so click and
+                        // drag agree at the row borders.
+                        int border = VStudioCraft.Game.UiScale.S(2, pw, ph);
+                        int trackX = r.X + border;
+                        int trackW = r.W - 2 * border;
+                        if (trackW < 1) trackW = 1;
+                        float t = (px - trackX) / (float)trackW;
+                        if (t < 0f) t = 0f;
+                        else if (t > 1f) t = 1f;
+                        HandleOptionsMenuAction(_optionsSliderDrag, t);
+                        break;
                     }
                 }
                 return;

@@ -21,6 +21,10 @@ namespace VStudioCraft.Game
             Back,
             ToggleHunger,
             ToggleRealTextures,
+            // Slider actions: clicks compute a 0..1 value from mouse-X
+            // within the row and return it via HitTestEx.
+            SetMasterVolume,
+            SetMusicVolume,
         }
 
         private const int RowWidthBase   = 380;
@@ -50,16 +54,23 @@ namespace VStudioCraft.Game
             public string Label;
             public bool IsSection;   // section heading — not clickable
             public bool IsDisabled;  // drawn dim, ignores clicks
+            // Slider rows render a track + filled bar from the row's left
+            // edge to (X + W * Value); Label is drawn as a prefix and the
+            // percentage suffix is appended at draw time.
+            public bool IsSlider;
+            public float Value;      // 0..1 current value (for sliders)
         }
 
         // We compose the row list on demand because section headings and
         // disabled rows depend on game state (creative mode disables the
         // hunger toggle). Kept tiny so the per-frame allocation is cheap.
         public static Row[] BuildRows(int screenW, int screenH,
-            bool hungerEnabled, bool isSurvival, bool useRealTextures)
+            bool hungerEnabled, bool isSurvival, bool useRealTextures,
+            float masterVolume, float musicVolume)
         {
             // SURVIVAL section: hunger toggle (disabled in creative).
             // GRAPHICS section: alpha-textures toggle (always available).
+            // AUDIO section: master + music sliders (always available).
             // BACK button at the bottom.
             // Section heading height matches a row's height for layout simplicity;
             // it just isn't clickable.
@@ -72,6 +83,12 @@ namespace VStudioCraft.Game
                 new Row { Id = ActionId.None,               Label = "GRAPHICS",
                           IsSection = true },
                 new Row { Id = ActionId.ToggleRealTextures, Label = TexturesLabel(useRealTextures) },
+                new Row { Id = ActionId.None,               Label = "AUDIO",
+                          IsSection = true },
+                new Row { Id = ActionId.SetMasterVolume,    Label = "ALL SOUND",
+                          IsSlider = true, Value = Clamp01(masterVolume) },
+                new Row { Id = ActionId.SetMusicVolume,     Label = "MUSIC",
+                          IsSlider = true, Value = Clamp01(musicVolume) },
                 new Row { Id = ActionId.Back,               Label = "BACK" },
             };
 
@@ -101,29 +118,73 @@ namespace VStudioCraft.Game
             return labels;
         }
 
-        public static ActionId HitTest(int screenW, int screenH, int mx, int my,
-            bool hungerEnabled, bool isSurvival, bool useRealTextures)
+        // Hit-test result. For toggle/button rows, SliderValue is unused.
+        // For slider rows, SliderValue is the 0..1 position the user
+        // clicked at — caller persists it via Settings + AudioEngine.
+        public struct HitResult
         {
-            var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival, useRealTextures);
+            public ActionId Id;
+            public float    SliderValue;
+        }
+
+        public static HitResult HitTestEx(int screenW, int screenH, int mx, int my,
+            bool hungerEnabled, bool isSurvival, bool useRealTextures,
+            float masterVolume, float musicVolume)
+        {
+            var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival, useRealTextures,
+                                 masterVolume, musicVolume);
             for (int i = 0; i < rows.Length; i++)
             {
                 var r = rows[i];
                 if (r.IsSection || r.IsDisabled) continue;
-                if (mx >= r.X && mx < r.X + r.W && my >= r.Y && my < r.Y + r.H)
-                    return r.Id;
+                if (mx < r.X || mx >= r.X + r.W || my < r.Y || my >= r.Y + r.H) continue;
+
+                if (r.IsSlider)
+                {
+                    // Map mouse-X across the row's width to 0..1, with a
+                    // small inset so clicking the very edges still snaps
+                    // exactly to 0% or 100% rather than being eaten by
+                    // border thickness.
+                    int border = UiScale.S(2, screenW, screenH);
+                    int trackX = r.X + border;
+                    int trackW = r.W - 2 * border;
+                    if (trackW < 1) trackW = 1;
+                    float t = (mx - trackX) / (float)trackW;
+                    if (t < 0f) t = 0f;
+                    else if (t > 1f) t = 1f;
+                    return new HitResult { Id = r.Id, SliderValue = t };
+                }
+                return new HitResult { Id = r.Id, SliderValue = 0f };
             }
-            return ActionId.None;
+            return new HitResult { Id = ActionId.None, SliderValue = 0f };
+        }
+
+        // Back-compat helper for callers that don't care about slider
+        // values (e.g. read-only hover detection during render). Forwards
+        // through HitTestEx with current volume values; the renderer's
+        // hover highlight only needs the ActionId.
+        public static ActionId HitTest(int screenW, int screenH, int mx, int my,
+            bool hungerEnabled, bool isSurvival, bool useRealTextures,
+            float masterVolume, float musicVolume)
+        {
+            return HitTestEx(screenW, screenH, mx, my,
+                hungerEnabled, isSurvival, useRealTextures,
+                masterVolume, musicVolume).Id;
         }
 
         // Y of the title text's top edge, sitting just above the first row.
         public static int TitleY(int screenW, int screenH,
-            bool hungerEnabled, bool isSurvival, bool useRealTextures)
+            bool hungerEnabled, bool isSurvival, bool useRealTextures,
+            float masterVolume, float musicVolume)
         {
-            var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival, useRealTextures);
+            var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival, useRealTextures,
+                                 masterVolume, musicVolume);
             int firstY = rows[0].Y;
             int titleScale = TitleFontScale(screenW, screenH);
             return firstY - TitleGap(screenW, screenH) - HotbarTextures.GlyphCellH * titleScale;
         }
+
+        private static float Clamp01(float v) => v < 0f ? 0f : (v > 1f ? 1f : v);
 
         private static string HungerLabel(bool on) =>
             on ? "HUNGER BAR: ON" : "HUNGER BAR: OFF";

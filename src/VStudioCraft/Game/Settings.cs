@@ -35,6 +35,63 @@ namespace VStudioCraft.Game
             set => WriteBool("UseRealTextures", value);
         }
 
+        // Audio mixer values, both 0..1. Persisted as DWord (value × 1000)
+        // so HKCU integer storage round-trips losslessly at the resolution
+        // the slider exposes (0.1 % per click step is far finer than ear
+        // can hear). Default: full volume — first launch should be audible
+        // unless the user opts down.
+        //
+        // MasterVolume scales every SFX (and any future music) — it's the
+        // global mute. MusicVolume scales only music tracks; the options
+        // slider for music multiplies onto the master, matching user
+        // expectation ("if I drop master to 50%, music drops too").
+        public static float MasterVolume
+        {
+            get => ReadFloat01("MasterVolume", 1.0f);
+            set => WriteFloat01("MasterVolume", value);
+        }
+
+        public static float MusicVolume
+        {
+            get => ReadFloat01("MusicVolume", 1.0f);
+            set => WriteFloat01("MusicVolume", value);
+        }
+
+        private static float ReadFloat01(string name, float fallback)
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(KeyPath))
+                {
+                    if (key == null) return fallback;
+                    var v = key.GetValue(name);
+                    if (v is int i)
+                    {
+                        if (i < 0) i = 0;
+                        else if (i > 1000) i = 1000;
+                        return i / 1000f;
+                    }
+                    return fallback;
+                }
+            }
+            catch { return fallback; }
+        }
+
+        private static void WriteFloat01(string name, float value)
+        {
+            try
+            {
+                if (value < 0f) value = 0f;
+                else if (value > 1f) value = 1f;
+                int stored = (int)(value * 1000f + 0.5f);
+                using (var key = Registry.CurrentUser.CreateSubKey(KeyPath))
+                {
+                    key?.SetValue(name, stored, RegistryValueKind.DWord);
+                }
+            }
+            catch { }
+        }
+
         private static bool ReadBool(string name, bool fallback)
         {
             try
