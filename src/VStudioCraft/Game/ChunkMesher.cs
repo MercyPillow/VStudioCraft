@@ -666,6 +666,20 @@ namespace VStudioCraft.Game
                             if (fe != null) facing = fe.Facing;
                             layer = BlockData.GetTileIndexForOriented((BlockType)a, axis, dir, facing);
                         }
+                        else if (a == (byte)BlockType.Chest)
+                        {
+                            // Oriented chest face: same lookup pattern as
+                            // furnace, but in the chest entity dict. A
+                            // chest with no entity yet (e.g. legacy save)
+                            // defaults to North facing.
+                            int wx = cx + baseX;
+                            int wy = cy;
+                            int wz = cz + baseZ;
+                            BlockFacing facing = BlockFacing.North;
+                            var ce = world.TryGetChestEntity(wx, wy, wz);
+                            if (ce != null) facing = ce.Facing;
+                            layer = BlockData.GetTileIndexForOriented((BlockType)a, axis, dir, facing);
+                        }
                         else
                         {
                             layer = BlockData.GetTileIndex((BlockType)a, faceKind);

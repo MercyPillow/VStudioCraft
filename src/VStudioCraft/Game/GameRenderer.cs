@@ -389,6 +389,19 @@ void main()
         // stale and ignored until the next open.
         private (int x, int y, int z) _furnacePos;
 
+        // Mirror of the furnace pair for chests. RMB-opening a Chest
+        // sets _isChestOpen + _chestPos and routes input through
+        // HandleChestClick / RenderChest. Chests don't tick, so unlike
+        // the furnace path nothing happens to the entity while the
+        // screen is open beyond the player's clicks.
+        private volatile bool _isChestOpen;
+        public bool IsChestOpen
+        {
+            get => _isChestOpen;
+            set => _isChestOpen = value;
+        }
+        private (int x, int y, int z) _chestPos;
+
         // Per-world setting: show the hunger drumstick row + drive
         // hunger-based slow regen. Off by default (the user explicitly
         // wanted the bar gone unless they opt in). Persisted in the world
@@ -406,7 +419,7 @@ void main()
         // OR themselves in here and the rest of the loop gates on this
         // single flag. Options doesn't add to this list because it only
         // ever opens on top of the pause menu (which is already halted).
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen;
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen;
 
         // Rebuild the block atlas from whichever source the user has
         // currently selected (procedural or embedded Alpha terrain.png).
@@ -1204,6 +1217,18 @@ void main()
                     _isFurnaceOpen = false;
                 }
             }
+            else if (t == BlockType.Chest)
+            {
+                // Same pattern as furnace creative-break: discard the
+                // entity (creative breaks don't drop) and close the
+                // chest UI if it was bound to this cell.
+                _world.RemoveChestEntity(hit.X, hit.Y, hit.Z);
+                if (_isChestOpen
+                    && _chestPos.x == hit.X && _chestPos.y == hit.Y && _chestPos.z == hit.Z)
+                {
+                    _isChestOpen = false;
+                }
+            }
             return _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
         }
 
@@ -1303,6 +1328,7 @@ void main()
                 // SpawnBreakDrop will skip the block drop, but we still
                 // want to close the screen if it was open.
                 FurnaceTileEntity spilled = null;
+                ChestTileEntity spilledChest = null;
                 if (brokenType == BlockType.Furnace || brokenType == BlockType.LitFurnace)
                 {
                     spilled = _world.RemoveFurnaceEntity(bx, by, bz);
@@ -1312,11 +1338,30 @@ void main()
                         _isFurnaceOpen = false;
                     }
                 }
+                else if (brokenType == BlockType.Chest)
+                {
+                    // Chest break in survival: pop the entity so we can
+                    // spill its contents as drops, and close the screen
+                    // if it's currently bound to this cell.
+                    spilledChest = _world.RemoveChestEntity(bx, by, bz);
+                    if (_isChestOpen
+                        && _chestPos.x == bx && _chestPos.y == by && _chestPos.z == bz)
+                    {
+                        _isChestOpen = false;
+                    }
+                }
                 _world.SetBlock(bx, by, bz, BlockType.Air);
                 SpawnBreakDrop(bx, by, bz, brokenType, heldType);
                 if (spilled != null)
                 {
                     foreach (var stack in spilled.SpillContents())
+                    {
+                        SpawnBreakDropStack(bx, by, bz, stack);
+                    }
+                }
+                if (spilledChest != null)
+                {
+                    foreach (var stack in spilledChest.SpillContents())
                     {
                         SpawnBreakDropStack(bx, by, bz, stack);
                     }
@@ -1408,6 +1453,15 @@ void main()
                     _world.GetOrCreateFurnaceEntity(hit.X, hit.Y, hit.Z);
                     _isFurnaceOpen = true;
                     return true;
+                case BlockType.Chest:
+                    // Chest screen binds to the cell's ChestTileEntity.
+                    // Get-or-create so a freshly placed chest gets an
+                    // empty entity on first open. No tick — chests are
+                    // passive containers.
+                    _chestPos = (hit.X, hit.Y, hit.Z);
+                    _world.GetOrCreateChestEntity(hit.X, hit.Y, hit.Z);
+                    _isChestOpen = true;
+                    return true;
                 default:
                     return false;
             }
@@ -1464,6 +1518,16 @@ void main()
                 {
                     var fe = _world.GetOrCreateFurnaceEntity(px, py, pz);
                     fe.Facing = FacingTowardPlayer(Camera.Forward);
+                }
+                else if (t == BlockType.Chest)
+                {
+                    // Same orientation rule as Furnace — the door/lock
+                    // face points at the placer. The entity carries the
+                    // 27-slot inventory + facing; allocating it on
+                    // place means the first mesh build already sees the
+                    // correct facing, no flicker on the first open.
+                    var ce = _world.GetOrCreateChestEntity(px, py, pz);
+                    ce.Facing = FacingTowardPlayer(Camera.Forward);
                 }
             }
             if (placed && GameMode == GameMode.Survival)
@@ -1819,6 +1883,28 @@ void main()
             if (slotIndex == FurnaceScreen.OutputSlot) return;
 
             int invIdx = FurnaceScreen.InventoryIndexFor(slotIndex);
+            if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
+            DepositOneFromCursor(ref inv.Slots[invIdx], inv);
+        }
+
+        // RMB-drag deposit into a chest-panel slot. 0..26 hits the
+        // chest entity's slots; 27..71 routes to the player inventory.
+        // Same one-per-crossing semantics as the other deposit paths.
+        public void HandleChestDragDeposit(int slotIndex)
+        {
+            if (Input == null || _world == null) return;
+            var inv = Input.Inventory;
+            if (inv.Cursor.IsEmpty) return;
+            var ce = _world.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            if (ce == null) return;
+
+            int chestIdx = ChestScreen.ChestIndexFor(slotIndex);
+            if (chestIdx >= 0)
+            {
+                DepositOneFromCursor(ref ce.Slots[chestIdx], inv);
+                return;
+            }
+            int invIdx = ChestScreen.InventoryIndexFor(slotIndex);
             if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
             DepositOneFromCursor(ref inv.Slots[invIdx], inv);
         }
@@ -2287,6 +2373,126 @@ void main()
             _isFurnaceOpen = false;
         }
 
+        // ----- Chest screen click handling ---------------------------
+        // Mirrors HandleFurnaceClick but the slot space is bigger and
+        // simpler: every chest slot is a regular cursor-exchange slot
+        // (no read-only output). Slot space (see ChestScreen.cs):
+        //   0..26   chest inventory (mirrors ChestTileEntity.Slots)
+        //   27..62  player main
+        //   63..71  player hotbar
+        public void HandleChestClick(int button, int mx, int my, int screenW, int screenH, bool shift)
+        {
+            if (Input == null) return;
+            if (_world == null) return;
+            var inv = Input.Inventory;
+            var ce = _world.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            if (ce == null) return; // safety: entity vanished mid-screen — caller should also reject
+
+            int slot = ChestScreen.HitTest(screenW, screenH, mx, my);
+            if (slot < 0)
+            {
+                if (!inv.Cursor.IsEmpty) TossCursorStack();
+                return;
+            }
+
+            int chestIdx = ChestScreen.ChestIndexFor(slot);
+            if (chestIdx >= 0)
+            {
+                // Chest slot — direct cursor exchange. Shift-click
+                // pushes the slot's contents into the player inventory
+                // (top-up matching, then first-empty).
+                if (shift)
+                {
+                    ce.Slots[chestIdx] = inv.TryAdd(ce.Slots[chestIdx]);
+                }
+                else if (button == 2) HandleRightClickSlotRef(ref ce.Slots[chestIdx], inv);
+                else                  HandleLeftClickSlotRef(ref ce.Slots[chestIdx], inv);
+                return;
+            }
+
+            // Player main + hotbar slots — same dispatch as the
+            // inventory screen. Shift-click on a player slot pushes
+            // the stack into the chest first (top up, then first empty)
+            // before falling back to cross-section moves inside the
+            // player inventory.
+            int invIdx = ChestScreen.InventoryIndexFor(slot);
+            if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
+            if (shift)
+            {
+                ref var src = ref inv.Slots[invIdx];
+                if (!src.IsEmpty)
+                {
+                    bool moved = TryShiftIntoChest(ref src, ce);
+                    if (!moved) inv.HandleShiftClickSlot(invIdx);
+                }
+            }
+            else if (button == 2)
+            {
+                inv.HandleRightClickSlot(invIdx);
+            }
+            else
+            {
+                inv.HandleLeftClickSlot(invIdx);
+            }
+        }
+
+        // Quick-move heuristic for shift-click from the player inventory
+        // into a chest: top up matching partial slots first, then drop
+        // into the first empty slot. Mirrors the two-pass shape used
+        // by TryShiftIntoGrid / Inventory.TryAdd.
+        private static bool TryShiftIntoChest(ref ItemStack src, ChestTileEntity ce)
+        {
+            if (src.IsEmpty) return false;
+            bool moved = false;
+            // Pass 1 — top up matching cells.
+            for (int i = 0; i < ce.Slots.Length; i++)
+            {
+                if (src.IsEmpty) break;
+                if (ce.Slots[i].IsEmpty || !ce.Slots[i].SameKindAs(src)) continue;
+                int room = ce.Slots[i].MaxStackSize - ce.Slots[i].Count;
+                if (room <= 0) continue;
+                int take = System.Math.Min(room, src.Count);
+                ce.Slots[i].Count += take;
+                src.Count -= take;
+                moved = true;
+                if (src.Count == 0) src = ItemStack.Empty;
+            }
+            // Pass 2 — first empty cell.
+            if (!src.IsEmpty)
+            {
+                for (int i = 0; i < ce.Slots.Length; i++)
+                {
+                    if (!ce.Slots[i].IsEmpty) continue;
+                    ce.Slots[i] = src;
+                    src = ItemStack.Empty;
+                    moved = true;
+                    break;
+                }
+            }
+            return moved;
+        }
+
+        // Close the chest screen. Slot contents stay on the entity
+        // (Alpha behaviour — a chest's a chest); only the cursor
+        // needs handling so the held stack doesn't strand on the next
+        // panel.
+        public void CloseChest()
+        {
+            if (Input == null)
+            {
+                _isChestOpen = false;
+                return;
+            }
+            var inv = Input.Inventory;
+            if (!inv.Cursor.IsEmpty)
+            {
+                var leftover = inv.TryAdd(inv.Cursor);
+                inv.Cursor = ItemStack.Empty;
+                if (!leftover.IsEmpty) ThrowStack(leftover);
+            }
+            _isChestOpen = false;
+        }
+
         // Close the crafting screen. Anything left in the 3×3 grid is
         // pushed back into the player's inventory; whatever doesn't
         // fit is tossed into the world (matches the comment in
@@ -2683,6 +2889,7 @@ void main()
             if (_isInventoryOpen) RenderInventory(width, height);
             else if (_isCraftingOpen) RenderCrafting(width, height);
             else if (_isFurnaceOpen) RenderFurnace(width, height);
+            else if (_isChestOpen) RenderChest(width, height);
             else if (_isPaused)
             {
                 // Options is layered on top of the pause menu — draw the
@@ -4045,6 +4252,167 @@ void main()
                     DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
                 }
                 int cursorFrame = FurnaceScreen.SlotPx(width, height);
+                int cursorFrameX = cx - cursorFrame / 2;
+                int cursorFrameY = cy - cursorFrame / 2;
+                if (inv.Cursor.Count > 1)
+                {
+                    DrawStackCount(inv.Cursor.Count, cursorFrameX, cursorFrameY,
+                        cursorFrame, cursorFrame, ortho);
+                }
+                DrawDurabilityBar(inv.Cursor, cursorFrameX, cursorFrameY,
+                    cursorFrame, cursorFrame, width, height, ortho);
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Chest screen. Same chrome as RenderFurnace but the body is a
+        // simple 9×3 grid above the player inventory — no arrow, no
+        // flame, no read-only output. Each chest slot is a regular
+        // cursor-exchange slot.
+        private void RenderChest(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            DrawSolidQuad(0, 0, width, height,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+
+            // ---- panel chrome ------------------------------------------
+            ChestScreen.GetPanelRect(width, height,
+                out int panelX, out int panelY, out int panelW, out int panelH);
+            DrawSolidQuad(panelX, panelY, panelW, panelH,
+                new Vector3(0.16f, 0.16f, 0.18f), 0.95f, ortho);
+            var border = new Vector3(0.78f, 0.82f, 0.88f);
+            int pb = ChestScreen.SlotBorderPx(width, height);
+            DrawSolidQuad(panelX, panelY, panelW, pb, border, 1f, ortho);
+            DrawSolidQuad(panelX, panelY + panelH - pb, panelW, pb, border, 1f, ortho);
+            DrawSolidQuad(panelX, panelY, pb, panelH, border, 1f, ortho);
+            DrawSolidQuad(panelX + panelW - pb, panelY, pb, panelH, border, 1f, ortho);
+
+            // ---- title -------------------------------------------------
+            DrawString(ChestScreen.Title, ChestScreen.TitleScale(width, height),
+                width / 2, ChestScreen.TitleY(width, height),
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            // ---- slot wells (all 72 slots) -----------------------------
+            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
+            var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
+            for (int i = 0; i < ChestScreen.TotalSlots; i++)
+            {
+                ChestScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+            }
+
+            ChestTileEntity ce = _world?.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            var inv = Input?.Inventory;
+            int iconPad = (ChestScreen.SlotPx(width, height) - ChestScreen.IconPx(width, height)) / 2;
+
+            // ---- icons in chest + inventory ----------------------------
+            if (ce != null)
+            {
+                for (int i = 0; i < ChestScreen.ChestSlotCount; i++)
+                {
+                    var stack = ce.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    ChestScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+            }
+            if (inv != null)
+            {
+                for (int i = ChestScreen.InvMainStart; i < ChestScreen.TotalSlots; i++)
+                {
+                    int invIdx = ChestScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty) continue;
+                    ChestScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+                GL.Disable(EnableCap.CullFace);
+            }
+
+            // ---- stack counts on every visible non-empty stack --------
+            if (ce != null)
+            {
+                for (int i = 0; i < ChestScreen.ChestSlotCount; i++)
+                {
+                    var stack = ce.Slots[i];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    ChestScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+            }
+            if (inv != null)
+            {
+                for (int i = ChestScreen.InvMainStart; i < ChestScreen.TotalSlots; i++)
+                {
+                    int invIdx = ChestScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    ChestScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+            }
+
+            // ---- durability bars (chest + inventory) ------------------
+            if (ce != null)
+            {
+                for (int i = 0; i < ChestScreen.ChestSlotCount; i++)
+                {
+                    var stack = ce.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    ChestScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
+            }
+            if (inv != null)
+            {
+                for (int i = ChestScreen.InvMainStart; i < ChestScreen.TotalSlots; i++)
+                {
+                    int invIdx = ChestScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty) continue;
+                    ChestScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
+            }
+
+            // ---- cursor stack (follows mouse, drawn last) -------------
+            if (inv != null && !inv.Cursor.IsEmpty && Input != null)
+            {
+                int cx = Input.MenuMouseX;
+                int cy = Input.MenuMouseY;
+                int iconSize = ChestScreen.IconPx(width, height);
+                int ix = cx - iconSize / 2;
+                int iy = cy - iconSize / 2;
+                if (BlockData.IsCubeShape(inv.Cursor.Type))
+                {
+                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                    GL.Disable(EnableCap.CullFace);
+                }
+                else
+                {
+                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                }
+                int cursorFrame = ChestScreen.SlotPx(width, height);
                 int cursorFrameX = cx - cursorFrame / 2;
                 int cursorFrameY = cy - cursorFrame / 2;
                 if (inv.Cursor.Count > 1)

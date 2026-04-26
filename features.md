@@ -34,7 +34,7 @@ clipping at ~3.5 rows).
 
 ## Blocks
 
-**Have** — 40 block IDs (`BlockType` enum)
+**Have** — 41 block IDs (`BlockType` enum)
 - Air, Grass, Dirt, Stone, Sand
 - Cobblestone, Bedrock, Gravel, Clay
 - CoalOre, IronOre, GoldOre, DiamondOre, RedstoneOre
@@ -47,8 +47,9 @@ clipping at ~3.5 rows).
 - Dandelion, Rose, BrownMushroom, RedMushroom — cross-sprite flora, non-collidable, raycast-targetable, light-transparent, scattered on grass during terrain gen
 - Crafting table (workbench) — planks-base block with a 3×3 grid texture on top and tool-silhouette sides; RMB opens the 3×3 crafting screen (`TryInteract` → `_isCraftingOpen`); axe-required tier; drops itself when broken
 - Furnace + LitFurnace — paired blocks at IDs 67/68 with stone-cap top, iron-banded stone-wall sides, and a recessed-mouth front face (lit variant adds an orange/yellow glow inside the mouth). Crafted from 8 cobblestone in a U-shape on the crafting bench. RMB opens the 3-slot smelter screen (input / fuel / output) overlaid on the player inventory; `FurnaceTileEntity` carries the per-block input/fuel/output stacks plus burn / cook timers and a cardinal `Facing` byte. The world ticks every entity at 20 Hz: fuel drains 1 tick/tick (Coal 1600 = 80 s, Wood 300 = 15 s, Stick 100 = 5 s), the cook-progress counter advances while burning + smeltable, and at 200 ticks (10 s) one input → one output. Entity transitions between burning and idle automatically swap the world block between Furnace and LitFurnace, so the lit-front glow is observable from outside without needing the screen open. Smelting recipes match Alpha: IronOre→IronIngot, GoldOre→GoldIngot, Sand→Glass, Cobblestone→Stone, ClayBall→ClayBrick. Breaking a furnace spills any contents as `DroppedItem`s and removes the entity. Persisted in the world save format (v6) with a count + per-entity (x, y, z, input, fuel, output, burnTime, maxBurnTime, cookProgress, facing) record. **Directionality**: at placement the front face is oriented to face the player who placed it (cardinal opposite of `Camera.Forward`); the mesher reads `FurnaceTileEntity.Facing` and routes that one side to the front tile while the other three sides show the plain side tile. The furnace-top tile is missing from the embedded `terrain.png` slot Alpha used (14, 3), so the atlas is patched at upload time to procedurally generate it from the side palette (stone-wall jitter + iron banding wrapped around all four edges + a 4×4 vent in the centre)
-- Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf; crafting-table top/side; furnace top/side/front + lit-front variant — front is selected per-face based on `FurnaceTileEntity.Facing`)
-- 38-block + 20-tool + 9-item + 6-tail-block (crafting-table top/side, furnace top/side/front/lit-front) procedural 16×16 pixel-art atlas, nearest-neighbour sampled
+- Chest — single-chest container at ID 69 with a planks-base block, iron-banded oriented front (lock plate + keyhole), plain plank sides, and a lid-plate top tile. Crafted from 8 planks in a U-shape on the crafting bench (centre slot empty, matches Alpha 1.1.2). RMB opens the chest screen (`ChestScreen`) — a 9×3 chest grid stacked over the player's main+hotbar inventory, same world-halt + cursor-release lifecycle as the inventory / crafting / furnace modals. `ChestTileEntity` owns a flat 27-slot `ItemStack[]` plus a cardinal `Facing` byte; the world keeps a `Dictionary<(x,y,z), ChestTileEntity>` so chest contents survive chunk unload/reload. Click handling routes through `HandleChestClick`: chest slots use the same Alpha pick / drop / swap / merge rules the player inventory uses (cursor stack is shared); shift-click on a player slot top-ups matching chest stacks then fills the first empty chest slot. Breaking a chest spills every non-empty slot as `DroppedItem`s in row-major order (top row first) plus the chest block itself, then removes the entity and auto-closes the screen if it was open. **Directionality**: at placement the front (locked) face is oriented to the cardinal opposite of `Camera.Forward` so it always faces the placer; the mesher reads `ChestTileEntity.Facing` and routes that one side to the front tile while the other three sides show the plain plank-side tile. Persisted in the world save format (v7) with a count + per-entity (x, y, z, facing, 27 ItemStacks) record appended after the furnace block — pre-v7 saves load with an empty chest table and zero chest blocks (the BlockType range simply wasn't populated before this version).
+- Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf; crafting-table top/side; furnace top/side/front + lit-front variant — front is selected per-face based on `FurnaceTileEntity.Facing`; chest top/side/front — front is selected per-face based on `ChestTileEntity.Facing`)
+- 38-block + 20-tool + 9-item + 9-tail-block (crafting-table top/side, furnace top/side/front/lit-front, chest top/side/front) procedural 16×16 pixel-art atlas, nearest-neighbour sampled
 - Transparent-block routing to a second alpha-blended render pass (water today)
 - Cross-sprite (X-shape) model path for non-cube blocks, alpha-tested in opaque pass via fragment-shader `discard`
 - Per-block shape category (`IsCubeShape`) and raycast/collision separation (`IsRaycastTarget` vs `IsSolid`) so torches/flowers/grass are targetable but non-collidable
@@ -76,7 +77,6 @@ clipping at ~3.5 rows).
 - Fences
 - Wooden door, iron door
 - Sign (post + wall)
-- Chest (with inventory)
 - Mob spawner (cage with flame)
 - Redstone wire, redstone torch, button, lever, pressure plate
 - Dispenser
@@ -226,7 +226,6 @@ clipping at ~3.5 rows).
 - Right-click "split half" stack op in the inventory (currently both buttons run the left-click rules)
 - Right-click drag spread (Alpha distributes one item per slot you drag the cursor over while RMB is held)
 - Shift-click "move to other half" (hotbar ↔ main grid)
-- Chest UI (crafting table + furnace are wired with persistent tile-entity contents; chest still pending)
 - Drop item via Q (only the GUI-toss path is wired)
 - Pick-block (middle mouse)
 - Armor slots (4 slots — the `Inventory` is 36+9 today; armor is unmodelled)
@@ -345,10 +344,10 @@ clipping at ~3.5 rows).
 ## Persistence
 
 **Have**
-- Custom gzipped binary world format (magic `VSC1`, version 4)
+- Custom gzipped binary world format (magic `VSC1`, version 7)
 - Per-chunk `IsModified` flag so unmodified chunks don't bloat saves
-- Save includes player position + camera yaw/pitch + game mode + HP + HungerEnabled survival sub-setting
-- v1/v2/v3 saves still load (missing fields default to Creative + full HP + hunger off)
+- Save includes player position + camera yaw/pitch + game mode + HP + HungerEnabled survival sub-setting + furnace tile entities (v5/v6) + chest tile entities (v7)
+- v1..v6 saves still load (missing fields default to Creative + full HP + hunger off; pre-v5 worlds load with no furnace entities; pre-v6 furnaces default to North-facing; pre-v7 worlds load with no chest entities)
 
 **Missing**
 - Persistence of: time of day, seed-per-feature state
@@ -408,7 +407,7 @@ multiple subsystems at once.
 
 ### Tier 1 — Survival gameplay loop (the biggest "feels like Minecraft" gaps)
 
-1. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron. (The ItemType layer + ingredient set this depends on already shipped — see _Items_ → Have.) **Status**: Crafting table ✓, Furnace ✓ (with placement-time directionality — front face follows the placer), Chest ✗ (still pending).
+1. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron. (The ItemType layer + ingredient set this depends on already shipped — see _Items_ → Have.) **Status**: Crafting table ✓, Furnace ✓ (with placement-time directionality — front face follows the placer), Chest ✓ (8-plank U recipe, 27-slot inventory, placement-time directionality, save v7, spill-on-break) — **Tier 1 #1 complete**.
 2. **Sound** — Audio backend (OpenAL via OpenTK, or NAudio) + an SFX bank: per-material step, block break, block place, attack hit, fall thud, water splash, UI click, ambient cave drip. Music tracks last. Surprisingly large feel-improvement vs. effort.
 
 ### Tier 2 — Visible world polish (each item improves every frame)

@@ -28,6 +28,12 @@ namespace VStudioCraft.Game
         // a serialised tile-entity sidecar; only the dict is persisted.
         private readonly Dictionary<(int x, int y, int z), FurnaceTileEntity> _furnaceEntities
             = new Dictionary<(int x, int y, int z), FurnaceTileEntity>();
+        // Chest tile entities — same lifetime model as furnaces. The dict
+        // is created on placement, mutated by the open-chest UI, drained
+        // and removed when the block breaks. Persisted alongside the
+        // furnace dict in WorldSaveFormat.
+        private readonly Dictionary<(int x, int y, int z), ChestTileEntity> _chestEntities
+            = new Dictionary<(int x, int y, int z), ChestTileEntity>();
         private readonly Noise _noise;
 
         public int Seed { get; }
@@ -241,5 +247,49 @@ namespace VStudioCraft.Game
         // furnace driver in GameRenderer and by save/load.
         public IEnumerable<KeyValuePair<(int x, int y, int z), FurnaceTileEntity>> FurnaceEntities
             => _furnaceEntities;
+
+        // ---- Chest tile entities ----
+
+        // Get-or-create a ChestTileEntity at (wx, wy, wz). Caller has
+        // already verified the block at the position is a Chest; the
+        // method just hands back (or installs) the persistent slot.
+        public ChestTileEntity GetOrCreateChestEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (!_chestEntities.TryGetValue(key, out var ce))
+            {
+                ce = new ChestTileEntity();
+                _chestEntities[key] = ce;
+            }
+            return ce;
+        }
+
+        // Look up a ChestTileEntity without creating one. Returns null
+        // if no entity exists for the coordinate (e.g. a freshly-placed
+        // chest that the player hasn't opened yet doesn't allocate one
+        // until interaction).
+        public ChestTileEntity TryGetChestEntity(int wx, int wy, int wz)
+        {
+            _chestEntities.TryGetValue((wx, wy, wz), out var ce);
+            return ce;
+        }
+
+        // Remove the entity at the coordinate and return it (or null).
+        // Used when the chest block is broken so the caller can spill
+        // contents as drops.
+        public ChestTileEntity RemoveChestEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (_chestEntities.TryGetValue(key, out var ce))
+            {
+                _chestEntities.Remove(key);
+                return ce;
+            }
+            return null;
+        }
+
+        // Iterate all (coord, entity) pairs — used by save/load.
+        public IEnumerable<KeyValuePair<(int x, int y, int z), ChestTileEntity>> ChestEntities
+            => _chestEntities;
     }
 }

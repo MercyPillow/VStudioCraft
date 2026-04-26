@@ -310,7 +310,7 @@ namespace VStudioCraft.UI
                                 // matching CaptureMouseLook on close runs
                                 // from the UI Esc handler in CloseCrafting /
                                 // CloseFurnace.
-                                if ((_renderer.IsCraftingOpen || _renderer.IsFurnaceOpen) && _mouseCaptured)
+                                if ((_renderer.IsCraftingOpen || _renderer.IsFurnaceOpen || _renderer.IsChestOpen) && _mouseCaptured)
                                 {
                                     Dispatcher.BeginInvoke(new Action(() =>
                                     {
@@ -383,6 +383,20 @@ namespace VStudioCraft.UI
                         _input.InventoryClickShift = false;
                     }
 
+                    // Same drain pattern for the chest screen.
+                    if (_renderer.IsChestOpen && _input.InventoryClickButton != 0)
+                    {
+                        var (pw0, ph0) = GetPhysicalSize();
+                        _renderer.HandleChestClick(
+                            _input.InventoryClickButton,
+                            _input.InventoryClickX,
+                            _input.InventoryClickY,
+                            pw0, ph0,
+                            _input.InventoryClickShift);
+                        _input.InventoryClickButton = 0;
+                        _input.InventoryClickShift = false;
+                    }
+
                     // Drain RMB drag-deposit queue — the host paints one
                     // slot per MouseMove crossing, and we apply them all
                     // here in arrival order. The renderer's HandleDrag-
@@ -403,6 +417,11 @@ namespace VStudioCraft.UI
                         {
                             for (int i = 0; i < deposits.Length; i++)
                                 _renderer.HandleFurnaceDragDeposit(deposits[i]);
+                        }
+                        else if (_renderer.IsChestOpen)
+                        {
+                            for (int i = 0; i < deposits.Length; i++)
+                                _renderer.HandleChestDragDeposit(deposits[i]);
                         }
                         else if (_renderer.IsInventoryOpen)
                         {
@@ -710,6 +729,7 @@ namespace VStudioCraft.UI
                     // a second Esc returns to the game).
                     if (_renderer != null && _renderer.IsCraftingOpen) CloseCrafting();
                     else if (_renderer != null && _renderer.IsFurnaceOpen) CloseFurnace();
+                    else if (_renderer != null && _renderer.IsChestOpen) CloseChest();
                     else if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
                     else if (_renderer != null && _renderer.IsOptionsOpen) _renderer.IsOptionsOpen = false;
                     else TogglePause();
@@ -808,6 +828,11 @@ namespace VStudioCraft.UI
                 CloseFurnace();
                 return;
             }
+            if (_renderer.IsChestOpen)
+            {
+                CloseChest();
+                return;
+            }
             _renderer.IsInventoryOpen = true;
             _input.ResetInventorySearch();
             ReleaseMouseLook();
@@ -838,6 +863,18 @@ namespace VStudioCraft.UI
         {
             if (_renderer == null) return;
             _renderer.CloseFurnace();
+            _rmbDragActive = false;
+            _rmbDragPainted.Clear();
+            CaptureMouseLook();
+        }
+
+        // Close the chest screen. Same lifecycle as CloseFurnace —
+        // chest slot contents stay on the entity, only the cursor is
+        // flushed back into the player inventory by the renderer.
+        private void CloseChest()
+        {
+            if (_renderer == null) return;
+            _renderer.CloseChest();
             _rmbDragActive = false;
             _rmbDragPainted.Clear();
             CaptureMouseLook();
@@ -914,7 +951,7 @@ namespace VStudioCraft.UI
             // same _input click slot since only one can be open at a time
             // (the renderer's drain branches in RenderLoop pick the right
             // handler based on the active modal).
-            if (_renderer != null && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen || _renderer.IsFurnaceOpen))
+            if (_renderer != null && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen || _renderer.IsFurnaceOpen || _renderer.IsChestOpen))
             {
                 if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
                 {
@@ -1143,7 +1180,7 @@ namespace VStudioCraft.UI
                 // within the same slot.
                 if (_rmbDragActive
                     && _renderer != null
-                    && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen || _renderer.IsFurnaceOpen))
+                    && (_renderer.IsInventoryOpen || _renderer.IsCraftingOpen || _renderer.IsFurnaceOpen || _renderer.IsChestOpen))
                 {
                     var (pw, ph) = GetPhysicalSize();
                     int slot = HitTestActiveModalSlot(px, py, pw, ph);
@@ -1188,6 +1225,10 @@ namespace VStudioCraft.UI
             if (_renderer.IsFurnaceOpen)
             {
                 return FurnaceScreen.HitTest(pw, ph, mx, my);
+            }
+            if (_renderer.IsChestOpen)
+            {
+                return ChestScreen.HitTest(pw, ph, mx, my);
             }
             if (_renderer.IsInventoryOpen)
             {

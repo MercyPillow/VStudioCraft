@@ -106,6 +106,15 @@ namespace VStudioCraft.Game
         // + cook/burn timers) keyed on world coordinate.
         Furnace    = 67,
         LitFurnace = 68,
+
+        // Chest — wood-planks chest with iron banding. Holds a 27-slot
+        // inventory stored in a per-position ChestTileEntity (same
+        // dictionary-on-World pattern as Furnace). Same id-space rule:
+        // appended past the tools+items slice so existing saves stay
+        // valid. Alpha-style "single chest" only — double-chest pairing
+        // (two adjacent chests merging into a 54-slot inventory) is not
+        // implemented; each chest is independent.
+        Chest      = 69,
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -443,6 +452,7 @@ namespace VStudioCraft.Game
                 case BlockType.Planks:
                 case BlockType.Bookshelf:
                 case BlockType.CraftingTable:
+                case BlockType.Chest:
                     return 2f;
                 case BlockType.Dirt:
                 case BlockType.Grass:
@@ -561,6 +571,19 @@ namespace VStudioCraft.Game
                     // no animated texture path needed.
                     if (faceKind == 0 || faceKind == 1) return BlockTextures.TileFurnaceTop;
                     return BlockTextures.TileFurnaceFrontLit;
+                case BlockType.Chest:
+                    // Chest face layout matches Alpha: a planked top
+                    // with a metal-bound lid silhouette, four wood-
+                    // banded sides (no door yet — single-chest mode
+                    // uses one side tile for all four faces here in
+                    // the un-oriented lookup; the mesher branches into
+                    // GetTileIndexForOriented to swap the front face
+                    // for the latch-and-keyhole tile based on
+                    // ChestTileEntity.Facing). Bottom is plain planks
+                    // because a chest sits on a plank base in Alpha.
+                    if (faceKind == 0) return BlockTextures.TileChestTop;
+                    if (faceKind == 1) return BlockTextures.TilePlanks;
+                    return BlockTextures.TileChestFront;
                 case BlockType.MossyCobblestone:
                     return BlockTextures.TileMossyCobblestone;
                 case BlockType.Obsidian:
@@ -617,9 +640,9 @@ namespace VStudioCraft.Game
 
         // Oriented-face tile lookup. Used by the mesher when the block
         // type has a "front" face whose orientation depends on a per-
-        // block facing (currently just Furnace / LitFurnace). For all
-        // other types the un-oriented GetTileIndex is fine and this
-        // function falls back to it.
+        // block facing (Furnace / LitFurnace / Chest). For all other
+        // types the un-oriented GetTileIndex is fine and this function
+        // falls back to it.
         //
         // axis/dir match the mesher's sweep semantics: axis 0 = X,
         // axis 1 = Y, axis 2 = Z; dir is +1 or -1.
@@ -629,26 +652,44 @@ namespace VStudioCraft.Game
         //   * the side face whose outward normal matches `facing` →
         //     the front tile (lit or unlit per block id)
         //   * the other three side faces → TileFurnaceSide
+        // For chests:
+        //   * top face → TileChestTop (lid)
+        //   * bottom face → TilePlanks
+        //   * the side face whose outward normal matches `facing` →
+        //     TileChestFront (latch + keyhole)
+        //   * the other three side faces → TileChestSide
         public static int GetTileIndexForOriented(
             BlockType t, int axis, int dir, BlockFacing facing)
         {
-            if (t != BlockType.Furnace && t != BlockType.LitFurnace)
-                return GetTileIndex(t, ChunkMesherFaceKind(axis, dir));
+            if (t == BlockType.Furnace || t == BlockType.LitFurnace)
+            {
+                if (axis == 1) return BlockTextures.TileFurnaceTop;
+                int frontTile = (t == BlockType.LitFurnace)
+                    ? BlockTextures.TileFurnaceFrontLit
+                    : BlockTextures.TileFurnaceFront;
+                return IsFacingFront(axis, dir, facing)
+                    ? frontTile
+                    : BlockTextures.TileFurnaceSide;
+            }
+            if (t == BlockType.Chest)
+            {
+                if (axis == 1)
+                    return dir > 0 ? BlockTextures.TileChestTop : BlockTextures.TilePlanks;
+                return IsFacingFront(axis, dir, facing)
+                    ? BlockTextures.TileChestFront
+                    : BlockTextures.TileChestSide;
+            }
+            return GetTileIndex(t, ChunkMesherFaceKind(axis, dir));
+        }
 
-            // Top/bottom — directionless cap tile.
-            if (axis == 1) return BlockTextures.TileFurnaceTop;
-
-            int frontTile = (t == BlockType.LitFurnace)
-                ? BlockTextures.TileFurnaceFrontLit
-                : BlockTextures.TileFurnaceFront;
-
-            // Decide whether THIS face is the front. The face's outward
-            // normal is (axis, dir); compare it to the facing's
-            // (axis, dir) signature.
-            //   North = -Z   (axis 2, dir -1)
-            //   South = +Z   (axis 2, dir +1)
-            //   East  = +X   (axis 0, dir +1)
-            //   West  = -X   (axis 0, dir -1)
+        // Compare a face's (axis, dir) outward normal to the cardinal
+        // direction encoded by `facing`. Cardinal mapping:
+        //   North = -Z (axis 2, dir -1)
+        //   South = +Z (axis 2, dir +1)
+        //   East  = +X (axis 0, dir +1)
+        //   West  = -X (axis 0, dir -1)
+        private static bool IsFacingFront(int axis, int dir, BlockFacing facing)
+        {
             int fAxis, fDir;
             switch (facing)
             {
@@ -657,8 +698,7 @@ namespace VStudioCraft.Game
                 case BlockFacing.South: fAxis = 2; fDir = +1; break;
                 default: /* North */    fAxis = 2; fDir = -1; break;
             }
-            if (axis == fAxis && dir == fDir) return frontTile;
-            return BlockTextures.TileFurnaceSide;
+            return axis == fAxis && dir == fDir;
         }
 
         private static int ChunkMesherFaceKind(int axis, int dir)
@@ -818,6 +858,7 @@ namespace VStudioCraft.Game
                 case BlockType.Planks:
                 case BlockType.Bookshelf:
                 case BlockType.CraftingTable:
+                case BlockType.Chest:
                     return ToolKind.Axe;
                 default:
                     return ToolKind.None;

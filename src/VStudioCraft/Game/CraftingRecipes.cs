@@ -175,6 +175,18 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Furnace, 1)));
 
+            // Chest: 8 planks ringing an empty middle cell — same U/box
+            // pattern as the furnace, just planks instead of cobble.
+            // Alpha pattern is "PPP / P.P / PPP".
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                    { BlockType.Planks, BlockType.Air,    BlockType.Planks },
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                },
+                new ItemStack(BlockType.Chest, 1)));
+
             // Tools — 5 materials (wood = Planks, stone = Cobblestone,
             // iron = IronIngot, diamond = Diamond, gold = GoldIngot)
             // × 4 kinds (pickaxe / shovel / axe / sword). Material

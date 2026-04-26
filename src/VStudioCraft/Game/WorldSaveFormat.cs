@@ -12,8 +12,11 @@ namespace VStudioCraft.Game
         // v4 = HungerEnabled survival sub-setting,
         // v5 = furnace tile entities (count + per-entity (x,y,z, input, fuel,
         //      output, burnTime, maxBurnTime, cookProgress)),
-        // v6 = furnace facing byte appended to each entity (0=N, 1=S, 2=E, 3=W).
-        private const byte CurrentVersion = 6;
+        // v6 = furnace facing byte appended to each entity (0=N, 1=S, 2=E, 3=W),
+        // v7 = chest tile entities (count + per-entity (x,y,z, facing,
+        //      27 ItemStacks)). Appended after the furnace block so a v6
+        //      reader stops cleanly at the EOF.
+        private const byte CurrentVersion = 7;
 
         public struct Header
         {
@@ -80,6 +83,25 @@ namespace VStudioCraft.Game
                     // v6: orientation byte. Default for legacy v5 saves
                     // is North on load (see Load below).
                     w.Write((byte)kv.Value.Facing);
+                }
+
+                // v7: chest tile entities. Same structure as the furnace
+                // block (count + per-entity record), but each record
+                // carries a facing byte + 27 ItemStacks instead of the
+                // furnace's three slots and timers. Empty chests are
+                // still emitted — Save iterates everything in the dict
+                // so the on-disk count matches the live count.
+                int ceCount = 0;
+                foreach (var _ in world.ChestEntities) ceCount++;
+                w.Write(ceCount);
+                foreach (var kv in world.ChestEntities)
+                {
+                    w.Write(kv.Key.x);
+                    w.Write(kv.Key.y);
+                    w.Write(kv.Key.z);
+                    w.Write((byte)kv.Value.Facing);
+                    for (int i = 0; i < ChestTileEntity.SlotCount; i++)
+                        WriteStack(w, kv.Value.Slots[i]);
                 }
             }
             if (File.Exists(path)) File.Delete(path);
@@ -184,6 +206,27 @@ namespace VStudioCraft.Game
                         // impact).
                         if (version >= 6)
                             fe.Facing = (BlockFacing)r.ReadByte();
+                    }
+                }
+
+                // v7: chest tile entities. Pre-v7 saves had no chests
+                // (the block didn't exist), so legacy worlds load with
+                // an empty chest table. The block layer in restored
+                // chunks won't reference Chest ids in those saves
+                // either — the BlockType range simply wasn't populated
+                // before this version.
+                if (version >= 7)
+                {
+                    int ceCount = r.ReadInt32();
+                    for (int i = 0; i < ceCount; i++)
+                    {
+                        int wx = r.ReadInt32();
+                        int wy = r.ReadInt32();
+                        int wz = r.ReadInt32();
+                        var ce = world.GetOrCreateChestEntity(wx, wy, wz);
+                        ce.Facing = (BlockFacing)r.ReadByte();
+                        for (int s = 0; s < ChestTileEntity.SlotCount; s++)
+                            ce.Slots[s] = ReadStack(r);
                     }
                 }
 

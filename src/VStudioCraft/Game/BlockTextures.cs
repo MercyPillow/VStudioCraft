@@ -42,13 +42,14 @@ namespace VStudioCraft.Game
         public const int ItemLayerCount = 9;
         public const int FirstItemLayer = BlockLayerCount + ToolLayerCount; // 58
         public const int FirstTailBlockLayer = FirstItemLayer + ItemLayerCount; // 67
-        // 6 tail tiles: CraftingTableTop, CraftingTableSide, FurnaceTop,
-        // FurnaceSide, FurnaceFront, FurnaceFrontLit. Each new multi-face
-        // block gets a contiguous block of layers appended here so the
-        // tool/item slice (which assumes everything past it sources from
+        // 9 tail tiles: CraftingTableTop, CraftingTableSide, FurnaceTop,
+        // FurnaceSide, FurnaceFront, FurnaceFrontLit, ChestTop,
+        // ChestSide, ChestFront. Each new multi-face block gets a
+        // contiguous block of layers appended here so the tool/item
+        // slice (which assumes everything past it sources from
         // terrain.png) stays untouched.
-        public const int TailBlockLayerCount = 6;
-        public const int LayerCount = FirstTailBlockLayer + TailBlockLayerCount; // 73
+        public const int TailBlockLayerCount = 9;
+        public const int LayerCount = FirstTailBlockLayer + TailBlockLayerCount; // 76
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -148,6 +149,17 @@ namespace VStudioCraft.Game
         public const int TileFurnaceSide     = 70;
         public const int TileFurnaceFront    = 71;
         public const int TileFurnaceFrontLit = 72;
+        // Chest face tiles. Top is the planked lid seen from above with
+        // the iron lock-plate visible. Side is the planked carcass with
+        // a single horizontal iron band. Front carries the same band
+        // plus the centred lock + door split. The bottom face reuses
+        // TilePlanks (the underside of an Alpha chest is just planks),
+        // so we only need three layers and route them through the
+        // oriented mesher path so the front lands on the placer-facing
+        // side and the other three sides draw TileChestSide.
+        public const int TileChestTop   = 73;
+        public const int TileChestSide  = 74;
+        public const int TileChestFront = 75;
 
         // A 2D texture array — one layer per tile. Greedy meshing can emit merged
         // quads with UVs exceeding [0,1]; with a layered texture and Repeat wrap the
@@ -226,6 +238,9 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileFurnaceSide, GenerateFurnaceSide);
             UploadLayer(layerPixels, TileFurnaceFront, GenerateFurnaceFront);
             UploadLayer(layerPixels, TileFurnaceFrontLit, GenerateFurnaceFrontLit);
+            UploadLayer(layerPixels, TileChestTop, GenerateChestTop);
+            UploadLayer(layerPixels, TileChestSide, GenerateChestSide);
+            UploadLayer(layerPixels, TileChestFront, GenerateChestFront);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -932,6 +947,15 @@ namespace VStudioCraft.Game
             /* TileFurnaceSide       */ (13, 2),
             /* TileFurnaceFront      */ (12, 2),
             /* TileFurnaceFrontLit   */ (13, 3),
+            // Chest tiles in Alpha 1.1.2's terrain.png. Top at (9,1) is
+            // the planked lid with the iron lock-plate; side at (10,1)
+            // is the planked carcass with a horizontal iron band;
+            // front at (11,1) adds the door split + centred lock to
+            // the band. The bottom face reuses TilePlanks (4,0) via
+            // GetTileIndex, so no fourth entry is needed.
+            /* TileChestTop          */ (9, 1),
+            /* TileChestSide         */ (10, 1),
+            /* TileChestFront        */ (11, 1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -2329,6 +2353,131 @@ namespace VStudioCraft.Game
                 }
                 SetJittered(pixels, x, y, r, g, b, 16, rng);
             }
+        }
+
+        // Chest top — planked lid with a small iron lock-plate centred
+        // on the front edge. The plate's "front" edge in the texture is
+        // the +Z edge in world space; that lines up with the default
+        // BlockFacing so a chest placed under the standard south-facing
+        // default reads correctly.
+        private static void GenerateChestTop(byte[] pixels)
+        {
+            // Plank base — same recipe as GeneratePlanks but a slightly
+            // darker tone so the lid reads as "treated wood" rather than
+            // bare planks.
+            var rng = new Random(0xCE51);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)115 : (byte)150;
+                byte g = groove ? (byte)82  : (byte)112;
+                byte b = groove ? (byte)44  : (byte)64;
+                SetJittered(pixels, x, y, r, g, b, 6, rng);
+            }
+            // Iron lock-plate: a small rectangle straddling the front
+            // edge of the lid (front = high y, since the side/front
+            // tiles place the band high too — see GenerateChestSide).
+            // Plate sits at x=6..9, y=11..13.
+            for (int y = 11; y <= 13; y++)
+            for (int x = 6; x <= 9; x++)
+            {
+                SetPixel(pixels, x, y, 110, 110, 110);
+            }
+            // Plate highlight (top edge) and shadow (bottom edge).
+            for (int x = 6; x <= 9; x++)
+            {
+                SetPixel(pixels, x, 11, 150, 150, 150);
+                SetPixel(pixels, x, 13, 70, 70, 70);
+            }
+            // A single keyhole pixel at the centre of the plate.
+            SetPixel(pixels, 7, 12, 30, 30, 30);
+            SetPixel(pixels, 8, 12, 30, 30, 30);
+        }
+
+        // Chest side — plank carcass with a single horizontal iron
+        // band across the upper third (y=4..5). No lock or door split,
+        // so the side reads as "the back/sides of a wooden box".
+        private static void GenerateChestSide(byte[] pixels)
+        {
+            var rng = new Random(0xCE62);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)115 : (byte)150;
+                byte g = groove ? (byte)82  : (byte)112;
+                byte b = groove ? (byte)44  : (byte)64;
+                SetJittered(pixels, x, y, r, g, b, 6, rng);
+            }
+            // Iron band — 2 pixels tall at y=4..5, with shadow on the
+            // lower edge so the band reads as a strap rather than a
+            // painted line.
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 4, 130, 130, 130);
+                SetPixel(pixels, x, 5, 96, 96, 96);
+            }
+            // Three rivets at evenly spaced offsets on the band.
+            for (int x = 2; x < TileSize; x += 5)
+            {
+                SetPixel(pixels, x, 4, 180, 180, 180);
+            }
+        }
+
+        // Chest front — same plank base + iron band as the side, plus
+        // a vertical door split down the centre column and a small
+        // iron lock straddling the band at the door split. This is
+        // the face that lands on the side of the chest facing the
+        // placer (handled by GetTileIndexForOriented).
+        private static void GenerateChestFront(byte[] pixels)
+        {
+            var rng = new Random(0xCE73);
+            // Plank base.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)115 : (byte)150;
+                byte g = groove ? (byte)82  : (byte)112;
+                byte b = groove ? (byte)44  : (byte)64;
+                SetJittered(pixels, x, y, r, g, b, 6, rng);
+            }
+            // Iron band — same coordinates as the side so the band
+            // wraps continuously around the chest.
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 4, 130, 130, 130);
+                SetPixel(pixels, x, 5, 96, 96, 96);
+            }
+            for (int x = 2; x < TileSize; x += 5)
+            {
+                SetPixel(pixels, x, 4, 180, 180, 180);
+            }
+            // Door split: a 1px dark seam down the middle of the
+            // lower two-thirds (y=6..15, x=8). Skip the band rows so
+            // the seam doesn't break the band silhouette.
+            for (int y = 6; y < TileSize; y++)
+            {
+                SetPixel(pixels, 8, y, 70, 46, 24);
+            }
+            // Iron lock — 4×3 plate centred on the door split,
+            // straddling the band so the lock visually fastens the
+            // band in place. Plate at x=6..9, y=6..8.
+            for (int y = 6; y <= 8; y++)
+            for (int x = 6; x <= 9; x++)
+            {
+                SetPixel(pixels, x, y, 110, 110, 110);
+            }
+            // Plate highlight + shadow.
+            for (int x = 6; x <= 9; x++)
+            {
+                SetPixel(pixels, x, 6, 150, 150, 150);
+                SetPixel(pixels, x, 8, 70, 70, 70);
+            }
+            // Keyhole — two near-black pixels at the plate centre.
+            SetPixel(pixels, 7, 7, 30, 30, 30);
+            SetPixel(pixels, 8, 7, 30, 30, 30);
         }
 
         private static void GenerateMossyCobblestone(byte[] pixels)

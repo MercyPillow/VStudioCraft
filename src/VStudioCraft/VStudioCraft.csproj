@@ -80,6 +80,8 @@
     <Compile Include="Game\CreativeCatalog.cs" />
     <Compile Include="Game\ChunkJobSystem.cs" />
     <Compile Include="Game\ChunkMesher.cs" />
+    <Compile Include="Game\ChestScreen.cs" />
+    <Compile Include="Game\ChestTileEntity.cs" />
     <Compile Include="Game\DroppedItem.cs" />
     <Compile Include="Game\Frustum.cs" />
     <Compile Include="Game\FurnaceRecipes.cs" />
