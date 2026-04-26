@@ -69,6 +69,7 @@
     <Compile Include="Editor\WorldEditorFactory.cs" />
     <Compile Include="Editor\WorldEditorPane.cs" />
     <Compile Include="Game\AlphaTerrainData.cs" />
+    <Compile Include="Game\AlphaToolsData.cs" />
     <Compile Include="Game\Block.cs" />
     <Compile Include="Game\BlockTextures.cs" />
     <Compile Include="Game\Camera.cs" />

@@ -39,6 +39,35 @@ namespace VStudioCraft.Game
         RedMushroom = 34,
         FlowingWater = 36,
         FlowingLava = 37,
+
+        // Tools — non-block items that share the BlockType id space so the
+        // existing ItemStack / inventory / save plumbing keeps working
+        // without a separate ItemId enum. Marked non-solid, non-targetable,
+        // non-cube, non-opaque and excluded from placement (TryPlace
+        // rejects IsTool stacks). Renderers route them through the flat-
+        // sprite path because tool sprites are 2D, not cubes. Order is
+        // material-major so a quick `(byte)t - WoodSword` chunked into 5s
+        // recovers material; kind is the chunk index.
+        WoodSword     = 38,
+        StoneSword    = 39,
+        IronSword     = 40,
+        DiamondSword  = 41,
+        GoldSword     = 42,
+        WoodShovel    = 43,
+        StoneShovel   = 44,
+        IronShovel    = 45,
+        DiamondShovel = 46,
+        GoldShovel    = 47,
+        WoodPickaxe   = 48,
+        StonePickaxe  = 49,
+        IronPickaxe   = 50,
+        DiamondPickaxe= 51,
+        GoldPickaxe   = 52,
+        WoodAxe       = 53,
+        StoneAxe      = 54,
+        IronAxe       = 55,
+        DiamondAxe    = 56,
+        GoldAxe       = 57,
     }
 
     internal static class BlockData
@@ -57,6 +86,7 @@ namespace VStudioCraft.Game
         // in via a separate per-tick fluid-contact check, not via collision.
         public static bool IsSolid(BlockType t)
         {
+            if (IsTool(t)) return false;
             switch (t)
             {
                 case BlockType.Air:
@@ -75,6 +105,14 @@ namespace VStudioCraft.Game
             }
         }
 
+        // True if this BlockType id refers to a tool item rather than a
+        // placeable block. Cheap range check — tool ids occupy the
+        // contiguous slice [WoodSword..GoldAxe]. Used by mesher,
+        // placement, rendering and inventory paths to take the tool
+        // branch without touching the per-block switch tables.
+        public static bool IsTool(BlockType t)
+            => (byte)t >= (byte)BlockType.WoodSword && (byte)t <= (byte)BlockType.GoldAxe;
+
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
         // skipped (you raycast through both); torches and future cross-sprite
@@ -84,6 +122,7 @@ namespace VStudioCraft.Game
         // matches Alpha (you can't punch out a fluid source by clicking it).
         public static bool IsRaycastTarget(BlockType t)
         {
+            if (IsTool(t)) return false;
             switch (t)
             {
                 case BlockType.Air:
@@ -103,6 +142,7 @@ namespace VStudioCraft.Game
         // emitted by a separate model-pass in ChunkMesher.
         public static bool IsCubeShape(BlockType t)
         {
+            if (IsTool(t)) return false;
             switch (t)
             {
                 case BlockType.Torch:
@@ -128,6 +168,7 @@ namespace VStudioCraft.Game
         // IsAlphaTestedCube).
         public static bool IsOpaque(BlockType t)
         {
+            if (IsTool(t)) return false;
             switch (t)
             {
                 case BlockType.Air:
@@ -202,6 +243,7 @@ namespace VStudioCraft.Game
         // a sub-cell volume so light still flows through their cell.
         public static bool IsLightTransparent(BlockType t)
         {
+            if (IsTool(t)) return true;
             switch (t)
             {
                 case BlockType.Air:
@@ -390,8 +432,244 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileBrownMushroom;
                 case BlockType.RedMushroom:
                     return BlockTextures.TileRedMushroom;
+                case BlockType.WoodSword:      return BlockTextures.TileWoodSword;
+                case BlockType.StoneSword:     return BlockTextures.TileStoneSword;
+                case BlockType.IronSword:      return BlockTextures.TileIronSword;
+                case BlockType.DiamondSword:   return BlockTextures.TileDiamondSword;
+                case BlockType.GoldSword:      return BlockTextures.TileGoldSword;
+                case BlockType.WoodShovel:     return BlockTextures.TileWoodShovel;
+                case BlockType.StoneShovel:    return BlockTextures.TileStoneShovel;
+                case BlockType.IronShovel:     return BlockTextures.TileIronShovel;
+                case BlockType.DiamondShovel:  return BlockTextures.TileDiamondShovel;
+                case BlockType.GoldShovel:     return BlockTextures.TileGoldShovel;
+                case BlockType.WoodPickaxe:    return BlockTextures.TileWoodPickaxe;
+                case BlockType.StonePickaxe:   return BlockTextures.TileStonePickaxe;
+                case BlockType.IronPickaxe:    return BlockTextures.TileIronPickaxe;
+                case BlockType.DiamondPickaxe: return BlockTextures.TileDiamondPickaxe;
+                case BlockType.GoldPickaxe:    return BlockTextures.TileGoldPickaxe;
+                case BlockType.WoodAxe:        return BlockTextures.TileWoodAxe;
+                case BlockType.StoneAxe:       return BlockTextures.TileStoneAxe;
+                case BlockType.IronAxe:        return BlockTextures.TileIronAxe;
+                case BlockType.DiamondAxe:     return BlockTextures.TileDiamondAxe;
+                case BlockType.GoldAxe:        return BlockTextures.TileGoldAxe;
                 default:
                     return BlockTextures.TileStone;
+            }
+        }
+    }
+
+    // Tool kind drives which block family the tool is "effective" against
+    // (faster break + drop eligibility for ores). None means "this stack
+    // isn't a tool" — the helpers below return defensive defaults so a
+    // bare-hand swing on stone still drops nothing without crashing the
+    // break path. Hoes are intentionally absent: there's no farming yet
+    // and the items.png hoe row is left unmapped.
+    internal enum ToolKind { None, Sword, Shovel, Pickaxe, Axe }
+
+    // Tier ladder for harvest eligibility. Wood and Gold sit at the same
+    // tier (Alpha quirk: gold mines fast but as poorly as wood); Stone is
+    // tier 2; Iron tier 3; Diamond tier 4. CanHarvest checks
+    // tool tier >= block requirement.
+    internal enum ToolMaterial { None, Wood, Stone, Iron, Diamond, Gold }
+
+    internal static class ToolData
+    {
+        // Vanilla Alpha durability values, rounded to the closest 16-bit
+        // integer. Gold is the most fragile despite mining the fastest;
+        // Diamond outlasts every other tier by a wide margin.
+        public static short MaxDurability(BlockType t)
+        {
+            switch (GetMaterial(t))
+            {
+                case ToolMaterial.Wood:    return 60;
+                case ToolMaterial.Stone:   return 132;
+                case ToolMaterial.Iron:    return 251;
+                case ToolMaterial.Gold:    return 33;
+                case ToolMaterial.Diamond: return 1562;
+                default:                   return 0;
+            }
+        }
+
+        public static ToolKind GetKind(BlockType t)
+        {
+            if (!BlockData.IsTool(t)) return ToolKind.None;
+            int chunk = ((byte)t - (byte)BlockType.WoodSword) / 5;
+            switch (chunk)
+            {
+                case 0: return ToolKind.Sword;
+                case 1: return ToolKind.Shovel;
+                case 2: return ToolKind.Pickaxe;
+                case 3: return ToolKind.Axe;
+                default: return ToolKind.None;
+            }
+        }
+
+        public static ToolMaterial GetMaterial(BlockType t)
+        {
+            if (!BlockData.IsTool(t)) return ToolMaterial.None;
+            int idx = ((byte)t - (byte)BlockType.WoodSword) % 5;
+            switch (idx)
+            {
+                case 0: return ToolMaterial.Wood;
+                case 1: return ToolMaterial.Stone;
+                case 2: return ToolMaterial.Iron;
+                case 3: return ToolMaterial.Diamond;
+                case 4: return ToolMaterial.Gold;
+                default: return ToolMaterial.None;
+            }
+        }
+
+        // Tier numbers used by both the tool's harvest level (the highest
+        // tier it can mine) and the block's required-tier (the minimum
+        // tier needed for a drop). Gold sits at tier 1 — it's faster than
+        // wood but not "stronger" in the harvest-tier sense, matching
+        // Alpha's "wood/gold mines stone but not iron" rule.
+        public static int Tier(ToolMaterial m)
+        {
+            switch (m)
+            {
+                case ToolMaterial.Wood:    return 1;
+                case ToolMaterial.Gold:    return 1;
+                case ToolMaterial.Stone:   return 2;
+                case ToolMaterial.Iron:    return 3;
+                case ToolMaterial.Diamond: return 4;
+                default:                   return 0;
+            }
+        }
+
+        // Minimum tier a pickaxe needs to drop the broken block.
+        // Non-pickaxe-required blocks return 0 here — caller still checks
+        // RequiredKind separately (e.g. dirt requires no tool kind, but
+        // shovels are faster, so it's drop-allowed regardless).
+        public static int RequiredTier(BlockType block)
+        {
+            switch (block)
+            {
+                case BlockType.Stone:
+                case BlockType.Cobblestone:
+                case BlockType.MossyCobblestone:
+                case BlockType.CoalOre:
+                case BlockType.Bricks:
+                case BlockType.Sponge: // not really, but a stone pick feels right
+                    return 1;
+                case BlockType.IronOre:
+                case BlockType.IronBlock:
+                    return 2;
+                case BlockType.GoldOre:
+                case BlockType.DiamondOre:
+                case BlockType.RedstoneOre:
+                case BlockType.GoldBlock:
+                case BlockType.DiamondBlock:
+                    return 3;
+                case BlockType.Obsidian:
+                    return 4;
+                default:
+                    return 0;
+            }
+        }
+
+        // Which tool kind is "correct" for the block — i.e. the kind
+        // whose effectiveness multiplier applies AND whose presence makes
+        // the block drop. Multiple kinds can be effective on a single
+        // block in vanilla, but Alpha keeps the rules simple: stone-y
+        // blocks need a pickaxe, dirt-y blocks like a shovel, wood-y
+        // blocks like an axe. Returns None when the block has no
+        // preferred tool — anything goes (or nothing required).
+        public static ToolKind RequiredKind(BlockType block)
+        {
+            switch (block)
+            {
+                case BlockType.Stone:
+                case BlockType.Cobblestone:
+                case BlockType.MossyCobblestone:
+                case BlockType.Bricks:
+                case BlockType.Obsidian:
+                case BlockType.CoalOre:
+                case BlockType.IronOre:
+                case BlockType.GoldOre:
+                case BlockType.DiamondOre:
+                case BlockType.RedstoneOre:
+                case BlockType.GoldBlock:
+                case BlockType.IronBlock:
+                case BlockType.DiamondBlock:
+                    return ToolKind.Pickaxe;
+                case BlockType.Dirt:
+                case BlockType.Grass:
+                case BlockType.Sand:
+                case BlockType.Gravel:
+                case BlockType.Clay:
+                    return ToolKind.Shovel;
+                case BlockType.WoodLog:
+                case BlockType.Planks:
+                case BlockType.Bookshelf:
+                    return ToolKind.Axe;
+                default:
+                    return ToolKind.None;
+            }
+        }
+
+        // Per-material break-speed multiplier when the right kind of tool
+        // is held against an effective block. Gold is dramatically fastest
+        // but its low durability + tier-1 harvest mean it's a niche
+        // choice for fast cobble runs, not a real upgrade path. Anything
+        // not effective falls back to 1× (bare-hand speed).
+        public static float SpeedMultiplier(BlockType tool, BlockType block)
+        {
+            if (!BlockData.IsTool(tool)) return 1f;
+            var kind = GetKind(tool);
+            var required = RequiredKind(block);
+            // Sword: 1.5× on cobwebs/leaves; we treat leaves as effective
+            // so saplings/vines collection isn't a chore. Otherwise no
+            // speed bonus (and a small 1× to keep the durability tick).
+            if (kind == ToolKind.Sword)
+            {
+                if (block == BlockType.Leaves) return 1.5f;
+                return 1f;
+            }
+            if (required != ToolKind.None && required != kind) return 1f;
+            switch (GetMaterial(tool))
+            {
+                case ToolMaterial.Wood:    return 2f;
+                case ToolMaterial.Stone:   return 4f;
+                case ToolMaterial.Iron:    return 6f;
+                case ToolMaterial.Diamond: return 8f;
+                case ToolMaterial.Gold:    return 12f;
+                default:                   return 1f;
+            }
+        }
+
+        // Drop eligibility rule for a block broken with the given tool
+        // (which may be Air / a non-tool stack). Mirrors Alpha:
+        //   * If the block has a required kind (e.g. pickaxe for stone),
+        //     the tool's kind must match.
+        //   * If the block has a required tier, the tool's material tier
+        //     must be at or above it.
+        // Returns true if the break should drop an item; false means
+        // "broke but yielded nothing" (the silent-stone outcome).
+        public static bool CanHarvest(BlockType tool, BlockType block)
+        {
+            var required = RequiredKind(block);
+            if (required == ToolKind.None) return true;
+            var kind = GetKind(tool);
+            if (kind != required) return false;
+            int tier = Tier(GetMaterial(tool));
+            return tier >= RequiredTier(block);
+        }
+
+        // Translate a block being broken into the BlockType that should
+        // drop. Stone drops Cobblestone (when harvest-eligible); ores drop
+        // their raw form; everything else drops itself. Caller is
+        // responsible for the CanHarvest gate before calling this.
+        public static BlockType DropFor(BlockType block)
+        {
+            switch (block)
+            {
+                case BlockType.Stone: return BlockType.Cobblestone;
+                // Note: vanilla Alpha drops the ore block itself, not the
+                // refined item — that mirrors our current "no smelting"
+                // state. When furnace ticking lands, swap these to
+                // raw-iron / raw-gold / coal items.
+                default: return block;
             }
         }
     }

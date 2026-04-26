@@ -18,7 +18,15 @@ namespace VStudioCraft.Game
     internal static class BlockTextures
     {
         public const int TileSize = 16;
-        public const int LayerCount = 38;
+        // Layers 0..37 are blocks (sourced from terrain.png in alpha mode,
+        // procedurally generated otherwise). Layers 38..57 are tool icons
+        // (always sourced from alpha_tools.png — there's no procedural
+        // tool art, so when alpha textures are unavailable they fall
+        // through to the magenta "missing tile" placeholder via the
+        // bounds check in CopyTile). Material order matches BlockType
+        // enum: wood, stone, iron, diamond, gold.
+        public const int LayerCount = 58;
+        public const int BlockLayerCount = 38;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -58,6 +66,30 @@ namespace VStudioCraft.Game
         public const int TileRose = 35;
         public const int TileBrownMushroom = 36;
         public const int TileRedMushroom = 37;
+
+        // Tool layer indices. Order is material-major (wood, stone, iron,
+        // diamond, gold within each kind), kind-grouped to mirror the
+        // enum chunking in BlockType. Match GetTileIndex in Block.cs.
+        public const int TileWoodSword      = 38;
+        public const int TileStoneSword     = 39;
+        public const int TileIronSword      = 40;
+        public const int TileDiamondSword   = 41;
+        public const int TileGoldSword      = 42;
+        public const int TileWoodShovel     = 43;
+        public const int TileStoneShovel    = 44;
+        public const int TileIronShovel     = 45;
+        public const int TileDiamondShovel  = 46;
+        public const int TileGoldShovel     = 47;
+        public const int TileWoodPickaxe    = 48;
+        public const int TileStonePickaxe   = 49;
+        public const int TileIronPickaxe    = 50;
+        public const int TileDiamondPickaxe = 51;
+        public const int TileGoldPickaxe    = 52;
+        public const int TileWoodAxe        = 53;
+        public const int TileStoneAxe       = 54;
+        public const int TileIronAxe        = 55;
+        public const int TileDiamondAxe     = 56;
+        public const int TileGoldAxe        = 57;
 
         // A 2D texture array — one layer per tile. Greedy meshing can emit merged
         // quads with UVs exceeding [0,1]; with a layered texture and Repeat wrap the
@@ -113,12 +145,40 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileBrownMushroom, GenerateBrownMushroom);
             UploadLayer(layerPixels, TileRedMushroom, GenerateRedMushroom);
 
+            // Tool layers come from alpha_tools.png unconditionally — there's
+            // no procedural tool art. If the tools PNG fails to decode the
+            // layers stay zero-filled (transparent), which reads as "no
+            // icon" rather than crashing the procedural atlas path.
+            UploadToolLayersFromAlphaTools(layerPixels);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
             return tex;
+        }
+
+        // Slice each tool tile out of alpha_tools.png and upload it to its
+        // destination layer. Caller has already bound the Texture2DArray.
+        // No-op if the tools PNG can't be decoded (older builds without
+        // AlphaToolsData, or a corrupt resource); the affected layers
+        // simply stay at whatever was there before (transparent for a
+        // freshly-allocated atlas).
+        private static void UploadToolLayersFromAlphaTools(byte[] layerPixels)
+        {
+            if (!TryDecodeEmbeddedTools(out byte[] toolBgra, out int toolW, out int toolH))
+                return;
+            for (int layer = BlockLayerCount; layer < LayerCount; layer++)
+            {
+                var (col, row) = AlphaTileCoords[layer];
+                CopyTile(toolBgra, toolW, toolH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
         }
 
         // Tile coordinates in Alpha 1.1.2_01's terrain.png. Format is
@@ -132,6 +192,14 @@ namespace VStudioCraft.Game
         // procedural tiles don't have a perfect 1:1 in vanilla Alpha
         // (clay, redstone ore, tall grass) — those use the closest
         // semantic match from the same era.
+        // Tool tile coords reference alpha_tools.png (NOT terrain.png).
+        // Layers 38..57 use the parallel ToolLayer flag below; CopyTile
+        // is called against a different source buffer for those layers
+        // when the alpha-textures path is active. Procedural mode has no
+        // tool art and just leaves those layers blank/magenta — the
+        // tools-PNG decode runs unconditionally because the procedural
+        // atlas still wants the same total layer count to keep the
+        // shader's sampler bindings stable.
         private static readonly (int col, int row)[] AlphaTileCoords = new (int, int)[LayerCount]
         {
             /* TileGrassTop          */ (0, 0),
@@ -172,7 +240,37 @@ namespace VStudioCraft.Game
             /* TileRose              */ (12, 0),
             /* TileBrownMushroom     */ (13, 1),
             /* TileRedMushroom       */ (12, 1),
+
+            // Tools — coordinates into alpha_tools.png. Standard Alpha
+            // items.png layout: row 4 = swords, row 5 = shovels, row 6
+            // = pickaxes, row 7 = axes; cols 0..4 = wood, stone, iron,
+            // diamond, gold (left-to-right material order).
+            /* TileWoodSword         */ (0, 4),
+            /* TileStoneSword        */ (1, 4),
+            /* TileIronSword         */ (2, 4),
+            /* TileDiamondSword      */ (3, 4),
+            /* TileGoldSword         */ (4, 4),
+            /* TileWoodShovel        */ (0, 5),
+            /* TileStoneShovel       */ (1, 5),
+            /* TileIronShovel        */ (2, 5),
+            /* TileDiamondShovel     */ (3, 5),
+            /* TileGoldShovel        */ (4, 5),
+            /* TileWoodPickaxe       */ (0, 6),
+            /* TileStonePickaxe      */ (1, 6),
+            /* TileIronPickaxe       */ (2, 6),
+            /* TileDiamondPickaxe    */ (3, 6),
+            /* TileGoldPickaxe       */ (4, 6),
+            /* TileWoodAxe           */ (0, 7),
+            /* TileStoneAxe          */ (1, 7),
+            /* TileIronAxe           */ (2, 7),
+            /* TileDiamondAxe        */ (3, 7),
+            /* TileGoldAxe           */ (4, 7),
         };
+
+        // True for layers whose source PNG is alpha_tools.png; false for
+        // layers sourced from terrain.png. CreateAtlasFromAlphaTerrain
+        // selects the right source buffer per layer using this flag.
+        private static bool IsToolLayer(int layer) => layer >= BlockLayerCount;
 
         // Image-based atlas: read the embedded Alpha terrain.png, slice
         // it into 16×16 tiles using AlphaTileCoords, and upload one
@@ -201,7 +299,8 @@ namespace VStudioCraft.Game
                 PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
 
             var layerPixels = new byte[TileSize * TileSize * 4];
-            for (int layer = 0; layer < LayerCount; layer++)
+            // Block layers from terrain.png (the bgra buffer just decoded).
+            for (int layer = 0; layer < BlockLayerCount; layer++)
             {
                 var (col, row) = AlphaTileCoords[layer];
                 CopyTile(bgra, srcW, srcH, col, row, layerPixels);
@@ -211,6 +310,11 @@ namespace VStudioCraft.Game
                     TileSize, TileSize, 1,
                     PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
             }
+            // Tool layers from alpha_tools.png — separately decoded to its
+            // own cached buffer so the two atlases stay independent
+            // (terrain can be hot-swappable in the future without
+            // disturbing tool icons).
+            UploadToolLayersFromAlphaTools(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -230,6 +334,16 @@ namespace VStudioCraft.Game
         private static int s_cachedW, s_cachedH;
         private static bool s_decodeAttempted;
         private static bool s_decodeFailed;
+
+        // Parallel decode cache for alpha_tools.png. Tools are independent
+        // from terrain (loaded from a different base64 constant) but
+        // reuse the same decode path — the only divergence is the source
+        // bytes. A separate cache avoids re-decoding on every atlas
+        // rebuild and keeps the two PNG buffers from clobbering each
+        // other's lifetimes.
+        private static byte[] s_toolsCachedBgra;
+        private static int s_toolsCachedW, s_toolsCachedH;
+        private static bool s_toolsDecodeFailed;
         // Surfaced through AlphaTerrainStatus so we can show the actual
         // failure reason in the Options label instead of a generic
         // "UNAVAILABLE" — we were guessing at the failure cause and
@@ -347,6 +461,69 @@ namespace VStudioCraft.Game
             s_cachedW = width;
             s_cachedH = height;
             return true;
+        }
+
+        // Decode alpha_tools.png from the inlined AlphaToolsData.Base64
+        // constant. Same GDI+ path as the terrain decoder — kept separate
+        // because the tools sheet has its own size (256×256) and its own
+        // failure mode (older builds without AlphaToolsData simply skip
+        // tool icons rather than going blank for everything).
+        private static bool TryDecodeEmbeddedTools(out byte[] bgra, out int width, out int height)
+        {
+            if (s_toolsCachedBgra != null)
+            {
+                bgra = s_toolsCachedBgra; width = s_toolsCachedW; height = s_toolsCachedH;
+                return true;
+            }
+            if (s_toolsDecodeFailed)
+            {
+                bgra = null; width = 0; height = 0; return false;
+            }
+
+            bgra = null; width = 0; height = 0;
+            try
+            {
+                string b64 = AlphaToolsData.Base64;
+                if (string.IsNullOrEmpty(b64))
+                {
+                    s_toolsDecodeFailed = true;
+                    return false;
+                }
+                byte[] pngBytes = Convert.FromBase64String(b64);
+
+                using (var src = new MemoryStream(pngBytes))
+                using (var bmp = new Bitmap(src))
+                {
+                    width = bmp.Width;
+                    height = bmp.Height;
+                    var rect = new Rectangle(0, 0, width, height);
+                    var data = bmp.LockBits(rect, GdiImageLockMode.ReadOnly, GdiPixelFormat.Format32bppArgb);
+                    try
+                    {
+                        int dstStride = width * 4;
+                        bgra = new byte[dstStride * height];
+                        for (int y = 0; y < height; y++)
+                        {
+                            IntPtr rowPtr = IntPtr.Add(data.Scan0, y * data.Stride);
+                            Marshal.Copy(rowPtr, bgra, y * dstStride, dstStride);
+                        }
+                    }
+                    finally
+                    {
+                        bmp.UnlockBits(data);
+                    }
+                }
+                s_toolsCachedBgra = bgra;
+                s_toolsCachedW = width;
+                s_toolsCachedH = height;
+                return true;
+            }
+            catch
+            {
+                s_toolsDecodeFailed = true;
+                bgra = null; width = 0; height = 0;
+                return false;
+            }
         }
 
         // Resolve PNG bytes from the most reliable source available.

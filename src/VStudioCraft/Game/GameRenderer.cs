@@ -1143,6 +1143,16 @@ void main()
                 _breakProgress = 0f;
             }
 
+            // Tool-aware speed: held tool's effectiveness multiplier
+            // applies when the right kind of tool is used against the
+            // right block. SpeedMultiplier returns 1f for bare-hand /
+            // ineffective combinations, so the survival "punch through
+            // anything" baseline is preserved.
+            BlockType heldType = BlockType.Air;
+            var heldStack = Input.Inventory.GetHotbar(Input.HotbarIndex);
+            if (!heldStack.IsEmpty) heldType = heldStack.Type;
+            float speedMult = ToolData.SpeedMultiplier(heldType, t);
+
             if (hardness <= 0f)
             {
                 // Hardness zero — flowers, torches, TNT — chip through immediately.
@@ -1150,7 +1160,7 @@ void main()
             }
             else
             {
-                _breakProgress += dt / hardness;
+                _breakProgress += dt * speedMult / hardness;
             }
 
             if (_breakProgress >= 1f)
@@ -1162,15 +1172,57 @@ void main()
                 int bx = hit.X, by = hit.Y, bz = hit.Z;
                 var brokenType = t;
                 _world.SetBlock(bx, by, bz, BlockType.Air);
-                SpawnBreakDrop(bx, by, bz, brokenType);
+                SpawnBreakDrop(bx, by, bz, brokenType, heldType);
+                // Tool durability tick: every successful break consumes 1
+                // point; when the tool runs out it's removed from the
+                // hotbar. Bare-hand and non-tool stacks (blocks held in
+                // the hotbar) are skipped.
+                if (BlockData.IsTool(heldType))
+                {
+                    DamageHeldTool(1);
+                }
                 _breakHasTarget = false;
                 _breakProgress = 0f;
+            }
+        }
+
+        // Apply `amount` durability damage to the player's currently-
+        // selected hotbar slot. If the tool reaches its MaxDurability the
+        // stack is cleared. Safe to call when nothing's held — the
+        // IsEmpty / IsTool guards keep it a no-op.
+        private void DamageHeldTool(int amount)
+        {
+            if (Input == null) return;
+            var inv = Input.Inventory;
+            if (inv == null) return;
+            int idx = Inventory.HotbarStart + Input.HotbarIndex;
+            if (idx < 0 || idx >= inv.Slots.Length) return;
+            ref var s = ref inv.Slots[idx];
+            if (s.IsEmpty || !BlockData.IsTool(s.Type)) return;
+            int newDur = s.Durability + amount;
+            int max = ToolData.MaxDurability(s.Type);
+            if (newDur >= max)
+            {
+                // Tool snapped — clear the slot. Alpha plays a sound here
+                // (the wooden break-snap); we'll wire that in once the
+                // audio pipeline lands.
+                s = ItemStack.Empty;
+            }
+            else
+            {
+                s.Durability = (short)newDur;
             }
         }
 
         public bool TryPlace(BlockType t)
         {
             if (_world == null) return false;
+            // Tools can't be placed — RMB on a tool stack is a no-op.
+            // Guard runs before the survival check so creative-mode
+            // RMB on a tool also does nothing (otherwise the cube
+            // shape branch below would attempt to place the tool's
+            // BlockType id as a block).
+            if (BlockData.IsTool(t)) return false;
             // In survival, you can only place blocks you actually have. The
             // call site already passes Input.SelectedBlock as `t`, so this
             // is mainly belt-and-braces against an empty hotbar slot
@@ -1218,13 +1270,24 @@ void main()
         // Creative breaks (TryBreak) intentionally don't call this — the
         // creative loop is "block-replace mode" and would otherwise litter
         // the world with drops the player didn't want.
-        private void SpawnBreakDrop(int bx, int by, int bz, BlockType type)
+        private void SpawnBreakDrop(int bx, int by, int bz, BlockType type, BlockType tool)
         {
             if (type == BlockType.Air) return;
             // Skip items we can't yet pick up cleanly: fluid sources just
             // disappear (matches Alpha — broken water doesn't drop).
             if (type == BlockType.Water || type == BlockType.FlowingWater
                 || type == BlockType.Lava  || type == BlockType.FlowingLava) return;
+
+            // Tier / kind gate: stone broken with bare hands or a wooden
+            // shovel breaks but yields nothing. Ores require a pickaxe
+            // of the right material tier (CanHarvest matches Alpha rules).
+            if (!ToolData.CanHarvest(tool, type)) return;
+
+            // Stone → cobblestone (when harvest-eligible). Other blocks
+            // drop themselves for now; furnace-smelt items will hook in
+            // later when crafting / smelting lands.
+            BlockType dropType = ToolData.DropFor(type);
+            if (dropType == BlockType.Air) return;
 
             var rng = _dropRng;
             float jx = ((float)rng.NextDouble() - 0.5f) * 2f;   // -1..1
@@ -1233,7 +1296,7 @@ void main()
             {
                 Position = new Vector3(bx + 0.5f, by + 0.5f, bz + 0.5f),
                 Velocity = new Vector3(jx, 3.5f, jz),
-                Stack = new ItemStack(type, 1),
+                Stack = new ItemStack(dropType, 1),
                 AgeSec = 0f,
                 PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
             };
@@ -1351,7 +1414,7 @@ void main()
             {
                 // Hotbar row is still a real slot — click it to drop the
                 // cursor / pick the slot up / swap, same rules as survival.
-                int hotSlot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my);
+                int hotSlot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my, /*creative*/true);
                 if (hotSlot >= 0)
                 {
                     if (shift) inv.HandleShiftClickSlot(hotSlot);
@@ -1457,7 +1520,11 @@ void main()
                 }
                 else
                 {
-                    var s = new ItemStack(inv.Cursor.Type, 1);
+                    // Preserve durability when splitting a tool stack — a
+                    // half-broken pickaxe dropped from the cursor should
+                    // arrive in the world with the same wear it had on
+                    // the mouse pointer.
+                    var s = new ItemStack(inv.Cursor.Type, 1, inv.Cursor.Durability);
                     var c = inv.Cursor; c.Count--;
                     inv.Cursor = c.Count > 0 ? c : ItemStack.Empty;
                     ThrowStack(s);
@@ -1472,7 +1539,7 @@ void main()
             {
                 // Only the hotbar row is a real slot in creative — main
                 // grid is the catalog. Q over the catalog is a no-op.
-                int hot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my);
+                int hot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my, /*creative*/true);
                 if (hot < 0) return;
                 DropFromSlotRef(ref inv.Slots[hot], wholeStack);
                 return;
@@ -2299,6 +2366,18 @@ void main()
                         out int sx, out int sy, out int sw, out int sh);
                     DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
                 }
+
+                // Durability bars on damaged tool stacks. Walks the same
+                // hotbar slots; DrawDurabilityBar is a no-op for non-tool
+                // and undamaged tool stacks so the work is bounded.
+                for (int i = 0; i < HotbarTextures.SlotCount; i++)
+                {
+                    var stack = inv.Slots[Inventory.HotbarStart + i];
+                    if (stack.IsEmpty) continue;
+                    HotbarLayout.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
             }
 
             // ---- tooltip text --------------------------------------------
@@ -2595,7 +2674,8 @@ void main()
                 new Vector3(0f, 0f, 0f), 0.55f, ortho);
 
             // ---- panel ---------------------------------------------------
-            InventoryScreen.GetPanelRect(width, height,
+            bool creativePanel = GameMode == GameMode.Creative;
+            InventoryScreen.GetPanelRect(width, height, creativePanel,
                 out int panelX, out int panelY, out int panelW, out int panelH);
 
             // Two-tone panel: dark fill + 2-px lighter border. Same palette
@@ -2614,7 +2694,7 @@ void main()
             string title = GameMode == GameMode.Creative ? "CREATIVE INVENTORY" : InventoryScreen.Title;
             DrawString(title, /*scale*/InventoryScreen.TitleScale(width, height),
                 /*centerX*/width / 2,
-                /*topY*/InventoryScreen.TitleY(width, height),
+                /*topY*/InventoryScreen.TitleY(width, height, creativePanel),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             if (GameMode == GameMode.Creative)
@@ -2648,13 +2728,18 @@ void main()
                 // Count badge in the same bottom-right anchor as a slot
                 // would use. Using SlotPx as the synthetic frame keeps
                 // visual parity with in-slot counts.
+                int cursorFrame = InventoryScreen.SlotPx(width, height);
+                int cursorFrameX = cx - cursorFrame / 2;
+                int cursorFrameY = cy - cursorFrame / 2;
                 if (inv.Cursor.Count > 1)
                 {
-                    int frame = InventoryScreen.SlotPx(width, height);
-                    int frameX = cx - frame / 2;
-                    int frameY = cy - frame / 2;
-                    DrawStackCount(inv.Cursor.Count, frameX, frameY, frame, frame, ortho);
+                    DrawStackCount(inv.Cursor.Count, cursorFrameX, cursorFrameY,
+                        cursorFrame, cursorFrame, ortho);
                 }
+                // Durability bar on cursor — moves with the mouse so the
+                // player can see how worn the tool they're dragging is.
+                DrawDurabilityBar(inv.Cursor, cursorFrameX, cursorFrameY,
+                    cursorFrame, cursorFrame, width, height, ortho);
             }
 
             GL.Enable(EnableCap.CullFace);
@@ -2714,6 +2799,18 @@ void main()
                     InventoryScreen.GetSlotRect(i, width, height,
                         out int sx, out int sy, out int sw, out int sh);
                     DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+
+                // Durability bars on damaged tools — same slot iteration,
+                // skipping the count-1 guard above (tools always have
+                // Count=1 but still need the bar).
+                for (int i = 0; i < InventoryScreen.TotalSlots; i++)
+                {
+                    var stack = inv.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    InventoryScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
                 }
             }
         }
@@ -2875,7 +2972,7 @@ void main()
             int hotbarBase = InventoryScreen.MainSlotCount;
             for (int i = hotbarBase; i < InventoryScreen.TotalSlots; i++)
             {
-                InventoryScreen.GetSlotRect(i, width, height,
+                InventoryScreen.GetSlotRect(i, width, height, /*creative*/true,
                     out int hsx, out int hsy, out int hsw, out int hsh);
                 DrawSlotWell(hsx, hsy, hsw, hsh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
             }
@@ -2885,7 +2982,7 @@ void main()
                 {
                     var stack = inv.Slots[i];
                     if (stack.IsEmpty) continue;
-                    InventoryScreen.GetSlotRect(i, width, height,
+                    InventoryScreen.GetSlotRect(i, width, height, /*creative*/true,
                         out int hsx, out int hsy, out _, out _);
                     DrawSlotIcon(stack.Type, hsx + iconPad, hsy + iconPad, width, height, ortho);
                 }
@@ -2895,7 +2992,7 @@ void main()
             int selected = Input != null ? Input.HotbarIndex : -1;
             if (selected >= 0 && selected < InventoryScreen.HotbarSlotCount)
             {
-                DrawHotbarSelectionHighlight(hotbarBase + selected, width, height, ortho);
+                DrawHotbarSelectionHighlight(hotbarBase + selected, width, height, ortho, /*creative*/true);
             }
 
             if (inv != null)
@@ -2904,9 +3001,21 @@ void main()
                 {
                     var stack = inv.Slots[i];
                     if (stack.IsEmpty || stack.Count <= 1) continue;
-                    InventoryScreen.GetSlotRect(i, width, height,
+                    InventoryScreen.GetSlotRect(i, width, height, /*creative*/true,
                         out int hsx, out int hsy, out int hsw, out int hsh);
                     DrawStackCount(stack.Count, hsx, hsy, hsw, hsh, ortho);
+                }
+
+                // Durability bars on damaged hotbar tools (creative pulls
+                // pristine tools from the catalog so this is mostly for
+                // the creative-survival hand-off cases — still cheap).
+                for (int i = hotbarBase; i < InventoryScreen.TotalSlots; i++)
+                {
+                    var stack = inv.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    InventoryScreen.GetSlotRect(i, width, height, /*creative*/true,
+                        out int hsx, out int hsy, out int hsw, out int hsh);
+                    DrawDurabilityBar(stack, hsx, hsy, hsw, hsh, width, height, ortho);
                 }
             }
 
@@ -2921,7 +3030,7 @@ void main()
                 if (absolute < filtered.Count)
                 {
                     string label = CreativeCatalog.FriendlyName(filtered[absolute]);
-                    InventoryScreen.GetPanelRect(width, height,
+                    InventoryScreen.GetPanelRect(width, height, /*creative*/true,
                         out int ppx, out int ppy, out int ppw, out int pph);
                     int tipScale = InventoryScreen.TitleScale(width, height);
                     DrawString(label, /*scale*/tipScale,
@@ -2967,6 +3076,9 @@ void main()
         // bar uses, drawn slightly oversize so it reads as a frame around
         // the slot.
         private void DrawHotbarSelectionHighlight(int slotIndex, int width, int height, Matrix4 ortho)
+            => DrawHotbarSelectionHighlight(slotIndex, width, height, ortho, /*creative*/false);
+
+        private void DrawHotbarSelectionHighlight(int slotIndex, int width, int height, Matrix4 ortho, bool creative)
         {
             _spriteShader.Use();
             _spriteShader.SetInt("uSprite", 0);
@@ -2975,7 +3087,7 @@ void main()
             _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
             GL.BindTexture(TextureTarget.Texture2D, _hotbarHighlightTexture);
 
-            InventoryScreen.GetSlotRect(slotIndex, width, height,
+            InventoryScreen.GetSlotRect(slotIndex, width, height, creative,
                 out int sx, out int sy, out int sw, out int sh);
             int hSize = UiScale.S(HotbarTextures.HighlightSize * 2, width, height);
             int hx = sx + (sw - hSize) / 2;
@@ -3002,6 +3114,60 @@ void main()
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
             DrawSpriteQuadFor(_spriteArrayShader, x, y, w, h, ortho);
+        }
+
+        // Durability bar overlay for a tool stack — Alpha-style: a thin
+        // 2-px (UI-scaled) horizontal bar pinned to the bottom of the
+        // slot rect, colour fading from green (full durability) through
+        // yellow to red (about to snap). The bar is hidden on undamaged
+        // tools so a freshly-crafted pickaxe doesn't show a green stripe
+        // taking up icon real estate. Slots that aren't tools are no-ops.
+        private void DrawDurabilityBar(in ItemStack stack, int slotX, int slotY,
+            int slotW, int slotH, int viewW, int viewH, Matrix4 ortho)
+        {
+            if (stack.IsEmpty) return;
+            if (!BlockData.IsTool(stack.Type)) return;
+            int max = ToolData.MaxDurability(stack.Type);
+            if (max <= 0) return;
+            int used = stack.Durability;
+            if (used <= 0) return; // pristine — hide the bar
+            if (used > max) used = max;
+
+            // Bar geometry: full slot width minus a 2px inset on each
+            // side, pinned to the bottom with another 2px inset so it
+            // sits inside the slot border. Height = 2 UI-scaled px,
+            // matching the hotbar wells' chiselled border thickness.
+            int inset = UiScale.S(2, viewW, viewH);
+            int barH  = UiScale.S(2, viewW, viewH);
+            int barX  = slotX + inset;
+            int barY  = slotY + slotH - inset - barH;
+            int barW  = slotW - inset * 2;
+            if (barW <= 0 || barH <= 0) return;
+
+            // Background (dark grey, full width) gives the foreground
+            // colour something to read against on light icons.
+            DrawSolidQuad(barX, barY, barW, barH, new Vector3(0f, 0f, 0f), 1f, ortho);
+
+            // Foreground length scales with remaining durability.
+            float remaining = (max - used) / (float)max; // 1 = pristine, 0 = broken
+            int fgW = (int)(barW * remaining);
+            if (fgW <= 0) return;
+
+            // Colour ramp: green at full → yellow at half → red at empty.
+            // Hue interpolation is overkill for a 2px bar, so do a 2-leg
+            // RGB lerp through (255,255,0) at 0.5.
+            Vector3 colour;
+            if (remaining > 0.5f)
+            {
+                float t = (remaining - 0.5f) * 2f; // 0..1 from yellow to green
+                colour = new Vector3(1f - t, 1f, 0f);
+            }
+            else
+            {
+                float t = remaining * 2f; // 0..1 from red to yellow
+                colour = new Vector3(1f, t, 0f);
+            }
+            DrawSolidQuad(barX, barY, fgW, barH, colour, 1f, ortho);
         }
 
         // Solid-colour quad at (x,y) sized (w,h) in pixels via the overlay

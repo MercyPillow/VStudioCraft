@@ -40,8 +40,10 @@ namespace VStudioCraft.Game
         // Catalog inclusion rule. Air isn't a placeable; FlowingWater /
         // FlowingLava are runtime-only fluid states the engine generates
         // from the source variants, so a player picking them up makes no
-        // sense. Everything else (including the source Water / Lava
-        // blocks) gets a tile.
+        // sense. Tools are included — creative players can grab a fresh
+        // pickaxe / shovel / axe / sword from the catalog the same way
+        // they'd pick a block. Everything else (including the source
+        // Water / Lava blocks) gets a tile.
         public static bool IsCatalogEntry(BlockType t)
         {
             switch (t)

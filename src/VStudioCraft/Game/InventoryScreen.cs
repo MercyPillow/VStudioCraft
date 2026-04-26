@@ -103,8 +103,23 @@ namespace VStudioCraft.Game
         public static int PanelWidth(int viewW, int viewH)
             => GridWidthPx(viewW, viewH) + PanelPadX(viewW, viewH) * 2;
         public static int PanelHeight(int viewW, int viewH)
-            => PanelPadY(viewW, viewH) + TitleHeight(viewW, viewH) + TitleGap(viewW, viewH)
-             + GridHeightPx(viewW, viewH) + PanelPadY(viewW, viewH);
+            => PanelHeight(viewW, viewH, /*creative*/false);
+
+        // Creative panels are taller than survival by the height of the
+        // search-bar zone (the bar itself + the gap below it). The survival
+        // panel reserves exactly MainRows*SlotPx for the main grid; in
+        // creative we want the *catalog* to get that much space, with the
+        // search bar above it as a separate band — otherwise the catalog
+        // ends up ~half a row short and the bottom row is clipped /
+        // partially-hidden behind the hotbar gap.
+        public static int PanelHeight(int viewW, int viewH, bool creative)
+        {
+            int h = PanelPadY(viewW, viewH) + TitleHeight(viewW, viewH) + TitleGap(viewW, viewH)
+                  + GridHeightPx(viewW, viewH) + PanelPadY(viewW, viewH);
+            if (creative)
+                h += SearchBarHeight(viewW, viewH) + SearchBarGap(viewW, viewH);
+            return h;
+        }
 
         // Top-left corner of the panel. Horizontally screen-centred,
         // vertically screen-centred too — but with a floor: the panel's
@@ -116,8 +131,14 @@ namespace VStudioCraft.Game
         public static void GetPanelRect(int screenW, int screenH,
             out int x, out int y, out int w, out int h)
         {
+            GetPanelRect(screenW, screenH, /*creative*/false, out x, out y, out w, out h);
+        }
+
+        public static void GetPanelRect(int screenW, int screenH, bool creative,
+            out int x, out int y, out int w, out int h)
+        {
             w = PanelWidth(screenW, screenH);
-            h = PanelHeight(screenW, screenH);
+            h = PanelHeight(screenW, screenH, creative);
             x = (screenW - w) / 2;
 
             // Preferred: screen-centred.
@@ -136,8 +157,11 @@ namespace VStudioCraft.Game
 
         // Title is centred horizontally; this returns the Y of its top edge.
         public static int TitleY(int screenW, int screenH)
+            => TitleY(screenW, screenH, /*creative*/false);
+
+        public static int TitleY(int screenW, int screenH, bool creative)
         {
-            GetPanelRect(screenW, screenH, out _, out int py, out _, out _);
+            GetPanelRect(screenW, screenH, creative, out _, out int py, out _, out _);
             return py + PanelPadY(screenW, screenH);
         }
 
@@ -148,7 +172,19 @@ namespace VStudioCraft.Game
         public static void GetSlotRect(int slotIndex, int screenW, int screenH,
             out int x, out int y, out int w, out int h)
         {
-            GetPanelRect(screenW, screenH, out int px, out int py, out _, out _);
+            GetSlotRect(slotIndex, screenW, screenH, /*creative*/false, out x, out y, out w, out h);
+        }
+
+        // Creative variant. The main grid (slots 0..35) doesn't actually
+        // render in creative — the catalog takes that space — but we still
+        // compute slot rects there so the existing hit-test loops keep
+        // working harmlessly. Hotbar slots get bumped down by the search-
+        // bar zone so they line up with the (taller) creative panel's
+        // bottom edge.
+        public static void GetSlotRect(int slotIndex, int screenW, int screenH, bool creative,
+            out int x, out int y, out int w, out int h)
+        {
+            GetPanelRect(screenW, screenH, creative, out int px, out int py, out _, out _);
             int slot = SlotPx(screenW, screenH);
             int padX = PanelPadX(screenW, screenH);
             int padY = PanelPadY(screenW, screenH);
@@ -166,7 +202,9 @@ namespace VStudioCraft.Game
             else
             {
                 x = gridX0 + col * slot;
-                y = gridY0 + MainRows * slot + gap;
+                int hotbarY = gridY0 + MainRows * slot + gap;
+                if (creative) hotbarY += SearchBarHeight(screenW, screenH) + SearchBarGap(screenW, screenH);
+                y = hotbarY;
             }
             w = slot;
             h = slot;
@@ -188,37 +226,34 @@ namespace VStudioCraft.Game
 
         // ---- creative layout helpers ------------------------------------
 
-        // Search bar rect — fills the grid-width region just below the title,
-        // where the first row of the survival main grid would normally be.
+        // Search bar rect — fills the grid-width region just below the title.
+        // Sits in its own band above the catalog grid; the panel grows by
+        // the bar's height in creative mode so it doesn't displace any
+        // catalog rows.
         public static void GetSearchBarRect(int screenW, int screenH,
             out int x, out int y, out int w, out int h)
         {
-            GetPanelRect(screenW, screenH, out int px, out int py, out _, out _);
+            GetPanelRect(screenW, screenH, /*creative*/true, out int px, out int py, out _, out _);
             x = px + PanelPadX(screenW, screenH);
             y = py + PanelPadY(screenW, screenH) + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
             w = GridWidthPx(screenW, screenH);
             h = SearchBarHeight(screenW, screenH);
         }
 
-        // Catalog grid rect — sits below the search bar, fills the rest of
-        // the main-grid region down to the hotbar gap. The renderer places
-        // catalog tiles on the same SlotPx grid so icons line up with the
-        // hotbar columns visually.
+        // Catalog grid rect — sits below the search bar and is exactly
+        // CatalogRows*SlotPx tall, so all 4 rows are fully visible and a
+        // tile-snapped scroll always shows complete rows. The taller
+        // creative panel makes room for this without crowding the hotbar.
         public static void GetCatalogRect(int screenW, int screenH,
             out int x, out int y, out int w, out int h)
         {
-            GetPanelRect(screenW, screenH, out int px, out int py, out _, out _);
+            GetPanelRect(screenW, screenH, /*creative*/true, out int px, out int py, out _, out _);
             int gridY0 = py + PanelPadY(screenW, screenH) + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
             int catalogTop = gridY0 + SearchBarHeight(screenW, screenH) + SearchBarGap(screenW, screenH);
             x = px + PanelPadX(screenW, screenH);
             y = catalogTop;
             w = GridWidthPx(screenW, screenH);
-            // Bottom of catalog = top of hotbar row - HotbarGap. The catalog
-            // therefore takes up the rows it has, minus the search-bar's
-            // intrusion. Compute from the survival main-grid height instead
-            // of redeclaring it.
-            int mainBottom = gridY0 + MainRows * SlotPx(screenW, screenH);
-            h = mainBottom - catalogTop;
+            h = CatalogRows * SlotPx(screenW, screenH);
         }
 
         // Hit-test the catalog tile under (mx, my). Returns the visible-row
@@ -240,11 +275,16 @@ namespace VStudioCraft.Game
         // in Inventory.Slots (HotbarStart..HotbarStart+HotbarCount-1) or -1.
         // Used by creative click routing — only the hotbar row is a real
         // slot in creative mode; the catalog area handles its own hits.
+        // Pass creative=true when called from creative-mode handlers so the
+        // hit rects line up with the (taller) creative panel.
         public static int HitTestHotbar(int screenW, int screenH, int mx, int my)
+            => HitTestHotbar(screenW, screenH, mx, my, /*creative*/false);
+
+        public static int HitTestHotbar(int screenW, int screenH, int mx, int my, bool creative)
         {
             for (int i = MainSlotCount; i < TotalSlots; i++)
             {
-                GetSlotRect(i, screenW, screenH, out int sx, out int sy, out int sw, out int sh);
+                GetSlotRect(i, screenW, screenH, creative, out int sx, out int sy, out int sw, out int sh);
                 if (mx >= sx && mx < sx + sw && my >= sy && my < sy + sh) return i;
             }
             return -1;

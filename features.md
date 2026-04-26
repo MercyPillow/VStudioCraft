@@ -4,11 +4,14 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 `src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
 Items marked **Have** exist today; items under **Missing** are the gap.
 
-Last updated after the fluid pass: water and lava sources now propagate
-into adjacent air every 0.25s via a source-driven outflow tick. Dig into
-the sea floor and the ocean floods in; place a source on a cliff and it
-falls. FlowingWater / FlowingLava are first-class block types with a
-per-cell metadata byte tracking remaining horizontal reach.
+Last updated after the tools + creative-inventory pass: tools (wood /
+stone / iron / gold / diamond × pickaxe / shovel / axe / sword) ship as
+20 new BlockType entries (38..57) sourced from a base64-inlined
+`alpha_tools.png`. Mining is now hardness × tool-speed gated, with
+RequiredTier drop gating, durability decrement on break, and a 3-stop
+green→yellow→red durability bar drawn across hotbar / inventory / cursor.
+Creative-inventory panel grew by the search-bar zone so all 4 catalog
+rows are fully visible (was clipping at ~3.5 rows).
 
 ---
 
@@ -213,10 +216,13 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 ## Items (actual items, not blocks)
 
+**Have**
+- Tools: wood / stone / iron / gold / diamond × pickaxe / shovel / axe / sword. Sourced from a base64-inlined `alpha_tools.png` (atlas layers 38..57); icons render through the existing `DrawFlatSpriteIcon` path so the inventory shows real 2D sprites rather than cubes.
+- Tool durability (per-stack `short` field on `ItemStack`; ticks +1 per successful break, stack clears at MaxDurability — Wood 60, Stone 132, Iron 251, Gold 33, Diamond 1562). Damaged tools never auto-stack: ItemStack equality / SameKindAs include durability.
+- Hardness-gated break time (per-block hardness × tool-class multiplier — Wood 2×, Stone 4×, Iron 6×, Diamond 8×, Gold 12×; bare-hand 1×). RequiredKind + RequiredTier in `ToolData` gate ore drops: stone-family blocks need a pickaxe of correct tier, otherwise the block breaks and yields nothing. Stone breaks into Cobblestone when harvest-eligible.
+
 **Missing**
-- Tools: wood / stone / iron / gold / diamond × pickaxe / shovel / axe / sword / hoe
-- Tool durability (per-item integer that ticks down on use; tool breaks at 0)
-- Hardness-gated break time (per-block hardness × tool-class multiplier; "correct tool" unlocks ore drops)
+- Hoe + farming (no crops yet, so the hoe row in alpha_tools.png is intentionally unmapped)
 - Furnace fuel + smelting recipes (input slot consumes a fuel item over a 10 s cook to produce an output item)
 - Armor + damage reduction
 - Bow + arrows
@@ -246,10 +252,12 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Options sub-menu (opened from pause-menu OPTIONS): SURVIVAL section with HUNGER BAR toggle (disabled in Creative). Esc pops Options back to the pause menu; BACK button does the same. Setting persists per-world in the save header.
 - Viewport-aware UI scaling (`UiScale`): hotbar, survival HUD icons, inventory panel + slots, pause / options menus, and bitmap-font labels all multiply their base pixel sizes by a factor derived from viewport height (720 px reference, clamped 1.0×–2.0×). Tool-window size keeps the original look; fullscreen / 1080p+ grows the chrome and click rects together so layout and hit-testing stay in lockstep. The crosshair is intentionally exempt and stays at a fixed pixel size as an aiming reticle.
 
+**Have (cont.)**
+- Tool-durability bar on item icons (3-stop green→yellow→red ramp pinned to the bottom of every slot — hotbar HUD, inventory grid, creative hotbar row, and cursor stack while dragging). Hidden on pristine tools so a fresh pickaxe doesn't show a green stripe.
+
 **Missing**
 - Dynamic hunger decay + food items. Hunger sub-setting and EatFood scaffold (flat-heal vs. refill branch) exist; eating items, hunger drain on activity, and the food UX itself are pending.
 - Armor row
-- Tool-durability bar on item icons
 - Item-name popup (Alpha shows the held item's name briefly when you switch hotbar slots; we only show it persistently)
 - Chat overlay
 - Hurt overlay / red flash on damage taken (Alpha tints the screen red for ~250 ms when the player loses HP)
@@ -379,64 +387,62 @@ multiple subsystems at once.
 
 ### Tier 1 — Survival gameplay loop (the biggest "feels like Minecraft" gaps)
 
-1. ~~**Inventory + item stacks**~~ — done. `ItemStack`/`Inventory` model, click-to-move slot exchange, cursor stack, stack-count digits, drops on break with pickup, GUI-toss.
-2. **Tools + block hardness + tool-aware mining** — Add wood/stone/iron/gold/diamond × pickaxe/shovel/axe/sword/hoe to the item registry, per-block hardness, tool-class lookup, and an `effectiveAgainst` mapping so the existing break-time path mines stone faster with a pickaxe and won't drop ore unless the right tool is held. Tool durability ticks per use; durability bar overlays on inventory icons. Unlocks Tier 1 #3.
-3. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron.
-4. **Sound** — Audio backend (OpenAL via OpenTK, or NAudio) + an SFX bank: per-material step, block break, block place, attack hit, fall thud, water splash, UI click, ambient cave drip. Music tracks last. Surprisingly large feel-improvement vs. effort.
+1. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron.
+2. **Sound** — Audio backend (OpenAL via OpenTK, or NAudio) + an SFX bank: per-material step, block break, block place, attack hit, fall thud, water splash, UI click, ambient cave drip. Music tracks last. Surprisingly large feel-improvement vs. effort.
 
 ### Tier 2 — Visible world polish (each item improves every frame)
 
-5. **Animated water / lava textures** — Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
-6. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
-7. **Particle system** — Block-break puffs, water splash on entry, lava bubbles, torch smoke wisp. Reuses the existing sprite shader.
-8. **Real glass transparency** — Glass routes through the alpha-blend pass like water; faces between adjacent glass cull internally so 2-deep glass doesn't z-fight.
-9. **Hand-held item rendering (first-person)** — Held block/tool bobs in the bottom-right of the viewport with a step-sync sway. Covers ~70% of the "world feels alive" sensation.
-10. **Hurt overlay + arm-swing on attack** — Cheap, high-perceptual: red screen-tint for 250 ms on damage, plus a held-hand arm swing on LMB.
+3. **Animated water / lava textures** — Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
+4. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
+5. **Particle system** — Block-break puffs, water splash on entry, lava bubbles, torch smoke wisp. Reuses the existing sprite shader.
+6. **Real glass transparency** — Glass routes through the alpha-blend pass like water; faces between adjacent glass cull internally so 2-deep glass doesn't z-fight.
+7. **Hand-held item rendering (first-person)** — Held block/tool bobs in the bottom-right of the viewport with a step-sync sway. Covers ~70% of the "world feels alive" sensation.
+8. **Hurt overlay + arm-swing on attack** — Cheap, high-perceptual: red screen-tint for 250 ms on damage, plus a held-hand arm swing on LMB.
 
 ### Tier 3 — Mobs (the world stops feeling empty)
 
-11. **Entity framework + first passive mob (pig)** — AABB walker shared with `Player`, simple wandering AI (random direction every 5 s). Drops raw porkchop on death.
-12. **First hostile mob (zombie or creeper)** — A* on a 16-block window, chase/attack AI, attack hooks into the existing `Player.TakeDamage`. Survival now has a threat.
-13. **Light-level-gated spawn loop** — Hostile spawns at light < 7, passive on grass at light ≥ 9. Per-chunk spawn cap.
-14. **Cow / sheep / chicken** — Variants of pig; sheep drops wool when sheared / killed.
-15. **Player skin + third-person model** — Required for F5 + future multiplayer.
+9. **Entity framework + first passive mob (pig)** — AABB walker shared with `Player`, simple wandering AI (random direction every 5 s). Drops raw porkchop on death.
+10. **First hostile mob (zombie or creeper)** — A* on a 16-block window, chase/attack AI, attack hooks into the existing `Player.TakeDamage`. Survival now has a threat.
+11. **Light-level-gated spawn loop** — Hostile spawns at light < 7, passive on grass at light ≥ 9. Per-chunk spawn cap.
+12. **Cow / sheep / chicken** — Variants of pig; sheep drops wool when sheared / killed.
+13. **Player skin + third-person model** — Required for F5 + future multiplayer.
 
 ### Tier 4 — Controls + UX parity (small, every-session improvements)
 
-16. **Q drop, middle-click pick-block, Shift sneak (edge-stop), F5 third-person** — Each ~50–100 LoC; ship together.
-17. **Right-click split, shift-click move, right-click drag spread** — Inventory ops Alpha shipped that we're missing.
-18. **Death screen with respawn button** — Replaces the current instant-respawn.
-19. **F3 debug screen** — XYZ, FPS, biome, light values, chunk count.
-20. **Item-name popup on hotbar switch** — Show the held block's name for ~2 s after a hotbar slot change (currently it's persistent above the bar).
+14. **Q drop, middle-click pick-block, Shift sneak (edge-stop), F5 third-person** — Each ~50–100 LoC; ship together.
+15. **Right-click split, shift-click move, right-click drag spread** — Inventory ops Alpha shipped that we're missing.
+16. **Death screen with respawn button** — Replaces the current instant-respawn.
+17. **F3 debug screen** — XYZ, FPS, biome, light values, chunk count.
+18. **Item-name popup on hotbar switch** — Show the held block's name for ~2 s after a hotbar slot change (currently it's persistent above the bar).
 
 ### Tier 5 — World-gen variety
 
-21. **Ravines + dungeons (cobble rooms with spawner + chest)** — Two scripted features added to the existing chunk-feature pipeline.
-22. **Surface lava lakes + underground pools + cliff-face springs**.
-23. **Fire + flint & steel** — Block, propagation tick, item to ignite. Pairs with TNT priming.
-24. **Falling sand / gravel physics** — Block-update tick converts unsupported sand/gravel into a falling-block entity.
-25. **Water-meets-lava → cobblestone / stone / obsidian** — Source-vs-source contact rule in the fluid tick.
-26. **Biome system (snow / desert / forest / plains)** — `OverworldGenerator` clone using rainfall/temperature noise; per-biome surface-block + flora rules. Unlocks ice/snow blocks, cacti, sugar cane, pumpkin patches.
+19. **Ravines + dungeons (cobble rooms with spawner + chest)** — Two scripted features added to the existing chunk-feature pipeline.
+20. **Surface lava lakes + underground pools + cliff-face springs**.
+21. **Fire + flint & steel** — Block, propagation tick, item to ignite. Pairs with TNT priming.
+22. **Falling sand / gravel physics** — Block-update tick converts unsupported sand/gravel into a falling-block entity.
+23. **Water-meets-lava → cobblestone / stone / obsidian** — Source-vs-source contact rule in the fluid tick.
+24. **Biome system (snow / desert / forest / plains)** — `OverworldGenerator` clone using rainfall/temperature noise; per-biome surface-block + flora rules. Unlocks ice/snow blocks, cacti, sugar cane, pumpkin patches.
 
 ### Tier 6 — Lighting + sky polish
 
-27. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
-28. **Cross-chunk light propagation** — Eliminates the small light seams at chunk borders next to torches.
-29. **Underwater fog colour swap** — Real deep-blue fog when the camera is submerged (we currently only tint the framebuffer).
-30. **Real moon phases (8-frame texture)** + **horizon gradient** + **rain / snow / lightning** + **biome sky tints**.
+25. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
+26. **Cross-chunk light propagation** — Eliminates the small light seams at chunk borders next to torches.
+27. **Underwater fog colour swap** — Real deep-blue fog when the camera is submerged (we currently only tint the framebuffer).
+28. **Real moon phases (8-frame texture)** + **horizon gradient** + **rain / snow / lightning** + **biome sky tints**.
 
 ### Tier 7 — Late-Alpha systems
 
-31. **Redstone primitives (wire + torch + lever + button + pressure plate + door)** — A whole creative dimension.
-32. **TNT priming + explosion algorithm** — Ray-based blast with block-resistance.
-33. **Signs (post + wall) with writable text** — Tile entity with a 4-line string + in-place text editor.
-34. **Slabs + stairs** — Sub-block geometry; metadata byte and a non-cube collision shape.
-35. **Pumpkins / cacti / sugar cane / ice / snow blocks / fences / doors / ladders** — Round out the block list.
+29. **Redstone primitives (wire + torch + lever + button + pressure plate + door)** — A whole creative dimension.
+30. **TNT priming + explosion algorithm** — Ray-based blast with block-resistance.
+31. **Signs (post + wall) with writable text** — Tile entity with a 4-line string + in-place text editor.
+32. **Slabs + stairs** — Sub-block geometry; metadata byte and a non-cube collision shape.
+33. **Pumpkins / cacti / sugar cane / ice / snow blocks / fences / doors / ladders** — Round out the block list.
 
 ### Tier 8 — Infrastructure + completion
 
-36. **Main menu + world select + world creation screen** — Currently we go straight from the VS tool window into a world.
-37. **Configurable key bindings + autosave + backup-on-load-failure**.
-38. **Painting, minecart, boat** — Late-Alpha entities.
-39. **Multiplayer (TCP server + protocol + auth + interp)** — Alpha had this; it's a project on its own. ~3000+ LoC.
+34. **Main menu + world select + world creation screen** — Currently we go straight from the VS tool window into a world.
+35. **Configurable key bindings + autosave + backup-on-load-failure**.
+36. **Painting, minecart, boat** — Late-Alpha entities.
+37. **Multiplayer (TCP server + protocol + auth + interp)** — Alpha had this; it's a project on its own. ~3000+ LoC.
 

@@ -82,8 +82,12 @@ namespace VStudioCraft.Game
                 for (int i = start; i < end; i++)
                 {
                     ref var s = ref Slots[i];
-                    if (s.IsEmpty || s.Type != stack.Type) continue;
-                    int room = ItemStack.MaxCount - s.Count;
+                    // SameKindAs (not Type==) so a damaged pickaxe doesn't
+                    // absorb a pristine one. Tools have MaxStackSize=1 too,
+                    // so even matching same-kind stacks get no room — the
+                    // pickup falls through to the empty-slot pass.
+                    if (s.IsEmpty || !s.SameKindAs(stack)) continue;
+                    int room = s.MaxStackSize - s.Count;
                     if (room <= 0) continue;
                     int take = Math.Min(room, stack.Count);
                     s.Count += take;
@@ -135,9 +139,9 @@ namespace VStudioCraft.Game
                 return;
             }
 
-            if (slot.Type == cursor.Type)
+            if (slot.SameKindAs(cursor))
             {
-                int room = ItemStack.MaxCount - slot.Count;
+                int room = slot.MaxStackSize - slot.Count;
                 if (room <= 0) return; // slot is already capped — no-op
                 int take = Math.Min(room, cursor.Count);
                 slot.Count += take;
@@ -186,8 +190,8 @@ namespace VStudioCraft.Game
             for (int i = destStart; i < destEnd; i++)
             {
                 ref var d = ref Slots[i];
-                if (d.IsEmpty || d.Type != src.Type) continue;
-                int room = ItemStack.MaxCount - d.Count;
+                if (d.IsEmpty || !d.SameKindAs(src)) continue;
+                int room = d.MaxStackSize - d.Count;
                 if (room <= 0) continue;
                 int take = Math.Min(room, src.Count);
                 d.Count += take;
