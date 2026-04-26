@@ -47,6 +47,17 @@ namespace VStudioCraft.Game
         public int InventoryClickButton;
         public int InventoryClickX;
         public int InventoryClickY;
+        // Shift state captured at the moment the click was queued. The
+        // renderer drains the click on its own frame so we have to snapshot
+        // the modifier state at queue time — querying Control.ModifierKeys
+        // from the render thread would race with the UI thread.
+        public bool InventoryClickShift;
+
+        // Q-drop one-shots. Q with no modifier drops 1 from the selected
+        // hotbar slot; Shift+Q drops the whole stack. Both are consumed by
+        // the renderer between frames and reset to false.
+        public bool DropOnePressed;
+        public bool DropStackPressed;
 
         // Creative-mode catalog state. Both fields are written by the host
         // (UI thread) and read by the renderer (render thread) — same
@@ -66,9 +77,9 @@ namespace VStudioCraft.Game
 
         public InputState()
         {
-            // Starter loadout — same nine blocks the bar shipped with before
-            // the inventory landed, at full stacks. Survival players can clear
-            // these by tossing them; creative ignores stack counts entirely.
+            // Starter loadout — nine canonical Alpha blocks, full stacks.
+            // Survival players can clear these by tossing them; creative
+            // ignores stack counts entirely.
             Inventory.FillHotbar(new[]
             {
                 BlockType.Grass,
@@ -78,7 +89,7 @@ namespace VStudioCraft.Game
                 BlockType.Torch,
                 BlockType.Dandelion,
                 BlockType.Rose,
-                BlockType.TallGrass,
+                BlockType.Cobblestone,
                 BlockType.Planks,
             }, ItemStack.MaxCount);
         }
@@ -121,6 +132,9 @@ namespace VStudioCraft.Game
             BreakPressed = PlacePressed = false;
             BreakHeld = false;
             InventoryClickButton = 0;
+            InventoryClickShift = false;
+            DropOnePressed = false;
+            DropStackPressed = false;
         }
 
         // Reset the creative catalog UI state. Called when the inventory

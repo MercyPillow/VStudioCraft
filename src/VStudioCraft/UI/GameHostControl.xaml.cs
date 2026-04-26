@@ -74,6 +74,15 @@ namespace VStudioCraft.UI
         {
             InitializeComponent();
 
+            // Eagerly decode the embedded Alpha terrain.png on the WPF
+            // UI thread (this constructor) so its byte buffer is cached
+            // before any render-thread atlas rebuild touches it. WPF
+            // imaging has thread-affinity quirks that can silently break
+            // a decode initiated from the GL render thread; prewarming
+            // here means the toggle flips later just read the cached
+            // BGRA bytes and never touch BitmapDecoder again.
+            VStudioCraft.Game.BlockTextures.PrewarmEmbeddedTerrain();
+
             _gl = new GLControl(new GraphicsMode(32, 24, 0, 0), 3, 3, GraphicsContextFlags.Default)
             {
                 Dock = DockStyle.Fill
@@ -285,8 +294,41 @@ namespace VStudioCraft.UI
                             _input.InventoryClickButton,
                             _input.InventoryClickX,
                             _input.InventoryClickY,
-                            pw0, ph0);
+                            pw0, ph0,
+                            _input.InventoryClickShift);
                         _input.InventoryClickButton = 0;
+                        _input.InventoryClickShift = false;
+                    }
+
+                    // Q-drop one-shots. Three sources by context:
+                    //   • Pause menu open: discard the press.
+                    //   • Inventory open: drop from cursor / hovered slot.
+                    //   • Otherwise: drop from the selected hotbar slot.
+                    // Drops thrown from the inventory still spawn into the
+                    // world immediately — TickDrops keeps running below
+                    // even with the inventory open, so the player sees the
+                    // toss arc rather than discovering a new pile when
+                    // they close the panel.
+                    if (_renderer.IsPaused)
+                    {
+                        _input.DropOnePressed = false;
+                        _input.DropStackPressed = false;
+                    }
+                    else if (_input.DropStackPressed || _input.DropOnePressed)
+                    {
+                        bool whole = _input.DropStackPressed;
+                        if (_renderer.IsInventoryOpen)
+                        {
+                            var (pwQ, phQ) = GetPhysicalSize();
+                            _renderer.DropFromInventoryHover(whole, pwQ, phQ);
+                        }
+                        else
+                        {
+                            _renderer.DropFromHotbar(whole);
+                        }
+                        _input.DropStackPressed = false;
+                        _input.DropOnePressed = false;
+                        changed = true;
                     }
                     if (changed)
                     {
@@ -299,12 +341,24 @@ namespace VStudioCraft.UI
                     // no world-state mutation). World updates — day cycle,
                     // fluid ticks, player movement, survival timers — all
                     // gate on !paused.
+                    //
+                    // Drops are special: when the inventory is the only
+                    // reason the world is halted (i.e. !IsPaused but
+                    // IsInventoryOpen), we still tick them so a Q / GUI
+                    // toss thrown from the inventory flies away in real
+                    // time instead of teleporting onto the floor the
+                    // moment the panel closes. The pause menu still
+                    // freezes drops fully (it's a true pause).
                     _renderer.UpdateStreaming();
                     _renderer.ProcessDirtyChunks(3);
                     if (!paused)
                     {
                         _renderer.AdvanceTime(dt);
                         UpdatePlayer(dt);
+                        _renderer.TickDrops(dt);
+                    }
+                    else if (!_renderer.IsPaused && _renderer.IsInventoryOpen)
+                    {
                         _renderer.TickDrops(dt);
                     }
 
@@ -492,6 +546,27 @@ namespace VStudioCraft.UI
                         Dispatcher.BeginInvoke(new Action(UpdateStatus));
                     }
                     break;
+                case Keys.Q:
+                    // Q drops one item; Shift+Q drops the whole stack.
+                    // Two contexts:
+                    //   • Inventory closed: source is the selected hotbar
+                    //     slot.
+                    //   • Inventory open: source is the cursor stack if
+                    //     non-empty, otherwise the slot under the mouse
+                    //     pointer (or the hovered hotbar slot in creative).
+                    //
+                    // The render thread drains the one-shot in RenderLoop;
+                    // it picks the right source based on IsInventoryOpen.
+                    // The pause menu still gates Q out (player is in a
+                    // modal that owns the keyboard).
+                    if (_renderer != null && !_renderer.IsPaused)
+                    {
+                        bool shiftHeld = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
+                        if (shiftHeld) _input.DropStackPressed = true;
+                        else           _input.DropOnePressed = true;
+                        e.SuppressKeyPress = true;
+                    }
+                    break;
                 case Keys.E:
                     // Open / close inventory. Esc also closes it (handled
                     // below) so the player has the same dismiss key as
@@ -672,6 +747,11 @@ namespace VStudioCraft.UI
                     var (px, py) = ToPhysicalCoord(e.X, e.Y);
                     _input.InventoryClickX = px;
                     _input.InventoryClickY = py;
+                    // Snapshot the shift modifier at click time. The render
+                    // thread drains the click on its own frame, so reading
+                    // ModifierKeys there would race with the UI thread.
+                    _input.InventoryClickShift =
+                        (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
                     _input.InventoryClickButton = e.Button == MouseButtons.Left ? 1 : 2;
                 }
                 return;
@@ -691,7 +771,8 @@ namespace VStudioCraft.UI
                     {
                         bool isSurvival = _renderer.GameMode == VStudioCraft.Game.GameMode.Survival;
                         var oact = OptionsMenu.HitTest(pw, ph, px, py,
-                            _renderer.HungerEnabled, isSurvival);
+                            _renderer.HungerEnabled, isSurvival,
+                            VStudioCraft.Game.Settings.UseRealTextures);
                         HandleOptionsMenuAction(oact);
                     }
                     else
@@ -760,6 +841,28 @@ namespace VStudioCraft.UI
                     break;
                 case OptionsMenu.ActionId.ToggleHunger:
                     _renderer.HungerEnabled = !_renderer.HungerEnabled;
+                    break;
+                case OptionsMenu.ActionId.ToggleRealTextures:
+                    // Persist to HKCU first so the next world load picks
+                    // up the new value at startup; then queue an atlas
+                    // rebuild on the GL thread (deletes the old texture
+                    // and uploads a fresh one from the new source). The
+                    // queue is drained at the top of RenderLoop, so the
+                    // swap happens between the click and the next frame
+                    // without a racy mid-draw GL state change.
+                    VStudioCraft.Game.Settings.UseRealTextures =
+                        !VStudioCraft.Game.Settings.UseRealTextures;
+                    // Make sure the BGRA decode has happened on the WPF
+                    // UI thread before we queue the GL-thread rebuild —
+                    // even if the constructor's prewarm got skipped or
+                    // the cache was somehow cleared, this guarantees
+                    // the toggle either populates the cache here or
+                    // marks it failed *now*, on the thread where WPF
+                    // imaging is happy. The label re-reads the status
+                    // immediately so the user sees the truth.
+                    VStudioCraft.Game.BlockTextures.PrewarmEmbeddedTerrain();
+                    var rendererRef = _renderer;
+                    _renderQueue.Enqueue(() => rendererRef.RebuildBlockAtlas());
                     break;
                 case OptionsMenu.ActionId.None:
                     break;

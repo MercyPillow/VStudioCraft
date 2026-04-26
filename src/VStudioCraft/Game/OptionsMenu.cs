@@ -20,6 +20,7 @@ namespace VStudioCraft.Game
             None,
             Back,
             ToggleHunger,
+            ToggleRealTextures,
         }
 
         private const int RowWidthBase   = 380;
@@ -55,18 +56,23 @@ namespace VStudioCraft.Game
         // disabled rows depend on game state (creative mode disables the
         // hunger toggle). Kept tiny so the per-frame allocation is cheap.
         public static Row[] BuildRows(int screenW, int screenH,
-            bool hungerEnabled, bool isSurvival)
+            bool hungerEnabled, bool isSurvival, bool useRealTextures)
         {
-            // 4 rows: SURVIVAL heading, hunger toggle, gap-as-section, BACK.
+            // SURVIVAL section: hunger toggle (disabled in creative).
+            // GRAPHICS section: alpha-textures toggle (always available).
+            // BACK button at the bottom.
             // Section heading height matches a row's height for layout simplicity;
             // it just isn't clickable.
             var labels = new[]
             {
-                new Row { Id = ActionId.None,         Label = "SURVIVAL",
+                new Row { Id = ActionId.None,               Label = "SURVIVAL",
                           IsSection = true },
-                new Row { Id = ActionId.ToggleHunger, Label = HungerLabel(hungerEnabled),
+                new Row { Id = ActionId.ToggleHunger,       Label = HungerLabel(hungerEnabled),
                           IsDisabled = !isSurvival },
-                new Row { Id = ActionId.Back,         Label = "BACK" },
+                new Row { Id = ActionId.None,               Label = "GRAPHICS",
+                          IsSection = true },
+                new Row { Id = ActionId.ToggleRealTextures, Label = TexturesLabel(useRealTextures) },
+                new Row { Id = ActionId.Back,               Label = "BACK" },
             };
 
             int rowW   = RowWidth(screenW, screenH);
@@ -96,9 +102,9 @@ namespace VStudioCraft.Game
         }
 
         public static ActionId HitTest(int screenW, int screenH, int mx, int my,
-            bool hungerEnabled, bool isSurvival)
+            bool hungerEnabled, bool isSurvival, bool useRealTextures)
         {
-            var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival);
+            var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival, useRealTextures);
             for (int i = 0; i < rows.Length; i++)
             {
                 var r = rows[i];
@@ -110,9 +116,10 @@ namespace VStudioCraft.Game
         }
 
         // Y of the title text's top edge, sitting just above the first row.
-        public static int TitleY(int screenW, int screenH, bool hungerEnabled, bool isSurvival)
+        public static int TitleY(int screenW, int screenH,
+            bool hungerEnabled, bool isSurvival, bool useRealTextures)
         {
-            var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival);
+            var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival, useRealTextures);
             int firstY = rows[0].Y;
             int titleScale = TitleFontScale(screenW, screenH);
             return firstY - TitleGap(screenW, screenH) - HotbarTextures.GlyphCellH * titleScale;
@@ -120,5 +127,25 @@ namespace VStudioCraft.Game
 
         private static string HungerLabel(bool on) =>
             on ? "HUNGER BAR: ON" : "HUNGER BAR: OFF";
+
+        private static string TexturesLabel(bool on)
+        {
+            // If the user has toggled ON but the embedded PNG can't be
+            // decoded (stale build with no resource, decoder threw, etc.)
+            // the renderer silently falls back to procedural — which
+            // looks identical to "OFF" in-game and produced the
+            // "I enable it but nothing happens" symptom. Surface the
+            // actual reason from BlockTextures.AlphaTerrainStatus so
+            // the label tells the truth and we can debug from a
+            // screenshot instead of guessing.
+            if (on && BlockTextures.AlphaTerrainAttempted && !BlockTextures.AlphaTerrainAvailable)
+            {
+                string status = BlockTextures.AlphaTerrainStatus;
+                return string.IsNullOrEmpty(status)
+                    ? "ALPHA TEXTURES: UNAVAILABLE"
+                    : "ALPHA TEXTURES: " + status.ToUpperInvariant();
+            }
+            return on ? "ALPHA TEXTURES: ON" : "ALPHA TEXTURES: OFF";
+        }
     }
 }

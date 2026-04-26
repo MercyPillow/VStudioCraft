@@ -366,6 +366,48 @@ void main()
         // single flag. Options doesn't add to this list because it only
         // ever opens on top of the pause menu (which is already halted).
         public bool IsWorldHalted => _isPaused || _isInventoryOpen;
+
+        // Rebuild the block atlas from whichever source the user has
+        // currently selected (procedural or embedded Alpha terrain.png).
+        // Called from the render thread when the Options toggle flips —
+        // we delete the previous GL texture handle, generate a fresh
+        // one, and let the existing shader uniform binding pick it up
+        // on the next frame (the uniform always samples texture unit 0,
+        // and we re-bind whatever lives in _atlasTexture there each
+        // draw, so swapping the handle is enough).
+        //
+        // Must run on the GL thread; the host queues a render-thread
+        // delegate when handling the Options click.
+        public void RebuildBlockAtlas()
+        {
+            // Build the replacement first, *then* swap. If we deleted the
+            // existing texture before creation and the new build failed
+            // (e.g. the embedded Alpha terrain.png is missing in a stale
+            // hive deployment) we'd leave the renderer pointing at handle
+            // 0 — sampler reads return black and the world goes dark on
+            // the next frame. By staging into `next` we keep the current
+            // atlas alive until we're sure of a working replacement.
+            int next;
+            if (Settings.UseRealTextures)
+            {
+                next = BlockTextures.CreateAtlasFromAlphaTerrain();
+                // Real-textures path can return 0 when the embedded PNG
+                // isn't present in this build — fall back to procedural
+                // so the toggle still produces *some* visible atlas.
+                if (next == 0) next = BlockTextures.CreateAtlas();
+            }
+            else
+            {
+                next = BlockTextures.CreateAtlas();
+            }
+            // Defensive: if even the procedural builder failed (extremely
+            // unlikely — it's all in-process pixel synthesis) keep the
+            // existing atlas rather than going black.
+            if (next == 0) return;
+            int old = _atlasTexture;
+            _atlasTexture = next;
+            if (old != 0) GL.DeleteTexture(old);
+        }
         private SkyRenderer _sky;
         private World _world;
         private ChunkJobSystem _jobs;
@@ -452,7 +494,27 @@ void main()
             _wireCubeMesh = BuildWireCubeMesh();
             _unitQuadMesh = BuildUnitQuadMesh();
             _breakCubeMesh = BuildBreakCubeMesh();
-            _atlasTexture = BlockTextures.CreateAtlas();
+            // Atlas source picked from the persisted user setting. The
+            // procedural atlas is the default; opt-in via the Options menu
+            // swaps to the embedded Alpha terrain.png slice. Both sources
+            // produce the same Texture2DArray shape so nothing else
+            // downstream needs to know which one is active.
+            //
+            // CreateAtlasFromAlphaTerrain returns 0 if the embedded PNG
+            // isn't in the assembly (older deployed build, missing
+            // resource on disk) — we silently fall back to the procedural
+            // atlas in that case so the game keeps rendering rather than
+            // going black-screen.
+            if (Settings.UseRealTextures)
+            {
+                _atlasTexture = BlockTextures.CreateAtlasFromAlphaTerrain();
+                if (_atlasTexture == 0)
+                    _atlasTexture = BlockTextures.CreateAtlas();
+            }
+            else
+            {
+                _atlasTexture = BlockTextures.CreateAtlas();
+            }
             _crackTexture = CrackTextures.CreateAtlas();
             _heartTexture = HudTextures.CreateHeartSheet();
             _drumstickTexture = HudTextures.CreateDrumstickSheet();
@@ -665,25 +727,18 @@ void main()
             // Fluid tick — every FluidTickInterval seconds drive a single
             // pass of source-driven outflow. The tick itself self-gates on
             // each chunk's HasActiveFluid flag, so a steady-state ocean
-            // costs nothing after the first scan. We only re-light chunks
-            // whose lava (light-emitting) cells changed; pure water flow is
-            // light-transparent and never alters the light field.
+            // costs nothing after the first scan. Both water and lava are
+            // light-transparent and emit 0, so the tick never has to drive
+            // a re-light pass — only a remesh of the chunks whose blocks
+            // changed. (Earlier revisions had lava emit 15, which forced a
+            // 3×3-chunk RecomputeRegion every spread step and stuttered the
+            // render thread; flowing lava and flowing water now share the
+            // same one-cost-per-tick model.)
             _fluidTickAccumulator += dt;
             while (_fluidTickAccumulator >= FluidTickInterval)
             {
                 _fluidTickAccumulator -= FluidTickInterval;
                 var result = FluidTick.Tick(_world);
-                // Lava emits 15 light, so a single advancing lava cell can
-                // brighten adjacent chunks. Relight a 3×3 region around each
-                // light-changed chunk so the glow doesn't stop at the border.
-                // Region recomputes overlap when nearby chunks both reported
-                // changes; the cost is bounded by edits-per-tick which is
-                // small in practice (lava only spreads a few cells per tick).
-                foreach (var key in result.LightChangedChunks)
-                {
-                    var touched = LightCalculator.RecomputeRegion(_world, key.x, key.z);
-                    foreach (var k in touched) _world.DirtyChunks.Add(k);
-                }
                 foreach (var key in result.ChangedChunks)
                 {
                     _world.DirtyChunks.Add(key);
@@ -1218,11 +1273,20 @@ void main()
                 // doesn't accumulate ridiculous velocity. Drag x/z lightly
                 // every frame so airborne drops decelerate and floor drops
                 // come to rest within a fraction of a second.
+                //
+                // Drag is rate-converted to be framerate-independent: the
+                // reference is 0.98^frame at 60 fps, so a high-fps machine
+                // doesn't decelerate the drop dramatically faster (which
+                // used to make tossed items dribble out at the player's
+                // feet). Math: drag-per-second = 0.98^60 ≈ 0.30, which
+                // means a thrown drop retains ~30% of its velocity after
+                // 1s and lands several blocks away.
                 d.Velocity.Y -= 20f * dt;
                 if (d.Velocity.Y < -20f) d.Velocity.Y = -20f;
                 d.Position += d.Velocity * dt;
-                d.Velocity.X *= 0.92f;
-                d.Velocity.Z *= 0.92f;
+                float airDrag = (float)System.Math.Pow(0.98, dt * 60.0);
+                d.Velocity.X *= airDrag;
+                d.Velocity.Z *= airDrag;
 
                 // Single-cell ground test: if the cell underneath the
                 // drop's bottom is solid, snap the drop up so its bottom
@@ -1237,9 +1301,11 @@ void main()
                     d.Position.Y = cyBot + 1f + DroppedItem.HalfSize;
                     if (d.Velocity.Y < 0f) d.Velocity.Y = 0f;
                     // Stronger horizontal drag once on ground so the drop
-                    // settles instead of skating.
-                    d.Velocity.X *= 0.6f;
-                    d.Velocity.Z *= 0.6f;
+                    // settles instead of skating. Same framerate-
+                    // independent treatment as the air drag.
+                    float groundDrag = (float)System.Math.Pow(0.6, dt * 60.0);
+                    d.Velocity.X *= groundDrag;
+                    d.Velocity.Z *= groundDrag;
                 }
 
                 // Pickup. Spawn-cooldown gates a 1-frame re-grab from the
@@ -1273,6 +1339,11 @@ void main()
         // (Alpha-style discard).
         public void HandleInventoryClick(int button, int mx, int my, int screenW, int screenH)
         {
+            HandleInventoryClick(button, mx, my, screenW, screenH, false);
+        }
+
+        public void HandleInventoryClick(int button, int mx, int my, int screenW, int screenH, bool shift)
+        {
             if (Input == null) return;
             var inv = Input.Inventory;
 
@@ -1283,7 +1354,8 @@ void main()
                 int hotSlot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my);
                 if (hotSlot >= 0)
                 {
-                    inv.HandleLeftClickSlot(hotSlot);
+                    if (shift) inv.HandleShiftClickSlot(hotSlot);
+                    else       inv.HandleLeftClickSlot(hotSlot);
                     return;
                 }
 
@@ -1321,8 +1393,10 @@ void main()
                 // For now both buttons run the same exchange — the right-
                 // click "split" semantics arrive when we add more granular
                 // stack ops. Single button covers the user's request
-                // (move items between hotbar and main).
-                inv.HandleLeftClickSlot(slot);
+                // (move items between hotbar and main). Shift+click bypasses
+                // the slot exchange and quick-moves to the opposite range.
+                if (shift) inv.HandleShiftClickSlot(slot);
+                else       inv.HandleLeftClickSlot(slot);
                 return;
             }
             // Outside the panel: drop the cursor stack into the world.
@@ -1334,24 +1408,142 @@ void main()
         }
 
         // Toss the cursor's stack into the world in front of the player.
-        // Used by clicks outside the inventory panel today; Q-drop will
-        // hook into the same path when it lands.
+        // Used by clicks outside the inventory panel and by Q-drop on the
+        // hotbar (via DropFromHotbar). Both paths route through ThrowStack
+        // so the "oomf" feel is identical.
         private void TossCursorStack()
         {
             if (Input == null) return;
             var stack = Input.Inventory.Cursor;
             if (stack.IsEmpty) return;
             Input.Inventory.Cursor = ItemStack.Empty;
+            ThrowStack(stack);
+        }
 
-            // Spawn just in front of the player at eye height with a
-            // forward kick + small upward arc so it lobs off the cliff /
-            // into the open instead of dribbling at the player's feet.
+        // Q-drop from the currently-selected hotbar slot. wholeStack=true
+        // (Shift+Q) ejects the whole stack; wholeStack=false (Q) splits one
+        // item off. No-op if the slot is empty. Same physics as the GUI
+        // toss — the drop spawns ~2 blocks in front of the player with a
+        // forward + upward kick so it actually flies away.
+        public void DropFromHotbar(bool wholeStack)
+        {
+            if (Input == null) return;
+            int idx = Input.HotbarIndex;
+            if (idx < 0 || idx >= Inventory.HotbarCount) return;
+            int slotIndex = Inventory.HotbarStart + idx;
+            DropFromSlotRef(ref Input.Inventory.Slots[slotIndex], wholeStack);
+        }
+
+        // Q-drop while the inventory screen is open. Mirrors hotbar Q-drop
+        // but resolves the source from the cursor stack (if non-empty) or
+        // the slot under the mouse pointer. Creative-mode catalog tiles
+        // aren't real slots — Q over a catalog tile is a no-op (the tile
+        // is an infinite source, dropping from it makes no sense). Catalog
+        // is read-only here.
+        public void DropFromInventoryHover(bool wholeStack, int screenW, int screenH)
+        {
+            if (Input == null) return;
+            var inv = Input.Inventory;
+
+            // Cursor stack always wins — it's the most explicit "I'm
+            // holding this" intent.
+            if (!inv.Cursor.IsEmpty)
+            {
+                if (wholeStack)
+                {
+                    var s = inv.Cursor;
+                    inv.Cursor = ItemStack.Empty;
+                    ThrowStack(s);
+                }
+                else
+                {
+                    var s = new ItemStack(inv.Cursor.Type, 1);
+                    var c = inv.Cursor; c.Count--;
+                    inv.Cursor = c.Count > 0 ? c : ItemStack.Empty;
+                    ThrowStack(s);
+                }
+                return;
+            }
+
+            int mx = Input.MenuMouseX;
+            int my = Input.MenuMouseY;
+
+            if (GameMode == GameMode.Creative)
+            {
+                // Only the hotbar row is a real slot in creative — main
+                // grid is the catalog. Q over the catalog is a no-op.
+                int hot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my);
+                if (hot < 0) return;
+                DropFromSlotRef(ref inv.Slots[hot], wholeStack);
+                return;
+            }
+
+            // Survival: any of the 45 inventory slots are fair game.
+            int slot = InventoryScreen.HitTest(screenW, screenH, mx, my);
+            if (slot < 0) return;
+            DropFromSlotRef(ref inv.Slots[slot], wholeStack);
+        }
+
+        // Shared "pop 1 or all from this slot and throw it" primitive.
+        private void DropFromSlotRef(ref ItemStack slot, bool wholeStack)
+        {
+            if (slot.IsEmpty) return;
+            ItemStack toss;
+            if (wholeStack)
+            {
+                toss = slot;
+                slot = ItemStack.Empty;
+            }
+            else
+            {
+                toss = new ItemStack(slot.Type, 1);
+                slot.Count--;
+                if (slot.Count <= 0) slot = ItemStack.Empty;
+            }
+            ThrowStack(toss);
+        }
+
+        // Shared throw primitive: spawn a DroppedItem at the player's hand
+        // (just outside the body, at eye height) and propel it along the
+        // camera-forward vector with a small upward arc. The drop visibly
+        // launches *from* the player and clearly leaves their pickup
+        // radius — not pre-teleported there, and not stopping at their
+        // feet either.
+        //
+        // Tuning: forward velocity 14 + framerate-independent air drag
+        // (0.98/frame at 60 fps) ⇒ several blocks of horizontal travel
+        // before the drop settles. Up-velocity 3.5 with gravity -20 gives
+        // a perceptible arc (peaks ~0.3 above eye, falls back to eye in
+        // ~0.35s, lands at feet around 0.75s).
+        // Pickup cooldown is generous so the player can keep walking after
+        // the throw without re-grabbing.
+        private void ThrowStack(ItemStack stack)
+        {
+            if (stack.IsEmpty) return;
             Vector3 fwd = Camera.Forward;
-            Vector3 spawn = Camera.Position + fwd * 0.6f;
+            // Just outside the player's body so the drop doesn't clip
+            // through the head model on spawn but still reads as "flying
+            // from me". If a wall is in our face, fall back to the camera
+            // origin so the drop spawns inside our own air rather than the
+            // wall.
+            Vector3 spawn = Camera.Position + fwd * 0.4f;
+            if (_world != null)
+            {
+                int sx = (int)System.Math.Floor(spawn.X);
+                int sy = (int)System.Math.Floor(spawn.Y);
+                int sz = (int)System.Math.Floor(spawn.Z);
+                if (BlockData.IsSolid(_world.GetBlock(sx, sy, sz)))
+                    spawn = Camera.Position;
+            }
             var d = new DroppedItem
             {
                 Position = spawn,
-                Velocity = fwd * 4f + new Vector3(0f, 1.5f, 0f),
+                // Velocity = (forward * speed) + small upward kick. The
+                // forward speed is what gives the throw its "vector feel":
+                // pitch the camera up and the drop arcs higher, look down
+                // and it slams into the ground at your feet — same shape
+                // the player intuitively expects from a thrown item.
+                Velocity = fwd * 14f + new Vector3(0f, 3.5f, 0f),
                 Stack = stack,
                 AgeSec = 0f,
                 // Longer cooldown than break-spawned drops so the player
@@ -2318,7 +2510,8 @@ void main()
             int my = Input?.MenuMouseY ?? -1;
 
             bool isSurvival = GameMode == GameMode.Survival;
-            var rows = OptionsMenu.BuildRows(width, height, HungerEnabled, isSurvival);
+            bool useReal = Settings.UseRealTextures;
+            var rows = OptionsMenu.BuildRows(width, height, HungerEnabled, isSurvival, useReal);
             int rowBorder = UiScale.S(2, width, height);
             int rowLabelScale = System.Math.Max(1, UiScale.S(2, width, height));
 
@@ -2370,7 +2563,7 @@ void main()
             // Title above the row stack.
             DrawString("OPTIONS", /*scale*/OptionsMenu.TitleFontScale(width, height),
                 /*centerX*/width / 2,
-                /*topY*/OptionsMenu.TitleY(width, height, HungerEnabled, isSurvival),
+                /*topY*/OptionsMenu.TitleY(width, height, HungerEnabled, isSurvival, useReal),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             GL.Enable(EnableCap.CullFace);

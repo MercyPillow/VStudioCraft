@@ -37,7 +37,6 @@ namespace VStudioCraft.Game
         Rose = 32,
         BrownMushroom = 33,
         RedMushroom = 34,
-        TallGrass = 35,
         FlowingWater = 36,
         FlowingLava = 37,
     }
@@ -70,7 +69,6 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
-                case BlockType.TallGrass:
                     return false;
                 default:
                     return true;
@@ -112,7 +110,6 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
-                case BlockType.TallGrass:
                     return false;
                 default:
                     return true;
@@ -120,8 +117,15 @@ namespace VStudioCraft.Game
         }
 
         // "Opaque" means "occludes the face of a neighbouring block." Used by
-        // the greedy mesher to decide whether to emit a face. Water (and later
-        // glass / leaves) are non-opaque so stone shows its face underwater.
+        // the greedy mesher to decide whether to emit a face. Water is
+        // non-opaque so stone shows its face underwater. Leaves and glass are
+        // non-opaque alpha-tested cubes — we render every face against
+        // anything (including another leaf or glass cube) so the cut-out
+        // regions in the front face reveal the leaves / panes / trunk / sky
+        // behind it, and trees + glass walls read with depth instead of as a
+        // single hollow shell. Inter-self face emission is forced on by the
+        // mesher even though `a == b` (see internalTransparent override and
+        // IsAlphaTestedCube).
         public static bool IsOpaque(BlockType t)
         {
             switch (t)
@@ -131,6 +135,8 @@ namespace VStudioCraft.Game
                 case BlockType.FlowingWater:
                 case BlockType.Lava:
                 case BlockType.FlowingLava:
+                case BlockType.Leaves:
+                case BlockType.Glass:
                 // Cross-sprite blocks don't fill the cell. If they were marked
                 // opaque the cube sweep would cull the faces of the block
                 // beneath them (so the grass under a torch loses its top face)
@@ -141,10 +147,31 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
-                case BlockType.TallGrass:
                     return false;
                 default:
                     return true;
+            }
+        }
+
+        // True for non-opaque cube blocks whose texture has binary alpha
+        // (gaps + solid pixels) and which therefore render through the
+        // OPAQUE stream's `discard` rather than the alpha-blended transparent
+        // stream. The mesher uses this for two things:
+        //   1. Inner-self faces (leaf-vs-leaf, glass-vs-glass) are always
+        //      emitted so adjacent blocks layer through each other.
+        //   2. The face stays on the opaque stream — back-to-front sorting
+        //      is unnecessary because alpha-discard is order-independent.
+        // Water/lava are non-opaque too, but their alpha is gradient
+        // (≈160), so they need true blending and stay off this list.
+        public static bool IsAlphaTestedCube(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Leaves:
+                case BlockType.Glass:
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -189,24 +216,29 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
-                case BlockType.TallGrass:
                     return true;
                 default:
                     return false;
             }
         }
 
-        // 0..15 luminous emission. Lava glows full bright. Torches sit at 14 —
-        // matches Alpha so a torch placed against a wall lights about 14 cells
-        // before fading out, leaving the 15th cell almost dark. Glowstone/fire
-        // slot in here.
+        // 0..15 luminous emission. Torches sit at 14 — matches Alpha so a
+        // torch placed against a wall lights about 14 cells before fading
+        // out, leaving the 15th cell almost dark. Glowstone/fire slot in here.
+        //
+        // Lava deliberately emits 0 here despite Alpha 1.1.2_01's vanilla
+        // value of 15: making lava a light source forced a 3×3-chunk
+        // RecomputeRegion every tick a flowing-lava cell advanced, which
+        // stuttered visibly on the render thread. Water (light-transparent,
+        // emission 0) had no such hit. The fluid sim is otherwise identical
+        // for both fluids — keeping the lighting path identical too is the
+        // simplest way to make lava perform like water. Lava still reads as
+        // lit because its own tile is bright; it just doesn't propagate
+        // brightness to neighbours.
         public static int LightEmission(BlockType t)
         {
             switch (t)
             {
-                case BlockType.Lava:
-                case BlockType.FlowingLava:
-                    return 15;
                 case BlockType.Torch:
                     return 14;
                 default:
@@ -269,7 +301,6 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
-                case BlockType.TallGrass:
                     return 0f;
                 // Air/fluids aren't raycast-targetable so callers shouldn't
                 // hit this; return 0 anyway as a defensive default.
@@ -359,8 +390,6 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileBrownMushroom;
                 case BlockType.RedMushroom:
                     return BlockTextures.TileRedMushroom;
-                case BlockType.TallGrass:
-                    return BlockTextures.TileTallGrass;
                 default:
                     return BlockTextures.TileStone;
             }

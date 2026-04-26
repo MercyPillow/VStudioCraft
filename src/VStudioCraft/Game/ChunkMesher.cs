@@ -579,7 +579,16 @@ namespace VStudioCraft.Game
                     // family check the inner faces between a sea-source cell
                     // and the falling-water cell that springs out of it would
                     // form a visible square in the water.
-                    bool internalTransparent = !aOpaque && (
+                    //
+                    // Alpha-tested cubes (leaves, glass) are deliberately
+                    // exempt: they're non-opaque (so neighbours' faces against
+                    // them are kept) but they DO want their inner-vs-inner
+                    // face emitted, because the cut-out regions in the front
+                    // face are what let you see the back face. Skipping the
+                    // shared face would collapse a tree canopy or a stack of
+                    // glass into a single hollow shell.
+                    bool aIsAlphaTested = !aAir && BlockData.IsAlphaTestedCube((BlockType)a);
+                    bool internalTransparent = !aOpaque && !aIsAlphaTested && (
                         a == b ||
                         (a != (byte)BlockType.Air && b != (byte)BlockType.Air &&
                          BlockData.FluidGroup((BlockType)a) != 0 &&
@@ -622,7 +631,13 @@ namespace VStudioCraft.Game
                         // Light occupies a full byte so the sky-or-block max can
                         // round-trip cleanly.
                         int key = ((layer + 1) & 0xFFFF) | ((lightPacked & 0xFF) << 16);
-                        if (!aOpaque) key = -key;
+                        // Negate to route into the alpha-blended transparent
+                        // stream. Alpha-tested cubes (leaves, glass) are
+                        // non-opaque but still belong on the opaque stream —
+                        // their texture is binary alpha (gaps + solid pixels)
+                        // so the shader's `discard` is the right model, not
+                        // back-to-front blending.
+                        if (!aOpaque && !aIsAlphaTested) key = -key;
                         _mask[j * dU + i] = key;
                     }
                     else

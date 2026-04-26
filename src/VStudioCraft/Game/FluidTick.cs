@@ -5,17 +5,23 @@ namespace VStudioCraft.Game
 {
     // Source-driven fluid propagation, run every tick interval by the renderer.
     //
-    // Alpha 1.1.2_01 fluids: water sources flow outward up to 7 cells
-    // horizontally + arbitrarily downward; lava flows up to 3 cells in
-    // overworld. Cells produced by spread are "flowing" variants — broken by
-    // any block placed into them, vanish when the source is removed.
+    // Water and lava share one code path here. The two fluids differ only in
+    // their textures and the BlockType bytes their sources produce
+    // (Water/FlowingWater vs Lava/FlowingLava); spread reach, fall behaviour,
+    // drain rules, and per-tick performance characteristics are identical.
+    // Earlier revisions had lava emit block-light, which forced a 3×3-chunk
+    // RecomputeRegion every tick a flowing-lava cell advanced and stuttered
+    // visibly on the render thread — fluid sim looked symmetric but lava paid
+    // a much heavier post-tick bill. Lava now emits 0 like water, so both
+    // fluids run identical machinery and a flowing river of either looks the
+    // same on a perf trace.
     //
     // What we implement here:
     //  - Sources (Water, Lava) flow downward into Air → produces FlowingWater /
     //    FlowingLava in the cell below.
-    //  - Sources flow into the four horizontal neighbours up to a per-fluid
-    //    horizontal reach (water=7, lava=3 cells away). Reach is encoded in
-    //    the per-cell metadata's low 4 bits as "remaining range to spread".
+    //  - Sources flow into the four horizontal neighbours up to FluidReach
+    //    cells away. Reach is encoded in the per-cell metadata's low 4 bits
+    //    as "remaining range to spread".
     //  - Flowing fluid cells continue propagation: still spread downward
     //    (reach refreshed to fall again) and horizontally if their remaining
     //    range > 0.
@@ -28,36 +34,26 @@ namespace VStudioCraft.Game
     // creates a new air-fluid boundary.
     //
     // What we DO NOT implement yet (logged in features.md):
-    //  - Drain on source removal — once placed, flowing cells persist until
-    //    manually broken.
-    //  - Visual height variation — flowing cells render as full cubes here.
+    //  - Visual height variation for non-falling cells (flowing cells render
+    //    as full cubes; the lid pass already handles surface fluid).
     //  - Water-meets-lava block formation (cobblestone / stone / obsidian).
     //  - Level-based animated textures.
     internal static class FluidTick
     {
-        // Horizontal reach. Encoded into the per-cell metadata: a fresh
-        // source-adjacent cell starts at WaterReach-1 (water) or LavaReach-1
-        // (lava), each step decrements until 0 stops further horizontal
-        // spread. Vertical fall always refreshes to full reach (matches
-        // Alpha — water down a cliff fans out at full reach again).
-        //
-        // Alpha's water reach is 7 cells (lava 3). With the cliff-edge rule
-        // (no horizontal spread when the cell below is air) the wider reach
-        // no longer floods waterfalls down a column; it just gives ground
-        // pools the authentic Alpha footprint.
-        private const int WaterReach = 7;
-        private const int LavaReach  = 3;
+        // Horizontal reach, applied to both fluids. Encoded into the per-cell
+        // metadata: a fresh source-adjacent cell starts at FluidReach-1, each
+        // step decrements until 0 stops further horizontal spread. Vertical
+        // fall always refreshes to full reach (water/lava down a cliff fans
+        // out at full reach again).
+        private const int FluidReach = 7;
 
 
-        // Result of a tick: which chunks had any block change, and which had
-        // a *light-affecting* change (lava family). Water never changes light
-        // because IsLightTransparent(Water)/IsLightTransparent(FlowingWater)
-        // are both true — sky and block light flow through unchanged. So a
-        // pure water tick can skip the full-chunk relight altogether.
+        // Result of a tick: chunks that had any block change. Both fluids are
+        // light-transparent and emit 0, so neither alters the light field —
+        // there's no separate "light changed" set to track.
         public struct TickResult
         {
             public HashSet<(int x, int z)> ChangedChunks;
-            public HashSet<(int x, int z)> LightChangedChunks;
         }
 
         // Reusable scratch buffers — the tick fires four times a second, and
@@ -74,7 +70,6 @@ namespace VStudioCraft.Game
         private static readonly List<(Chunk c, int lx, int y, int lz, int group)> _drains
             = new List<(Chunk, int, int, int, int)>(64);
         private static readonly HashSet<Chunk> _producedWrites = new HashSet<Chunk>();
-        private static readonly HashSet<Chunk> _producedLavaWrites = new HashSet<Chunk>();
         private static readonly List<Chunk> _activeChunks = new List<Chunk>(64);
 
         // Run a single tick over every active chunk in the world. Returns
@@ -85,7 +80,6 @@ namespace VStudioCraft.Game
             _writes.Clear();
             _drains.Clear();
             _producedWrites.Clear();
-            _producedLavaWrites.Clear();
             _activeChunks.Clear();
 
             // Snapshot the active chunks up-front. Iterating
@@ -136,19 +130,16 @@ namespace VStudioCraft.Game
                 d.c.IsModified = true;
                 d.c.HasActiveFluid = true;
                 _producedWrites.Add(d.c);
-                if (d.group == 2) _producedLavaWrites.Add(d.c);
             }
 
-            // Build the result sets. Chunks that produced no writes AND
+            // Build the result set. Chunks that produced no writes AND
             // weren't written into by a neighbour go to inactive — their
             // fluid has reached steady state until something disturbs it.
             // (The "written into by neighbour" case is captured because
             //  SpreadHoriz adds the destination chunk to _producedWrites
             //  even when it isn't in _activeChunks.)
             var changed = new HashSet<(int x, int z)>();
-            var lightChanged = new HashSet<(int x, int z)>();
             foreach (var c in _producedWrites) changed.Add((c.ChunkX, c.ChunkZ));
-            foreach (var c in _producedLavaWrites) lightChanged.Add((c.ChunkX, c.ChunkZ));
 
             // Self-deactivate any active chunk that didn't produce/receive
             // any writes this tick — it's at steady state.
@@ -158,7 +149,7 @@ namespace VStudioCraft.Game
                 if (!_producedWrites.Contains(c)) c.HasActiveFluid = false;
             }
 
-            return new TickResult { ChangedChunks = changed, LightChangedChunks = lightChanged };
+            return new TickResult { ChangedChunks = changed };
         }
 
         // Mark a chunk + its 4 neighbours as having active fluid. Called by
@@ -188,9 +179,7 @@ namespace VStudioCraft.Game
 
                 bool isSource = (b == BlockType.Water || b == BlockType.Lava);
                 bool isFalling = !isSource && (meta[idx] & 0x10) != 0;
-                int reach = isSource
-                    ? (group == 1 ? WaterReach : LavaReach)
-                    : (meta[idx] & 0x0F);
+                int reach = isSource ? FluidReach : (meta[idx] & 0x0F);
 
                 // Landing conversion: a falling cell that finds solid ground
                 // beneath it stops being "falling" — it becomes the wellhead
@@ -240,8 +229,7 @@ namespace VStudioCraft.Game
                     if (below == BlockType.Air)
                     {
                         belowAir = true;
-                        int fallReach = (group == 1 ? WaterReach : LavaReach);
-                        byte fallMeta = (byte)((fallReach & 0x0F) | 0x10); // bit 4 = falling
+                        byte fallMeta = (byte)((FluidReach & 0x0F) | 0x10); // bit 4 = falling
                         StageWrite(chunk, x, y - 1, z, (byte)flowing, fallMeta, group);
                     }
                 }
@@ -274,7 +262,10 @@ namespace VStudioCraft.Game
             // Keep the chunk active for next tick — it just produced a fresh
             // boundary that will need follow-up propagation.
             c.HasActiveFluid = true;
-            if (group == 2) _producedLavaWrites.Add(c);
+            // group is unused now that water and lava share the same code
+            // path; kept on the signature so the call sites stay symmetric
+            // with future per-fluid hooks (e.g. water-meets-lava → stone).
+            _ = group;
         }
 
         private static void SpreadHoriz(

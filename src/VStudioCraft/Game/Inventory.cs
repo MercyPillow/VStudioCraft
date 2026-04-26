@@ -150,5 +150,63 @@ namespace VStudioCraft.Game
             Cursor = slot;
             slot = cursor;
         }
+
+        // Shift+click transfer (Alpha quick-move). If the clicked slot is on
+        // the hotbar, the stack is pushed into the main grid; if it's on the
+        // main grid, it's pushed onto the hotbar. The destination range is
+        // scanned in order:
+        //   1. Same-type partial stacks first (merge until full).
+        //   2. First empty slot.
+        // For hotbar→main we walk the main grid top-left to bottom-right
+        // (slots 0..35); for main→hotbar we walk the hotbar 1→9 (slots
+        // 36..44). Anything that doesn't fit stays in the source slot —
+        // canonical Alpha behaviour and matches the user's "move to first
+        // unused slot" request.
+        public void HandleShiftClickSlot(int slotIndex)
+        {
+            if (slotIndex < 0 || slotIndex >= TotalSlots) return;
+            ref var src = ref Slots[slotIndex];
+            if (src.IsEmpty) return;
+
+            int destStart, destEnd;
+            if (slotIndex >= HotbarStart)
+            {
+                // Hotbar → main grid (top-left scan)
+                destStart = 0;
+                destEnd   = MainCount;
+            }
+            else
+            {
+                // Main grid → hotbar (1..9 scan)
+                destStart = HotbarStart;
+                destEnd   = HotbarStart + HotbarCount;
+            }
+
+            // Pass 1 — top up matching partial stacks in destination range.
+            for (int i = destStart; i < destEnd; i++)
+            {
+                ref var d = ref Slots[i];
+                if (d.IsEmpty || d.Type != src.Type) continue;
+                int room = ItemStack.MaxCount - d.Count;
+                if (room <= 0) continue;
+                int take = Math.Min(room, src.Count);
+                d.Count += take;
+                src.Count -= take;
+                if (src.Count == 0) { src = ItemStack.Empty; return; }
+            }
+
+            // Pass 2 — first empty slot in destination range.
+            for (int i = destStart; i < destEnd; i++)
+            {
+                ref var d = ref Slots[i];
+                if (!d.IsEmpty) continue;
+                d = src;
+                src = ItemStack.Empty;
+                return;
+            }
+            // Out of room in the destination range — leave the source slot
+            // untouched (no half-moves: if the player wanted a partial they
+            // can left-click).
+        }
     }
 }

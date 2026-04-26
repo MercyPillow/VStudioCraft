@@ -434,14 +434,15 @@ namespace VStudioCraft.Game
                 if (chunk.RawBlocks[placeIdx] != (byte)BlockType.Air) continue;
                 if (chunk.RawBlocks[groundIdx] != (byte)BlockType.Grass) continue;
 
-                // Roll the type. Tall grass dominates; flowers next; mushrooms
-                // are rare on the open surface (alpha placed brown/red ones
-                // mostly in dim places — we still surface-spawn a few so the
-                // world isn't barren of them until we add caves-spawn).
+                // Roll the type. Alpha 1.1.2_01 had no tall grass yet — the
+                // surface flora set is just flowers + mushrooms. Dandelions
+                // dominate (commonest in alpha grass plains), roses next,
+                // mushrooms rare (alpha placed brown/red ones mostly in dim
+                // places — we still surface-spawn a few so the world isn't
+                // barren of them until we add cave-spawn).
                 BlockType pick;
                 int r = rng.Next(100);
-                if (r < 55)      pick = BlockType.TallGrass;
-                else if (r < 75) pick = BlockType.Dandelion;
+                if (r < 55)      pick = BlockType.Dandelion;
                 else if (r < 90) pick = BlockType.Rose;
                 else if (r < 96) pick = BlockType.BrownMushroom;
                 else             pick = BlockType.RedMushroom;

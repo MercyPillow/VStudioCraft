@@ -1,5 +1,13 @@
 using System;
+using System.Drawing;
+using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using OpenTK.Graphics.OpenGL;
+// Aliased to avoid collision with OpenTK.Graphics.OpenGL.PixelFormat,
+// which is used pervasively in this file for GL.TexImage3D etc.
+using GdiPixelFormat = System.Drawing.Imaging.PixelFormat;
+using GdiImageLockMode = System.Drawing.Imaging.ImageLockMode;
 
 namespace VStudioCraft.Game
 {
@@ -10,7 +18,7 @@ namespace VStudioCraft.Game
     internal static class BlockTextures
     {
         public const int TileSize = 16;
-        public const int LayerCount = 39;
+        public const int LayerCount = 38;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -50,7 +58,6 @@ namespace VStudioCraft.Game
         public const int TileRose = 35;
         public const int TileBrownMushroom = 36;
         public const int TileRedMushroom = 37;
-        public const int TileTallGrass = 38;
 
         // A 2D texture array — one layer per tile. Greedy meshing can emit merged
         // quads with UVs exceeding [0,1]; with a layered texture and Repeat wrap the
@@ -105,7 +112,6 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileRose, GenerateRose);
             UploadLayer(layerPixels, TileBrownMushroom, GenerateBrownMushroom);
             UploadLayer(layerPixels, TileRedMushroom, GenerateRedMushroom);
-            UploadLayer(layerPixels, TileTallGrass, GenerateTallGrass);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -113,6 +119,406 @@ namespace VStudioCraft.Game
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
             return tex;
+        }
+
+        // Tile coordinates in Alpha 1.1.2_01's terrain.png. Format is
+        // (col, row), each cell 16×16 pixels in a 16×16 grid (256×256
+        // total). The embedded PNG is sliced once at atlas-build time
+        // and uploaded layer-per-layer into the same Texture2DArray
+        // shape as the procedural atlas, so the rest of the renderer
+        // doesn't need to know which one is active.
+        //
+        // Coordinates picked to match the canonical Alpha layout. A few
+        // procedural tiles don't have a perfect 1:1 in vanilla Alpha
+        // (clay, redstone ore, tall grass) — those use the closest
+        // semantic match from the same era.
+        private static readonly (int col, int row)[] AlphaTileCoords = new (int, int)[LayerCount]
+        {
+            /* TileGrassTop          */ (0, 0),
+            /* TileGrassSide         */ (3, 0),
+            /* TileDirt              */ (2, 0),
+            /* TileStone             */ (1, 0),
+            /* TileSand              */ (2, 1),
+            /* TileCobblestone       */ (0, 1),
+            /* TileBedrock           */ (1, 1),
+            /* TileGravel            */ (3, 1),
+            /* TileClay              */ (8, 4),
+            /* TileCoalOre           */ (2, 2),
+            /* TileIronOre           */ (1, 2),
+            /* TileGoldOre           */ (0, 2),
+            /* TileDiamondOre        */ (2, 3),
+            /* TileRedstoneOre       */ (3, 3),
+            /* TileLogTop            */ (5, 1),
+            /* TileLogSide           */ (4, 1),
+            /* TilePlanks            */ (4, 0),
+            /* TileLeaves            */ (4, 3),
+            /* TileWater             */ (15, 13),
+            /* TileLava              */ (15, 15),
+            /* TileGoldBlock         */ (7, 1),
+            /* TileIronBlock         */ (6, 1),
+            /* TileDiamondBlock      */ (8, 1),
+            /* TileBricks            */ (7, 0),
+            /* TileTntTop            */ (9, 0),
+            /* TileTntBottom         */ (10, 0),
+            /* TileTntSide           */ (8, 0),
+            /* TileBookshelfSide     */ (3, 2),
+            /* TileMossyCobblestone  */ (4, 2),
+            /* TileObsidian          */ (5, 2),
+            /* TileSponge            */ (0, 3),
+            /* TileGlass             */ (1, 3),
+            /* TileWool              */ (0, 4),
+            /* TileTorch             */ (0, 5),
+            /* TileDandelion         */ (13, 0),
+            /* TileRose              */ (12, 0),
+            /* TileBrownMushroom     */ (13, 1),
+            /* TileRedMushroom       */ (12, 1),
+        };
+
+        // Image-based atlas: read the embedded Alpha terrain.png, slice
+        // it into 16×16 tiles using AlphaTileCoords, and upload one
+        // layer per tile in the same order as CreateAtlas. The result
+        // is a drop-in replacement for the procedural atlas — same
+        // dimensions, same layer count, same wrap/filter — so callers
+        // can swap between them at runtime without needing to rebuild
+        // shaders or vertex layouts.
+        //
+        // Returns 0 if the embedded resource isn't present (caller is
+        // expected to fall back to the procedural atlas) — this keeps
+        // older deployed builds that haven't had the PNG re-embedded
+        // from going black-screen. Any other failure (decoder fault,
+        // GL upload error) propagates as an exception.
+        public static int CreateAtlasFromAlphaTerrain()
+        {
+            byte[] bgra; int srcW, srcH;
+            if (!TryDecodeEmbeddedTerrain(out bgra, out srcW, out srcH))
+                return 0;
+
+            int tex = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2DArray, tex);
+            GL.TexImage3D(
+                TextureTarget.Texture2DArray, 0, PixelInternalFormat.Rgba,
+                TileSize, TileSize, LayerCount, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+
+            var layerPixels = new byte[TileSize * TileSize * 4];
+            for (int layer = 0; layer < LayerCount; layer++)
+            {
+                var (col, row) = AlphaTileCoords[layer];
+                CopyTile(bgra, srcW, srcH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
+
+            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+            return tex;
+        }
+
+        // Cached decoded buffer. The atlas builder runs on the GL render
+        // thread, but WPF imaging has thread-affinity quirks — the safest
+        // way to dodge them is to decode once and reuse the byte buffer
+        // for any subsequent rebuild. The cache is process-scoped: every
+        // world-load on the same VS session gets the already-decoded
+        // pixels with no PNG decoder pass at all.
+        private static byte[] s_cachedBgra;
+        private static int s_cachedW, s_cachedH;
+        private static bool s_decodeAttempted;
+        private static bool s_decodeFailed;
+        // Surfaced through AlphaTerrainStatus so we can show the actual
+        // failure reason in the Options label instead of a generic
+        // "UNAVAILABLE" — we were guessing at the failure cause and
+        // chasing the wrong fix; a visible message turns this into
+        // a one-click diagnosis next time it happens.
+        private static string s_decodeStatus;
+
+        // Decode the embedded PNG into a tightly-packed BGRA byte array.
+        // WPF's BitmapDecoder is the simplest decoder we already have a
+        // reference to (PresentationCore); System.Drawing would also
+        // work but adds platform baggage. The PNG ships in the assembly
+        // as a manifest resource — preferred name is
+        // "VStudioCraft.Assets.alpha_terrain.png" (set via the project's
+        // <LogicalName>) but we tolerate the default-derived name too,
+        // which is what some build paths or older csproj edits produce.
+        //
+        // Returns false if no candidate resource is found in the
+        // assembly's manifest, or if the decoder throws (a stale build
+        // or unusual WPF host setup) — caller falls back to procedural
+        // art rather than crashing the render thread.
+        private static bool TryDecodeEmbeddedTerrain(out byte[] bgra, out int width, out int height)
+        {
+            // Fast path: reuse cached buffer once we've decoded once.
+            if (s_cachedBgra != null)
+            {
+                bgra = s_cachedBgra; width = s_cachedW; height = s_cachedH;
+                return true;
+            }
+            // Don't keep retrying a decode that's already failed — once
+            // is enough; subsequent calls just take the fallback.
+            if (s_decodeFailed)
+            {
+                bgra = null; width = 0; height = 0;
+                return false;
+            }
+            s_decodeAttempted = true;
+
+            bgra = null; width = 0; height = 0;
+            try
+            {
+                bool ok = TryDecodeEmbeddedTerrainCore(out bgra, out width, out height);
+                if (!ok && s_decodeStatus == null)
+                    s_decodeStatus = "no resource";
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                // Capture the type+first-line of the message so the
+                // Options label can surface it. We don't include the
+                // full message because it may contain paths/locale text
+                // that won't fit; the type alone narrows the cause to
+                // GDI+ vs IO vs reflection vs something stranger.
+                s_decodeFailed = true;
+                s_decodeStatus = ex.GetType().Name;
+                bgra = null; width = 0; height = 0;
+                return false;
+            }
+        }
+
+        // GDI+ decoder. We previously used WPF's BitmapDecoder, but in
+        // some VS hosting setups it threw mid-decode (CopyPixels on a
+        // non-Dispatcher thread, or codec initialisation that hadn't
+        // run yet) and silently fell back to procedural. System.Drawing
+        // is already referenced for the WinForms host, has no thread
+        // affinity and no Dispatcher dependency, and locks the bitmap's
+        // pixel data directly so we get raw BGRA out the other side
+        // without going through WPF's imaging stack.
+        //
+        // Source-of-bytes precedence:
+        //   1. AlphaTerrainData.Base64 — a string constant compiled into
+        //      the assembly's IL. This is the primary source because
+        //      <EmbeddedResource> turned out to be fragile in some
+        //      developer VS configurations (the resource silently went
+        //      missing from the deployed DLL); a const string is
+        //      something the compiler simply cannot drop.
+        //   2. Embedded manifest resource — kept as a secondary source
+        //      so existing builds that still ship the resource keep
+        //      working, and so a future regenerated PNG can be picked
+        //      up from the resource without re-running the codegen
+        //      script for the base64 constant.
+        private static bool TryDecodeEmbeddedTerrainCore(out byte[] bgra, out int width, out int height)
+        {
+            bgra = null; width = 0; height = 0;
+
+            byte[] pngBytes = TryLoadPngBytes();
+            if (pngBytes == null) return false;
+
+            using (var src = new MemoryStream(pngBytes))
+            using (var bmp = new Bitmap(src))
+            {
+                width  = bmp.Width;
+                height = bmp.Height;
+
+                var rect = new Rectangle(0, 0, width, height);
+                var data = bmp.LockBits(rect, GdiImageLockMode.ReadOnly, GdiPixelFormat.Format32bppArgb);
+                try
+                {
+                    int dstStride = width * 4;
+                    bgra = new byte[dstStride * height];
+                    for (int y = 0; y < height; y++)
+                    {
+                        IntPtr rowPtr = IntPtr.Add(data.Scan0, y * data.Stride);
+                        Marshal.Copy(rowPtr, bgra, y * dstStride, dstStride);
+                    }
+                }
+                finally
+                {
+                    bmp.UnlockBits(data);
+                }
+            }
+
+            // Cache the decoded buffer so subsequent toggles reuse it
+            // instead of re-running the decoder.
+            s_cachedBgra = bgra;
+            s_cachedW = width;
+            s_cachedH = height;
+            return true;
+        }
+
+        // Resolve PNG bytes from the most reliable source available.
+        // Returns null only if both the inlined base64 constant and
+        // the embedded manifest resource are absent — at which point
+        // we genuinely have no terrain data and the caller should
+        // fall back to procedural.
+        private static byte[] TryLoadPngBytes()
+        {
+            // 1. Inline base64 constant — present unconditionally in
+            //    every build because it's IL, not a resource. This
+            //    path makes the toggle work regardless of whatever
+            //    VS configuration ate the embedded resource last time.
+            try
+            {
+                var b64 = AlphaTerrainData.Base64;
+                if (!string.IsNullOrEmpty(b64))
+                    return Convert.FromBase64String(b64);
+            }
+            catch
+            {
+                // Fall through to manifest resource path — extremely
+                // unlikely (the constant is valid base64 by codegen
+                // construction) but we don't want a corrupted constant
+                // to take out the whole alpha-textures option.
+            }
+
+            // 2. Manifest resource fallback (legacy / belt-and-braces).
+            var asm = Assembly.GetExecutingAssembly();
+
+            // Resource-name resolution order:
+            //   1. The LogicalName we set in the csproj (preferred).
+            //   2. Default-mapped name (RootNamespace + path), in case
+            //      LogicalName wasn't picked up by the build.
+            //   3. Anything containing "alpha_terrain.png" — last-ditch
+            //      heuristic so a future rename still works without
+            //      touching this code.
+            string[] candidates =
+            {
+                "VStudioCraft.Assets.alpha_terrain.png",
+                "VStudioCraft.Game.Assets.alpha_terrain.png",
+            };
+            string match = null;
+            var allNames = asm.GetManifestResourceNames();
+            foreach (var c in candidates)
+            {
+                foreach (var n in allNames)
+                {
+                    if (string.Equals(n, c, StringComparison.OrdinalIgnoreCase))
+                    {
+                        match = n;
+                        break;
+                    }
+                }
+                if (match != null) break;
+            }
+            if (match == null)
+            {
+                foreach (var n in allNames)
+                {
+                    if (n.IndexOf("alpha_terrain", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        match = n;
+                        break;
+                    }
+                }
+            }
+            if (match == null) return null;
+
+            try
+            {
+                using (var s = asm.GetManifestResourceStream(match))
+                {
+                    if (s == null) return null;
+                    using (var ms = new MemoryStream())
+                    {
+                        s.CopyTo(ms);
+                        return ms.ToArray();
+                    }
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // Eagerly decode the embedded terrain on a known-good thread
+        // (typically the WPF UI thread at world-load time). Calling this
+        // before any toggle ensures the cache is populated, so the GL
+        // render-thread rebuild later just reads the cached BGRA buffer
+        // and never touches the WPF imaging stack itself. Safe to call
+        // multiple times — it's a no-op once the cache is populated.
+        public static void PrewarmEmbeddedTerrain()
+        {
+            if (s_cachedBgra != null || s_decodeFailed) return;
+            byte[] _; int __, ___;
+            TryDecodeEmbeddedTerrain(out _, out __, out ___);
+        }
+
+        // Diagnostic surface for the Options menu. After PrewarmEmbeddedTerrain
+        // runs (or after the first toggle attempt), this reflects whether the
+        // alpha terrain.png is actually usable — false here means the toggle
+        // is a no-op and the user is silently getting procedural in both
+        // ON and OFF positions, which is exactly the "I enable it but
+        // nothing changes" symptom we're trying to make legible.
+        public static bool AlphaTerrainAvailable => s_cachedBgra != null;
+        public static bool AlphaTerrainAttempted => s_decodeAttempted || s_cachedBgra != null;
+        public static bool AlphaTerrainFailed => s_decodeFailed;
+        // Short human-readable status (exception type, "no resource",
+        // or null when not yet attempted). Surfaced in OptionsMenu
+        // when the toggle would otherwise show a misleading state.
+        public static string AlphaTerrainStatus => s_decodeStatus;
+
+        // Copy a single 16×16 tile from the source BGRA buffer at
+        // (col*16, row*16) into a tightly-packed RGBA buffer suitable
+        // for GL upload. Two transforms happen here:
+        //
+        //   1. BGRA → RGBA channel swap (PNG decoder gives us BGRA;
+        //      GL upload expects RGBA in our pipeline).
+        //
+        //   2. Vertical flip — PNG row 0 is the *top* of the source
+        //      tile, but the procedural atlas (and therefore the mesh
+        //      UVs that drive the renderer) treats data row 0 as the
+        //      *bottom* of the rendered face (see comments on
+        //      GenerateGrassSide / GenerateTorch — the green fringe
+        //      and flame head sit at high y to land at the *top* of
+        //      a face). Without this flip, terrain.png sliced tiles
+        //      would render upside-down: grass-side fringe at the
+        //      bottom, torches pointing down, flowers inverted.
+        private static void CopyTile(byte[] srcBgra, int srcW, int srcH, int col, int row, byte[] dstRgba)
+        {
+            int x0 = col * TileSize;
+            int y0 = row * TileSize;
+            // Bounds check: an out-of-range coordinate (e.g. someone
+            // edits AlphaTileCoords past 16×16) should produce a magenta
+            // tile rather than crash, so the bad mapping is visible
+            // in-game rather than silently failing.
+            if (x0 < 0 || y0 < 0 || x0 + TileSize > srcW || y0 + TileSize > srcH)
+            {
+                for (int i = 0; i < dstRgba.Length; i += 4)
+                {
+                    dstRgba[i + 0] = 255;
+                    dstRgba[i + 1] = 0;
+                    dstRgba[i + 2] = 255;
+                    dstRgba[i + 3] = 255;
+                }
+                return;
+            }
+
+            int srcStride = srcW * 4;
+            for (int ty = 0; ty < TileSize; ty++)
+            {
+                // Read the source row in PNG order (top-to-bottom)…
+                int srcRow = (y0 + ty) * srcStride + x0 * 4;
+                // …but write to the dst row that mirrors it vertically,
+                // so high-y in source ends up at low-y in dst (= bottom
+                // of rendered face), matching procedural convention.
+                int dstY = TileSize - 1 - ty;
+                int dstRow = dstY * TileSize * 4;
+                for (int tx = 0; tx < TileSize; tx++)
+                {
+                    byte b = srcBgra[srcRow + tx * 4 + 0];
+                    byte g = srcBgra[srcRow + tx * 4 + 1];
+                    byte r = srcBgra[srcRow + tx * 4 + 2];
+                    byte a = srcBgra[srcRow + tx * 4 + 3];
+                    dstRgba[dstRow + tx * 4 + 0] = r;
+                    dstRgba[dstRow + tx * 4 + 1] = g;
+                    dstRgba[dstRow + tx * 4 + 2] = b;
+                    dstRgba[dstRow + tx * 4 + 3] = a;
+                }
+            }
         }
 
         private delegate void LayerFiller(byte[] pixels);
@@ -563,8 +969,14 @@ namespace VStudioCraft.Game
 
         private static void GenerateLeaves(byte[] pixels)
         {
-            // Fast-graphics-style opaque leaves: dense green noise with some
-            // near-black specks reading as gaps through the canopy.
+            // Fancy-graphics-style alpha-tested leaves: dense green noise
+            // punched through with ~25% holes so adjacent leaf blocks read
+            // through each other as a layered canopy. Matches the alpha (4,3)
+            // tile's silhouette behaviour — the shader's `if (tex.a < 0.5)
+            // discard;` does the cut-out, no blending. Without the holes the
+            // canopy collapsed to a single solid hull and every block behind
+            // the front face was invisible.
+            var rng = new Random(0x1EAF);
             var palette = new (byte, byte, byte)[]
             {
                 (48, 92, 30),
@@ -573,7 +985,23 @@ namespace VStudioCraft.Game
                 (30, 60, 16),
                 (20, 40, 10),
             };
-            NoiseFill(pixels, 0x1EAF, palette, new[] { 10, 6, 3, 4, 2 });
+            var weights = new[] { 10, 6, 3, 4, 2 };
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                // Roughly 1-in-4 cells punch through entirely. The choice
+                // is deterministic per-tile (seeded RNG) so two adjacent
+                // leaf blocks share the same hole pattern — that makes the
+                // layered effect read as foliage rather than a moiré.
+                bool hole = rng.Next(4) == 0;
+                if (hole)
+                {
+                    SetPixel(pixels, x, y, 0, 0, 0, 0);
+                    continue;
+                }
+                var (r, g, b) = Pick(rng, palette, weights);
+                SetPixel(pixels, x, y, r, g, b, 255);
+            }
         }
 
         private static void GenerateWater(byte[] pixels)
@@ -812,20 +1240,37 @@ namespace VStudioCraft.Game
 
         private static void GenerateGlass(byte[] pixels)
         {
-            // No alpha in the pipeline yet — we approximate with a bright pale
-            // interior and a muted frame so the tile reads as a glass pane.
+            // Alpha-tested glass: opaque pale frame, fully transparent
+            // interior. The fragment shader's `if (tex.a < 0.5) discard;`
+            // cuts the centre out at draw time, leaving just the 1-pixel
+            // border visible — matches Alpha 1.1.2_01's canonical glass
+            // tile (clear pane outlined in a muted frame). Combined with
+            // the mesher's IsAlphaTestedCube routing, adjacent glass blocks
+            // emit their shared face so a row of windows reads as a stack
+            // of frames the player can see through, not a hollow shell.
+            //
+            // Two pixels in from each edge is left as frame as well so the
+            // outline is a touch thicker and reads cleanly at 16×16 nearest-
+            // filter — a 1-px border alone disappears at distance.
             var rng = new Random(0x61A5);
             for (int y = 0; y < TileSize; y++)
             for (int x = 0; x < TileSize; x++)
             {
-                bool border = (x == 0 || y == 0 || x == TileSize - 1 || y == TileSize - 1);
-                if (border)
+                bool outer = (x == 0 || y == 0 || x == TileSize - 1 || y == TileSize - 1);
+                bool inner = (x == 1 || y == 1 || x == TileSize - 2 || y == TileSize - 2);
+                if (outer)
                 {
                     SetJittered(pixels, x, y, 190, 200, 210, 6, rng);
                 }
+                else if (inner)
+                {
+                    // Slight highlight on the inner ring — sells the bevel.
+                    SetJittered(pixels, x, y, 220, 228, 236, 5, rng);
+                }
                 else
                 {
-                    SetJittered(pixels, x, y, 240, 244, 250, 6, rng);
+                    // Discarded by the shader; the alpha=0 makes it transparent.
+                    SetPixel(pixels, x, y, 0, 0, 0, 0);
                 }
             }
         }
@@ -1029,39 +1474,5 @@ namespace VStudioCraft.Game
             SetPixel(pixels, 7, 8, 240, 240, 232, 255);
         }
 
-        private static void GenerateTallGrass(byte[] pixels)
-        {
-            // A scatter of upright green blades, slightly varied in height,
-            // fanning out from the centre. Alpha's tall grass was a sparser,
-            // taller-than-it-is-wide bundle.
-            var rng = new Random(0x7A11);
-            for (int y = 0; y < TileSize; y++)
-            for (int x = 0; x < TileSize; x++)
-                SetPixel(pixels, x, y, 0, 0, 0, 0);
-
-            // 6 blades at varying x positions and heights, with the tallest
-            // in the centre, shorter blades fanning out. Bottom always at y=0.
-            int[] bladeXs = { 4, 6, 7, 8, 10, 12 };
-            int[] bladeH  = { 4, 7, 9, 8, 6, 3 };
-            for (int b = 0; b < bladeXs.Length; b++)
-            {
-                int bx = bladeXs[b];
-                int h = bladeH[b];
-                for (int y = 0; y < h; y++)
-                {
-                    // Top tip is yellower (drying), base is darker green.
-                    byte rr, gg, bb;
-                    if (y == h - 1)      { rr = 168; gg = 188; bb = 80; }
-                    else if (y >= h - 2) { rr = 110; gg = 170; bb = 70; }
-                    else                  { rr = 80;  gg = 140; bb = 50; }
-                    SetJittered(pixels, bx, y, rr, gg, bb, 8, rng);
-                }
-            }
-            // A couple of horizontal "spread" blades at the very base so the
-            // root cluster doesn't read as just vertical sticks.
-            SetJittered(pixels, 5, 0, 80, 140, 50, 6, rng);
-            SetJittered(pixels, 9, 0, 80, 140, 50, 6, rng);
-            SetJittered(pixels, 11, 0, 80, 140, 50, 6, rng);
-        }
     }
 }

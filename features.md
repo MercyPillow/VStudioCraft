@@ -20,13 +20,13 @@ per-cell metadata byte tracking remaining horizontal reach.
 - CoalOre, IronOre, GoldOre, DiamondOre, RedstoneOre
 - WoodLog, Planks, Leaves
 - Water (source) + FlowingWater (spread cell, water-tinted) — both transparent, share fluid family for face culling
-- Lava (source) + FlowingLava (spread cell, emits 15 block-light) — full-block visual today, no churn animation yet
+- Lava (source) + FlowingLava (spread cell) — shares the water tick code path verbatim (same reach, same drain rules); emission left at 0 so a flowing lava stream doesn't force per-tick relights and stutter the render thread
 - GoldBlock, IronBlock, DiamondBlock
 - Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Glass (opaque placeholder), Wool
 - Torch (floor placement, emits 14 block-light, cross-sprite model, alpha-tested)
-- Dandelion, Rose, BrownMushroom, RedMushroom, TallGrass — cross-sprite flora, non-collidable, raycast-targetable, light-transparent, scattered on grass during terrain gen
+- Dandelion, Rose, BrownMushroom, RedMushroom — cross-sprite flora, non-collidable, raycast-targetable, light-transparent, scattered on grass during terrain gen
 - Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf)
-- 39-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
+- 38-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
 - Transparent-block routing to a second alpha-blended render pass (water today)
 - Cross-sprite (X-shape) model path for non-cube blocks, alpha-tested in opaque pass via fragment-shader `discard`
 - Per-block shape category (`IsCubeShape`) and raycast/collision separation (`IsRaycastTarget` vs `IsSolid`) so torches/flowers/grass are targetable but non-collidable
@@ -43,6 +43,8 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Cactus (damages on contact)
 - Pumpkin + jack-o'-lantern
 - Tall grass / flower / mushroom block-tick removal when the grass below is broken (today the sprite stays floating)
+- Falling sand / gravel physics (unsupported sand or gravel should convert to a falling-block entity, fall under gravity, and resettle as a placed block)
+- Sponge actually absorbing nearby water (Alpha quirk — currently sponge is an inert block)
 - Fluid side faces against glass or other non-opaque non-fluid blocks still use the cube sweep (full height). Only air-facing sides are replaced by the custom trapezoid; glass-adjacent water still shows a full-height side face at that boundary. Rare edge case, acceptable for V1.
 - Water-meets-lava block formation (cobblestone / stone / obsidian)
 - Water/lava textures animated (current tiles are static)
@@ -112,7 +114,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Cross-chunk light propagation (today each chunk lights independently; small seams resolve when both sides relight, but a true "light leaks across chunk borders" pass would eliminate them)
 - Incremental relight (Alpha's "decreased + increased" queue pair) — currently we full-recompute the chunk on every edit
 - Underwater light attenuation (water passes light losslessly today; Alpha attenuates a few levels)
-- Glowstone, fire, jack-o'-lantern as block-light sources (Lava emits 15, Torch emits 14)
+- Glowstone, fire, jack-o'-lantern as block-light sources (Torch emits 14; Lava is intentionally non-emissive — see FluidTick header)
 - Persisted light (currently recomputed deterministically on load — saves space but costs ~1 ms per chunk on world entry)
 
 ## Sky / weather
@@ -143,8 +145,9 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Passive mobs: cow, pig, sheep, chicken
 - Hostile mobs: zombie, skeleton, spider, creeper, slime
 - Mob AI / pathfinding
-- Mob spawn cycles
+- Mob spawn cycles (light-level-gated for hostile, biome/grass-gated for passive)
 - Drops on death
+- Player skin / third-person model (player is currently invisible; F5 third-person will need a model + texture)
 - Dropped-item entity (block drops on break — see _Inventory / items_; mob drops still missing since there are no mobs)
 - Projectiles: arrow, snowball, egg
 - Vehicles: minecart, boat
@@ -200,6 +203,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 **Missing**
 - Right-click "split half" stack op in the inventory (currently both buttons run the left-click rules)
+- Right-click drag spread (Alpha distributes one item per slot you drag the cursor over while RMB is held)
 - Shift-click "move to other half" (hotbar ↔ main grid)
 - Crafting table / furnace / chest UIs (no inventory beyond the player)
 - Drop item via Q (only the GUI-toss path is wired)
@@ -211,8 +215,9 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 **Missing**
 - Tools: wood / stone / iron / gold / diamond × pickaxe / shovel / axe / sword / hoe
-- Tool durability
-- Hardness-gated break time
+- Tool durability (per-item integer that ticks down on use; tool breaks at 0)
+- Hardness-gated break time (per-block hardness × tool-class multiplier; "correct tool" unlocks ore drops)
+- Furnace fuel + smelting recipes (input slot consumes a fuel item over a 10 s cook to produce an output item)
 - Armor + damage reduction
 - Bow + arrows
 - Flint and steel
@@ -245,8 +250,10 @@ per-cell metadata byte tracking remaining horizontal reach.
 - Dynamic hunger decay + food items. Hunger sub-setting and EatFood scaffold (flat-heal vs. refill branch) exist; eating items, hunger drain on activity, and the food UX itself are pending.
 - Armor row
 - Tool-durability bar on item icons
-- Item-name popup
+- Item-name popup (Alpha shows the held item's name briefly when you switch hotbar slots; we only show it persistently)
 - Chat overlay
+- Hurt overlay / red flash on damage taken (Alpha tints the screen red for ~250 ms when the player loses HP)
+- Death screen with respawn button (currently we instant-respawn — see Player → Missing)
 - F3 debug screen
 - More Options (render distance, brightness, controls, audio…)
 - Main menu + world select + world creation screen
@@ -293,7 +300,7 @@ per-cell metadata byte tracking remaining horizontal reach.
 ## Controls
 
 **Have**
-- WASD, Space, Ctrl (sprint), Esc (release mouse / close modal), LMB break, RMB place, 1–8 hotbar (Grass / Dirt / Stone / Sand / Torch / Dandelion / Rose / TallGrass)
+- WASD, Space, Ctrl (sprint), Esc (release mouse / close modal), LMB break, RMB place, 1–8 hotbar (Grass / Dirt / Stone / Sand / Torch / Dandelion / Rose / Cobblestone)
 - E opens / closes inventory (releases mouse-look, halts world ticks; Esc also closes it)
 - F3 toggles Creative ↔ Survival (re-uses Alpha's F3 slot; debug screen pending)
 
@@ -344,8 +351,8 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 **Missing**
 - Tile entities (chest, furnace, sign, mob spawner)
-- Random block ticks (grass spread, crop grow, leaf decay, ice melt)
-- Scheduled ticks (water/lava flow, redstone)
+- Random block ticks (grass spread, crop grow, leaf decay, ice melt, falling sand/gravel detach)
+- Scheduled ticks (water/lava flow, redstone, torch fall)
 - Explosion algorithm (ray-based blast with block-resistance)
 - Fire propagation
 - Mob-spawn attempt loop per game tick
@@ -363,12 +370,73 @@ per-cell metadata byte tracking remaining horizontal reach.
 
 ---
 
-## Suggested next steps (rough order)
+## Roadmap (prioritised by impact-per-effort)
+
+Tiered so each one is a coherent swim lane — pick a tier, ship the items in
+order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
+codebase's style with no architectural blockers; Tiers 5+ start touching
+multiple subsystems at once.
+
+### Tier 1 — Survival gameplay loop (the biggest "feels like Minecraft" gaps)
 
 1. ~~**Inventory + item stacks**~~ — done. `ItemStack`/`Inventory` model, click-to-move slot exchange, cursor stack, stack-count digits, drops on break with pickup, GUI-toss.
-2. **Block hardness + mining time + drops** — break timing exists; drops now exist; per-block hardness tuning + tool-aware mining time still needed.
-3. **Mobs** (pig/zombie first) — entity system + AI validated; zombie/creeper attacks hook straight into the existing Player.TakeDamage.
-4. **Crafting table + furnace** — recipe plumbing.
-5. **Sound** — music + step sounds close the "it feels like Minecraft" gap fast.
+2. **Tools + block hardness + tool-aware mining** — Add wood/stone/iron/gold/diamond × pickaxe/shovel/axe/sword/hoe to the item registry, per-block hardness, tool-class lookup, and an `effectiveAgainst` mapping so the existing break-time path mines stone faster with a pickaxe and won't drop ore unless the right tool is held. Tool durability ticks per use; durability bar overlays on inventory icons. Unlocks Tier 1 #3.
+3. **Crafting table + furnace + chest** — Three tile entities + their container UIs (extend `InventoryScreen` with a panel-mode dispatch), recipe-matcher (`ItemStack[]` patterns → outputs), smelting tick (input slot consumes a fuel slot over ~10 s to produce an output), persisted contents in the world save. Closes the core Alpha loop: wood → planks → sticks → pickaxe → cobble → furnace → iron.
+4. **Sound** — Audio backend (OpenAL via OpenTK, or NAudio) + an SFX bank: per-material step, block break, block place, attack hit, fall thud, water splash, UI click, ambient cave drip. Music tracks last. Surprisingly large feel-improvement vs. effort.
 
-Each of the above is 200–1500 LoC of new code in this codebase's style; nothing is architecturally blocking.
+### Tier 2 — Visible world polish (each item improves every frame)
+
+5. **Animated water / lava textures** — Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
+6. **Wall torches + torch-fall** — Metadata byte for orientation + a scheduled-tick that pops the torch off when its supporting block is mined.
+7. **Particle system** — Block-break puffs, water splash on entry, lava bubbles, torch smoke wisp. Reuses the existing sprite shader.
+8. **Real glass transparency** — Glass routes through the alpha-blend pass like water; faces between adjacent glass cull internally so 2-deep glass doesn't z-fight.
+9. **Hand-held item rendering (first-person)** — Held block/tool bobs in the bottom-right of the viewport with a step-sync sway. Covers ~70% of the "world feels alive" sensation.
+10. **Hurt overlay + arm-swing on attack** — Cheap, high-perceptual: red screen-tint for 250 ms on damage, plus a held-hand arm swing on LMB.
+
+### Tier 3 — Mobs (the world stops feeling empty)
+
+11. **Entity framework + first passive mob (pig)** — AABB walker shared with `Player`, simple wandering AI (random direction every 5 s). Drops raw porkchop on death.
+12. **First hostile mob (zombie or creeper)** — A* on a 16-block window, chase/attack AI, attack hooks into the existing `Player.TakeDamage`. Survival now has a threat.
+13. **Light-level-gated spawn loop** — Hostile spawns at light < 7, passive on grass at light ≥ 9. Per-chunk spawn cap.
+14. **Cow / sheep / chicken** — Variants of pig; sheep drops wool when sheared / killed.
+15. **Player skin + third-person model** — Required for F5 + future multiplayer.
+
+### Tier 4 — Controls + UX parity (small, every-session improvements)
+
+16. **Q drop, middle-click pick-block, Shift sneak (edge-stop), F5 third-person** — Each ~50–100 LoC; ship together.
+17. **Right-click split, shift-click move, right-click drag spread** — Inventory ops Alpha shipped that we're missing.
+18. **Death screen with respawn button** — Replaces the current instant-respawn.
+19. **F3 debug screen** — XYZ, FPS, biome, light values, chunk count.
+20. **Item-name popup on hotbar switch** — Show the held block's name for ~2 s after a hotbar slot change (currently it's persistent above the bar).
+
+### Tier 5 — World-gen variety
+
+21. **Ravines + dungeons (cobble rooms with spawner + chest)** — Two scripted features added to the existing chunk-feature pipeline.
+22. **Surface lava lakes + underground pools + cliff-face springs**.
+23. **Fire + flint & steel** — Block, propagation tick, item to ignite. Pairs with TNT priming.
+24. **Falling sand / gravel physics** — Block-update tick converts unsupported sand/gravel into a falling-block entity.
+25. **Water-meets-lava → cobblestone / stone / obsidian** — Source-vs-source contact rule in the fluid tick.
+26. **Biome system (snow / desert / forest / plains)** — `OverworldGenerator` clone using rainfall/temperature noise; per-biome surface-block + flora rules. Unlocks ice/snow blocks, cacti, sugar cane, pumpkin patches.
+
+### Tier 6 — Lighting + sky polish
+
+27. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
+28. **Cross-chunk light propagation** — Eliminates the small light seams at chunk borders next to torches.
+29. **Underwater fog colour swap** — Real deep-blue fog when the camera is submerged (we currently only tint the framebuffer).
+30. **Real moon phases (8-frame texture)** + **horizon gradient** + **rain / snow / lightning** + **biome sky tints**.
+
+### Tier 7 — Late-Alpha systems
+
+31. **Redstone primitives (wire + torch + lever + button + pressure plate + door)** — A whole creative dimension.
+32. **TNT priming + explosion algorithm** — Ray-based blast with block-resistance.
+33. **Signs (post + wall) with writable text** — Tile entity with a 4-line string + in-place text editor.
+34. **Slabs + stairs** — Sub-block geometry; metadata byte and a non-cube collision shape.
+35. **Pumpkins / cacti / sugar cane / ice / snow blocks / fences / doors / ladders** — Round out the block list.
+
+### Tier 8 — Infrastructure + completion
+
+36. **Main menu + world select + world creation screen** — Currently we go straight from the VS tool window into a world.
+37. **Configurable key bindings + autosave + backup-on-load-failure**.
+38. **Painting, minecart, boat** — Late-Alpha entities.
+39. **Multiplayer (TCP server + protocol + auth + interp)** — Alpha had this; it's a project on its own. ~3000+ LoC.
+

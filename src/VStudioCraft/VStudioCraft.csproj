@@ -68,6 +68,7 @@
     <Compile Include="Commands\OpenWorldCommand.cs" />
     <Compile Include="Editor\WorldEditorFactory.cs" />
     <Compile Include="Editor\WorldEditorPane.cs" />
+    <Compile Include="Game\AlphaTerrainData.cs" />
     <Compile Include="Game\Block.cs" />
     <Compile Include="Game\BlockTextures.cs" />
     <Compile Include="Game\Camera.cs" />
@@ -93,6 +94,7 @@
     <Compile Include="Game\Noise.cs" />
     <Compile Include="Game\OptionsMenu.cs" />
     <Compile Include="Game\OverlayMesh.cs" />
+    <Compile Include="Game\Settings.cs" />
     <Compile Include="Game\PauseMenu.cs" />
     <Compile Include="Game\Player.cs" />
     <Compile Include="Game\Raycast.cs" />
@@ -122,6 +124,9 @@
     <EmbeddedResource Include="VSPackage.resx">
       <MergeWithCTO>true</MergeWithCTO>
       <ManifestResourceName>VSPackage</ManifestResourceName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Assets\alpha_terrain.png">
+      <LogicalName>VStudioCraft.Assets.alpha_terrain.png</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>

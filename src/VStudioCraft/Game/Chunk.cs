@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 
 namespace VStudioCraft.Game
@@ -103,6 +104,21 @@ namespace VStudioCraft.Game
                 int n = r.Read(_blocks, read, _blocks.Length - read);
                 if (n <= 0) break;
                 read += n;
+            }
+            // Sanitize legacy block IDs that no longer exist in the enum
+            // (e.g. TallGrass=35 was removed once we narrowed scope to
+            // Alpha 1.1.2_01, which had no tall grass). Without this,
+            // older saves load fine but the mesher hits the default
+            // branch in BlockData and renders the stale ID as opaque
+            // stone-textured cubes wherever the foliage used to be.
+            // Mapping legacy flora to Air leaves a tidy scatter of empty
+            // cells the player can walk through, matching what they'd
+            // see if they re-generated the world today.
+            for (int i = 0; i < _blocks.Length; i++)
+            {
+                byte b = _blocks[i];
+                if (!Enum.IsDefined(typeof(BlockType), b))
+                    _blocks[i] = (byte)BlockType.Air;
             }
         }
     }
