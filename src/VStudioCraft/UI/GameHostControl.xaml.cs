@@ -271,7 +271,35 @@ namespace VStudioCraft.UI
                         }
                         if (_input.PlacePressed)
                         {
-                            changed |= _renderer.TryPlace(_input.SelectedBlock);
+                            // RMB dispatch: interact-first (CraftingTable opens
+                            // its panel etc.), then fall through to placement
+                            // if no interaction consumed the click. The
+                            // interact path returns true on consume so it can
+                            // short-circuit the placement attempt and avoid
+                            // double-dispatching the right-click.
+                            if (_renderer.TryInteract())
+                            {
+                                changed = true;
+                                // TryInteract may have opened a modal screen
+                                // (e.g. crafting) on the render thread —
+                                // mouse-look toggling has to happen on the
+                                // UI thread, so dispatch the release once
+                                // we observe the flag transition. The
+                                // matching CaptureMouseLook on close runs
+                                // from the UI Esc handler in CloseCrafting.
+                                if (_renderer.IsCraftingOpen && _mouseCaptured)
+                                {
+                                    Dispatcher.BeginInvoke(new Action(() =>
+                                    {
+                                        ReleaseMouseLook();
+                                        _input.Clear();
+                                    }));
+                                }
+                            }
+                            else
+                            {
+                                changed |= _renderer.TryPlace(_input.SelectedBlock);
+                            }
                             _input.PlacePressed = false;
                         }
                     }
@@ -291,6 +319,24 @@ namespace VStudioCraft.UI
                     {
                         var (pw0, ph0) = GetPhysicalSize();
                         _renderer.HandleInventoryClick(
+                            _input.InventoryClickButton,
+                            _input.InventoryClickX,
+                            _input.InventoryClickY,
+                            pw0, ph0,
+                            _input.InventoryClickShift);
+                        _input.InventoryClickButton = 0;
+                        _input.InventoryClickShift = false;
+                    }
+
+                    // Same drain pattern for the crafting screen — clicks
+                    // are queued by the host MouseDown handler into the
+                    // same _input field as the inventory queue (only one
+                    // modal can be open at a time), and the renderer's
+                    // crafting handler applies them on this thread.
+                    if (_renderer.IsCraftingOpen && _input.InventoryClickButton != 0)
+                    {
+                        var (pw0, ph0) = GetPhysicalSize();
+                        _renderer.HandleCraftingClick(
                             _input.InventoryClickButton,
                             _input.InventoryClickX,
                             _input.InventoryClickY,
@@ -587,7 +633,8 @@ namespace VStudioCraft.UI
                     // pops the topmost modal so the player isn't trapped
                     // (e.g. Esc inside Options returns to the pause menu,
                     // a second Esc returns to the game).
-                    if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
+                    if (_renderer != null && _renderer.IsCraftingOpen) CloseCrafting();
+                    else if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
                     else if (_renderer != null && _renderer.IsOptionsOpen) _renderer.IsOptionsOpen = false;
                     else TogglePause();
                     e.SuppressKeyPress = true;
@@ -671,6 +718,18 @@ namespace VStudioCraft.UI
             _input.ResetInventorySearch();
             ReleaseMouseLook();
             _input.Clear();
+        }
+
+        // Close the crafting screen. Opening is handled directly by
+        // TryInteract on the render thread (RMB on a CraftingTable cell);
+        // this is the symmetric close path, called from Esc and (later)
+        // from the ToggleInventory key if the player hits E to dismiss
+        // crafting the same way they dismiss the inventory panel.
+        private void CloseCrafting()
+        {
+            if (_renderer == null) return;
+            _renderer.CloseCrafting();
+            CaptureMouseLook();
         }
 
         private void GlOnMouseWheel(object sender, MouseEventArgs e)

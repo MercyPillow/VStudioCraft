@@ -27,11 +27,23 @@ namespace VStudioCraft.Game
         // coordinates); in procedural mode both ranges are synthesised
         // directly. Material order in the tool slice matches BlockType
         // enum: wood, stone, iron, diamond, gold.
-        public const int LayerCount = 67;
+        //
+        // Layers 67+ are "tail block" tiles — additional block face textures
+        // added after the tool/item slice was frozen. They source from
+        // terrain.png in alpha mode (same as 0..37) and from procedural
+        // generators in procedural mode. The tool/item slice loop bounds
+        // itself with FirstTailBlockLayer so it doesn't try to read these
+        // out of alpha_tools.png. Currently used for the multi-face
+        // crafting table tiles (top + side). Adding more multi-face
+        // blocks later (furnace, dispenser, jukebox, etc.) follows the
+        // same pattern: append to the tail range.
         public const int BlockLayerCount = 38;
         public const int ToolLayerCount = 20;
         public const int ItemLayerCount = 9;
         public const int FirstItemLayer = BlockLayerCount + ToolLayerCount; // 58
+        public const int FirstTailBlockLayer = FirstItemLayer + ItemLayerCount; // 67
+        public const int TailBlockLayerCount = 2; // CraftingTableTop, CraftingTableSide
+        public const int LayerCount = FirstTailBlockLayer + TailBlockLayerCount; // 69
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -110,6 +122,12 @@ namespace VStudioCraft.Game
         public const int TileClayBrick = 65;
         public const int TileBowl      = 66;
 
+        // Tail block layers — additional block-face tiles appended past
+        // the tool/item slice. These come from terrain.png (alpha mode)
+        // or a procedural generator (procedural mode), NOT alpha_tools.png.
+        public const int TileCraftingTableTop  = 67;
+        public const int TileCraftingTableSide = 68;
+
         // A 2D texture array — one layer per tile. Greedy meshing can emit merged
         // quads with UVs exceeding [0,1]; with a layered texture and Repeat wrap the
         // fragment shader just samples texelFetch-equivalent `texture(array, vec3(fract(uv), layer))`.
@@ -178,6 +196,12 @@ namespace VStudioCraft.Game
             // alpha-textures atlas in CreateAtlasFromAlphaTerrain.
             GenerateProceduralItemLayers(layerPixels);
 
+            // Tail block tiles — procedural CraftingTable face textures.
+            // These come from terrain.png in alpha mode and from these
+            // generators in procedural mode.
+            UploadLayer(layerPixels, TileCraftingTableTop, GenerateCraftingTableTop);
+            UploadLayer(layerPixels, TileCraftingTableSide, GenerateCraftingTableSide);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -196,7 +220,10 @@ namespace VStudioCraft.Game
         {
             if (!TryDecodeEmbeddedTools(out byte[] toolBgra, out int toolW, out int toolH))
                 return;
-            for (int layer = BlockLayerCount; layer < LayerCount; layer++)
+            // Stops at FirstTailBlockLayer so the tail-block range (which
+            // sources from terrain.png) doesn't get sliced out of the
+            // tools PNG.
+            for (int layer = BlockLayerCount; layer < FirstTailBlockLayer; layer++)
             {
                 var (col, row) = AlphaTileCoords[layer];
                 CopyTile(toolBgra, toolW, toolH, col, row, layerPixels);
@@ -857,6 +884,14 @@ namespace VStudioCraft.Game
             /* TileClayBall          */ (9, 3),
             /* TileClayBrick         */ (6, 1),
             /* TileBowl              */ (7, 4),
+
+            // Tail blocks — coordinates into terrain.png (NOT alpha_tools).
+            // Crafting table top is the work-bench grid at (11,2); side
+            // is the tool-rack art at (11,3). The bottom face reuses
+            // TilePlanks (4,0) at the GetTileIndex lookup so we don't
+            // need a third entry.
+            /* TileCraftingTableTop  */ (11, 2),
+            /* TileCraftingTableSide */ (11, 3),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -912,6 +947,21 @@ namespace VStudioCraft.Game
             // clay ball/brick, bowl) into the same 256×256 sheet, so a
             // single decode + slice loop covers both ranges.
             UploadToolLayersFromAlphaTools(layerPixels);
+
+            // Tail block layers (67+) — sourced from terrain.png, same as
+            // the 0..37 range. Done after the tool slice so the loop ranges
+            // stay non-overlapping. AlphaTileCoords entries for these layers
+            // index into terrain.png coordinates.
+            for (int layer = FirstTailBlockLayer; layer < LayerCount; layer++)
+            {
+                var (col, row) = AlphaTileCoords[layer];
+                CopyTile(bgra, srcW, srcH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -1944,6 +1994,83 @@ namespace VStudioCraft.Game
                     }
                 }
             }
+        }
+
+        // Crafting table top — plank base with a 3×3 grid scratched in,
+        // hinting at the work surface. The grid is drawn with a slightly
+        // darker tint (not pure black) so it reads at a glance without
+        // shouting "IDE icon" at the player.
+        private static void GenerateCraftingTableTop(byte[] pixels)
+        {
+            // Start from a planks-style base.
+            var rng = new Random(0xC2A1);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)110 : (byte)148;
+                byte g = groove ? (byte)80 : (byte)112;
+                byte b = groove ? (byte)44 : (byte)64;
+                SetJittered(pixels, x, y, r, g, b, 5, rng);
+            }
+            // Overlay the 3×3 work grid: vertical bars at x=5 and x=10,
+            // horizontal bars at y=5 and y=10. 1px wide, dark brown.
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 5, 60, 38, 18);
+                SetPixel(pixels, x, 10, 60, 38, 18);
+            }
+            for (int y = 0; y < TileSize; y++)
+            {
+                SetPixel(pixels, 5, y, 60, 38, 18);
+                SetPixel(pixels, 10, y, 60, 38, 18);
+            }
+            // Outer rim — frames the work surface against the side art.
+            for (int i = 0; i < TileSize; i++)
+            {
+                SetPixel(pixels, i, 0, 88, 60, 30);
+                SetPixel(pixels, i, TileSize - 1, 88, 60, 30);
+                SetPixel(pixels, 0, i, 88, 60, 30);
+                SetPixel(pixels, TileSize - 1, i, 88, 60, 30);
+            }
+        }
+
+        // Crafting table side — plank base with two simple tool
+        // silhouettes (a saw blade outline + a hammer head) drawn in
+        // dark brown. Doesn't need to be readable at micro-scale; it
+        // just needs to NOT look like plain planks so the player can
+        // tell the block apart from a normal Planks block at a glance.
+        private static void GenerateCraftingTableSide(byte[] pixels)
+        {
+            var rng = new Random(0xC2B2);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)110 : (byte)148;
+                byte g = groove ? (byte)80 : (byte)112;
+                byte b = groove ? (byte)44 : (byte)64;
+                SetJittered(pixels, x, y, r, g, b, 5, rng);
+            }
+            // Hammer (top-left): rectangular head + diagonal handle.
+            // Head: x=2..6, y=2..4
+            for (int y = 2; y <= 4; y++)
+            for (int x = 2; x <= 6; x++)
+                SetPixel(pixels, x, y, 60, 38, 18);
+            // Handle: diagonal from (5,4) toward (10,9).
+            for (int i = 0; i < 6; i++)
+                SetPixel(pixels, 5 + i, 4 + i, 80, 50, 22);
+
+            // Saw blade (bottom-right): triangular silhouette.
+            // Spine: y=12, x=8..14
+            for (int x = 8; x <= 14; x++)
+                SetPixel(pixels, x, 12, 60, 38, 18);
+            // Teeth: alternating below the spine
+            for (int x = 8; x <= 14; x += 2)
+                SetPixel(pixels, x, 13, 60, 38, 18);
+            // Handle: y=10..11, x=14
+            SetPixel(pixels, 14, 10, 80, 50, 22);
+            SetPixel(pixels, 14, 11, 80, 50, 22);
         }
 
         private static void GenerateMossyCobblestone(byte[] pixels)

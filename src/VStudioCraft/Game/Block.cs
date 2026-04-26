@@ -37,6 +37,14 @@ namespace VStudioCraft.Game
         Rose = 32,
         BrownMushroom = 33,
         RedMushroom = 34,
+        // CraftingTable slots into the previously-vacant id 35. Placed
+        // here (not appended after items) so the enum stays "blocks
+        // first, then tools 38+, then items 58+" — pushing tool ids
+        // would invalidate every save the project has produced. The
+        // open slot was always intended for a block, this just spends
+        // it. Texture is multi-face: planks on the bottom, work-bench
+        // top on top, tool-rack side on the four sides.
+        CraftingTable = 35,
         FlowingWater = 36,
         FlowingLava = 37,
 
@@ -413,6 +421,7 @@ namespace VStudioCraft.Game
                 case BlockType.WoodLog:
                 case BlockType.Planks:
                 case BlockType.Bookshelf:
+                case BlockType.CraftingTable:
                     return 2f;
                 case BlockType.Dirt:
                 case BlockType.Grass:
@@ -503,6 +512,13 @@ namespace VStudioCraft.Game
                 case BlockType.Bookshelf:
                     if (faceKind == 0 || faceKind == 1) return BlockTextures.TilePlanks;
                     return BlockTextures.TileBookshelfSide;
+                case BlockType.CraftingTable:
+                    // Top: work-bench grid. Bottom: plain planks (crafting
+                    // table sits on a plank base in Alpha). Sides: the
+                    // tool-rack art with hammer/saw silhouettes.
+                    if (faceKind == 0) return BlockTextures.TileCraftingTableTop;
+                    if (faceKind == 1) return BlockTextures.TilePlanks;
+                    return BlockTextures.TileCraftingTableSide;
                 case BlockType.MossyCobblestone:
                     return BlockTextures.TileMossyCobblestone;
                 case BlockType.Obsidian:
@@ -702,6 +718,7 @@ namespace VStudioCraft.Game
                 case BlockType.WoodLog:
                 case BlockType.Planks:
                 case BlockType.Bookshelf:
+                case BlockType.CraftingTable:
                     return ToolKind.Axe;
                 default:
                     return ToolKind.None;

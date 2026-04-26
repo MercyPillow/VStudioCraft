@@ -348,6 +348,28 @@ void main()
             set => _isOptionsOpen = value;
         }
 
+        // True while the crafting screen is open (RMB on a CraftingTable
+        // block). Same world-halt semantics as IsInventoryOpen — host
+        // gates ticks on IsWorldHalted, render path draws the panel on
+        // top. Volatile for UI/render thread sync.
+        private volatile bool _isCraftingOpen;
+        public bool IsCraftingOpen
+        {
+            get => _isCraftingOpen;
+            set => _isCraftingOpen = value;
+        }
+
+        // The 3×3 crafting grid + output slot, owned by the renderer
+        // because the screen is a transient overlay (no save/multi-
+        // session lifecycle). When the screen closes, anything left in
+        // the grid is shoved back into the player's inventory; leftovers
+        // toss into the world like a closed-with-cursor inventory does.
+        // The output slot is ALWAYS rebuilt from CraftingRecipes.Match
+        // each time the grid changes, so we never write directly to it
+        // outside of the take-from-output path.
+        private readonly ItemStack[] _craftingGrid = new ItemStack[CraftingScreen.GridSlotCount];
+        private ItemStack _craftingOutput;
+
         // Per-world setting: show the hunger drumstick row + drive
         // hunger-based slow regen. Off by default (the user explicitly
         // wanted the bar gone unless they opt in). Persisted in the world
@@ -365,7 +387,7 @@ void main()
         // OR themselves in here and the rest of the loop gates on this
         // single flag. Options doesn't add to this list because it only
         // ever opens on top of the pause menu (which is already halted).
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen;
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen;
 
         // Rebuild the block atlas from whichever source the user has
         // currently selected (procedural or embedded Alpha terrain.png).
@@ -1214,6 +1236,44 @@ void main()
             }
         }
 
+        // RMB-on-block interaction dispatch. Runs BEFORE TryPlace so
+        // an interactive block (crafting table today; furnace, chest,
+        // door later) can swallow the right-click without it being
+        // interpreted as a placement attempt. Returns true if the
+        // interaction was consumed — the caller should not also call
+        // TryPlace in that case.
+        //
+        // Currently handles only CraftingTable: RMB opens the crafting
+        // screen. The raycast must land on an actual CraftingTable cell
+        // (not just any solid block) for the open to fire. If the
+        // player isn't aiming at anything, or is aiming at a non-
+        // interactive block, this returns false and the place flow
+        // proceeds normally.
+        public bool TryInteract()
+        {
+            if (_world == null) return false;
+            if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
+                return false;
+            var target = _world.GetBlock(hit.X, hit.Y, hit.Z);
+            switch (target)
+            {
+                case BlockType.CraftingTable:
+                    // Crafting screen acts as a session overlay — the
+                    // grid resets to empty on every open. Future
+                    // expansion (chest / furnace) will key per-block-
+                    // position state on tile entities; crafting has no
+                    // persistent contents in Alpha (close-with-stuff-in-
+                    // grid → it tosses out, so empty-on-open is correct).
+                    for (int i = 0; i < _craftingGrid.Length; i++)
+                        _craftingGrid[i] = ItemStack.Empty;
+                    _craftingOutput = ItemStack.Empty;
+                    _isCraftingOpen = true;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         public bool TryPlace(BlockType t)
         {
             if (_world == null) return false;
@@ -1499,6 +1559,243 @@ void main()
             {
                 TossCursorStack();
             }
+        }
+
+        // ----- Crafting screen click handling --------------------------
+        // Mirrors HandleInventoryClick's contract: the host queues clicks
+        // via _input on MouseDown, the render thread drains the queue
+        // here once per frame so all crafting-grid + cursor mutation
+        // stays single-threaded. Slot space is the 0..54 range described
+        // in CraftingScreen.cs:
+        //   0..8   — 3×3 input grid (mutates _craftingGrid + recomputes output)
+        //   9      — output (read-only result of CraftingRecipes.Match)
+        //   10..54 — player main + hotbar (mirrors HandleInventoryClick)
+        // After every grid mutation _craftingOutput is rebuilt from the
+        // recipe registry so the panel always shows what the current
+        // contents resolve to.
+        public void HandleCraftingClick(int button, int mx, int my, int screenW, int screenH, bool shift)
+        {
+            if (Input == null) return;
+            var inv = Input.Inventory;
+
+            int slot = CraftingScreen.HitTest(screenW, screenH, mx, my);
+            if (slot < 0)
+            {
+                // Click outside the panel: same toss-cursor behaviour as
+                // the inventory screen so the player can dump a stack by
+                // clicking the dim wash.
+                if (!inv.Cursor.IsEmpty) TossCursorStack();
+                return;
+            }
+
+            // Crafting input grid (3×3) — exchange with cursor like a
+            // normal slot, then rebuild the output slot from the recipe
+            // table. Shift-click on a grid cell quick-moves the stack
+            // back into the player inventory (mirrors Alpha behaviour).
+            if (slot >= 0 && slot < CraftingScreen.GridSlotCount)
+            {
+                if (shift)
+                {
+                    // Push the grid cell into the player inventory
+                    // (TryAdd already prefers hotbar then main grid).
+                    var leftover = inv.TryAdd(_craftingGrid[slot]);
+                    _craftingGrid[slot] = leftover;
+                }
+                else
+                {
+                    HandleLeftClickSlotRef(ref _craftingGrid[slot], inv);
+                }
+                _craftingOutput = CraftingRecipes.Match(_craftingGrid);
+                return;
+            }
+
+            // Output slot — read-only "result" cell. LMB picks up (or tops
+            // up if the cursor already holds the same item) one batch and
+            // consumes one of every input. Shift+click crafts as many
+            // batches as fit in the player inventory in a single click.
+            if (slot == CraftingScreen.OutputSlot)
+            {
+                if (_craftingOutput.IsEmpty) return;
+
+                if (shift)
+                {
+                    // Repeat-craft until either the recipe stops
+                    // matching (e.g. ran out of an ingredient) or the
+                    // inventory has no room for another batch.
+                    while (!_craftingOutput.IsEmpty)
+                    {
+                        var batch = _craftingOutput;
+                        var leftover = inv.TryAdd(batch);
+                        if (!leftover.IsEmpty)
+                        {
+                            // No room — stop crafting; we don't half-
+                            // consume an input. Anything that DID fit
+                            // already landed in the inventory; the
+                            // leftover is forfeit (no input was
+                            // consumed for it).
+                            break;
+                        }
+                        CraftingRecipes.ConsumeOne(_craftingGrid);
+                        _craftingOutput = CraftingRecipes.Match(_craftingGrid);
+                    }
+                    return;
+                }
+
+                // Plain LMB: into the cursor.
+                if (inv.Cursor.IsEmpty)
+                {
+                    inv.Cursor = _craftingOutput;
+                    CraftingRecipes.ConsumeOne(_craftingGrid);
+                    _craftingOutput = CraftingRecipes.Match(_craftingGrid);
+                    return;
+                }
+                if (inv.Cursor.SameKindAs(_craftingOutput))
+                {
+                    int room = inv.Cursor.MaxStackSize - inv.Cursor.Count;
+                    if (room < _craftingOutput.Count) return; // can't fit a full batch — Alpha doesn't partial-craft into the cursor
+                    var c = inv.Cursor;
+                    c.Count += _craftingOutput.Count;
+                    inv.Cursor = c;
+                    CraftingRecipes.ConsumeOne(_craftingGrid);
+                    _craftingOutput = CraftingRecipes.Match(_craftingGrid);
+                    return;
+                }
+                // Different type on cursor: ignore (no swap into output).
+                return;
+            }
+
+            // Player main + hotbar slots — same dispatch as the regular
+            // inventory screen, just with our InventoryIndexFor mapping
+            // since the slot space here starts at 10.
+            int invIdx = CraftingScreen.InventoryIndexFor(slot);
+            if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
+            if (shift)
+            {
+                // Shift+click on an inventory slot pushes into the
+                // crafting grid first if there's room of the same type
+                // or an empty cell, otherwise falls back to the regular
+                // inventory cross-section quick-move. Keeps the grid as
+                // the natural target while the panel is open.
+                ref var src = ref inv.Slots[invIdx];
+                if (!src.IsEmpty)
+                {
+                    bool moved = TryShiftIntoGrid(ref src);
+                    if (!moved) inv.HandleShiftClickSlot(invIdx);
+                }
+            }
+            else
+            {
+                inv.HandleLeftClickSlot(invIdx);
+            }
+            // Inventory ↔ grid shifts can change a grid cell — recompute
+            // the output. (HandleLeftClickSlot only touches inventory +
+            // cursor, but it's cheap to re-resolve.)
+            _craftingOutput = CraftingRecipes.Match(_craftingGrid);
+        }
+
+        // Same Alpha left-click rules as Inventory.HandleLeftClickSlot,
+        // but the "slot" lives outside the inventory's slot array (in
+        // _craftingGrid). Sharing the cursor with the inventory keeps
+        // the player's hand consistent across crafting and main-bag.
+        private static void HandleLeftClickSlotRef(ref ItemStack slot, Inventory inv)
+        {
+            var cursor = inv.Cursor;
+            if (cursor.IsEmpty)
+            {
+                if (slot.IsEmpty) return;
+                inv.Cursor = slot;
+                slot = ItemStack.Empty;
+                return;
+            }
+            if (slot.IsEmpty)
+            {
+                slot = cursor;
+                inv.Cursor = ItemStack.Empty;
+                return;
+            }
+            if (slot.SameKindAs(cursor))
+            {
+                int room = slot.MaxStackSize - slot.Count;
+                if (room <= 0) return;
+                int take = System.Math.Min(room, cursor.Count);
+                slot.Count += take;
+                cursor.Count -= take;
+                inv.Cursor = cursor.Count > 0 ? cursor : ItemStack.Empty;
+                return;
+            }
+            // Different type — swap.
+            inv.Cursor = slot;
+            slot = cursor;
+        }
+
+        // Push a player-inventory stack into the crafting grid: top up
+        // matching partial cells first, then fill the first empty cell.
+        // Returns true if any items moved (so the caller can skip the
+        // regular Inventory shift-click path). Same two-pass policy as
+        // Inventory.TryAdd, scoped to _craftingGrid.
+        private bool TryShiftIntoGrid(ref ItemStack src)
+        {
+            bool moved = false;
+            // Pass 1 — top up matching partial cells.
+            for (int i = 0; i < _craftingGrid.Length; i++)
+            {
+                if (src.IsEmpty) break;
+                ref var c = ref _craftingGrid[i];
+                if (c.IsEmpty || !c.SameKindAs(src)) continue;
+                int room = c.MaxStackSize - c.Count;
+                if (room <= 0) continue;
+                int take = System.Math.Min(room, src.Count);
+                c.Count += take;
+                src.Count -= take;
+                moved = true;
+                if (src.Count == 0) src = ItemStack.Empty;
+            }
+            // Pass 2 — first empty cell.
+            if (!src.IsEmpty)
+            {
+                for (int i = 0; i < _craftingGrid.Length; i++)
+                {
+                    ref var c = ref _craftingGrid[i];
+                    if (!c.IsEmpty) continue;
+                    c = src;
+                    src = ItemStack.Empty;
+                    moved = true;
+                    break;
+                }
+            }
+            return moved;
+        }
+
+        // Close the crafting screen. Anything left in the 3×3 grid is
+        // pushed back into the player's inventory; whatever doesn't
+        // fit is tossed into the world (matches the comment in
+        // CraftingScreen.cs and Alpha's "close-with-stuff-in-grid"
+        // semantics). The cursor is treated the same way — leaving the
+        // crafting screen with a stack on the cursor would otherwise
+        // strand it on the next-opened panel.
+        public void CloseCrafting()
+        {
+            if (Input == null)
+            {
+                _isCraftingOpen = false;
+                return;
+            }
+            var inv = Input.Inventory;
+            for (int i = 0; i < _craftingGrid.Length; i++)
+            {
+                if (_craftingGrid[i].IsEmpty) continue;
+                var leftover = inv.TryAdd(_craftingGrid[i]);
+                _craftingGrid[i] = ItemStack.Empty;
+                if (!leftover.IsEmpty) ThrowStack(leftover);
+            }
+            if (!inv.Cursor.IsEmpty)
+            {
+                var leftover = inv.TryAdd(inv.Cursor);
+                inv.Cursor = ItemStack.Empty;
+                if (!leftover.IsEmpty) ThrowStack(leftover);
+            }
+            _craftingOutput = ItemStack.Empty;
+            _isCraftingOpen = false;
         }
 
         // Toss the cursor's stack into the world in front of the player.
@@ -1863,6 +2160,7 @@ void main()
             // we still gate on _isInventoryOpen first so a stuck flag
             // can't double-stack the dim wash.
             if (_isInventoryOpen) RenderInventory(width, height);
+            else if (_isCraftingOpen) RenderCrafting(width, height);
             else if (_isPaused)
             {
                 // Options is layered on top of the pause menu — draw the
@@ -2769,6 +3067,200 @@ void main()
                 }
                 // Durability bar on cursor — moves with the mouse so the
                 // player can see how worn the tool they're dragging is.
+                DrawDurabilityBar(inv.Cursor, cursorFrameX, cursorFrameY,
+                    cursorFrame, cursorFrame, width, height, ortho);
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Crafting-table screen. Mirrors RenderInventory's layout but
+        // with the 3×3 input grid + arrow + output slot stacked on top
+        // of the player's main + hotbar grids. The same dim-wash + slot
+        // wells + cursor stack draw so the panel reads as part of the
+        // same family of modal screens. All slot positions come from
+        // CraftingScreen.GetSlotRect — the renderer never duplicates
+        // geometry math the click router doesn't also use.
+        private void RenderCrafting(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            DrawSolidQuad(0, 0, width, height,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+
+            // ---- panel chrome (matches inventory) -----------------------
+            CraftingScreen.GetPanelRect(width, height,
+                out int panelX, out int panelY, out int panelW, out int panelH);
+            DrawSolidQuad(panelX, panelY, panelW, panelH,
+                new Vector3(0.16f, 0.16f, 0.18f), 0.95f, ortho);
+            var border = new Vector3(0.78f, 0.82f, 0.88f);
+            int pb = CraftingScreen.SlotBorderPx(width, height);
+            DrawSolidQuad(panelX, panelY, panelW, pb, border, 1f, ortho);
+            DrawSolidQuad(panelX, panelY + panelH - pb, panelW, pb, border, 1f, ortho);
+            DrawSolidQuad(panelX, panelY, pb, panelH, border, 1f, ortho);
+            DrawSolidQuad(panelX + panelW - pb, panelY, pb, panelH, border, 1f, ortho);
+
+            // ---- title --------------------------------------------------
+            DrawString(CraftingScreen.Title, /*scale*/CraftingScreen.TitleScale(width, height),
+                /*centerX*/width / 2,
+                /*topY*/CraftingScreen.TitleY(width, height),
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            // ---- slot wells (all 55 slots) ------------------------------
+            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
+            var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
+            for (int i = 0; i < CraftingScreen.TotalSlots; i++)
+            {
+                CraftingScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+            }
+
+            // ---- arrow (3×3 grid → output) ------------------------------
+            // Simple white wedge (a vertical bar plus a triangular head)
+            // — keeps the panel readable without needing a dedicated
+            // sprite sheet. UiScale.S so it stays proportional at every
+            // window size.
+            CraftingScreen.GetArrowCenter(width, height, out int acx, out int acy);
+            int arrowBarLen = UiScale.S(28, width, height);
+            int arrowBarTh  = UiScale.S(6, width, height);
+            int arrowHead   = UiScale.S(14, width, height);
+            var arrowCol    = new Vector3(0.92f, 0.94f, 0.98f);
+            // Shaft.
+            DrawSolidQuad(acx - arrowBarLen / 2, acy - arrowBarTh / 2,
+                arrowBarLen, arrowBarTh, arrowCol, 1f, ortho);
+            // Head — stack of horizontal slices to fake a triangle without
+            // needing a triangle primitive (DrawSolidQuad is the only
+            // non-textured shape we have here).
+            for (int i = 0; i < arrowHead; i++)
+            {
+                int barW = arrowHead - i;
+                if (barW <= 0) break;
+                DrawSolidQuad(acx + arrowBarLen / 2 + i, acy - barW,
+                    1, barW * 2, arrowCol, 1f, ortho);
+            }
+
+            // ---- icons in grid + output --------------------------------
+            var inv = Input?.Inventory;
+            int iconPad = (CraftingScreen.SlotPx(width, height) - CraftingScreen.IconPx(width, height)) / 2;
+
+            for (int i = 0; i < CraftingScreen.GridSlotCount; i++)
+            {
+                var stack = _craftingGrid[i];
+                if (stack.IsEmpty) continue;
+                CraftingScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
+                DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+            }
+            if (!_craftingOutput.IsEmpty)
+            {
+                CraftingScreen.GetSlotRect(CraftingScreen.OutputSlot, width, height,
+                    out int ox, out int oy, out _, out _);
+                DrawSlotIcon(_craftingOutput.Type, ox + iconPad, oy + iconPad, width, height, ortho);
+            }
+            // Player inventory + hotbar — same iteration pattern as the
+            // survival inventory body, just remapped through
+            // InventoryIndexFor since slot space here starts at 10.
+            if (inv != null)
+            {
+                for (int i = CraftingScreen.InvMainStart; i < CraftingScreen.TotalSlots; i++)
+                {
+                    int invIdx = CraftingScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty) continue;
+                    CraftingScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+                GL.Disable(EnableCap.CullFace);
+            }
+
+            // ---- stack counts on every visible non-empty stack ---------
+            for (int i = 0; i < CraftingScreen.GridSlotCount; i++)
+            {
+                var stack = _craftingGrid[i];
+                if (stack.IsEmpty || stack.Count <= 1) continue;
+                CraftingScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+            }
+            if (!_craftingOutput.IsEmpty && _craftingOutput.Count > 1)
+            {
+                CraftingScreen.GetSlotRect(CraftingScreen.OutputSlot, width, height,
+                    out int ox, out int oy, out int ow, out int oh);
+                DrawStackCount(_craftingOutput.Count, ox, oy, ow, oh, ortho);
+            }
+            if (inv != null)
+            {
+                for (int i = CraftingScreen.InvMainStart; i < CraftingScreen.TotalSlots; i++)
+                {
+                    int invIdx = CraftingScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    CraftingScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+                // Durability bars (tools with damage) on every slot the
+                // player owns. Grid + output are mostly material stacks so
+                // the bar is a no-op there for typical recipes; cheap to
+                // include for completeness.
+                for (int i = 0; i < CraftingScreen.GridSlotCount; i++)
+                {
+                    var stack = _craftingGrid[i];
+                    if (stack.IsEmpty) continue;
+                    CraftingScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
+                for (int i = CraftingScreen.InvMainStart; i < CraftingScreen.TotalSlots; i++)
+                {
+                    int invIdx = CraftingScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty) continue;
+                    CraftingScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
+            }
+
+            // ---- cursor stack (follows the mouse, drawn last) ----------
+            if (inv != null && !inv.Cursor.IsEmpty && Input != null)
+            {
+                int cx = Input.MenuMouseX;
+                int cy = Input.MenuMouseY;
+                int iconSize = CraftingScreen.IconPx(width, height);
+                int ix = cx - iconSize / 2;
+                int iy = cy - iconSize / 2;
+
+                if (BlockData.IsCubeShape(inv.Cursor.Type))
+                {
+                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                    GL.Disable(EnableCap.CullFace);
+                }
+                else
+                {
+                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                }
+                int cursorFrame = CraftingScreen.SlotPx(width, height);
+                int cursorFrameX = cx - cursorFrame / 2;
+                int cursorFrameY = cy - cursorFrame / 2;
+                if (inv.Cursor.Count > 1)
+                {
+                    DrawStackCount(inv.Cursor.Count, cursorFrameX, cursorFrameY,
+                        cursorFrame, cursorFrame, ortho);
+                }
                 DrawDurabilityBar(inv.Cursor, cursorFrameX, cursorFrameY,
                     cursorFrame, cursorFrame, width, height, ortho);
             }

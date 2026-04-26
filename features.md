@@ -34,7 +34,7 @@ clipping at ~3.5 rows).
 
 ## Blocks
 
-**Have** — 37 block IDs (`BlockType` enum)
+**Have** — 38 block IDs (`BlockType` enum)
 - Air, Grass, Dirt, Stone, Sand
 - Cobblestone, Bedrock, Gravel, Clay
 - CoalOre, IronOre, GoldOre, DiamondOre, RedstoneOre
@@ -45,6 +45,7 @@ clipping at ~3.5 rows).
 - Bricks, TNT, Bookshelf, MossyCobblestone, Obsidian, Sponge, Glass (opaque placeholder), Wool
 - Torch (floor placement, emits 14 block-light, cross-sprite model, alpha-tested)
 - Dandelion, Rose, BrownMushroom, RedMushroom — cross-sprite flora, non-collidable, raycast-targetable, light-transparent, scattered on grass during terrain gen
+- Crafting table (workbench) — planks-base block with a 3×3 grid texture on top and tool-silhouette sides; RMB opens the 3×3 crafting screen (`TryInteract` → `_isCraftingOpen`); axe-required tier; drops itself when broken
 - Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf)
 - 38-layer procedural 16×16 pixel-art atlas, nearest-neighbour sampled
 - Transparent-block routing to a second alpha-blended render pass (water today)
@@ -74,7 +75,6 @@ clipping at ~3.5 rows).
 - Fences
 - Wooden door, iron door
 - Sign (post + wall)
-- Crafting table (workbench)
 - Furnace (lit + unlit)
 - Chest (with inventory)
 - Mob spawner (cage with flame)
@@ -220,12 +220,13 @@ clipping at ~3.5 rows).
 - Block drops on break (survival): the broken block spawns a 0.25-block `DroppedItem` that bobs + spins, falls under gravity, settles on the floor, and gets picked up when the player walks within 1.5 blocks (`TickDrops`). `Inventory.TryAdd` runs Alpha's two-pass merge-then-fill (hotbar first, then main grid), with leftover staying in the world for re-pickup.
 - Toss-from-cursor — clicking outside the inventory panel with a non-empty cursor lobs the stack into the world as a drop (`TossCursorStack`), with a 1 s pickup cooldown so the throw isn't instantly re-grabbed.
 - Scroll-wheel hotbar cycling — wheel up/down moves the selected hotbar slot left/right (1 slot per Windows 120-unit notch), gated to gameplay (no wheel scroll while a modal is up).
+- Crafting screen — RMB on a CraftingTable block opens a 3×3 input grid + result slot stacked over the player's main+hotbar inventory (`CraftingScreen` layout helper, `_isCraftingOpen` modal flag ORs into `IsWorldHalted`). Recipe registry (`CraftingRecipes`) covers Alpha 1.1.2_01 staples — sticks (2 planks vertical → 4 sticks), crafting table (2×2 planks → 1 table), bowls (V-shape planks → 4 bowls), torches (coal + stick → 4 torches), bricks block (2×2 clay brick → 1 bricks), planks (1 wood log shapeless → 4 planks), and all 20 tools (5 materials × pickaxe/shovel/axe/sword) — with shaped matching that scans every (rOff, cOff) sub-rectangle of the 3×3 (so a 2×2 recipe matches in any quadrant) plus shapeless multiset matching as a fallback. Output slot recomputes after every grid mutation; LMB takes a single batch into the cursor (consumes one of every input), shift-click crafts as many batches as fit in the inventory in one click. Closing the screen (Esc) flushes the grid + cursor into the player inventory and tosses any leftovers as world drops (matches Alpha "close-with-stuff-in-grid" behaviour). Same world-halt + cursor-release + slot-rect-shared-with-clickrouter pattern as the inventory screen.
 
 **Missing**
 - Right-click "split half" stack op in the inventory (currently both buttons run the left-click rules)
 - Right-click drag spread (Alpha distributes one item per slot you drag the cursor over while RMB is held)
 - Shift-click "move to other half" (hotbar ↔ main grid)
-- Crafting table / furnace / chest UIs (no inventory beyond the player)
+- Furnace / chest UIs (crafting table is wired; furnace + chest still pending tile-entity persistent-contents work)
 - Drop item via Q (only the GUI-toss path is wired)
 - Pick-block (middle mouse)
 - Armor slots (4 slots — the `Inventory` is 36+9 today; armor is unmodelled)
