@@ -42,9 +42,11 @@ namespace VStudioCraft.Game
         private static bool _muted = true;
         private static float _masterGain = 1.0f;
         private static string _initFailureReason; // null when init succeeded
+        private static string _preloadDiagnostic;  // last preload attempt summary
 
         public static bool IsAvailable => _initTried && !_muted;
         public static string InitFailureReason => _initFailureReason;
+        public static string PreloadDiagnostic  => _preloadDiagnostic;
 
         public static float MasterGain
         {
@@ -94,6 +96,7 @@ namespace VStudioCraft.Game
                 }
                 _muted = false;
                 _initFailureReason = null;
+                System.Diagnostics.Debug.WriteLine("[VStudioCraft.AudioEngine] init OK; preload: " + (_preloadDiagnostic ?? "(none)"));
             }
             catch (Exception ex)
             {
@@ -102,45 +105,95 @@ namespace VStudioCraft.Game
                 // doesn't need to know. Reason is exposed for the
                 // options menu so the user can see why audio is dead.
                 _muted = true;
-                _initFailureReason = ex.Message;
+                // Concatenate context-ctor reason + preload diagnostic so
+                // the options menu shows the WHOLE story in one row. The
+                // common failure mode is "DLL not found at <path>" — that
+                // tells us deployment is broken in a way the bare
+                // exception message ("module could not be loaded") never
+                // would.
+                string preload = _preloadDiagnostic ?? "(no preload diagnostic)";
+                _initFailureReason = ex.GetType().Name + ": " + ex.Message + " | " + preload;
+                System.Diagnostics.Debug.WriteLine("[VStudioCraft.AudioEngine] init failed: " + _initFailureReason);
                 try { _context?.Dispose(); } catch { }
                 _context = null;
             }
         }
 
         // Locate openal32.dll next to this assembly and LoadLibrary it.
-        // Returns silently on failure — caller will see the AudioContext
-        // ctor throw a moment later, which produces a more useful message.
+        // Returns a status string (also stashed in _preloadDiagnostic) so
+        // the options menu can surface the real reason audio is dead —
+        // "DLL not found in <path>", "LoadLibrary failed: 0x...", etc.
         //
-        // We check `Native\openal32.dll` first (where the csproj Content
-        // entry deploys it — preserves the source folder structure under
-        // `bin\Debug\` and inside the VSIX) then fall back to a flat
-        // sibling, in case a future packaging change drops the subfolder.
+        // We try a small set of likely directories rather than just the
+        // assembly's CodeBase, because VSIX deployment can take a few
+        // forms:
+        //   1. Direct VS run (F5 + experimental hive): assembly loads from
+        //      the Extensions\<Random>\ folder; Native\openal32.dll sits
+        //      under that same folder.
+        //   2. VSIX-installed for the user: same layout but at a different
+        //      LocalAppData path.
+        //   3. Local bin\Debug build with a shadow-copied assembly: the
+        //      shadow copy has no Native\ subfolder, so we fall back to
+        //      Assembly.CodeBase (the original DLL location).
+        // Plus a flat-sibling fallback in case packaging ever changes.
         private static void TryPreloadOpenAL()
         {
+            var attempts = new System.Collections.Generic.List<string>();
             try
             {
-                string asmDir = Path.GetDirectoryName(
-                    new Uri(typeof(AudioEngine).Assembly.CodeBase).LocalPath);
-                if (string.IsNullOrEmpty(asmDir)) return;
-                string[] candidates =
+                var asm = typeof(AudioEngine).Assembly;
+                string locDir = SafeDir(asm.Location);
+                string codeDir;
+                try
                 {
-                    Path.Combine(asmDir, "Native", "openal32.dll"),
-                    Path.Combine(asmDir, "openal32.dll"),
-                };
-                foreach (string p in candidates)
+                    codeDir = SafeDir(new Uri(asm.CodeBase).LocalPath);
+                }
+                catch { codeDir = null; }
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+
+                var dirs = new System.Collections.Generic.List<string>();
+                AddIfNew(dirs, locDir);
+                AddIfNew(dirs, codeDir);
+                AddIfNew(dirs, baseDir);
+
+                foreach (string d in dirs)
                 {
-                    if (File.Exists(p))
+                    foreach (string rel in new[] { @"Native\openal32.dll", "openal32.dll" })
                     {
-                        LoadLibraryW(p);
+                        string p = Path.Combine(d, rel);
+                        attempts.Add(p);
+                        if (!File.Exists(p)) continue;
+                        IntPtr h = LoadLibraryW(p);
+                        if (h != IntPtr.Zero)
+                        {
+                            _preloadDiagnostic = "loaded " + p;
+                            return;
+                        }
+                        int err = Marshal.GetLastWin32Error();
+                        _preloadDiagnostic = "LoadLibrary failed (0x" + err.ToString("X") + ") for " + p;
                         return;
                     }
                 }
+                _preloadDiagnostic = "openal32.dll not found; searched: " + string.Join(" ; ", attempts);
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore — best-effort preload.
+                _preloadDiagnostic = "preload threw: " + ex.GetType().Name + " " + ex.Message;
             }
+        }
+
+        private static string SafeDir(string p)
+        {
+            try { return string.IsNullOrEmpty(p) ? null : Path.GetDirectoryName(p); }
+            catch { return null; }
+        }
+
+        private static void AddIfNew(System.Collections.Generic.List<string> list, string d)
+        {
+            if (string.IsNullOrEmpty(d)) return;
+            for (int i = 0; i < list.Count; i++)
+                if (string.Equals(list[i], d, StringComparison.OrdinalIgnoreCase)) return;
+            list.Add(d);
         }
 
         // Upload a PCM buffer (mono 16-bit) and return its AL buffer

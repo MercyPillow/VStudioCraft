@@ -74,23 +74,36 @@ namespace VStudioCraft.Game
             // BACK button at the bottom.
             // Section heading height matches a row's height for layout simplicity;
             // it just isn't clickable.
-            var labels = new[]
+            bool audioOk = AudioEngine.IsAvailable;
+            var rowList = new System.Collections.Generic.List<Row>(10);
+            rowList.Add(new Row { Id = ActionId.None, Label = "SURVIVAL", IsSection = true });
+            rowList.Add(new Row { Id = ActionId.ToggleHunger, Label = HungerLabel(hungerEnabled),
+                                  IsDisabled = !isSurvival });
+            rowList.Add(new Row { Id = ActionId.None, Label = "GRAPHICS", IsSection = true });
+            rowList.Add(new Row { Id = ActionId.ToggleRealTextures, Label = TexturesLabel(useRealTextures) });
+            rowList.Add(new Row { Id = ActionId.None, Label = "AUDIO", IsSection = true });
+            rowList.Add(new Row { Id = ActionId.SetMasterVolume, Label = "ALL SOUND",
+                                  IsSlider = true, Value = Clamp01(masterVolume),
+                                  IsDisabled = !audioOk });
+            rowList.Add(new Row { Id = ActionId.SetMusicVolume, Label = "MUSIC",
+                                  IsSlider = true, Value = Clamp01(musicVolume),
+                                  IsDisabled = !audioOk });
+            // When audio init failed, follow the sliders with a status
+            // row showing the reason. Skipped on success so the menu
+            // stays compact when everything works.
+            if (!audioOk)
             {
-                new Row { Id = ActionId.None,               Label = "SURVIVAL",
-                          IsSection = true },
-                new Row { Id = ActionId.ToggleHunger,       Label = HungerLabel(hungerEnabled),
-                          IsDisabled = !isSurvival },
-                new Row { Id = ActionId.None,               Label = "GRAPHICS",
-                          IsSection = true },
-                new Row { Id = ActionId.ToggleRealTextures, Label = TexturesLabel(useRealTextures) },
-                new Row { Id = ActionId.None,               Label = "AUDIO",
-                          IsSection = true },
-                new Row { Id = ActionId.SetMasterVolume,    Label = "ALL SOUND",
-                          IsSlider = true, Value = Clamp01(masterVolume) },
-                new Row { Id = ActionId.SetMusicVolume,     Label = "MUSIC",
-                          IsSlider = true, Value = Clamp01(musicVolume) },
-                new Row { Id = ActionId.Back,               Label = "BACK" },
-            };
+                string reason = AudioEngine.InitFailureReason ?? "unknown error";
+                // Trim long messages — the row width can't show much
+                // without wrapping. The full reason is also written to
+                // VS's debug output via Debug.WriteLine in AudioEngine.
+                if (reason.Length > 80) reason = reason.Substring(0, 77) + "...";
+                rowList.Add(new Row { Id = ActionId.None,
+                                      Label = "AUDIO UNAVAILABLE — " + reason.ToUpperInvariant(),
+                                      IsSection = true, IsDisabled = true });
+            }
+            rowList.Add(new Row { Id = ActionId.Back, Label = "BACK" });
+            var labels = rowList.ToArray();
 
             int rowW   = RowWidth(screenW, screenH);
             int rowH   = RowHeight(screenW, screenH);
