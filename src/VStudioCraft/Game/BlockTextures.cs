@@ -94,7 +94,50 @@ namespace VStudioCraft.Game
         // existing tile.
         public const int FirstTailDoorLayer = FirstTailCaneLayer + TailCaneLayerCount; // 107
         public const int TailDoorLayerCount = 6;
-        public const int LayerCount = FirstTailDoorLayer + TailDoorLayerCount;          // 113
+        // Tier 4 #17 — Bow combat companion items. Two new flat-sprite
+        // icons: TileFlintAndSteel and TileApple. Append-only past the
+        // door pack so existing v8 saves stay byte-stable. Both ship
+        // procedural (the embedded alpha_tools.png coords for the two
+        // sprites haven't been verified, so AlphaTileCoords carries
+        // sentinels and the slice helpers fall through to the
+        // procedural generators in either atlas mode).
+        public const int FirstTailFireLayer = FirstTailDoorLayer + TailDoorLayerCount; // 113
+        public const int TailFireLayerCount = 2;
+        // Tier 4 #20 — Snowball throwable icon. Egg already has a
+        // sprite at TileEgg=84 (Tier 3 #12); only the new snowball
+        // needs an atlas slot. Append-only past the fire pack.
+        public const int FirstTailThrowLayer = FirstTailFireLayer + TailFireLayerCount; // 115
+        public const int TailThrowLayerCount = 1;
+        // Tier 4 #15 — Bucket family icons (4 sprites: empty + water +
+        // lava + milk). Procedural-only — same alpha_tools.png-coord-
+        // unverified story as the door / fire / throw packs. Append-
+        // only past the throw pack so existing v8 saves stay byte-
+        // stable (atlas indices for every preceding tile are fixed).
+        public const int FirstTailBucketLayer = FirstTailThrowLayer + TailThrowLayerCount; // 116
+        public const int TailBucketLayerCount = 4;
+        // Tier 4 #18 — Slimeball icon (Alpha 341). One sprite appended
+        // past the bucket pack. Procedural-only — no verified
+        // alpha_tools.png coord, sentinel below. Append-only past the
+        // bucket pack so existing v8 saves stay byte-stable.
+        public const int FirstTailSlimeLayer  = FirstTailBucketLayer + TailBucketLayerCount; // 120
+        public const int TailSlimeLayerCount  = 1;
+        // Tier 4 #22 — Compass icon (Alpha 345). One sprite appended
+        // past the slime pack. Procedural-only — the atlas-base sprite
+        // is a static "white dial face with N marker" image; the
+        // rotating direction indicator is drawn as a TEXTUAL overlay
+        // in GameRenderer.RenderHotbar (NOT baked here — would require
+        // per-frame atlas mutation). Append-only past the slime pack
+        // so existing v8 saves stay byte-stable.
+        public const int FirstTailCompassLayer = FirstTailSlimeLayer + TailSlimeLayerCount;  // 121
+        public const int TailCompassLayerCount = 1;
+        // Tier 4 #21 — Saddle icon (Alpha 329). One sprite appended
+        // past the compass pack. Procedural-only — no verified
+        // alpha_tools.png coord, sentinel below. Append-only past the
+        // compass pack so existing v8/v9 saves stay byte-stable (every
+        // preceding atlas index is unchanged).
+        public const int FirstTailSaddleLayer  = FirstTailCompassLayer + TailCompassLayerCount; // 122
+        public const int TailSaddleLayerCount  = 1;
+        public const int LayerCount = FirstTailSaddleLayer + TailSaddleLayerCount;              // 123
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -157,6 +200,46 @@ namespace VStudioCraft.Game
         public const int TileIronDoorBottom = 110;
         public const int TileWoodDoorItem   = 111;
         public const int TileIronDoorItem   = 112;
+        // Tier 4 #17 — Flint and Steel + Apple icon tiles. Both are
+        // procedural item sprites; layer indices follow the door
+        // pack in append-only order.
+        public const int TileFlintAndSteel  = 113;
+        public const int TileApple          = 114;
+        // Tier 4 #20 — Snowball icon (Alpha 332). Procedural — no
+        // verified alpha_tools.png coord, sentinel entry below.
+        public const int TileSnowball       = 115;
+        // Tier 4 #15 — Bucket family icons (Alpha 325/326/327/335).
+        // Procedural — no verified alpha_tools.png coords, sentinel
+        // entries in AlphaTileCoords below. Each is a silver pail
+        // silhouette differentiated by its rim/contents colour so a
+        // glance at the hotbar tells the player which bucket they're
+        // holding.
+        public const int TileBucketEmpty    = 116;
+        public const int TileBucketWater    = 117;
+        public const int TileBucketLava     = 118;
+        public const int TileBucketMilk     = 119;
+        // Tier 4 #18 — Slimeball icon (Alpha 341). Procedural — no
+        // verified alpha_tools.png coord, sentinel entry below. Drops
+        // only from small Slime mobs; no recipe consumes it in Alpha
+        // 1.1.2_01 (sticky pistons + magma cream + slime block all
+        // post-date the era), so the sprite is purely visual.
+        public const int TileSlimeball      = 120;
+        // Tier 4 #22 — Compass icon (Alpha 345). Procedural — no
+        // verified alpha_tools.png coord, sentinel entry below. The
+        // base sprite is a static dial face; the rotating direction
+        // marker (N/E/S/W text) is rendered live as an OVERLAY on
+        // top of this tile by RenderHotbar, not baked into the atlas
+        // tile. Recipe ships in Tier 8 #42 once redstone exists; for
+        // now the item is creative-catalog only.
+        public const int TileCompass        = 121;
+        // Tier 4 #21 — Saddle icon (Alpha 329). Procedural — no
+        // verified alpha_tools.png coord, sentinel entry below. Brown
+        // leather pad with a darker hide outline and a metal-buckle pip
+        // so a glance at the hotbar reads "saddle, not bread or
+        // porkchop". Recipe doesn't exist in Alpha 1.1.2_01 (saddles
+        // are dungeon loot only); item ships as a creative-catalog
+        // entry until dungeons land in Tier 6 #32.
+        public const int TileSaddle         = 122;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -367,6 +450,30 @@ namespace VStudioCraft.Game
             // AlphaTileCoords); the alpha-textures atlas calls the
             // same path so the icons stay readable in either mode.
             GenerateProceduralDoorLayers(layerPixels);
+
+            // Tier 4 #17 — Flint and Steel + Apple icon pack. Same
+            // procedural-always story as the door pack.
+            GenerateProceduralFireLayers(layerPixels);
+
+            // Tier 4 #20 — Snowball icon. Egg already painted by
+            // GenerateProceduralItemLayers via TileEgg.
+            GenerateProceduralThrowLayers(layerPixels);
+
+            // Tier 4 #15 — Bucket icons (empty/water/lava/milk).
+            // Procedural-only, same story as the throw pack.
+            GenerateProceduralBucketLayers(layerPixels);
+
+            // Tier 4 #18 — Slimeball icon. Procedural-only, same
+            // sentinel-coord story as the bucket pack.
+            GenerateProceduralSlimeLayers(layerPixels);
+
+            // Tier 4 #22 — Compass dial face. Procedural-only, same
+            // sentinel-coord story as the slime pack.
+            GenerateProceduralCompassLayers(layerPixels);
+
+            // Tier 4 #21 — Saddle sprite. Procedural-only, same
+            // sentinel-coord story as the compass pack.
+            GenerateProceduralSaddleLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -1309,6 +1416,405 @@ namespace VStudioCraft.Game
             UploadItem (layerPixels, TileIronDoorItem,   GenerateIronDoorItemIcon);
         }
 
+        // Tier 4 #17 — Flint and Steel sprite. A small grey-steel
+        // strike-bar diagonally crossing a brown flint chip. The
+        // diagonal "+" silhouette reads as a fire-starter at hotbar
+        // scale; the steel highlights pick up so the metal flicker
+        // is visible against the dark flint.
+        private static void GenerateFlintAndSteelItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) flint   = (60, 55, 50);
+            (byte r, byte g, byte b) flintHi = (110, 100, 90);
+            (byte r, byte g, byte b) steel   = (180, 180, 195);
+            (byte r, byte g, byte b) steelHi = (230, 230, 240);
+            (byte r, byte g, byte b) steelLo = (95, 95, 110);
+            // Flint chip — bottom-left to mid-right diagonal blob.
+            int[] fx = { 4, 5, 5, 6, 6, 7, 7, 8 };
+            int[] fy = { 12, 11, 12, 11, 12, 10, 11, 10 };
+            for (int i = 0; i < fx.Length; i++)
+                SetPixel(pixels, fx[i], fy[i], flint.r, flint.g, flint.b);
+            SetPixel(pixels, 5, 11, flintHi.r, flintHi.g, flintHi.b);
+            SetPixel(pixels, 7, 10, flintHi.r, flintHi.g, flintHi.b);
+            // Steel striker — diagonal bar from upper-right toward
+            // the flint, two pixels wide for visual weight.
+            for (int i = 0; i < 6; i++)
+            {
+                int x = 11 - i;
+                int y = 4 + i;
+                SetPixel(pixels, x, y, steel.r, steel.g, steel.b);
+                SetPixel(pixels, x + 1, y, steelLo.r, steelLo.g, steelLo.b);
+                SetPixel(pixels, x, y - 1, steelHi.r, steelHi.g, steelHi.b);
+            }
+            // Spark dots — three small bright pips between the
+            // striker tip and the flint, hinting at "sparks fly".
+            SetPixel(pixels, 8, 9, 255, 220, 100);
+            SetPixel(pixels, 9, 8, 255, 200, 80);
+        }
+
+        // Tier 4 #17 — Apple sprite. A round red fruit with a small
+        // brown stem and a green leaf pip. Reads at hotbar size as
+        // unmistakeably "apple"; deep red body with a single
+        // highlight pixel anchors the colour against the warmer
+        // food items (porkchop / bread) so the player can pick the
+        // apple out of a mixed inventory at a glance.
+        private static void GenerateAppleItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) skin   = (205, 40, 40);
+            (byte r, byte g, byte b) skinHi = (245, 110, 90);
+            (byte r, byte g, byte b) skinLo = (130, 20, 20);
+            (byte r, byte g, byte b) stem   = (90, 55, 25);
+            (byte r, byte g, byte b) leaf   = (60, 145, 50);
+            (byte r, byte g, byte b) leafHi = (120, 200, 100);
+            // Apple body — rounded blob centred horizontally,
+            // slightly squashed so it reads as fruit rather than
+            // a sphere. Rows 5..12, columns 5..10, corners trimmed.
+            for (int y = 5; y <= 12; y++)
+            for (int x = 5; x <= 10; x++)
+            {
+                bool corner = (x == 5 || x == 10) && (y == 5 || y == 12);
+                if (corner) continue;
+                SetPixel(pixels, x, y, skin.r, skin.g, skin.b);
+            }
+            // Highlight bloom — bright pip on the upper-left of the
+            // body for a glossy fruit read.
+            SetPixel(pixels, 6, 6, skinHi.r, skinHi.g, skinHi.b);
+            SetPixel(pixels, 7, 7, skinHi.r, skinHi.g, skinHi.b);
+            // Shadow band — bottom-right edge.
+            SetPixel(pixels, 10, 11, skinLo.r, skinLo.g, skinLo.b);
+            SetPixel(pixels, 9, 12, skinLo.r, skinLo.g, skinLo.b);
+            // Stem — thin brown stub at the top.
+            SetPixel(pixels, 8, 4, stem.r, stem.g, stem.b);
+            SetPixel(pixels, 8, 3, stem.r, stem.g, stem.b);
+            // Leaf — small green wedge to the right of the stem.
+            SetPixel(pixels, 9, 4, leaf.r, leaf.g, leaf.b);
+            SetPixel(pixels, 10, 4, leafHi.r, leafHi.g, leafHi.b);
+        }
+
+        // Tier 4 #17 — Procedural fire-and-food layer painter. Called
+        // from both the procedural-only atlas (CreateAtlas) and the
+        // alpha-textures atlas (CreateAtlasFromAlphaTerrain). Same
+        // fall-through pattern as the door layer painter — sentinel
+        // entries in AlphaTileCoords mean these are always painted
+        // procedurally regardless of atlas mode.
+        private static void GenerateProceduralFireLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TileFlintAndSteel, GenerateFlintAndSteelItem);
+            UploadItem(layerPixels, TileApple,         GenerateAppleItem);
+        }
+
+        // Tier 4 #20 — Procedural throwable icon painter. Snowball is
+        // the only new sprite; Egg's tile (TileEgg=84) was painted by
+        // Tier 3 #12's drop pass. Same procedural-only story as the
+        // fire pack — sentinel entries in AlphaTileCoords mean both
+        // atlas modes paint identically here.
+        private static void GenerateProceduralThrowLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TileSnowball, GenerateSnowballItem);
+        }
+
+        // Tier 4 #15 — Procedural bucket icon painter. Four sprites:
+        // empty, water, lava, milk. All four share the silver-pail
+        // silhouette painted by GenerateBucketBody so the hotbar reads
+        // as "same item, different contents" — only the contents fill
+        // colour differs. Same procedural-only story as the throw pack
+        // (sentinel coords mean both atlas modes paint identically).
+        private static void GenerateProceduralBucketLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TileBucketEmpty, GenerateBucketEmptyItem);
+            UploadItem(layerPixels, TileBucketWater, GenerateBucketWaterItem);
+            UploadItem(layerPixels, TileBucketLava,  GenerateBucketLavaItem);
+            UploadItem(layerPixels, TileBucketMilk,  GenerateBucketMilkItem);
+        }
+
+        // Tier 4 #18 — Slimeball icon painter. Single sprite — small
+        // green sphere with a brighter highlight pip and a darker
+        // shadow pip so it reads as a 3D ball, not a flat disc. The
+        // colour band (saturated lime → forest green) matches the
+        // Slime mob body so a glance at the hotbar links the drop to
+        // the mob it came from.
+        private static void GenerateProceduralSlimeLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TileSlimeball, GenerateSlimeballItem);
+        }
+
+        // Tier 4 #22 — Compass icon painter. Single sprite — light
+        // grey circular dial face with a fixed "N" indicator at the
+        // top so the player can read the dial as a compass at a
+        // glance even before the live direction overlay paints. The
+        // rotating arrow / direction marker is drawn separately by
+        // RenderHotbar (per-frame text overlay tied to the player's
+        // bearing); baking it into the atlas tile would require
+        // mutating the texture every frame, which isn't worth the GL
+        // cost for a one-letter glyph the HUD layer can already draw.
+        private static void GenerateProceduralCompassLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TileCompass, GenerateCompassItem);
+        }
+
+        // Tier 4 #21 — Saddle icon painter. Single sprite — small
+        // brown leather pad with a darker hide outline, a horn at the
+        // front (the raised pommel), and a tiny iron-buckle pip on
+        // the side strap. Same procedural-only story as the slime /
+        // compass packs (sentinel atlas coord), so both atlas modes
+        // paint identically.
+        private static void GenerateProceduralSaddleLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TileSaddle, GenerateSaddleItem);
+        }
+
+        // Tier 4 #21 — Saddle sprite. 16×16 pixel painter:
+        //   - Main pad: a horizontally-elongated brown rectangle
+        //     (rows 7..11, cols 3..12). Reads as the seat the player
+        //     sits on top of the pig.
+        //   - Outline: one-pixel darker rim around the pad so the
+        //     silhouette pops against any hotbar background colour.
+        //   - Pommel: a tiny raised hump on the front edge (cols 7..8,
+        //     row 6) — the saddle's horn, what the rider grips.
+        //   - Buckle: single iron-grey pixel pair on the right side
+        //     strap (col 11, row 9) so the pad reads as a strapped
+        //     saddle, not just a generic brown blob.
+        // Palette is muted — saturated browns clash with the warmer
+        // pinks of the porkchop and bread tiles, so the saddle gets a
+        // colder, drabber leather hue to keep the hotbar legible.
+        private static void GenerateSaddleItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) leather   = (115, 75, 40);
+            (byte r, byte g, byte b) leatherHi = (155, 105, 60);
+            (byte r, byte g, byte b) leatherLo = (75, 45, 22);
+            (byte r, byte g, byte b) buckle    = (180, 180, 185);
+            // Pad fill.
+            for (int y = 7; y <= 11; y++)
+            for (int x = 3; x <= 12; x++)
+                SetPixel(pixels, x, y, leather.r, leather.g, leather.b);
+            // Top highlight band along the upper edge of the pad.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 7, leatherHi.r, leatherHi.g, leatherHi.b);
+            // Bottom shadow band along the lower edge of the pad.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 11, leatherLo.r, leatherLo.g, leatherLo.b);
+            // Outline ring.
+            for (int x = 3; x <= 12; x++)
+            {
+                SetPixel(pixels, x, 6,  leatherLo.r, leatherLo.g, leatherLo.b);
+                SetPixel(pixels, x, 12, leatherLo.r, leatherLo.g, leatherLo.b);
+            }
+            for (int y = 7; y <= 11; y++)
+            {
+                SetPixel(pixels, 2,  y, leatherLo.r, leatherLo.g, leatherLo.b);
+                SetPixel(pixels, 13, y, leatherLo.r, leatherLo.g, leatherLo.b);
+            }
+            // Pommel hump — slight raise above the pad's front edge.
+            SetPixel(pixels, 7, 5, leatherLo.r, leatherLo.g, leatherLo.b);
+            SetPixel(pixels, 8, 5, leatherLo.r, leatherLo.g, leatherLo.b);
+            SetPixel(pixels, 7, 6, leatherHi.r, leatherHi.g, leatherHi.b);
+            SetPixel(pixels, 8, 6, leatherHi.r, leatherHi.g, leatherHi.b);
+            // Buckle pip on the right-side strap.
+            SetPixel(pixels, 11, 9, buckle.r, buckle.g, buckle.b);
+            SetPixel(pixels, 11, 10, buckle.r, buckle.g, buckle.b);
+        }
+
+        // Tier 4 #22 — Compass dial face. 16×16 sprite: light grey
+        // outer ring with a darker bezel pip, off-white centre disc,
+        // and a small red "N" marker pip at the top of the ring so
+        // the dial is unmistakably oriented even with no overlay.
+        // Same low-key palette the Alpha sprite used (greyscale dial
+        // with a single accent colour). The HUD overlay paints the
+        // live direction letter on TOP of this tile at draw time.
+        private static void GenerateCompassItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) bezel = (95, 95, 100);
+            (byte r, byte g, byte b) face  = (220, 220, 215);
+            (byte r, byte g, byte b) inner = (245, 240, 230);
+            (byte r, byte g, byte b) nMark = (200, 60, 60);
+            // Bezel ring (12-px diameter approximated by a rounded
+            // square between [3..12] inclusive with corners trimmed).
+            for (int y = 3; y <= 12; y++)
+            for (int x = 3; x <= 12; x++)
+            {
+                bool corner = (x == 3 || x == 12) && (y == 3 || y == 12);
+                if (corner) continue;
+                bool edge = (x == 3 || x == 12 || y == 3 || y == 12);
+                if (edge) SetPixel(pixels, x, y, bezel.r, bezel.g, bezel.b);
+                else      SetPixel(pixels, x, y, face.r,  face.g,  face.b);
+            }
+            // Inner highlight disc — slightly brighter centre so the
+            // face reads as a polished dial, not a flat disc.
+            for (int y = 6; y <= 9; y++)
+            for (int x = 6; x <= 9; x++)
+                SetPixel(pixels, x, y, inner.r, inner.g, inner.b);
+            // Fixed "N" marker pip at the top of the ring — two red
+            // pixels so it survives the 1× hotbar scaling without
+            // disappearing. The live direction letter from RenderHotbar
+            // is drawn larger and centred, so this pip stays visible
+            // beneath it as the cardinal-N reference.
+            SetPixel(pixels, 7, 4, nMark.r, nMark.g, nMark.b);
+            SetPixel(pixels, 8, 4, nMark.r, nMark.g, nMark.b);
+        }
+
+        // Tier 4 #18 — Slimeball sprite. Centred 6×6 rounded square
+        // (corners trimmed) on transparent so the silhouette reads as
+        // a soft sphere. Saturated lime body, bright highlight on the
+        // upper-left, darker shadow band on the lower-right. Same
+        // shape language as the snowball sprite — different palette
+        // distinguishes them at a glance even though both are
+        // throwable-sized round items.
+        private static void GenerateSlimeballItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) slime   = (90, 175, 90);
+            (byte r, byte g, byte b) slimeHi = (160, 230, 130);
+            (byte r, byte g, byte b) slimeLo = (45, 110, 50);
+            for (int y = 5; y <= 10; y++)
+            for (int x = 5; x <= 10; x++)
+            {
+                bool corner = (x == 5 || x == 10) && (y == 5 || y == 10);
+                if (corner) continue;
+                SetPixel(pixels, x, y, slime.r, slime.g, slime.b);
+            }
+            // Highlight bloom — bright top-left.
+            SetPixel(pixels, 6, 6, slimeHi.r, slimeHi.g, slimeHi.b);
+            SetPixel(pixels, 7, 6, slimeHi.r, slimeHi.g, slimeHi.b);
+            SetPixel(pixels, 6, 7, slimeHi.r, slimeHi.g, slimeHi.b);
+            // Shadow band — bottom-right edge.
+            SetPixel(pixels, 9, 10, slimeLo.r, slimeLo.g, slimeLo.b);
+            SetPixel(pixels, 10, 9, slimeLo.r, slimeLo.g, slimeLo.b);
+            SetPixel(pixels, 10, 10, slimeLo.r, slimeLo.g, slimeLo.b);
+        }
+
+        // Tier 4 #15 — Bucket silhouette painter. Iron pail viewed
+        // head-on: a trapezoid body (wide rim, narrow base) with a
+        // curved handle arching over the top. Silver-grey palette
+        // with a darker band along the bottom and a brighter
+        // highlight on the upper-left so it reads as a metal vessel
+        // and not a flat rectangle. The body's interior is left as
+        // a hole so callers can fill it with a contents colour
+        // (water/lava/milk) after this routine runs.
+        private static void GenerateBucketBody(byte[] pixels)
+        {
+            (byte r, byte g, byte b) iron     = (170, 175, 180);
+            (byte r, byte g, byte b) ironHi   = (215, 220, 225);
+            (byte r, byte g, byte b) ironLo   = (90, 95, 100);
+            // Handle — single-pixel arch from (4,4) up to (8..7,2)
+            // and back down to (11,4). Drawn first so the rim
+            // overdraws where they meet (rim wins visually).
+            SetPixel(pixels, 4, 4, ironLo.r, ironLo.g, ironLo.b);
+            SetPixel(pixels, 5, 3, ironLo.r, ironLo.g, ironLo.b);
+            SetPixel(pixels, 6, 2, ironLo.r, ironLo.g, ironLo.b);
+            SetPixel(pixels, 7, 2, ironLo.r, ironLo.g, ironLo.b);
+            SetPixel(pixels, 8, 2, ironLo.r, ironLo.g, ironLo.b);
+            SetPixel(pixels, 9, 2, ironLo.r, ironLo.g, ironLo.b);
+            SetPixel(pixels, 10, 3, ironLo.r, ironLo.g, ironLo.b);
+            SetPixel(pixels, 11, 4, ironLo.r, ironLo.g, ironLo.b);
+            // Rim — top edge of pail, full width.
+            for (int x = 3; x <= 12; x++)
+                SetPixel(pixels, x, 4, iron.r, iron.g, iron.b);
+            // Rim highlight — bright pip on the upper-left so the
+            // pail catches a "light from above-left" suggestion.
+            SetPixel(pixels, 4, 4, ironHi.r, ironHi.g, ironHi.b);
+            SetPixel(pixels, 5, 4, ironHi.r, ironHi.g, ironHi.b);
+            // Side walls — trapezoid, narrowing toward the base.
+            // Left wall: drops from (3,5) to (5,12); right wall:
+            // drops from (12,5) to (10,12).
+            for (int y = 5; y <= 12; y++)
+            {
+                int leftX  = 3 + ((y - 5) / 4); // 3,3,3,3,4,4,4,4
+                int rightX = 12 - ((y - 5) / 4);
+                SetPixel(pixels, leftX,  y, iron.r, iron.g, iron.b);
+                SetPixel(pixels, rightX, y, iron.r, iron.g, iron.b);
+            }
+            // Base — bottom edge of pail.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 12, iron.r, iron.g, iron.b);
+            // Base shadow — one row up so the pail reads as a 3D
+            // cup, not a flat sheet.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 11, ironLo.r, ironLo.g, ironLo.b);
+        }
+
+        // Helper — flood-fill the pail's interior with `fill` (BGR
+        // order via SetPixel). Bounds match the trapezoid in
+        // GenerateBucketBody: rim row 5..11, narrowing-cup interior.
+        // Only writes pixels within the inner cup so the silver
+        // silhouette stays visible around the contents.
+        private static void FillBucketInterior(byte[] pixels, byte fr, byte fg, byte fb)
+        {
+            for (int y = 5; y <= 11; y++)
+            {
+                int leftX  = 4 + ((y - 5) / 4);
+                int rightX = 11 - ((y - 5) / 4);
+                for (int x = leftX; x <= rightX; x++)
+                    SetPixel(pixels, x, y, fr, fg, fb);
+            }
+        }
+
+        // Tier 4 #15 — Empty bucket sprite. Silver pail silhouette
+        // with no contents — interior shows transparent pixels (the
+        // pail looks "empty"). The body painter alone is enough; no
+        // fill call.
+        private static void GenerateBucketEmptyItem(byte[] pixels)
+        {
+            GenerateBucketBody(pixels);
+        }
+
+        // Tier 4 #15 — Water bucket sprite. Pail silhouette with a
+        // blue contents fill — same blue as the in-world water tile
+        // so the player visually links the bucket to the source it
+        // was scooped from.
+        private static void GenerateBucketWaterItem(byte[] pixels)
+        {
+            GenerateBucketBody(pixels);
+            FillBucketInterior(pixels, 65, 105, 200);
+        }
+
+        // Tier 4 #15 — Lava bucket sprite. Pail silhouette with an
+        // orange-red contents fill matching the in-world lava tile.
+        private static void GenerateBucketLavaItem(byte[] pixels)
+        {
+            GenerateBucketBody(pixels);
+            FillBucketInterior(pixels, 220, 100, 30);
+        }
+
+        // Tier 4 #15 — Milk bucket sprite. Pail silhouette with a
+        // creamy-white contents fill — lighter than the empty
+        // pail's grey rim so the contents read as "filled" not
+        // "empty" at a glance.
+        private static void GenerateBucketMilkItem(byte[] pixels)
+        {
+            GenerateBucketBody(pixels);
+            FillBucketInterior(pixels, 245, 245, 240);
+        }
+
+        // Tier 4 #20 — Snowball sprite. A small white-ish circle on
+        // transparent — reads as a packed snow handful at hotbar
+        // scale. Slight blue tint on the shadow side anchors the
+        // colour against the warmer ingredient items so the player
+        // can pick a snowball out of a mixed inventory at a glance
+        // (without it the white blob looks like a paper / cloth
+        // sprite). Centred body 6×6 with rounded corners; one bright
+        // highlight pip and one cool-shadow pip.
+        private static void GenerateSnowballItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) snow   = (235, 240, 250);
+            (byte r, byte g, byte b) snowHi = (255, 255, 255);
+            (byte r, byte g, byte b) snowLo = (175, 195, 220);
+            // Body — 6×6 rounded square (corners trimmed).
+            for (int y = 5; y <= 10; y++)
+            for (int x = 5; x <= 10; x++)
+            {
+                bool corner = (x == 5 || x == 10) && (y == 5 || y == 10);
+                if (corner) continue;
+                SetPixel(pixels, x, y, snow.r, snow.g, snow.b);
+            }
+            // Highlight bloom — bright top-left.
+            SetPixel(pixels, 6, 6, snowHi.r, snowHi.g, snowHi.b);
+            SetPixel(pixels, 7, 6, snowHi.r, snowHi.g, snowHi.b);
+            SetPixel(pixels, 6, 7, snowHi.r, snowHi.g, snowHi.b);
+            // Cool-shadow band on the bottom-right edge so the
+            // snowball reads as a 3D ball, not a flat disc.
+            SetPixel(pixels, 9, 10, snowLo.r, snowLo.g, snowLo.b);
+            SetPixel(pixels, 10, 9, snowLo.r, snowLo.g, snowLo.b);
+            SetPixel(pixels, 10, 10, snowLo.r, snowLo.g, snowLo.b);
+        }
+
         // Wheat seeds item — small green/brown cluster of grain pellets
         // centred in the tile. Reads as a handful of seeds at hotbar
         // scale: a 4×3 dotted oval with two-tone shading.
@@ -2185,6 +2691,49 @@ namespace VStudioCraft.Game
             /* TileIronDoorBottom    */ (-1, -1),
             /* TileWoodDoorItem      */ (-1, -1),
             /* TileIronDoorItem      */ (-1, -1),
+            // Tier 4 #17 — FlintAndSteel + Apple. Same procedural-only
+            // story as the door pack: the canonical alpha_tools.png
+            // coords haven't been verified, so the sentinels keep the
+            // slice helpers from overlaying garbage and the procedural
+            // generators paint the final tile in both atlas modes.
+            /* TileFlintAndSteel     */ (-1, -1),
+            /* TileApple             */ (-1, -1),
+            // Tier 4 #20 — Snowball throwable icon. Procedural-only,
+            // same story as the fire pack — alpha_tools.png coord
+            // unverified, sentinel keeps the slicer from overlaying
+            // garbage. Egg's atlas tile lives at TileEgg=84 (Tier 3
+            // #12) and is unaffected.
+            /* TileSnowball          */ (-1, -1),
+            // Tier 4 #15 — Bucket icons. Procedural-only, same
+            // sentinel story as the throw pack — alpha_tools.png
+            // coords for the four bucket sprites haven't been
+            // verified against the embedded sheet, so the slicer
+            // stays out and the procedural generators do the
+            // painting. Bumping these to real coords later is per-
+            // row one-line edits.
+            /* TileBucketEmpty       */ (-1, -1),
+            /* TileBucketWater       */ (-1, -1),
+            /* TileBucketLava        */ (-1, -1),
+            /* TileBucketMilk        */ (-1, -1),
+            // Tier 4 #18 — Slimeball icon. Procedural-only, same
+            // sentinel story as the bucket pack — alpha_tools.png
+            // coord unverified, sentinel keeps the slicer from
+            // overlaying garbage and the procedural generator paints
+            // the final tile in both atlas modes.
+            /* TileSlimeball         */ (-1, -1),
+            // Tier 4 #22 — Compass dial-face icon. Procedural-only —
+            // the rotating direction marker is rendered live as a
+            // TEXTUAL overlay on top of this base tile by RenderHotbar
+            // (per-frame atlas mutation isn't worth the cost), so the
+            // baked tile is just a fixed dial face. Sentinel keeps
+            // the slicer out of this layer in both atlas modes.
+            /* TileCompass           */ (-1, -1),
+            // Tier 4 #21 — Saddle icon. Procedural-only, same sentinel
+            // story as the compass pack — alpha_tools.png coord for
+            // the saddle sprite hasn't been verified against the
+            // embedded sheet. The procedural generator paints a small
+            // brown leather pad in both atlas modes.
+            /* TileSaddle            */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -2317,6 +2866,33 @@ namespace VStudioCraft.Game
             // alpha-textures mode while the procedural-only atlas
             // (CreateAtlas) would render them correctly.
             GenerateProceduralDoorLayers(layerPixels);
+
+            // Tier 4 #17 — Flint and Steel + Apple icons, same
+            // procedural-always story as the door pack.
+            GenerateProceduralFireLayers(layerPixels);
+
+            // Tier 4 #20 — Snowball icon. Egg's tile is shared with the
+            // Tier 3 #12 drop tile (TileEgg=84), painted by the
+            // Tail-item alpha-tools slice above; only Snowball needs
+            // an explicit paint here.
+            GenerateProceduralThrowLayers(layerPixels);
+
+            // Tier 4 #15 — Bucket icons (empty/water/lava/milk). All
+            // four ship procedural; sentinel coords keep the slicer
+            // from overlaying garbage in alpha-textures mode.
+            GenerateProceduralBucketLayers(layerPixels);
+
+            // Tier 4 #18 — Slimeball icon. Procedural-always — same
+            // sentinel-coord story as the bucket pack.
+            GenerateProceduralSlimeLayers(layerPixels);
+
+            // Tier 4 #22 — Compass dial face. Procedural-always —
+            // same sentinel-coord story as the slime pack.
+            GenerateProceduralCompassLayers(layerPixels);
+
+            // Tier 4 #21 — Saddle sprite. Procedural-always — same
+            // sentinel-coord story as the compass pack.
+            GenerateProceduralSaddleLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);

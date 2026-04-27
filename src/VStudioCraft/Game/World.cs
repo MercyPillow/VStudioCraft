@@ -299,6 +299,60 @@ namespace VStudioCraft.Game
                     _hostiles.Add(mob);
                 }
             }
+
+            // ---- SLIME pass ----
+            // Tier 4 #18 — Slimes spawn in a tiny rare subset of chunks
+            // ("slime chunks") regardless of light, at low Y. The chunk
+            // selector is a deterministic hash of (chunkX, chunkZ) so
+            // a given world-seed reliably has the SAME slime chunks
+            // every load — players who learn one chunk's slime address
+            // can return to it. Mask of 0x3FF gives a ~1-in-1024 hit
+            // rate, which is plenty rare; the alternative of "every
+            // chunk has a small chance" would scatter slimes
+            // everywhere and dilute the "find the slime cave" niche
+            // that's central to the Alpha slime-farming idiom.
+            //
+            // Per slime-chunk we attempt SlimeAttempts spawns, each
+            // sampling a random Y in [0, SlimeMaxY). Floor + 2-air-
+            // headroom required (Big slime is 2.0 tall — we still
+            // demand 2 air blocks above the floor, which is enough for
+            // size=1 placement; oversize-on-a-tight-pocket clipping is
+            // resolved by the entity's IntegrateMotion the same way it
+            // is for any AABB-versus-cell collision elsewhere). NO
+            // light gate — this is the whole reason slimes are a
+            // distinct species.
+            //
+            // V1 always spawns Big (size=2) slimes. Alpha 1.1.2_01
+            // actually picks size in {0,1,2} uniformly per spawn, but
+            // a fresh slime chunk producing 4 medium + small slimes
+            // immediately overwhelms the local mob count once each
+            // Big-slime-equivalent splits into 2..4 children. Big-only
+            // keeps the chunk-gen population tractable; the runtime
+            // split path produces the smaller variants organically.
+            uint slimeChunkHash = unchecked(
+                (uint)c.ChunkX * 0x1F1F1F1Fu + (uint)c.ChunkZ * 0x91E10DA5u);
+            if ((slimeChunkHash & SlimeChunkMask) == 0u)
+            {
+                uint slimeRng = unchecked(slimeChunkHash * 0x9E3779B1u + (uint)Seed);
+                for (int attempt = 0; attempt < SlimeAttempts; attempt++)
+                {
+                    slimeRng = unchecked(slimeRng * 0x85EBCA6Bu + 0xC2B2AE3Du);
+                    int slx = (int)((slimeRng >> 4) & 0xFu);   // 0..15
+                    slimeRng = unchecked(slimeRng * 0x85EBCA6Bu + 0xC2B2AE3Du);
+                    int slz = (int)((slimeRng >> 4) & 0xFu);   // 0..15
+                    slimeRng = unchecked(slimeRng * 0x85EBCA6Bu + 0xC2B2AE3Du);
+                    int syCandidate = (int)((slimeRng >> 8) % (uint)SlimeMaxY);
+                    if (syCandidate + 2 >= Chunk.SizeY) continue;
+                    if (!BlockData.IsSolid(c.Get(slx, syCandidate, slz))) continue;
+                    if (c.Get(slx, syCandidate + 1, slz) != BlockType.Air) continue;
+                    if (c.Get(slx, syCandidate + 2, slz) != BlockType.Air) continue;
+
+                    int slimeMobSeed = unchecked((int)slimeRng) ^ 0x5151AA55;
+                    var slimeSpawn = new OpenTK.Vector3(
+                        chunkBaseX + slx + 0.5f, syCandidate + 1f, chunkBaseZ + slz + 0.5f);
+                    _hostiles.Add(new Slime(slimeSpawn, slimeMobSeed, /*size:*/2));
+                }
+            }
         }
 
         // Live mob-spawn attempt loop (Tier 3 #11). Layered ON TOP of the
@@ -361,6 +415,18 @@ namespace VStudioCraft.Game
         // to keep cave hostiles topped up.
         public const int   CaveSampleMinY        = 8;
         public const int   CaveSampleMaxY        = 56;
+        // Tier 4 #18 — Slime chunk-gen pass. SlimeChunkMask is the
+        // bitmask the (chunkX, chunkZ) hash is AND'd against; a result
+        // of 0 means the chunk is a "slime chunk". 0x3FF (10 bits)
+        // gives a 1-in-1024 hit rate, which is plenty rare so the
+        // slime-farming niche stays a deliberate find. SlimeAttempts
+        // is the per-slime-chunk spawn quota; 4 is enough that a hit
+        // chunk feels populated without drowning in slimes (each
+        // big-slime-equivalent splits into 2..4 children on death,
+        // multiplying the population organically).
+        public const uint  SlimeChunkMask        = 0x3FFu;
+        public const int   SlimeAttempts         = 4;
+        public const int   SlimeMaxY             = 40;
 
         private float _spawnTimer;
         private readonly Random _spawnRng = new Random();

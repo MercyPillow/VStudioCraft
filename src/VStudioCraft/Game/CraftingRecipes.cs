@@ -322,6 +322,88 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Torch, 4)));
 
+            // Tier 4 #17 — Bow. Alpha pattern is sticks down the LEFT
+            // and centre columns plus string down the RIGHT column,
+            // arranged in a "bent bow" silhouette:
+            //   . S B
+            //   S . B
+            //   . S B
+            // Three sticks form the spine, three strings form the
+            // bowstring. Output: 1 bow.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Air,   BlockType.Stick, BlockType.String },
+                    { BlockType.Stick, BlockType.Air,   BlockType.String },
+                    { BlockType.Air,   BlockType.Stick, BlockType.String },
+                },
+                new ItemStack(BlockType.Bow, 1)));
+
+            // Tier 4 #17 — Arrow. Alpha pattern is flint top, stick
+            // middle, feather bottom in a single vertical column:
+            //   F
+            //   S
+            //   E
+            // Output: 4 arrows. The matcher anchors the 1-wide
+            // pattern to any of the three columns.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Flint },
+                    { BlockType.Stick },
+                    { BlockType.Feather },
+                },
+                new ItemStack(BlockType.Arrow, 4)));
+
+            // Tier 4 #17 — Flint and Steel. Alpha pattern is iron
+            // ingot top-left, flint to its lower-right (the diagonal
+            // strike pose):
+            //   I .
+            //   . F
+            // Output: 1 flint and steel. The placement / fire / TNT
+            // hooks are gated on later tiers (see TryInteract no-op
+            // comment); the recipe still produces a usable item slot
+            // so the player can gather the ingredients early.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.IronIngot, BlockType.Air },
+                    { BlockType.Air,       BlockType.Flint },
+                },
+                new ItemStack(BlockType.FlintAndSteel, 1)));
+
+            // Tier 4 #15 — Empty Bucket. Alpha pattern is three iron
+            // ingots arranged in a V (corners + bottom-centre):
+            //   I . I
+            //   . I .
+            // Output: 1 empty bucket. Filled buckets aren't crafted
+            // — RMB on a fluid source / cow turns this empty bucket
+            // into the matching filled variant in TryInteract.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.IronIngot, BlockType.Air,       BlockType.IronIngot },
+                    { BlockType.Air,       BlockType.IronIngot, BlockType.Air       },
+                },
+                new ItemStack(BlockType.BucketEmpty, 1)));
+
+            // Tier 4 #22 — Compass recipe is DEFERRED to Tier 8 #42 (the
+            // tier that ships Redstone Dust). Alpha's pattern is four
+            // iron ingots arranged in a + with a single redstone dust
+            // in the middle:
+            //   . I .
+            //   I R I
+            //   . I .
+            // Output: 1 compass. Redstone Dust doesn't exist as an
+            // ItemType yet — adding the recipe here would either
+            // require a placeholder ingredient (which the player can't
+            // obtain, so the recipe would never trigger) or wiring a
+            // half-baked redstone item ahead of its tier. Per the
+            // roadmap the item ships as a creative-catalog-only entry
+            // until redstone arrives; the recipe slot is reserved here
+            // by comment so the Tier 8 author can drop it in alongside
+            // the new ingredient without re-discovering the pattern.
+
             return list;
         }
 

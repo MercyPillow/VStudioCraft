@@ -506,6 +506,17 @@ namespace VStudioCraft.UI
                         _renderer.TickHostiles(dt);
                         _renderer.TickMobSpawns(dt);
                         _renderer.TickFurnacesIfDue(dt);
+                        // Tier 4 #17 — Bow/arrow hooks. TickBowCharge
+                        // accumulates RMB-held draw time and fires on
+                        // release; TickArrows runs ballistic physics
+                        // and collision for in-flight arrows. Both
+                        // freeze under pause / inventory like drops.
+                        _renderer.TickBowCharge(dt);
+                        _renderer.TickArrows(dt);
+                        // Tier 4 #20 — Snowball / egg projectile
+                        // physics. Same gating as TickArrows (frozen
+                        // under pause / inventory).
+                        _renderer.TickThrown(dt);
                     }
                     else if (!_renderer.IsPaused)
                     {
@@ -1082,7 +1093,17 @@ namespace VStudioCraft.UI
                 _input.BreakPressed = true;
                 _input.BreakHeld = true;
             }
-            else if (e.Button == MouseButtons.Right) _input.PlacePressed = true;
+            else if (e.Button == MouseButtons.Right)
+            {
+                _input.PlacePressed = true;
+                // Tier 4 #17 — Hold-RMB path used by the bow draw.
+                // PlacePressed remains the one-shot signal every other
+                // RMB consumer keys off (placement, eat, door, hoe);
+                // PlaceHeld lets the renderer's bow-charge accumulator
+                // see the held state without changing those existing
+                // callers. Cleared on MouseUp.
+                _input.PlaceHeld = true;
+            }
         }
 
         private void HandlePauseMenuAction(PauseMenu.ActionId act)
@@ -1249,6 +1270,12 @@ namespace VStudioCraft.UI
             {
                 _rmbDragActive = false;
                 _rmbDragPainted.Clear();
+                // Tier 4 #17 — clear the bow-draw hold flag. The
+                // renderer's TickBowCharge sees this transition and
+                // fires the arrow on the same frame so the shot
+                // velocity uses the most recent frame's accumulated
+                // draw time.
+                _input.PlaceHeld = false;
             }
         }
 

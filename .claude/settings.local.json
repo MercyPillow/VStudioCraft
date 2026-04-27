@@ -165,7 +165,18 @@
       "PowerShell(git -C C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft diff --stat)",
       "PowerShell(\\(Get-Content 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\BlockTextures.cs'\\).Length)",
       "PowerShell(git -C C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft diff --stat HEAD -- src/VStudioCraft/Game/BlockTextures.cs)",
-      "PowerShell(dotnet build src/VStudioCraft/VStudioCraft.csproj 2>&1)"
+      "PowerShell(dotnet build src/VStudioCraft/VStudioCraft.csproj 2>&1)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\Block.cs\",\"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\GameRenderer.cs\",\"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\BlockTextures.cs\",\"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\ItemStack.cs\",\"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\PassiveMobs.cs\",\"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\CreativeCatalog.cs\" | ForEach-Object { \"$\\($_.Name\\): $\\(\\(Get-Content $_.FullName\\).Count\\) lines\" })",
+      "PowerShell(dotnet build \"src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" -nologo -v q 2>&1)",
+      "PowerShell(dotnet build src/VStudioCraft/VStudioCraft.csproj -nologo -v q)",
+      "PowerShell($msb = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"; & $msb src/VStudioCraft/VStudioCraft.csproj /t:CoreCompile /p:Configuration=Release /v:minimal /nologo)",
+      "PowerShell(dotnet build src/VStudioCraft/VStudioCraft.csproj -c Release -nologo -v m 2>&1)",
+      "PowerShell($dll = Get-Item src\\\\VStudioCraft\\\\obj\\\\Release\\\\VStudioCraft.dll; $src = Get-Item src\\\\VStudioCraft\\\\Game\\\\Entity.cs; \"DLL : $\\($dll.LastWriteTime\\)\"; \"Src : $\\($src.LastWriteTime\\)\"; \"DLL newer than Entity.cs source: $\\($dll.LastWriteTime -gt $src.LastWriteTime\\)\")",
+      "PowerShell($dll = Get-Item src\\\\VStudioCraft\\\\obj\\\\Release\\\\VStudioCraft.dll -ErrorAction SilentlyContinue; if \\($dll\\) { Write-Output \"DLL: $\\($dll.LastWriteTime\\)\" } else { Write-Output \"DLL missing\" }; $now = Get-Date; Write-Output \"Now: $now\")",
+      "PowerShell($f = Get-Item src\\\\VStudioCraft\\\\obj\\\\Debug\\\\VStudioCraft.csproj.CoreCompileInputs.cache; \"CoreCompileInputs.cache: $\\($f.LastWriteTime\\)\"; $g = Get-Item src\\\\VStudioCraft\\\\obj\\\\Debug\\\\.NETFramework,Version=v4.7.2.AssemblyAttributes.cs; \"AssemblyAttributes: $\\($g.LastWriteTime\\)\")",
+      "PowerShell($opentk = Get-ChildItem \"$env:USERPROFILE\\\\.nuget\\\\packages\\\\opentk\\\\3.3.3\\\\lib\\\\net20\\\\OpenTK.dll\" -ErrorAction SilentlyContinue; if \\($opentk\\) { Write-Output $opentk.FullName } else { Get-ChildItem \"$env:USERPROFILE\\\\.nuget\\\\packages\\\\opentk\" -Recurse -Filter OpenTK.dll | Select-Object -First 5 FullName })",
+      "PowerShell($csc = Get-ChildItem \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\Roslyn\\\\csc.exe\" -ErrorAction SilentlyContinue; if \\(-not $csc\\) { $csc = Get-ChildItem \"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\" -Recurse -Filter csc.exe -ErrorAction SilentlyContinue | Select-Object -First 1 }; Write-Output \"CSC: $\\($csc.FullName\\)\")",
+      "PowerShell($glc = Get-ChildItem \"$env:USERPROFILE\\\\.nuget\\\\packages\" -Recurse -Filter \"OpenTK.GLControl.dll\" -ErrorAction SilentlyContinue | Select-Object -First 1; Write-Output $glc.FullName)"
     ]
   }
 }

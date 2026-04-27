@@ -261,6 +261,80 @@ namespace VStudioCraft.Game
         // branch.
         WoodDoorItem = 102, // Alpha 324
         IronDoorItem = 103, // Alpha 330
+
+        // Tier 4 #17 — Flint and Steel + Apple. Both are simple item
+        // ids appended past IronDoorItem so existing v8 saves stay
+        // byte-stable (no enum renumber). FlintAndSteel is the bow's
+        // companion fire-starter; Alpha used it on TNT (prime → fuse)
+        // and on solid blocks (place a Fire block adjacent to the
+        // clicked face). Both downstream targets are roadmap-deferred
+        // (TNT priming = Tier 8 #43, Fire block = Tier 6 #34), so
+        // V1 RMB does nothing — this is a faithful staged drop, not
+        // a bug. Apple is a 4-HP food item that drops rarely (~0.5%)
+        // from breaking oak leaves; same eat-on-RMB shape as Bread /
+        // RawPorkchop / CookedPorkchop.
+        FlintAndSteel = 104, // Alpha 259
+        Apple         = 105, // Alpha 260
+
+        // Tier 4 #20 — Snowball. Throwable RMB projectile (Alpha 332).
+        // Egg already exists at id 82 (Tier 3 #12 — chicken lays them);
+        // this entry adds Snowball as a NEW item, and the projectile
+        // entity ThrownProjectile carries both kinds at runtime.
+        // Snowball stack-cap is 16 in Alpha (vs 64 default) — see
+        // ItemStack.MaxStackSizeFor for the exception. V1 Snowball is a
+        // creative-catalog-only entry: Alpha obtained it via shovel-on-
+        // snow, but snow blocks are roadmap-deferred (Tier 6/8). NO
+        // recipe ships with this tier; the catalog gives creative
+        // players one and survival has no obtain path until snow lands.
+        // Append-only past Apple=105 so existing v8 saves stay byte-
+        // stable (same trick every preceding tier used).
+        Snowball = 106, // Alpha 332
+
+        // Tier 4 #15 — Buckets. Empty bucket scoops Water/Lava sources or
+        // milks a Cow on RMB; filled bucket places its source back into
+        // the world. All four ids ship as items (IsItem range extends to
+        // BucketMilk), and the filled three are stack-cap-1 in Alpha
+        // 1.1.2_01 so a player can't carry an unlimited fluid reservoir
+        // in a single slot — the carry cost is what makes ferrying lava
+        // up from cave-level a meaningful trip. Append-only past
+        // Snowball=106 so existing v8 saves stay byte-stable.
+        BucketEmpty = 107, // Alpha 325
+        BucketWater = 108, // Alpha 326
+        BucketLava  = 109, // Alpha 327
+        BucketMilk  = 110, // Alpha 335
+
+        // Tier 4 #18 — Slimeball. Drops only from small slimes; the in-
+        // world Slime mob is the obtain path. No recipes consume it
+        // (sticky pistons + magma cream + slime block all post-date
+        // Alpha 1.1.2_01), so the item is a cosmetic collectible kept
+        // for completeness — same "audited Alpha id, no downstream
+        // craft" story as Snowball. Append-only past BucketMilk=110 so
+        // existing v8 saves stay byte-stable.
+        Slimeball   = 111, // Alpha 341
+
+        // Tier 4 #22 — Compass (Alpha 345). Held item; small textual
+        // direction marker on the hotbar slot points toward world
+        // spawn from anywhere on the map. The Alpha craft is 4 iron
+        // ingots in a + with a single redstone in the middle; redstone
+        // dust doesn't exist yet (Tier 8 #42) so the item ships as a
+        // creative-catalog-only entry — the recipe is deferred until
+        // redstone arrives. Append-only past Slimeball=111 so existing
+        // v8 saves stay byte-stable; v9 of the save format adds the
+        // world-spawn vector (see WorldSaveFormat) so a freshly-loaded
+        // save can point the compass at the same spawn the player
+        // originally appeared at, not just wherever they happened to be
+        // when the save was written.
+        Compass     = 112, // Alpha 345
+
+        // Tier 4 #21 — Saddle (Alpha 329). Held item; RMB on a Pig
+        // equips it (sets Pig.Saddled), and RMB on a saddled pig (with
+        // a non-saddle held stack) mounts the player. Alpha saddles are
+        // unstackable (one slot per saddle) and obtained ONLY from
+        // dungeon chests — there's no craft recipe in Alpha 1.1.2_01.
+        // Dungeons don't exist yet (Tier 6 #32), so until they ship the
+        // saddle is a creative-catalog-only entry. Append-only past
+        // Compass=112 so existing v8/v9 saves stay byte-stable.
+        Saddle      = 113, // Alpha 329
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -315,6 +389,35 @@ namespace VStudioCraft.Game
         // player crafts, picks up, and what drops on break.
         public const BlockType WoodDoorItem = BlockType.WoodDoorItem;
         public const BlockType IronDoorItem = BlockType.IronDoorItem;
+        // Tier 4 #17 — Bow combat ammo / food / flint-and-steel.
+        // Bow + Arrow already existed in the enum at Tier 3 #10 as
+        // inert collectibles; #17 wires them into real projectile
+        // combat. FlintAndSteel + Apple are appended past
+        // IronDoorItem.
+        public const BlockType FlintAndSteel = BlockType.FlintAndSteel;
+        public const BlockType Apple         = BlockType.Apple;
+        // Tier 4 #20 — Snowball throwable. Egg (already on the list as
+        // BlockType.Egg) shares the projectile path but doesn't need a
+        // new alias here — it kept its Tier 3 #12 alias.
+        public const BlockType Snowball      = BlockType.Snowball;
+        // Tier 4 #15 — Bucket family. Empty bucket fills with Water /
+        // Lava sources or with Milk via RMB on a Cow; filled buckets
+        // dispense back into the world (Milk is currently a no-op until
+        // potion effects arrive — see TryInteract for the rationale).
+        public const BlockType BucketEmpty   = BlockType.BucketEmpty;
+        public const BlockType BucketWater   = BlockType.BucketWater;
+        public const BlockType BucketLava    = BlockType.BucketLava;
+        public const BlockType BucketMilk    = BlockType.BucketMilk;
+        // Tier 4 #18 — Slimeball drop from small slimes.
+        public const BlockType Slimeball     = BlockType.Slimeball;
+        // Tier 4 #22 — Compass. Recipe-deferred until Tier 8 #42
+        // ships redstone dust; until then the item is creative-only.
+        public const BlockType Compass       = BlockType.Compass;
+        // Tier 4 #21 — Saddle. Alpha 1.1.2_01 has NO craft for saddles
+        // — only dungeon-chest loot. Dungeons land in Tier 6 #32, so
+        // until then the saddle ships as a creative-catalog-only entry
+        // and the recipe gap is documented in features.md.
+        public const BlockType Saddle        = BlockType.Saddle;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -361,6 +464,27 @@ namespace VStudioCraft.Game
                 // and future multiplayer-protocol parity work.
                 case BlockType.WoodDoorItem:   return 324;
                 case BlockType.IronDoorItem:   return 330;
+                // Tier 4 #17 — flint+steel + apple. Alpha numeric ids
+                // 259 (FlintAndSteel) and 260 (Apple); kept here for
+                // save-format and future multiplayer-protocol parity.
+                case BlockType.FlintAndSteel:  return 259;
+                case BlockType.Apple:          return 260;
+                // Tier 4 #20 — Snowball throwable. Alpha numeric id 332;
+                // Egg's Alpha id (344) is already returned by the
+                // BlockType.Egg case earlier in the switch.
+                case BlockType.Snowball:       return 332;
+                // Tier 4 #15 — Bucket family. Alpha numeric ids 325
+                // (empty), 326 (water), 327 (lava), 335 (milk).
+                case BlockType.BucketEmpty:    return 325;
+                case BlockType.BucketWater:    return 326;
+                case BlockType.BucketLava:     return 327;
+                case BlockType.BucketMilk:     return 335;
+                // Tier 4 #18 — Slimeball. Alpha numeric id 341.
+                case BlockType.Slimeball:      return 341;
+                // Tier 4 #22 — Compass. Alpha numeric id 345.
+                case BlockType.Compass:        return 345;
+                // Tier 4 #21 — Saddle. Alpha numeric id 329.
+                case BlockType.Saddle:         return 329;
                 default:                       return -1;
             }
         }
@@ -410,6 +534,19 @@ namespace VStudioCraft.Game
                 // names are only needed for the item form.
                 case BlockType.WoodDoorItem:   return "Wooden Door";
                 case BlockType.IronDoorItem:   return "Iron Door";
+                case BlockType.FlintAndSteel:  return "Flint and Steel";
+                case BlockType.Apple:          return "Apple";
+                case BlockType.Snowball:       return "Snowball";
+                // Tier 4 #15 — Bucket family. Empty bucket is just
+                // "Bucket" (no qualifier — matches Alpha tooltip);
+                // filled variants get a "<contents> Bucket" name.
+                case BlockType.BucketEmpty:    return "Bucket";
+                case BlockType.BucketWater:    return "Water Bucket";
+                case BlockType.BucketLava:     return "Lava Bucket";
+                case BlockType.BucketMilk:     return "Milk Bucket";
+                case BlockType.Slimeball:      return "Slimeball";
+                case BlockType.Compass:        return "Compass";
+                case BlockType.Saddle:         return "Saddle";
                 default:                       return t.ToString();
             }
         }
@@ -551,7 +688,24 @@ namespace VStudioCraft.Game
             // separately keeps the per-id branches in IsSolid /
             // IsCubeShape / IsOpaque from being short-circuited by
             // the item early-out.
-            || ((byte)t >= (byte)BlockType.WoodDoorItem && (byte)t <= (byte)BlockType.IronDoorItem);
+            || ((byte)t >= (byte)BlockType.WoodDoorItem && (byte)t <= (byte)BlockType.IronDoorItem)
+            // Tier 4 #17 — FlintAndSteel + Apple. Both are non-
+            // placeable, non-tool items appended past IronDoorItem;
+            // future appended item ids extend this range.
+            // Tier 4 #20 — Snowball appended past Apple. The slice
+            // simply grows the upper bound; same trick every preceding
+            // item-pack used.
+            // Tier 4 #15 — Bucket family (empty/water/lava/milk) appended
+            // past Snowball. Slice upper bound bumps to BucketMilk=110;
+            // future appended item ids continue to extend it.
+            // Tier 4 #18 — Slimeball appended past BucketMilk. Slice
+            // upper bound bumps to Slimeball=111.
+            // Tier 4 #22 — Compass appended past Slimeball. Slice upper
+            // bound bumps to Compass=112; future appended item ids
+            // continue to extend it.
+            // Tier 4 #21 — Saddle appended past Compass. Slice upper
+            // bound bumps to Saddle=113.
+            || ((byte)t >= (byte)BlockType.FlintAndSteel && (byte)t <= (byte)BlockType.Saddle);
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -1116,6 +1270,40 @@ namespace VStudioCraft.Game
                 case BlockType.IronDoorBlockTop:    return BlockTextures.TileIronDoorTop;
                 case BlockType.WoodDoorItem:        return BlockTextures.TileWoodDoorItem;
                 case BlockType.IronDoorItem:        return BlockTextures.TileIronDoorItem;
+                // Tier 4 #17 — Flint and Steel + Apple icons. Both
+                // are flat-sprite items, same render path as every
+                // other ingredient — sprite tile sampled by the
+                // hotbar / dropped-item / inventory-icon shaders.
+                case BlockType.FlintAndSteel:       return BlockTextures.TileFlintAndSteel;
+                case BlockType.Apple:               return BlockTextures.TileApple;
+                // Tier 4 #20 — Snowball icon. Same flat-sprite path as
+                // every other ingredient item; Egg's tile (TileEgg) is
+                // already wired via the BlockType.Egg case above.
+                case BlockType.Snowball:            return BlockTextures.TileSnowball;
+                // Tier 4 #15 — Bucket family icons. Each has its own
+                // flat-sprite tile — silver pail silhouette plus a
+                // contents-coloured rim (water=blue, lava=orange,
+                // milk=white). All four ship procedural; canonical
+                // alpha_tools.png coords are sentinel.
+                case BlockType.BucketEmpty:         return BlockTextures.TileBucketEmpty;
+                case BlockType.BucketWater:         return BlockTextures.TileBucketWater;
+                case BlockType.BucketLava:          return BlockTextures.TileBucketLava;
+                case BlockType.BucketMilk:          return BlockTextures.TileBucketMilk;
+                // Tier 4 #18 — Slimeball icon. Procedural — small green
+                // sphere sprite painted in BlockTextures.
+                case BlockType.Slimeball:           return BlockTextures.TileSlimeball;
+                // Tier 4 #22 — Compass icon. Procedural — light grey
+                // dial face with a fixed N marker at the top. The
+                // direction-pointing arrow is rendered as a TEXTUAL
+                // OVERLAY ("N"/"E"/"S"/"W") at hotbar render time on
+                // top of this base sprite, NOT baked into the atlas
+                // tile (would require per-frame atlas mutation).
+                case BlockType.Compass:             return BlockTextures.TileCompass;
+                // Tier 4 #21 — Saddle icon. Procedural — small brown
+                // leather saddle silhouette. No verified alpha_tools.png
+                // coord; the sentinel entry in AlphaTileCoords keeps the
+                // slicer from overlaying garbage.
+                case BlockType.Saddle:              return BlockTextures.TileSaddle;
                 default:
                     return BlockTextures.TileStone;
             }

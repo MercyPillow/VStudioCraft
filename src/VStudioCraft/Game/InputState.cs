@@ -25,6 +25,17 @@ namespace VStudioCraft.Game
         // for instant break); survival ignores it and uses BreakHeld instead.
         public bool BreakHeld;
 
+        // Tier 4 #17 — True while the right mouse button is held with
+        // mouse-look captured. Drives bow-charge accumulation: while
+        // the held item is Bow and PlaceHeld is set, the renderer
+        // builds up draw fraction over ArrowProjectile.MaxDrawSeconds.
+        // On the falling edge (PlaceHeld → false with prior charge)
+        // an arrow fires from the camera at scaled muzzle velocity.
+        // Other RMB consumers (placement, food eat, doors, etc.) keep
+        // routing through the existing one-shot PlacePressed; the
+        // hold path is bow-only.
+        public bool PlaceHeld;
+
         // Player-owned 45-slot inventory + cursor. Hotbar lives at slot
         // indices 36..44 (matching InventoryScreen). The render thread reads
         // Slots[i] every frame to draw the bar / inventory; the UI thread
@@ -172,6 +183,7 @@ namespace VStudioCraft.Game
             MouseLookActive = false;
             BreakPressed = PlacePressed = false;
             BreakHeld = false;
+            PlaceHeld = false;
             InventoryClickButton = 0;
             InventoryClickShift = false;
             DropOnePressed = false;

@@ -258,6 +258,13 @@ void main()
         private const int MaxUnloadsPerFrame = 3;
         private const int MaxMeshUploadsPerFrame = 4; // completed-mesh drains per frame
 
+        // Mob render-cull distance. Mobs farther than this from the camera
+        // skip rendering even if technically inside the frustum — at >64m a
+        // pig is sub-pixel anyway, so issuing 5–9 draw calls per mob just
+        // to render a flicker isn't worth it. The despawn radius is 128
+        // blocks, so we cull well before mobs disappear from world state.
+        private const float MobCullDistance = 64f;
+
         private const float DayDuration = 300f;         // 5 min
         private const float TransitionDuration = 30f;   // 30 s (dawn and dusk each)
         private const float NightDuration = 60f;        // 1 min
@@ -305,6 +312,38 @@ void main()
         // load doesn't inherit drops from the previous session.
         private readonly System.Collections.Generic.List<DroppedItem> _drops
             = new System.Collections.Generic.List<DroppedItem>();
+
+        // Tier 4 #17 — In-flight bow arrows. Each entity in this list is
+        // an ArrowProjectile owned by the renderer the same way drops are.
+        // TickArrows advances physics, runs a swept block-raycast and
+        // mob-AABB test, and despawns the arrow on hit / max-range / max-
+        // landed-age. Arrows are NOT persisted to save files (Alpha didn't
+        // either) — SetWorld clears them so a load doesn't inherit
+        // arrows from the previous session.
+        //
+        // Bow draw is tracked alongside: BowDrawHeld is true while the
+        // player has RMB held with a Bow in the hotbar, BowDrawSec is
+        // the accumulated charge time clamped to ArrowProjectile.
+        // MaxDrawSeconds. RMB release with a positive draw fires one
+        // arrow; the input-handling site flips BowDrawHeld off and
+        // calls FireBowArrow which reads BowDrawSec, decrements an
+        // arrow stack, and resets BowDrawSec to 0.
+        private readonly System.Collections.Generic.List<ArrowProjectile> _arrows
+            = new System.Collections.Generic.List<ArrowProjectile>();
+
+        // Tier 4 #20 — In-flight thrown projectiles (Snowball + Egg).
+        // Same renderer-owned-list pattern as _arrows; TickThrown
+        // advances physics + raycast + AABB, RenderThrown paints. Not
+        // persisted (Alpha didn't either) — SetWorld clears them.
+        private readonly System.Collections.Generic.List<ThrownProjectile> _thrown
+            = new System.Collections.Generic.List<ThrownProjectile>();
+
+        // Bow charge state — only meaningful when the held item is Bow.
+        // Single-thread-owned (render thread) so no synchronisation;
+        // the host's RMB-state setters cross threads but only write to
+        // _input fields that this code reads.
+        private float _bowDrawSec;
+        private bool _bowWasDrawing;
 
         // Cosmetic particle system. Block breaks, water splashes, and the
         // ambient lava-bubble / torch-smoke emitters all push into this.
@@ -555,6 +594,22 @@ void main()
         private const float FurnaceTickInterval = 0.05f;
         private float _furnaceTickAccumulator;
 
+        // Mob AI tick cadence. Alpha 1.1.2 runs entity logic at 20 Hz; we
+        // accumulate dt and step the wander/chase/physics integration on
+        // 50 ms boundaries. Without this, the mob update cost scales with
+        // frame rate (at 1000 fps a passive's gravity + Collides scan ran
+        // 50× per logical tick), which dominated the FPS regression after
+        // the Tier 3 mobs landed. The accumulator is shared across
+        // passives + hostiles so they stay in lockstep, and capped so a
+        // long pause / hitch doesn't trigger a spiral-of-death catch-up.
+        private const float MobTickInterval = 0.05f;
+        private const int   MobTickMaxCatchup = 4;
+        private float _mobTickAccumulator;
+        // Steps consumed this frame, set by TickPassives and read by
+        // TickHostiles. Caller pairs the two methods, so TickHostiles
+        // doesn't re-advance the accumulator — both lists step in lockstep.
+        private int _mobStepsThisFrame;
+
         // Survival is opt-in; the existing game loop starts in Creative so we
         // don't break the creative-lite flow everybody already has. Toggled
         // from the UI thread via F3 — the single enum write is atomic on
@@ -782,6 +837,11 @@ void main()
             Player.Velocity = Vector3.Zero;
             Player.OnGround = false;
             Player.HealFull();
+            // Tier 4 #21 — A fresh world has no rideable pig, and the
+            // player starts dismounted. Defensive — should already be
+            // null on a freshly-constructed Player, but explicit-is-
+            // better when world recycling reuses a Player instance.
+            Player.Riding = null;
             _spawnPos = Player.Position;
             _voidTimer = 0f;
             _wasSubmergedPrev = false;
@@ -800,13 +860,28 @@ void main()
             Player.Position = header.CameraPos;
             Player.Velocity = Vector3.Zero;
             Player.OnGround = false;
+            // Tier 4 #21 — Always dismount on world load. Matches
+            // Alpha 1.1.2_01 (the saddle reference is ephemeral —
+            // saving while mounted always returned dismounted). Also
+            // the previously-ridden pig instance is gone now (the new
+            // World was just loaded and its passive list is freshly
+            // populated by chunk-gen), so the reference would be a
+            // dangling pointer to a discarded entity if we DIDN'T
+            // clear it.
+            Player.Riding = null;
             // Saved health + mode restore the exact survival state; if the save is
             // pre-v3 the loader fills them with Creative + full health defaults.
             GameMode = header.GameMode;
             Player.Health = header.Health > 0 ? header.Health : Player.MaxHealth;
             HungerEnabled = header.HungerEnabled;
             Player.LastFallDistance = 0f;
-            _spawnPos = Player.Position;
+            // Tier 4 #22 — restore the saved world spawn (v9+) so the
+            // compass and respawn keep pointing at the original spawn
+            // across save/load. Pre-v9 saves return CameraPos in
+            // SpawnPos (see WorldSaveFormat.Load), which preserves the
+            // pre-existing behaviour where _spawnPos was set to the
+            // just-loaded player position.
+            _spawnPos = header.SpawnPos;
             _voidTimer = 0f;
             _wasSubmergedPrev = false;
             _stepDistance = 0f;
@@ -829,6 +904,10 @@ void main()
                 GameMode = GameMode,
                 Health = Player.Health,
                 HungerEnabled = HungerEnabled,
+                // Tier 4 #22 — persist the world spawn alongside the
+                // header so the compass needle and respawn target both
+                // survive a round-trip through disk.
+                SpawnPos = _spawnPos,
             };
             WorldSaveFormat.Save(path, header, _world);
         }
@@ -1219,6 +1298,16 @@ void main()
             // coordinates — drop them so a world swap doesn't leave stale
             // floating items at coordinates that may no longer be loaded.
             _drops.Clear();
+            // Tier 4 #17 — same reasoning for in-flight arrows. They
+            // reference world coordinates of the previous session and
+            // would visually drift through the wrong terrain after a
+            // load. Bow draw state also resets so the player doesn't
+            // inherit a half-charged shot across worlds.
+            _arrows.Clear();
+            // Tier 4 #20 — same reasoning for thrown snowballs/eggs.
+            _thrown.Clear();
+            _bowDrawSec = 0f;
+            _bowWasDrawing = false;
             // Same reasoning for cosmetic particles — a leftover lava
             // bubble from the previous world would float in mid-air at
             // the new world's matching coordinates.
@@ -1735,6 +1824,88 @@ void main()
         public bool TryInteract()
         {
             if (_world == null) return false;
+
+            // Tier 4 #20 — Snowball / Egg throw runs BEFORE the raycast
+            // gate. Throws fire into open air (over a cliff, into the
+            // sky, past max-reach) so the raycast-must-hit gate that
+            // normally short-circuits TryInteract() would lock the
+            // throw to "must aim at a block within reach" — the wrong
+            // behaviour, since Alpha lets you launch a snowball at
+            // anything in the camera direction. Held-item match is the
+            // only gate; the projectile's own physics handle whether it
+            // hits a block, a mob, or flies past max-range.
+            if (Input != null)
+            {
+                var preStack = Input.Inventory.GetHotbar(Input.HotbarIndex);
+                BlockType preHeld = preStack.IsEmpty ? BlockType.Air : preStack.Type;
+                if (preHeld == BlockType.Snowball || preHeld == BlockType.Egg)
+                {
+                    SpawnThrownProjectile(preHeld == BlockType.Snowball
+                        ? ThrownProjectile.Kind.Snowball
+                        : ThrownProjectile.Kind.Egg);
+                    if (GameMode == GameMode.Survival)
+                        Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                    SfxBank.PlayPlace(BlockType.Wool);
+                    return true;
+                }
+                // Tier 4 #15 — Empty-bucket-on-Cow milking. Runs BEFORE
+                // the block raycast so an entity in front of (and
+                // closer than) any block intercepts the RMB. We
+                // explicitly compare the closest cow's ray-distance
+                // against the closest block's ray-distance — if a wall
+                // sits between the player and the cow, the wall wins
+                // and the bucket interaction falls through to the
+                // fluid-pickup / placement paths below. Only Cow is a
+                // valid milking target; pigs / sheep / chickens are
+                // ignored (Alpha 1.1.2_01 only milks cows).
+                if (preHeld == BlockType.BucketEmpty)
+                {
+                    if (TryMilkCowWithBucket()) return true;
+                    // No cow hit — fall through to the block-raycast
+                    // path below so an empty bucket can still scoop a
+                    // water/lava source even when there's no cow in
+                    // front of the player.
+                }
+                // Tier 4 #21 — Saddle / pig-mount interactions. Mirrors
+                // the cow-milking pattern: an entity-pick along the
+                // camera ray runs BEFORE the block raycast so a pig
+                // closer than any solid block intercepts the RMB.
+                //
+                // Two branches here, in priority order:
+                //   1. Held = Saddle: equip the closest hit pig. Sets
+                //      Pig.Saddled = true and decrements the saddle
+                //      stack (survival only). Misses on no-pig fall
+                //      through to the block raycast — a saddle RMB on
+                //      empty space shouldn't open a crafting table or
+                //      place a block, but the placement code already
+                //      no-ops on item types so no extra suppression is
+                //      needed.
+                //   2. Held != Saddle and the closest hit entity is a
+                //      saddled pig: mount the pig (set Player.Riding
+                //      to it). The player can mount with any held
+                //      stack — Alpha didn't gate mounting on an empty
+                //      hand. This branch comes second so RMB-with-
+                //      saddle on an already-saddled pig is interpreted
+                //      as "equip again" (a no-op visual, the pig is
+                //      already saddled) rather than "mount" — matches
+                //      Alpha behaviour where holding a saddle never
+                //      mounts.
+                if (preHeld == BlockType.Saddle)
+                {
+                    if (TrySaddleClosestPig()) return true;
+                    // No pig hit — fall through. Don't consume.
+                }
+                else if (Player.Riding == null)
+                {
+                    // Mount-only branch — already-mounted players
+                    // don't need a re-mount RMB. Also skipped if the
+                    // pig the player is riding gets RMB'd from on top
+                    // (a closest-hit-pig pick from inside the AABB
+                    // would otherwise re-mount immediately).
+                    if (TryMountSaddledPig()) return true;
+                }
+            }
+
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
                 return false;
             var target = _world.GetBlock(hit.X, hit.Y, hit.Z);
@@ -1958,6 +2129,145 @@ void main()
                         }
                         return true;
                     }
+                }
+                // Tier 4 #17 — Apple (Alpha 260) heals 4 HP and is
+                // consumed on RMB; same gate as Bread/Stew so eating
+                // at full health is a no-op. No item return (unlike
+                // Stew) — apples are a flat one-shot food.
+                else if (held == BlockType.Apple)
+                {
+                    if (Player != null && Player.Health < Player.MaxHealth)
+                    {
+                        EatFood(4);
+                        if (GameMode == GameMode.Survival)
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                        return true;
+                    }
+                }
+                // Tier 4 #17 — Flint and Steel (Alpha 259) is a NO-OP
+                // in V1. The two real uses both depend on systems
+                // gated to later tiers:
+                //   * Light fire on a solid block face → Tier 6 #34
+                //     (Fire spread). No fire block, no fire mechanic.
+                //   * Prime TNT → Tier 8 #43 (TNT + redstone). No
+                //     primed TNT entity.
+                // Returning false (rather than true) lets the held
+                // item RMB fall through to the standard tile-entity
+                // switch below — clicking flint-and-steel on a
+                // crafting table still opens the crafting screen,
+                // which matches the Alpha behaviour where the tool
+                // didn't suppress block interactions.
+                else if (held == BlockType.FlintAndSteel)
+                {
+                    // Intentional no-op — see comment above. Fall
+                    // through to the target switch so RMB on a
+                    // workbench / furnace / chest / door still
+                    // routes to the normal interact handlers.
+                }
+                // Tier 4 #15 — Empty bucket RMB on a fluid SOURCE
+                // cell scoops the source out and swaps the held
+                // bucket for the matching filled variant. Only
+                // sources qualify (Alpha rule — flowing cells are
+                // transient and can't be picked up; the player has
+                // to hunt for a still cell). The cell becomes Air
+                // and the chunk's HasActiveFluid flag is re-armed
+                // so the surrounding fluid network re-flows next
+                // tick (without this, neighbouring flowing cells
+                // adjacent to the now-empty cell would never re-
+                // evaluate, and the freshly-scooped cell would just
+                // sit dry forever even if reachable from another
+                // source). Non-source cells (FlowingWater /
+                // FlowingLava / regular blocks) fall through to the
+                // tile-entity switch unmodified.
+                if (held == BlockType.BucketEmpty)
+                {
+                    if (target == BlockType.Water || target == BlockType.Lava)
+                    {
+                        BlockType filled = (target == BlockType.Water)
+                            ? BlockType.BucketWater
+                            : BlockType.BucketLava;
+                        if (_world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air))
+                        {
+                            // Re-arm the chunk's fluid tick. A chunk
+                            // that's gone steady-state stops re-
+                            // ticking; setting HasActiveFluid=true
+                            // forces FluidTick to revisit it next
+                            // frame so neighbouring flowing cells
+                            // can react to the new empty cell.
+                            int cx = hit.X >> 4, cz = hit.Z >> 4;
+                            var chunk = _world.GetChunk(cx, cz);
+                            if (chunk != null) chunk.HasActiveFluid = true;
+                            SwapHeldBucket(filled);
+                            // Use the place sound for the audio
+                            // cue — Alpha's bucket-fill sound is
+                            // distinct, but PlayPlace(Wool) is the
+                            // closest match in the existing bank.
+                            SfxBank.PlayPlace(BlockType.Wool);
+                            return true;
+                        }
+                    }
+                    // No fluid source under crosshair — fall through
+                    // to the tile-entity switch so RMB on a chest /
+                    // furnace / workbench / door with an empty
+                    // bucket still opens the relevant screen.
+                }
+                // Tier 4 #15 — Filled water / lava bucket RMB places
+                // a source cell adjacent to the clicked face. Same
+                // adjacency rule as block placement — hit.Nx/Ny/Nz
+                // is the offset to the empty cell. Replaceable
+                // targets (Air, flowing fluids, flowers / grass /
+                // mushrooms / wheat / cane) get overwritten the
+                // same way TryPlace handles them, but stricter:
+                // we only allow Air or any fluid cell here so the
+                // player doesn't accidentally lose a flower /
+                // sapling under a poured bucket. After the place
+                // succeeds the held filled-bucket becomes an empty
+                // bucket so the player can refill at the next
+                // source they find.
+                if (held == BlockType.BucketWater || held == BlockType.BucketLava)
+                {
+                    int px = hit.X + hit.Nx;
+                    int py = hit.Y + hit.Ny;
+                    int pz = hit.Z + hit.Nz;
+                    BlockType existing = _world.GetBlock(px, py, pz);
+                    bool replaceable = existing == BlockType.Air
+                                    || BlockData.FluidGroup(existing) != 0;
+                    if (replaceable)
+                    {
+                        BlockType source = (held == BlockType.BucketWater)
+                            ? BlockType.Water
+                            : BlockType.Lava;
+                        if (_world.SetBlock(px, py, pz, source))
+                        {
+                            // Mark the destination chunk's fluid
+                            // flag so FluidTick picks the new source
+                            // up next frame and starts the outflow.
+                            // Without this, a freshly poured bucket
+                            // into a quiescent chunk would just sit
+                            // there as a 1×1×1 puddle until something
+                            // else woke the chunk up.
+                            int cx = px >> 4, cz = pz >> 4;
+                            var chunk = _world.GetChunk(cx, cz);
+                            if (chunk != null) chunk.HasActiveFluid = true;
+                            SwapHeldBucket(BlockType.BucketEmpty);
+                            SfxBank.PlayPlace(BlockType.Wool);
+                            return true;
+                        }
+                    }
+                }
+                // Tier 4 #15 — Milk bucket RMB. In Alpha 1.1.2_01
+                // milk's only effect was clearing potion effects
+                // — and potions don't exist yet (gated to a future
+                // tier). For V1 the action is a no-op; the bucket
+                // stays full so the player doesn't lose the milk.
+                // TODO: When potions arrive, drink the milk (clear
+                // active effects, swap held BucketMilk →
+                // BucketEmpty). Falling through to the target
+                // switch means RMB on a chest / workbench with
+                // milk still opens the screen.
+                if (held == BlockType.BucketMilk)
+                {
+                    // Intentional no-op — see comment above.
                 }
             }
 
@@ -2440,6 +2750,18 @@ void main()
                 // Fall through — Grass still drops Dirt via the normal
                 // path (DropFor maps Grass → Dirt for bare-hand breaks).
             }
+            // Tier 4 #17 — Leaves have a 1-in-200 (0.5%) chance to drop
+            // an Apple in addition to the normal sapling odds. Alpha
+            // 1.1.2_01 only had one leaf type so any Leaves break is
+            // treated as oak for the apple drop. Runs alongside the
+            // default DropFor (which still produces a sapling chance).
+            if (type == BlockType.Leaves)
+            {
+                if (_dropRng.Next(200) == 0)
+                    SpawnSingleDrop(bx, by, bz, new ItemStack(BlockType.Apple, 1));
+                // Fall through to DropFor for the standard sapling /
+                // leaves drop.
+            }
 
             // Stone → cobblestone, CoalOre → Coal item, DiamondOre →
             // Diamond gem (handled in DropFor). Two blocks have
@@ -2645,6 +2967,773 @@ void main()
             }
         }
 
+        // Tier 4 #17 — Per-frame bow charge accumulator + arrow physics
+        // tick. Called from the host loop alongside TickDrops so all
+        // entity-style updates share the same pause/modal gating (drops,
+        // arrows, particles all freeze when the world is halted).
+        //
+        // Charge logic:
+        //   * If the player is holding RMB AND the held item is Bow,
+        //     accumulate dt into _bowDrawSec (capped at MaxDrawSeconds).
+        //   * On the falling edge (held item != Bow OR PlaceHeld false)
+        //     while a charge had been built, fire one arrow with muzzle
+        //     velocity proportional to the captured draw fraction.
+        //   * Outside the bow path the accumulator stays at 0.
+        // The fire path also gates on having an Arrow stack in the
+        // inventory — no arrows means the shot is rejected silently
+        // (matches Alpha — the bow's "can't fire empty" feedback was
+        // just the arrow not appearing).
+        public void TickBowCharge(float dt)
+        {
+            if (Input == null || Player == null) return;
+            var heldStack = Input.Inventory.GetHotbar(Input.HotbarIndex);
+            BlockType held = heldStack.IsEmpty ? BlockType.Air : heldStack.Type;
+            bool drawing = Input.PlaceHeld && held == BlockType.Bow;
+
+            if (drawing)
+            {
+                _bowDrawSec += dt;
+                if (_bowDrawSec > ArrowProjectile.MaxDrawSeconds)
+                    _bowDrawSec = ArrowProjectile.MaxDrawSeconds;
+                _bowWasDrawing = true;
+            }
+            else if (_bowWasDrawing)
+            {
+                // Falling edge — RMB released (or hotbar swapped off
+                // the bow mid-draw, which is a faithful Alpha "the
+                // shot just dies" outcome). Fire only if there was
+                // any draw at all and the player is actually holding
+                // a Bow at release; otherwise just dump the charge.
+                if (held == BlockType.Bow && _bowDrawSec > 0f)
+                {
+                    FireBowArrow(_bowDrawSec / ArrowProjectile.MaxDrawSeconds);
+                }
+                _bowDrawSec = 0f;
+                _bowWasDrawing = false;
+            }
+        }
+
+        // Spawn one ArrowProjectile from the player's eye position
+        // along the camera-forward direction, with muzzle velocity +
+        // damage scaled by the captured draw fraction. Decrements
+        // one Arrow from the inventory in survival; rejects the
+        // shot if no arrows are available.
+        //
+        // drawFrac is clamped to [0, 1]. Below 0.05 we still allow
+        // the shot but use the floor velocity / damage — Alpha
+        // released even a tap as a weak arrow rather than a "must
+        // hold N seconds" gate.
+        private void FireBowArrow(float drawFrac)
+        {
+            if (_world == null || Camera == null || Player == null || Input == null) return;
+            if (drawFrac < 0f) drawFrac = 0f;
+            if (drawFrac > 1f) drawFrac = 1f;
+            // Survival ammo gate. Creative shoots without consuming
+            // arrows (matches Alpha — creative bows had no ammo cost).
+            if (GameMode == GameMode.Survival)
+            {
+                if (!TryConsumeOneArrow()) return;
+            }
+
+            float speed = ArrowProjectile.MinMuzzleSpeed
+                + (ArrowProjectile.MaxMuzzleSpeed - ArrowProjectile.MinMuzzleSpeed) * drawFrac;
+            int dmg = (int)System.Math.Round(drawFrac * ArrowProjectile.MaxDamage);
+            if (dmg < 1) dmg = 1;
+
+            var origin = new Vector3(
+                Player.Position.X,
+                Player.Position.Y + Player.EyeHeight,
+                Player.Position.Z);
+            var dir = Camera.Forward;
+            // Defensive normalise — Camera.Forward is already unit
+            // length but a future refactor could feed raw radians
+            // into this path without normalising; keeps speed math
+            // exact.
+            if (dir.LengthSquared > 1e-8f) dir.Normalize();
+
+            var arrow = new ArrowProjectile
+            {
+                Position    = origin + dir * 0.5f,
+                Velocity    = dir * speed,
+                Origin      = origin,
+                Damage      = dmg,
+                HasLanded   = false,
+                LandedTimer = 0f,
+            };
+            _arrows.Add(arrow);
+            // Pickup-style chirp doubles as a release sound — there's
+            // no dedicated bow-fire SFX in the bank yet (TODO: add a
+            // proper twang). Wool-place chirp is reused by the melee
+            // hit path; matching it here gives consistent attack
+            // audio feedback.
+            SfxBank.PlayPlace(BlockType.Wool);
+        }
+
+        // Find an Arrow stack in the player's inventory and decrement
+        // it by one. Returns true if an arrow was consumed (the bow
+        // shot proceeds); false means the inventory is dry (the shot
+        // is rejected). Searches hotbar first so the player can keep
+        // arrows on the bar for fast reload, then the main grid.
+        private bool TryConsumeOneArrow()
+        {
+            if (Input == null) return false;
+            var inv = Input.Inventory;
+            // Hotbar pass.
+            for (int i = 0; i < Inventory.HotbarCount; i++)
+            {
+                int idx = Inventory.HotbarStart + i;
+                if (inv.Slots[idx].Type == BlockType.Arrow && inv.Slots[idx].Count > 0)
+                {
+                    inv.Slots[idx].Count--;
+                    if (inv.Slots[idx].Count <= 0) inv.Slots[idx] = ItemStack.Empty;
+                    return true;
+                }
+            }
+            // Main grid pass.
+            for (int i = 0; i < Inventory.MainCount; i++)
+            {
+                if (inv.Slots[i].Type == BlockType.Arrow && inv.Slots[i].Count > 0)
+                {
+                    inv.Slots[i].Count--;
+                    if (inv.Slots[i].Count <= 0) inv.Slots[i] = ItemStack.Empty;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Per-frame physics + collision pass over every in-flight
+        // arrow. Caller (the host's render loop) gates this the same
+        // way as TickDrops so arrows freeze under pause / inventory.
+        //
+        // Each arrow:
+        //   * Applies gravity (-GravityPerSec * dt to Y velocity).
+        //   * Computes the swept step (Velocity * dt). Runs
+        //     Raycast.Cast from the previous position in the step
+        //     direction with maxDist = step length to find a solid
+        //     block hit; on hit, snaps Position to the hit cell's
+        //     entry face, zeros Velocity, sets HasLanded.
+        //   * Tests against every live HostileMob and PassiveMob AABB
+        //     using the same RayAabbIntersect helper as TryHitMob,
+        //     scoped to the step length. On the closest mob hit the
+        //     arrow deals Damage and despawns; the mob's TakeDamage
+        //     refreshes hurt-flash.
+        //   * Despawns if it flies past MaxRange from origin or
+        //     drops below the world bottom.
+        // Landed arrows count up LandedTimer until despawn.
+        public void TickArrows(float dt)
+        {
+            if (_world == null || Player == null) return;
+            if (_arrows.Count == 0) return;
+
+            for (int i = _arrows.Count - 1; i >= 0; i--)
+            {
+                var a = _arrows[i];
+                if (a.HasLanded)
+                {
+                    a.LandedTimer += dt;
+                    if (a.LandedTimer >= ArrowProjectile.LandedDespawnSec)
+                    {
+                        _arrows.RemoveAt(i);
+                    }
+                    continue;
+                }
+
+                // Range gate — checks distance from origin BEFORE the
+                // step so an arrow that already overshot last frame
+                // still despawns even if the next step would land it.
+                var fromOrigin = a.Position - a.Origin;
+                if (fromOrigin.LengthSquared > ArrowProjectile.MaxRange * ArrowProjectile.MaxRange)
+                {
+                    _arrows.RemoveAt(i);
+                    continue;
+                }
+
+                // Below-world despawn — y < BottomY-ish; the world
+                // bedrock is at y=0 in this build, so anything below
+                // a generous -16 is unrecoverable.
+                if (a.Position.Y < -16f)
+                {
+                    _arrows.RemoveAt(i);
+                    continue;
+                }
+
+                a.Velocity.Y -= ArrowProjectile.GravityPerSec * dt;
+
+                Vector3 step = a.Velocity * dt;
+                float stepLen = step.Length;
+                if (stepLen <= 1e-6f) continue;
+                Vector3 stepDir = step / stepLen;
+
+                // Mob-AABB pass FIRST — finds the closest mob along
+                // the step. Gated to only apply if it's nearer than
+                // the block hit (resolved below) — the renderer
+                // already has a similar pattern in TryHitMob.
+                float bestMobT = float.MaxValue;
+                PassiveMob hitPassive = null;
+                HostileMob hitHostile = null;
+                var passives = _world.Passives;
+                var hostiles = _world.Hostiles;
+                for (int p = 0; p < passives.Count; p++)
+                {
+                    var mob = passives[p];
+                    if (mob.IsDead) continue;
+                    mob.GetAabb(out var min, out var max);
+                    if (RayAabbIntersect(a.Position, stepDir, min, max, stepLen, out float t))
+                    {
+                        if (t < bestMobT)
+                        {
+                            bestMobT = t;
+                            hitPassive = mob;
+                            hitHostile = null;
+                        }
+                    }
+                }
+                for (int h = 0; h < hostiles.Count; h++)
+                {
+                    var mob = hostiles[h];
+                    if (mob.IsDead) continue;
+                    mob.GetAabb(out var min, out var max);
+                    if (RayAabbIntersect(a.Position, stepDir, min, max, stepLen, out float t))
+                    {
+                        if (t < bestMobT)
+                        {
+                            bestMobT = t;
+                            hitHostile = mob;
+                            hitPassive = null;
+                        }
+                    }
+                }
+
+                // Block-raycast pass — Amanatides voxel walk capped
+                // at the step length. Returns hit voxel + face
+                // normal; the entry-point along the ray is what we
+                // use to snap the arrow position.
+                bool blockHit = Raycast.Cast(_world, a.Position, stepDir, stepLen, out var rh);
+                float blockT = blockHit ? DistanceToHit(a.Position, stepDir, rh) : float.MaxValue;
+
+                // Resolve nearest event.
+                if (bestMobT <= blockT && (hitPassive != null || hitHostile != null))
+                {
+                    // Mob hit wins. Apply damage, drop the death
+                    // drops if the mob died, despawn the arrow.
+                    if (hitPassive != null)
+                    {
+                        hitPassive.TakeDamage(a.Damage);
+                        if (hitPassive.IsDead) hitPassive.SpawnDeathDrops(this);
+                    }
+                    else
+                    {
+                        hitHostile.TakeDamage(a.Damage);
+                        if (hitHostile.IsDead) hitHostile.SpawnDeathDrops(this);
+                    }
+                    SfxBank.PlayPlace(BlockType.Wool); // hit-thump reuse
+                    _arrows.RemoveAt(i);
+                    continue;
+                }
+
+                if (blockHit)
+                {
+                    // Block hit — snap arrow to the entry point and
+                    // mark landed. We back the position off the cell
+                    // by a hair (RenderHalfSize) so the arrow doesn't
+                    // visually clip into the wall.
+                    var hitPos = a.Position + stepDir * blockT;
+                    Vector3 normal = new Vector3(rh.Nx, rh.Ny, rh.Nz);
+                    a.Position = hitPos + normal * ArrowProjectile.RenderHalfSize;
+                    a.Velocity = Vector3.Zero;
+                    a.HasLanded = true;
+                    continue;
+                }
+
+                // Free flight — advance position, keep ticking next
+                // frame.
+                a.Position += step;
+            }
+        }
+
+        // Tier 4 #20 — Spawn one ThrownProjectile (Snowball or Egg)
+        // from the player's eye along camera-forward at the canonical
+        // 22 m/s muzzle speed (Alpha snowball baseline; eggs share).
+        // No charge/draw — RMB-press fires immediately. The item-stack
+        // decrement + SFX are handled at the call site (TryInteract).
+        private void SpawnThrownProjectile(ThrownProjectile.Kind kind)
+        {
+            if (_world == null || Camera == null || Player == null) return;
+
+            var origin = new Vector3(
+                Player.Position.X,
+                Player.Position.Y + Player.EyeHeight,
+                Player.Position.Z);
+            var dir = Camera.Forward;
+            // Defensive normalise — Camera.Forward is already unit
+            // length but a future refactor could feed raw radians
+            // here without normalising.
+            if (dir.LengthSquared > 1e-8f) dir.Normalize();
+
+            // Per-projectile RNG seeded from tick count. Environment.
+            // TickCount is good enough — successive throws land on
+            // different milliseconds so each snowball/egg gets its own
+            // seed, and the eggs' chicken-spawn roll doesn't lock-step
+            // with another concurrent random source. Keeping the RNG
+            // local to the projectile means the world's shared RNG
+            // (SpawnRng / similar) isn't perturbed by player actions.
+            var rng = new System.Random(System.Environment.TickCount + (int)kind);
+
+            var p = new ThrownProjectile
+            {
+                Position       = origin + dir * 0.5f,
+                Velocity       = dir * ThrownProjectile.MuzzleSpeed,
+                Origin         = origin,
+                ProjectileKind = kind,
+                Rng            = rng,
+            };
+            _thrown.Add(p);
+        }
+
+        // Tier 4 #20 — Per-frame physics + collision pass over every
+        // in-flight thrown projectile. Mirrors TickArrows' swept
+        // raycast + AABB-mob test pattern, but the on-hit semantics
+        // diverge (Snowball/Egg always despawn immediately on any
+        // contact; no landed phase, no damage to most mobs, egg rolls
+        // 5% chicken on any landing).
+        public void TickThrown(float dt)
+        {
+            if (_world == null || Player == null) return;
+            if (_thrown.Count == 0) return;
+
+            for (int i = _thrown.Count - 1; i >= 0; i--)
+            {
+                var p = _thrown[i];
+
+                // Range gate — checks distance from origin BEFORE the
+                // step so a projectile that already overshot last
+                // frame still despawns. Mirrors TickArrows.
+                var fromOrigin = p.Position - p.Origin;
+                if (fromOrigin.LengthSquared > ThrownProjectile.MaxRange * ThrownProjectile.MaxRange)
+                {
+                    _thrown.RemoveAt(i);
+                    continue;
+                }
+
+                // Below-world despawn — same -16 sentinel the arrow uses.
+                if (p.Position.Y < -16f)
+                {
+                    _thrown.RemoveAt(i);
+                    continue;
+                }
+
+                p.Velocity.Y -= ThrownProjectile.GravityPerSec * dt;
+
+                Vector3 step = p.Velocity * dt;
+                float stepLen = step.Length;
+                if (stepLen <= 1e-6f) continue;
+                Vector3 stepDir = step / stepLen;
+
+                // Mob-AABB pass — find closest mob hit along the step.
+                float bestMobT = float.MaxValue;
+                PassiveMob hitPassive = null;
+                HostileMob hitHostile = null;
+                var passives = _world.Passives;
+                var hostiles = _world.Hostiles;
+                for (int q = 0; q < passives.Count; q++)
+                {
+                    var mob = passives[q];
+                    if (mob.IsDead) continue;
+                    mob.GetAabb(out var min, out var max);
+                    if (RayAabbIntersect(p.Position, stepDir, min, max, stepLen, out float t))
+                    {
+                        if (t < bestMobT)
+                        {
+                            bestMobT = t;
+                            hitPassive = mob;
+                            hitHostile = null;
+                        }
+                    }
+                }
+                for (int h = 0; h < hostiles.Count; h++)
+                {
+                    var mob = hostiles[h];
+                    if (mob.IsDead) continue;
+                    mob.GetAabb(out var min, out var max);
+                    if (RayAabbIntersect(p.Position, stepDir, min, max, stepLen, out float t))
+                    {
+                        if (t < bestMobT)
+                        {
+                            bestMobT = t;
+                            hitHostile = mob;
+                            hitPassive = null;
+                        }
+                    }
+                }
+
+                // Block-raycast pass — Amanatides voxel walk capped at
+                // the step length. Same Raycast.Cast helper the arrow
+                // tick uses.
+                bool blockHit = Raycast.Cast(_world, p.Position, stepDir, stepLen, out var rh);
+                float blockT = blockHit ? DistanceToHit(p.Position, stepDir, rh) : float.MaxValue;
+
+                // Resolve nearest event.
+                if (bestMobT <= blockT && (hitPassive != null || hitHostile != null))
+                {
+                    // Mob hit. Damage rules:
+                    //   * Snowball → 0 damage to most mobs. Alpha
+                    //     snowballs damage Blazes for 3 HP, but Blazes
+                    //     don't exist in the codebase yet. The
+                    //     hostile-mob types (Zombie/Skeleton/Spider/
+                    //     Creeper) all take 0 — matches Alpha exactly.
+                    //     The 'if (mob is Blaze) damage = 3 else 0'
+                    //     branch the spec calls for is reduced to 'else
+                    //     0' here because the Blaze type doesn't exist;
+                    //     leaving the Blaze branch as a TODO comment is
+                    //     the future-proofing the spec asked for.
+                    //   * Egg → 0 damage always. The hit triggers the
+                    //     5% chicken-spawn roll regardless of victim.
+                    int damage = 0;
+                    // TODO Tier 9+ : when Blaze ships, snowballs hit
+                    // Blaze for 3 damage:
+                    //     if (hitHostile is Blaze) damage = 3;
+                    if (damage > 0)
+                    {
+                        if (hitPassive != null)
+                        {
+                            hitPassive.TakeDamage(damage);
+                            if (hitPassive.IsDead) hitPassive.SpawnDeathDrops(this);
+                        }
+                        else
+                        {
+                            hitHostile.TakeDamage(damage);
+                            if (hitHostile.IsDead) hitHostile.SpawnDeathDrops(this);
+                        }
+                    }
+                    var hitPos = p.Position + stepDir * bestMobT;
+                    if (p.ProjectileKind == ThrownProjectile.Kind.Egg)
+                        TryEggSpawnChicken(p, hitPos);
+                    _thrown.RemoveAt(i);
+                    continue;
+                }
+
+                if (blockHit)
+                {
+                    // Block hit — both kinds despawn silently with no
+                    // visible mark (Alpha snowballs vanish; egg shells
+                    // crack but we don't model the crack particle).
+                    // Egg rolls the 5% chicken-spawn roll at the hit
+                    // point.
+                    var hitPos = p.Position + stepDir * blockT;
+                    if (p.ProjectileKind == ThrownProjectile.Kind.Egg)
+                        TryEggSpawnChicken(p, hitPos);
+                    _thrown.RemoveAt(i);
+                    continue;
+                }
+
+                // Free flight — advance position, keep ticking next
+                // frame.
+                p.Position += step;
+            }
+        }
+
+        // Tier 4 #20 — Egg-only chicken-spawn roll. Alpha 1.1.2_01
+        // gave a thrown egg a 1-in-8 chance to spawn a chick on
+        // landing; later versions tightened to 1-in-32 with rare
+        // 4-chick mass spawns. The spec called out 5% (1-in-20 ≈ the
+        // mid-era value), so we use that — close enough to Alpha
+        // canon, and a round number that's easy to test. Spawns the
+        // chicken at the impact point with a small upward offset so
+        // it doesn't immediately fall through the ground; gets added
+        // to the world's _passives list via the standard SpawnPassive
+        // path (see World.cs).
+        private void TryEggSpawnChicken(ThrownProjectile p, Vector3 hitPos)
+        {
+            if (_world == null) return;
+            if (p.Rng.NextDouble() >= ThrownProjectile.EggChickenSpawnChance) return;
+            // Lift the spawn point a hair so the chick doesn't clip
+            // into the block face the egg just hit; PassiveMob's
+            // gravity will settle it down to the floor next tick.
+            var spawnPos = hitPos + new Vector3(0f, 0.1f, 0f);
+            int seed = p.Rng.Next();
+            var chick = new Chicken(spawnPos, seed);
+            _world.Passives.Add(chick);
+        }
+
+        // Distance along (origin, dir) to the entry plane of the
+        // raycast hit voxel. Mirrors the geometric semantics of
+        // Raycast.Cast: dir is normalised, the hit struct carries
+        // the cell + entry-face normal. Computes the ray parameter
+        // by solving for the hit-face plane intersection.
+        private static float DistanceToHit(Vector3 origin, Vector3 dir, Raycast.Hit hit)
+        {
+            // Pick the axis-aligned plane defined by the hit face
+            // normal. The hit cell's MIN corner is (hit.X, hit.Y,
+            // hit.Z) so the appropriate plane coordinate is the
+            // cell coord shifted by 1 if the normal points + along
+            // that axis.
+            float planeCoord;
+            float dirComponent;
+            float originComponent;
+            if (hit.Nx != 0)
+            {
+                planeCoord = hit.X + (hit.Nx > 0 ? 1f : 0f);
+                dirComponent = dir.X;
+                originComponent = origin.X;
+            }
+            else if (hit.Ny != 0)
+            {
+                planeCoord = hit.Y + (hit.Ny > 0 ? 1f : 0f);
+                dirComponent = dir.Y;
+                originComponent = origin.Y;
+            }
+            else if (hit.Nz != 0)
+            {
+                planeCoord = hit.Z + (hit.Nz > 0 ? 1f : 0f);
+                dirComponent = dir.Z;
+                originComponent = origin.Z;
+            }
+            else
+            {
+                // Defensive: degenerate normal (origin already inside
+                // a solid cell). Treat as t=0.
+                return 0f;
+            }
+            if (System.Math.Abs(dirComponent) < 1e-8f) return 0f;
+            float t = (planeCoord - originComponent) / dirComponent;
+            return t < 0f ? 0f : t;
+        }
+
+        // Tier 4 #15 — Try to milk the closest Cow along the camera
+        // ray with the empty bucket the player is holding. Called
+        // from TryInteract BEFORE the block raycast. Returns true if
+        // a cow was milked (caller short-circuits the rest of
+        // TryInteract); false if no cow was in front, OR if a block
+        // sits closer than the closest cow (so the bucket falls
+        // through to the fluid-pickup path).
+        //
+        // Why a dedicated helper instead of reusing TryHitMob: TryHitMob
+        // damages and may kill the mob — neither happens on milk. The
+        // helper here is purely a "pick the closest cow within reach,
+        // gated by block occlusion" test, swap held empty bucket →
+        // milk bucket, no damage. Pigs / sheep / chickens / hostile
+        // mobs are explicitly NOT valid targets.
+        private bool TryMilkCowWithBucket()
+        {
+            if (_world == null || Input == null) return false;
+            var passives = _world.Passives;
+            if (passives.Count == 0) return false;
+
+            var origin = Camera.Position;
+            var dir = Camera.Forward;
+
+            // Closest cow along the ray.
+            float bestT = float.MaxValue;
+            Cow bestCow = null;
+            for (int i = 0; i < passives.Count; i++)
+            {
+                var p = passives[i];
+                if (p.IsDead) continue;
+                if (!(p is Cow cow)) continue;
+                cow.GetAabb(out var min, out var max);
+                if (!RayAabbIntersect(origin, dir, min, max, ReachDistance, out float t)) continue;
+                if (t < bestT)
+                {
+                    bestT = t;
+                    bestCow = cow;
+                }
+            }
+            if (bestCow == null) return false;
+
+            // Block-occlusion check — if a wall sits between the
+            // player and the cow, the milk action is suppressed and
+            // the bucket falls through to whatever block path the
+            // raycast finds. Mirrors how TryHitMob treats walls
+            // (cell-centre distance is good enough for the cow vs.
+            // wall comparison — half-block error around the centre
+            // is tiny relative to the 8m reach).
+            if (Raycast.Cast(_world, origin, dir, ReachDistance, out var blockHit))
+            {
+                float bdx = (blockHit.X + 0.5f) - origin.X;
+                float bdy = (blockHit.Y + 0.5f) - origin.Y;
+                float bdz = (blockHit.Z + 0.5f) - origin.Z;
+                float blockDist = (float)System.Math.Sqrt(bdx * bdx + bdy * bdy + bdz * bdz);
+                if (blockDist <= bestT) return false;
+            }
+
+            // Milk it. Survival swaps the held empty bucket for a
+            // milk bucket via SwapHeldBucket; creative leaves the
+            // empty bucket alone (creative players don't run out of
+            // pails so the swap would just clutter their hotbar).
+            // Audio cue uses the place sound — no dedicated milk
+            // sample in the bank yet.
+            SwapHeldBucket(BlockType.BucketMilk);
+            SfxBank.PlayPlace(BlockType.Wool);
+            return true;
+        }
+
+        // Tier 4 #21 — Try to equip a saddle on the closest live Pig
+        // along the camera ray. Mirrors TryMilkCowWithBucket's pattern:
+        // entity-AABB sweep, block-occlusion check, then mutate the
+        // mob + decrement the held stack. Returns true if a pig was
+        // saddled (caller short-circuits TryInteract); false otherwise.
+        //
+        // Skipped if the pig is already saddled — re-RMB with another
+        // saddle in hand shouldn't burn the held saddle for no reason.
+        // Returns false in that case so the caller falls through (and
+        // the placement path will also no-op since Saddle is an item).
+        private bool TrySaddleClosestPig()
+        {
+            if (_world == null || Input == null) return false;
+            var passives = _world.Passives;
+            if (passives.Count == 0) return false;
+
+            var origin = Camera.Position;
+            var dir = Camera.Forward;
+
+            float bestT = float.MaxValue;
+            Pig bestPig = null;
+            for (int i = 0; i < passives.Count; i++)
+            {
+                var p = passives[i];
+                if (p.IsDead) continue;
+                if (!(p is Pig pig)) continue;
+                pig.GetAabb(out var min, out var max);
+                if (!RayAabbIntersect(origin, dir, min, max, ReachDistance, out float t)) continue;
+                if (t < bestT)
+                {
+                    bestT = t;
+                    bestPig = pig;
+                }
+            }
+            if (bestPig == null) return false;
+            // Already-saddled pigs short-circuit — don't waste the
+            // held saddle. Caller then falls through to the mount-
+            // branch (which will pick up this same pig if held isn't
+            // Saddle). With a Saddle in hand it's a quiet no-op.
+            if (bestPig.Saddled) return false;
+
+            // Block-occlusion check — same shape as TryMilkCowWithBucket.
+            // A wall between the player and the pig blocks the equip.
+            if (Raycast.Cast(_world, origin, dir, ReachDistance, out var blockHit))
+            {
+                float bdx = (blockHit.X + 0.5f) - origin.X;
+                float bdy = (blockHit.Y + 0.5f) - origin.Y;
+                float bdz = (blockHit.Z + 0.5f) - origin.Z;
+                float blockDist = (float)System.Math.Sqrt(bdx * bdx + bdy * bdy + bdz * bdz);
+                if (blockDist <= bestT) return false;
+            }
+
+            // Equip and decrement (survival only — creative players
+            // keep the saddle in their hotbar so they can repeatedly
+            // saddle pigs without their stack running out).
+            bestPig.Saddled = true;
+            if (GameMode == GameMode.Survival)
+                Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+            // Audio cue uses the place sound — no dedicated saddle
+            // sample in the bank yet (matches the "no milk-specific
+            // sample" workaround in TryMilkCowWithBucket).
+            SfxBank.PlayPlace(BlockType.Wool);
+            return true;
+        }
+
+        // Tier 4 #21 — Try to mount the closest saddled Pig along the
+        // camera ray. Same entity-pick + block-occlusion shape as
+        // TrySaddleClosestPig. On success sets Player.Riding to the pig
+        // — Player.Update reads this and glues the player to the pig's
+        // back, suspends physics, and gates dismount on the next
+        // wantJump. Returns true on a successful mount.
+        //
+        // Pigs without a saddle are NOT mountable (Alpha rule — bare
+        // pigs don't accept riders). Caller has already verified that
+        // the held item ISN'T a Saddle (saddle-RMB takes priority in
+        // TryInteract).
+        private bool TryMountSaddledPig()
+        {
+            if (_world == null) return false;
+            var passives = _world.Passives;
+            if (passives.Count == 0) return false;
+
+            var origin = Camera.Position;
+            var dir = Camera.Forward;
+
+            float bestT = float.MaxValue;
+            Pig bestPig = null;
+            for (int i = 0; i < passives.Count; i++)
+            {
+                var p = passives[i];
+                if (p.IsDead) continue;
+                if (!(p is Pig pig)) continue;
+                if (!pig.Saddled) continue;
+                pig.GetAabb(out var min, out var max);
+                if (!RayAabbIntersect(origin, dir, min, max, ReachDistance, out float t)) continue;
+                if (t < bestT)
+                {
+                    bestT = t;
+                    bestPig = pig;
+                }
+            }
+            if (bestPig == null) return false;
+
+            // Block-occlusion check — wall between player and pig
+            // blocks the mount.
+            if (Raycast.Cast(_world, origin, dir, ReachDistance, out var blockHit))
+            {
+                float bdx = (blockHit.X + 0.5f) - origin.X;
+                float bdy = (blockHit.Y + 0.5f) - origin.Y;
+                float bdz = (blockHit.Z + 0.5f) - origin.Z;
+                float blockDist = (float)System.Math.Sqrt(bdx * bdx + bdy * bdy + bdz * bdz);
+                if (blockDist <= bestT) return false;
+            }
+
+            Player.Riding = bestPig;
+            // Snap the player to the pig's back immediately so the
+            // first frame of mounted state doesn't show a one-tick
+            // teleport from old foot position to glued. Player.Update's
+            // mounted branch will keep doing this every subsequent
+            // frame.
+            Player.Position = new Vector3(
+                bestPig.Position.X,
+                bestPig.Position.Y + bestPig.Height + 0.4f,
+                bestPig.Position.Z);
+            Player.Velocity = Vector3.Zero;
+            SfxBank.PlayPlace(BlockType.Wool);
+            return true;
+        }
+
+        // Tier 4 #15 — Swap the player's held bucket for a different
+        // bucket variant (empty → filled or filled → empty). The
+        // hotbar slot stays in place if there's a stack of size 1
+        // (the common case — filled buckets cap at 1, empty caps
+        // at 16 but the player typically holds one); larger empty-
+        // bucket stacks decrement by 1 and the new variant gets
+        // routed through Inventory.TryAdd so it fills the next
+        // available slot. Creative skips both halves — pails are
+        // free.
+        //
+        // The "stack of empty buckets, swap one for filled" case is
+        // why we can't just unconditionally rewrite the slot: that
+        // would silently delete the rest of the stack.
+        private void SwapHeldBucket(BlockType newType)
+        {
+            if (Input == null) return;
+            if (GameMode != GameMode.Survival) return;
+            ref var slot = ref Input.Inventory.Slots[Inventory.HotbarStart + Input.HotbarIndex];
+            if (slot.IsEmpty) return;
+            if (slot.Count <= 1)
+            {
+                // Lone bucket — swap in place. Construction with
+                // count=1 ensures the new type's stack-cap (1 for
+                // filled, 16 for empty) is respected.
+                slot = new ItemStack(newType, 1);
+                return;
+            }
+            // Multi-stack of empty buckets. Decrement the held stack
+            // and route the new variant via TryAdd so it lands in
+            // the player's inventory (hotbar first, then main).
+            // TryAdd's leftover handling means a full inventory
+            // would discard the new bucket — match how Stew /
+            // Bowl-return already handles the same edge case.
+            slot.Count--;
+            Input.Inventory.TryAdd(new ItemStack(newType, 1));
+        }
+
         // Click-attack on the closest mob along the camera ray within
         // ReachDistance. Returns true if a mob was struck (caller should
         // then skip the block break). The damage value follows Alpha
@@ -2812,24 +3901,44 @@ void main()
         // is open, mirroring TickDrops.
         public void TickPassives(float dt)
         {
-            if (_world == null) return;
-            var passives = _world.Passives;
-            for (int i = passives.Count - 1; i >= 0; i--)
+            if (_world == null) { _mobStepsThisFrame = 0; return; }
+
+            // Fixed-step accumulator — Alpha 1.1.2's 20Hz logic tick.
+            // Without this, mob AI + physics ran once per render frame at
+            // 1000+ fps, scaling collision scans linearly with FPS.
+            _mobTickAccumulator += dt;
+            float maxAccum = MobTickInterval * MobTickMaxCatchup;
+            if (_mobTickAccumulator > maxAccum) _mobTickAccumulator = maxAccum;
+
+            int steps = 0;
+            while (_mobTickAccumulator >= MobTickInterval)
             {
-                var mob = passives[i];
-                if (mob.IsDead)
+                _mobTickAccumulator -= MobTickInterval;
+                steps++;
+            }
+            _mobStepsThisFrame = steps;
+            if (steps == 0) return;
+
+            var passives = _world.Passives;
+            for (int s = 0; s < steps; s++)
+            {
+                for (int i = passives.Count - 1; i >= 0; i--)
                 {
-                    passives.RemoveAt(i);
-                    continue;
-                }
-                mob.Update(dt, _world);
-                if (mob is Chicken chicken)
-                {
-                    // Egg-lay countdown is decoupled from the base wander
-                    // tick so PassiveMob.Update can stay sink-free; the
-                    // chicken-only path threads `this` (the IDropSink)
-                    // through here.
-                    chicken.TickEggLay(dt, this);
+                    var mob = passives[i];
+                    if (mob.IsDead)
+                    {
+                        passives.RemoveAt(i);
+                        continue;
+                    }
+                    mob.Update(MobTickInterval, _world);
+                    if (mob is Chicken chicken)
+                    {
+                        // Egg-lay countdown is decoupled from the base wander
+                        // tick so PassiveMob.Update can stay sink-free; the
+                        // chicken-only path threads `this` (the IDropSink)
+                        // through here.
+                        chicken.TickEggLay(MobTickInterval, this);
+                    }
                 }
             }
         }
@@ -2847,26 +3956,35 @@ void main()
         public void TickHostiles(float dt)
         {
             if (_world == null) return;
+            // Caller pairs TickHostiles with TickPassives at the same dt.
+            // The accumulator was already advanced + step count cached;
+            // we just consume it so passives + hostiles stay in lockstep.
+            int steps = _mobStepsThisFrame;
+            if (steps == 0) return;
+
             var hostiles = _world.Hostiles;
             var playerPos = Player != null ? Player.Position : Vector3.Zero;
-            for (int i = hostiles.Count - 1; i >= 0; i--)
+            for (int s = 0; s < steps; s++)
             {
-                var mob = hostiles[i];
-                if (mob.IsDead)
+                for (int i = hostiles.Count - 1; i >= 0; i--)
                 {
-                    hostiles.RemoveAt(i);
-                    continue;
-                }
-                mob.Update(dt, _world, playerPos, this);
-                if (mob is Creeper creeper)
-                {
-                    creeper.TickFuse(dt, playerPos, this);
-                    // A detonated creeper has 0 HP and IsDead = true,
-                    // so the next tick will reap it via the IsDead
-                    // guard above. SpawnDeathDrops is a no-op when
-                    // DetonatedThisFrame is set, so the player gets no
-                    // gunpowder from blowing themselves up — matches
-                    // the "explosion eats the corpse" Alpha behaviour.
+                    var mob = hostiles[i];
+                    if (mob.IsDead)
+                    {
+                        hostiles.RemoveAt(i);
+                        continue;
+                    }
+                    mob.Update(MobTickInterval, _world, playerPos, this);
+                    if (mob is Creeper creeper)
+                    {
+                        creeper.TickFuse(MobTickInterval, playerPos, this);
+                        // A detonated creeper has 0 HP and IsDead = true,
+                        // so the next tick will reap it via the IsDead
+                        // guard above. SpawnDeathDrops is a no-op when
+                        // DetonatedThisFrame is set, so the player gets no
+                        // gunpowder from blowing themselves up — matches
+                        // the "explosion eats the corpse" Alpha behaviour.
+                    }
                 }
             }
         }
@@ -2918,6 +4036,22 @@ void main()
                 PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
             };
             _drops.Add(d);
+        }
+
+        // IDropSink — Tier 4 #18 Slime split insertion. A dying Big or
+        // Medium slime pushes 2..4 smaller-size copies into the
+        // hostile list via SpawnDeathDrops. Routed through the world's
+        // mob list (same surface chunk-gen + live-spawn use); the
+        // renderer's TickHostiles loop already iterates back-to-front
+        // and is safe to grow during the same tick — newly-spawned
+        // slimes start updating from the NEXT tick (the iteration
+        // index sits on the dying slime, then RemoveAt collapses
+        // everything past it without revisiting), so we can't
+        // accidentally re-tick the children before they finish init.
+        void IDropSink.SpawnHostile(HostileMob mob)
+        {
+            if (_world == null || mob == null) return;
+            _world.Hostiles.Add(mob);
         }
 
         // Inventory click dispatcher. Survival routes through the slot
@@ -4050,6 +5184,17 @@ void main()
             }
 
             RenderDrops(width, height);
+            // Tier 4 #17 — In-flight bow arrows. Drawn right after drops
+            // so they layer the same as a tossed item entity (occluded
+            // by mobs / player). V1 visual is a small grey cube — proper
+            // oriented billboard rendering is a polish TODO.
+            RenderArrows(width, height);
+            // Tier 4 #20 — In-flight snowball / egg projectiles. Same
+            // entity-layer slot as arrows so they occlude / are
+            // occluded consistently with other thrown ballistic
+            // entities. Reuses the flat-colour overlay shader; per-
+            // projectile tint set inside the helper.
+            RenderThrown(width, height);
             // Tier 3 #12 third-person Steve. Drawn first in the entity
             // layer so passives + hostiles + particles can occlude /
             // overlay the player rig naturally; only renders when F5 is
@@ -4384,6 +5529,82 @@ void main()
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
+        // Tier 4 #17 — Render every in-flight arrow as a tiny grey
+        // cube at its world position. Uses the flat-colour overlay
+        // shader (same one the mob renderer uses) so we don't need
+        // an atlas binding for a per-frame few-arrow draw. A proper
+        // oriented-billboard / textured arrow is a polish TODO; the
+        // cube is small enough (HalfSize=0.08) to read as a "bullet
+        // trail" rather than a flying block.
+        private void RenderArrows(int width, int height)
+        {
+            if (_arrows.Count == 0) return;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+            // Mid-grey body — easy to spot against grass, sky, and
+            // most block textures without being neon. Embedded
+            // arrows could in principle pulse a tint or shift to a
+            // darker shade once HasLanded; we keep one colour for V1.
+            var arrowColor = new Vector3(0.55f, 0.55f, 0.55f);
+            _overlayShader.SetVector3("uColor", arrowColor);
+
+            var view = Camera.GetView();
+            var proj = Camera.GetProjection(width, height);
+            var vp = view * proj;
+
+            // _breakCubeMesh spans [0,1]^3 — translate by -0.5 to
+            // centre on origin then scale to 2 × HalfSize.
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var sizeScale   = Matrix4.CreateScale(ArrowProjectile.RenderHalfSize * 2f);
+
+            for (int i = 0; i < _arrows.Count; i++)
+            {
+                var a = _arrows[i];
+                var trans = Matrix4.CreateTranslation(a.Position);
+                var model = localCentre * sizeScale * trans;
+                var mvp = model * vp;
+                _overlayShader.SetMatrix4("uMVP", mvp);
+                _breakCubeMesh.Draw();
+            }
+        }
+
+        // Tier 4 #20 — Render every in-flight thrown projectile as a
+        // small cube tinted by kind (snowball = white, egg = warm
+        // off-white). Mirrors RenderArrows; per-projectile uColor lets
+        // both kinds share the loop without splitting into two passes.
+        // The kind-specific tint is the projectile's own GetRenderColor
+        // so future kinds (ender pearl, fire charge if we ever go past
+        // Alpha) just need to add an enum branch and a colour.
+        private void RenderThrown(int width, int height)
+        {
+            if (_thrown.Count == 0) return;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            var view = Camera.GetView();
+            var proj = Camera.GetProjection(width, height);
+            var vp = view * proj;
+
+            // Same cube-as-marker geometry as RenderArrows. Per-frame
+            // matrix build is cheap (only as many entries as live
+            // projectiles, capped by physics/range).
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var sizeScale   = Matrix4.CreateScale(ThrownProjectile.RenderHalfSize * 2f);
+
+            for (int i = 0; i < _thrown.Count; i++)
+            {
+                var p = _thrown[i];
+                _overlayShader.SetVector3("uColor", p.GetRenderColor());
+                var trans = Matrix4.CreateTranslation(p.Position);
+                var model = localCentre * sizeScale * trans;
+                var mvp = model * vp;
+                _overlayShader.SetMatrix4("uMVP", mvp);
+                _breakCubeMesh.Draw();
+            }
+        }
+
         // Passive-mob body renderer (Tier 3 #9 + #12). Each passive is a
         // small cluster of solid-coloured cuboids; the per-type body shape
         // is dispatched on concrete type (Pig / Cow / Sheep / Chicken).
@@ -4412,10 +5633,18 @@ void main()
 
             var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
 
+            // Cull mobs outside the view frustum or beyond the visible-mob
+            // distance. _frustum was refreshed for this frame's chunk pass,
+            // which runs before mob rendering, so we reuse it as-is.
+            var camPos = Camera.Position;
+            const float MobCullDistSq = MobCullDistance * MobCullDistance;
+
             for (int i = 0; i < passives.Count; i++)
             {
                 var mob = passives[i];
                 if (mob.IsDead) continue;
+
+                if (!IsMobVisible(mob.Position, mob.HalfWidth, mob.Height, camPos, MobCullDistSq)) continue;
 
                 float hurt = mob.HurtTimer > 0f
                     ? mob.HurtTimer / PassiveMob.HurtFlashSeconds
@@ -4428,13 +5657,31 @@ void main()
                 var trans = Matrix4.CreateTranslation(mob.Position);
                 var rigToWorld = rot * trans;
 
-                if (mob is Pig)
+                if (mob is Pig pig)
                 {
                     var basePink   = new Vector3(0.96f, 0.55f, 0.65f);
                     var baseSnout  = new Vector3(0.78f, 0.42f, 0.50f);
                     var bodyColor  = Vector3.Lerp(basePink,  hurtRed, hurt);
                     var snoutColor = Vector3.Lerp(baseSnout, hurtRed, hurt);
                     DrawPig(rigToWorld, vp, bodyColor, snoutColor);
+                    // Tier 4 #21 — Saddled pigs render an additional
+                    // small dark-brown leather pad on top of the pig's
+                    // back so the player has a visual "this pig is
+                    // saddled, RMB to mount" cue. Reuses DrawPigCuboid
+                    // (no dedicated saddle mesh — the cuboid silhouette
+                    // is plenty for an Alpha-style 16-px world). Y
+                    // offset places it at body-top (bodyOff.Y +
+                    // bodySize.Y * 0.5 = 0.40 + 0.225 = 0.625) plus the
+                    // saddle's half-thickness (0.05) so the pad's
+                    // bottom face flush-matches the body-top face.
+                    if (pig.Saddled)
+                    {
+                        var saddleColor = new Vector3(0.32f, 0.20f, 0.10f);
+                        DrawPigCuboid(
+                            new Vector3(0f, 0.675f, 0f),
+                            new Vector3(0.45f, 0.10f, 0.55f),
+                            rigToWorld, vp, saddleColor);
+                    }
                 }
                 else if (mob is Cow)
                 {
@@ -4584,6 +5831,29 @@ void main()
             DrawPigCuboid(new Vector3(-0.07f, 0.11f, 0f), legSize, rigToWorld, vp, beak);
         }
 
+        // Visibility test for one mob: distance + frustum. Padded by
+        // 0.5 m so cuboids extending past the AABB (spider legs, cow
+        // horns, sheep wool overhang) don't pop at the screen edge.
+        // Reuses _frustum, which the chunk pass already updated for this
+        // frame's vp.
+        private bool IsMobVisible(Vector3 pos, float halfWidth, float height,
+            Vector3 camPos, float maxDistSq)
+        {
+            float dx = pos.X - camPos.X;
+            float dy = pos.Y - camPos.Y;
+            float dz = pos.Z - camPos.Z;
+            if (dx * dx + dy * dy + dz * dz > maxDistSq) return false;
+
+            const float Pad = 0.5f;
+            float minX = pos.X - halfWidth - Pad;
+            float maxX = pos.X + halfWidth + Pad;
+            float minY = pos.Y - Pad;
+            float maxY = pos.Y + height + Pad;
+            float minZ = pos.Z - halfWidth - Pad;
+            float maxZ = pos.Z + halfWidth + Pad;
+            return _frustum.Intersects(minX, minY, minZ, maxX, maxY, maxZ);
+        }
+
         // Inner helper for RenderPassives / RenderHostiles: draw one
         // solid-coloured cuboid positioned in the mob's local rig
         // (Y=0 = feet, +Z = forward). Named after the original pig
@@ -4594,11 +5864,19 @@ void main()
         private void DrawPigCuboid(Vector3 offset, Vector3 size,
             Matrix4 rigToWorld, Matrix4 vp, Vector3 color)
         {
-            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
-            var sizeScale   = Matrix4.CreateScale(size);
-            var localPlace  = Matrix4.CreateTranslation(offset);
-            var model = localCentre * sizeScale * localPlace * rigToWorld;
-            var mvp = model * vp;
+            // Fold localCentre*sizeScale*localPlace into one matrix: scale
+            // on the diagonal, (offset − 0.5*size) in the translation row.
+            // Saves 3 Matrix4.Create calls + 2 multiplies per cuboid (called
+            // 5–9× per visible mob, hundreds of times per frame).
+            var localToRig = new Matrix4(
+                size.X, 0f,     0f,     0f,
+                0f,     size.Y, 0f,     0f,
+                0f,     0f,     size.Z, 0f,
+                offset.X - 0.5f * size.X,
+                offset.Y - 0.5f * size.Y,
+                offset.Z - 0.5f * size.Z,
+                1f);
+            var mvp = localToRig * rigToWorld * vp;
             _overlayShader.SetMatrix4("uMVP", mvp);
             _overlayShader.SetVector3("uColor", color);
             _breakCubeMesh.Draw();
@@ -4631,13 +5909,19 @@ void main()
         private void DrawPivotedAtCuboid(Vector3 offset, Vector3 size, Vector3 pivot, float swingAngleX,
             Matrix4 rigToWorld, Matrix4 vp, Vector3 color)
         {
-            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
-            var sizeScale   = Matrix4.CreateScale(size);
-            var localPlace  = Matrix4.CreateTranslation(offset);
+            // Same localCentre*sizeScale*localPlace fold as DrawPigCuboid.
+            var localToRig = new Matrix4(
+                size.X, 0f,     0f,     0f,
+                0f,     size.Y, 0f,     0f,
+                0f,     0f,     size.Z, 0f,
+                offset.X - 0.5f * size.X,
+                offset.Y - 0.5f * size.Y,
+                offset.Z - 0.5f * size.Z,
+                1f);
             var toPivot   = Matrix4.CreateTranslation(-pivot);
             var rotate    = Matrix4.CreateRotationX(swingAngleX);
             var fromPivot = Matrix4.CreateTranslation(pivot);
-            var model = localCentre * sizeScale * localPlace * toPivot * rotate * fromPivot * rigToWorld;
+            var model = localToRig * toPivot * rotate * fromPivot * rigToWorld;
             var mvp = model * vp;
             _overlayShader.SetMatrix4("uMVP", mvp);
             _overlayShader.SetVector3("uColor", color);
@@ -4846,10 +6130,15 @@ void main()
             _overlayShader.Use();
             _overlayShader.SetFloat("uAlpha", 1f);
 
+            var camPos = Camera.Position;
+            const float MobCullDistSq = MobCullDistance * MobCullDistance;
+
             for (int i = 0; i < hostiles.Count; i++)
             {
                 var mob = hostiles[i];
                 if (mob.IsDead) continue;
+
+                if (!IsMobVisible(mob.Position, mob.HalfWidth, mob.Height, camPos, MobCullDistSq)) continue;
 
                 float hurt = mob.HurtTimer > 0f
                     ? mob.HurtTimer / HostileMob.HurtFlashSeconds
@@ -4901,7 +6190,58 @@ void main()
                     color = Vector3.Lerp(color, hurtRed, hurt);
                     DrawCreeper(rigToWorld, vp, color);
                 }
+                else if (mob is Slime slime)
+                {
+                    // Tier 4 #18 — Slime body. Single translucent green
+                    // cube sized to the hitbox, with two small dark
+                    // dots on the front face for eyes. Squish wobble:
+                    // height pulses with sin(SquashTimer) so the cube
+                    // looks like a soft gel cube rather than a rigid
+                    // box. Hurt flash uses the standard lerp toward
+                    // hurtRed; the alpha is reduced toward 0.7 so the
+                    // body reads as gelatinous (without it, the mob
+                    // looks like a solid green block, indistinguishable
+                    // from a placed Wool).
+                    var slimeGreen = Vector3.Lerp(new Vector3(0.30f, 0.70f, 0.40f), hurtRed, hurt);
+                    var slimeEyes  = new Vector3(0.05f, 0.10f, 0.05f);
+                    _overlayShader.SetFloat("uAlpha", 0.7f);
+                    DrawSlime(rigToWorld, vp, slimeGreen, slimeEyes, slime);
+                    _overlayShader.SetFloat("uAlpha", 1f);
+                }
             }
+        }
+
+        // Tier 4 #18 — Slime body + eye dots. Body is a single cuboid
+        // sized to the hitbox (HalfWidth*2 × Height × HalfWidth*2);
+        // squash wobble multiplies the Y dimension by 1 ± a small sin
+        // pulse so the silhouette breathes the way a soft gel cube
+        // would on landing. Eyes are two tiny dark cubes on the front
+        // face — body's local +Z is the facing direction (set by
+        // Slime.Yaw via the rigToWorld rotation matrix), so eye
+        // offsets in +Z land on whatever way the slime is currently
+        // pointing.
+        private void DrawSlime(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 body, Vector3 eyes, Slime slime)
+        {
+            float squash = 1.0f + 0.10f * (float)Math.Sin(slime.SquashTimer);
+            float w = slime.HalfWidth * 2f;
+            float h = slime.Height * squash;
+            // Body cube — bottom flush with the AABB floor (offset = h/2).
+            var bodySize = new Vector3(w, h, w);
+            DrawPigCuboid(new Vector3(0f, h * 0.5f, 0f), bodySize, rigToWorld, vp, body);
+
+            // Eyes — two tiny dark cubes on the front face. Scale eye
+            // size to the slime's HalfWidth so a Big slime gets visibly
+            // proportioned eyes (a fixed pixel size on a 1.0-half-width
+            // cube would vanish). Eye Y sits ~70% up the body so the
+            // dots read as a pair of looking-forward beads.
+            float eyeS = slime.HalfWidth * 0.20f;
+            float eyeY = h * 0.65f;
+            float eyeSpacing = slime.HalfWidth * 0.40f;
+            float eyeForward = slime.HalfWidth + 0.005f; // hair past the front face
+            var eyeSize = new Vector3(eyeS, eyeS, eyeS);
+            DrawPigCuboid(new Vector3(+eyeSpacing, eyeY, +eyeForward), eyeSize, rigToWorld, vp, eyes);
+            DrawPigCuboid(new Vector3(-eyeSpacing, eyeY, +eyeForward), eyeSize, rigToWorld, vp, eyes);
         }
 
         // Humanoid (Zombie / Skeleton): head + torso + 2 arms + 2 legs
@@ -5584,6 +6924,31 @@ void main()
             // baseline (cull off, depth off) before the next sprite draws.
             GL.Disable(EnableCap.CullFace);
 
+            // ---- compass direction overlay (Tier 4 #22) ------------------
+            // Compass slots get a single-letter overlay (N/E/S/W) drawn
+            // on TOP of the static dial-face sprite, indicating which
+            // cardinal direction the world spawn lies in RELATIVE to
+            // where the player is currently facing. The full rotating-
+            // arrow render would need a custom rotated-quad mesh path
+            // (none of the existing 2D draw calls support arbitrary
+            // rotation), so we ship the textual quadrant fallback per
+            // the roadmap entry — a complete-enough V1 that reads as
+            // a working compass at a glance and unblocks the item's
+            // Tier 4 #22 ship without dragging in a new render path.
+            // TODO: replace with a real rotated-needle quad once the
+            // 2D overlay layer grows a rotation-capable draw call.
+            if (inv != null)
+            {
+                for (int i = 0; i < HotbarTextures.SlotCount; i++)
+                {
+                    var stack = inv.Slots[Inventory.HotbarStart + i];
+                    if (stack.IsEmpty || stack.Type != BlockType.Compass) continue;
+                    HotbarLayout.GetIconRect(i, width, height,
+                        out int xp, out int yp, out int iw, out int ih);
+                    DrawCompassDirectionMark(xp, yp, iw, ih, ortho);
+                }
+            }
+
             // ---- selected highlight --------------------------------------
             if (inv != null && selected >= 0 && selected < HotbarTextures.SlotCount)
             {
@@ -5693,6 +7058,76 @@ void main()
                 DrawSpriteQuadFor(_spriteShader, x, topY, glyphW, glyphH, ortho);
                 x += glyphW;
             }
+        }
+
+        // Tier 4 #22 — Compass HUD overlay. Draws a single cardinal
+        // letter (N/E/S/W) centred on the compass slot's icon rect,
+        // indicating which way the world spawn lies RELATIVE to the
+        // player's current facing. The letter is the textual fallback
+        // for the rotating-needle render the roadmap entry described —
+        // shipping the real arrow would have required a new rotated-
+        // quad draw path (none of the existing 2D overlay calls
+        // support arbitrary rotation), and the entry itself flagged
+        // the textual fallback as a complete-enough V1.
+        //
+        // Bearing math: dir = SpawnPos − Player.Position (XZ only).
+        // The camera's forward at Yaw=0 is -Z (see Camera.Forward), so
+        // the world-yaw that points at the spawn is atan2(dir.X, -dir.Z),
+        // and the angle of that bearing RELATIVE to where the camera
+        // is looking is (bearing − Camera.Yaw). When relative ≈ 0 the
+        // spawn is straight ahead → "N"; +π/2 → spawn is to the right
+        // → "E"; ±π → behind → "S"; -π/2 → left → "W". Quadrants are
+        // chunked at the eight-of-π boundaries so the letter only flips
+        // at the diagonals — small head turns leave the marker stable.
+        private void DrawCompassDirectionMark(int iconX, int iconY,
+            int iconW, int iconH, Matrix4 ortho)
+        {
+            if (Player == null || Camera == null) return;
+            float dx = _spawnPos.X - Player.Position.X;
+            float dz = _spawnPos.Z - Player.Position.Z;
+            // Degenerate case: standing on the spawn pixel. Show "N" so
+            // the slot still draws SOMETHING readable — atan2(0, 0) is
+            // implementation-defined and the player visibly stops moving
+            // when they're at spawn anyway, so the marker isn't load-
+            // bearing here.
+            const float Eps = 1e-4f;
+            string letter;
+            if (System.Math.Abs(dx) < Eps && System.Math.Abs(dz) < Eps)
+            {
+                letter = "N";
+            }
+            else
+            {
+                // World yaw that points at spawn. Camera.Yaw=0 → forward = -Z.
+                float bearing = (float)System.Math.Atan2(dx, -dz);
+                float rel = bearing - Camera.Yaw;
+                // Wrap to [-π, π] so the quadrant test is clean.
+                const float TwoPi = (float)(System.Math.PI * 2.0);
+                while (rel >  System.Math.PI) rel -= TwoPi;
+                while (rel < -System.Math.PI) rel += TwoPi;
+                // Eighth-π boundaries: [-π/4, π/4) = N, [π/4, 3π/4) = E,
+                // [3π/4, π] ∪ [-π, -3π/4) = S, [-3π/4, -π/4) = W.
+                float quart = (float)(System.Math.PI / 4.0);
+                if      (rel >= -quart       && rel <  quart)        letter = "N";
+                else if (rel >=  quart       && rel <  3f * quart)   letter = "E";
+                else if (rel >= -3f * quart  && rel < -quart)        letter = "W";
+                else                                                  letter = "S";
+            }
+            // Centre a scale-2 glyph on the icon rect. The bitmap glyph
+            // is 6×8 source pixels; scale 2 puts it at 12×16 — large
+            // enough to read on the dial but smaller than the icon so
+            // the static N pip painted into the atlas tile stays visible
+            // at the top of the bezel.
+            int scale = 2;
+            int glyphW = HotbarTextures.GlyphCellW * scale;
+            int glyphH = HotbarTextures.GlyphCellH * scale;
+            int cx = iconX + iconW / 2;
+            int topY = iconY + iconH / 2 - glyphH / 2;
+            // Drop-shadow first for contrast against the pale dial face.
+            DrawString(letter, scale, cx + 1, topY + 1,
+                new Vector4(0f, 0f, 0f, 0.85f), ortho);
+            DrawString(letter, scale, cx, topY,
+                new Vector4(1f, 0.25f, 0.25f, 1f), ortho);
         }
 
         // Draw an inventory-stack count (e.g. "64") right-aligned to the

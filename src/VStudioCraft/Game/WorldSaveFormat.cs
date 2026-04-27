@@ -24,7 +24,18 @@ namespace VStudioCraft.Game
         //      few real-world minutes per field but no data loss. The
         //      record sits past the chest block so a v7 reader stops
         //      cleanly at EOF without seeing the new section.
-        private const byte CurrentVersion = 8;
+        // v9 = Tier 4 #22 world-spawn vector (3 floats appended at the
+        //      tail of the file, AFTER the v8 wheat-metadata block so a
+        //      v8 reader stops cleanly at the wheat record's EOF and
+        //      doesn't see the new section). The spawn vector is the
+        //      remembered respawn point — Alpha sets it to the player's
+        //      first-tick position and never moves it (no bed yet); the
+        //      compass arrow points at this. Pre-v9 saves load the spawn
+        //      from the saved player position (the only sensible default
+        //      — without a recorded spawn the closest stand-in is "where
+        //      the player was when they saved", which matches what the
+        //      renderer was already doing on load before this version).
+        private const byte CurrentVersion = 9;
 
         public struct Header
         {
@@ -35,6 +46,13 @@ namespace VStudioCraft.Game
             public GameMode GameMode;  // v3+
             public int Health;         // v3+ (1..MaxHealth; 0 means "load default")
             public bool HungerEnabled; // v4+ — survival sub-setting; default off
+            // v9+ — world spawn (Tier 4 #22 / Compass). Remembered
+            // respawn point and the target the compass arrow points
+            // at. Pre-v9 saves return the player's saved feet position
+            // here on load so the compass and respawn behave sanely on
+            // legacy worlds (no separate spawn was tracked, so the
+            // best stand-in is "wherever the player saved").
+            public Vector3 SpawnPos;
         }
 
         public static void Save(string path, Header header, World world)
@@ -127,6 +145,19 @@ namespace VStudioCraft.Game
                     w.Write(chunk.ChunkZ);
                     chunk.WriteSparseMeta(w);
                 }
+
+                // v9: Tier 4 #22 — world-spawn vector. Three floats at
+                // the tail of the stream so a v8 reader hits EOF after
+                // the wheat record and never sees this. The compass
+                // overlay reads SpawnPos to compute the bearing arrow;
+                // respawn-on-death already used a renderer-private
+                // _spawnPos with no persistence, so this also fixes
+                // the long-standing bug where reloading a save would
+                // reset the respawn point to the saved feet position
+                // even if the player had wandered far from spawn.
+                w.Write(header.SpawnPos.X);
+                w.Write(header.SpawnPos.Y);
+                w.Write(header.SpawnPos.Z);
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
@@ -285,6 +316,26 @@ namespace VStudioCraft.Game
                             for (int j = 0; j < dropCount; j++) { r.ReadInt32(); r.ReadByte(); }
                         }
                     }
+                }
+
+                // v9: Tier 4 #22 — world-spawn vector. Pre-v9 saves
+                // didn't track a separate spawn point (the renderer's
+                // _spawnPos was reset to the just-loaded player
+                // position on every load), so the compass needs a
+                // sensible default for legacy worlds. The closest
+                // stand-in is the saved feet position — same value
+                // pre-v9 readers would have populated _spawnPos with,
+                // so the runtime behaviour is unchanged on those
+                // saves; the compass simply points at "where you last
+                // saved" instead of "where you originally spawned".
+                if (version >= 9)
+                {
+                    header.SpawnPos = new Vector3(
+                        r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                }
+                else
+                {
+                    header.SpawnPos = header.CameraPos;
                 }
 
                 return (header, world);

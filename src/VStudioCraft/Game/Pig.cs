@@ -19,6 +19,19 @@ namespace VStudioCraft.Game
         public const float HitboxHalfWidth = 0.45f;
         public const float HitboxHeight    = 0.9f;
 
+        // Tier 4 #21 — Whether a saddle has been equipped to this pig.
+        // RMB on the pig with a Saddle in hand sets it true (consuming
+        // the saddle); RMB on a saddled pig with any other held item
+        // mounts the player. Default false. Saddled pigs render with a
+        // small dark-brown leather pad on their back via DrawPig's
+        // saddle branch.
+        //
+        // Persistence: passive mobs aren't currently saved (mob
+        // population regenerates from chunk-gen on world load), so the
+        // Saddled flag is ephemeral — matches Alpha 1.1.2_01 behaviour
+        // where saved-and-loaded pigs always returned unsaddled.
+        public bool Saddled;
+
         public Pig(Vector3 spawnPos, int seed) : base(spawnPos, seed)
         {
             HalfWidth = HitboxHalfWidth;

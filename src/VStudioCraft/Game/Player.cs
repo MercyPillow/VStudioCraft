@@ -87,6 +87,27 @@ namespace VStudioCraft.Game
         // frame to apply fall damage in survival mode, then clears it.
         public float LastFallDistance;
 
+        // Tier 4 #21 — Currently-ridden pig (Alpha 329 saddle). Non-null
+        // means the player is mounted: physics is suspended, gravity
+        // doesn't apply, WASD does NOTHING (Alpha pigs were unsteerable
+        // — they just wandered with the player on top), and the
+        // player's Position is glued to the pig each frame so the
+        // camera tracks the pig. Space dismounts (sets Riding=null
+        // and pushes the player up by 1 block).
+        //
+        // The reference is ephemeral: on world load it's always null
+        // (matches Alpha — saving while mounted always dismounted on
+        // load). The field is also force-cleared if the ridden pig
+        // dies, so a killed mount can't strand the player in mid-air
+        // physics-suspended forever.
+        //
+        // Why a Pig reference instead of a generic Entity: only pigs
+        // are rideable in Alpha 1.1.2_01 (minecarts are a separate
+        // entity, horses are post-Alpha), so the typed reference keeps
+        // the mount/dismount logic from having to switch on entity
+        // kind.
+        public Pig Riding;
+
         // Highest Y reached while airborne — the "peak" from which fall distance
         // is measured. Reset to current Y while on the ground so small hops
         // don't accumulate.
@@ -102,6 +123,77 @@ namespace VStudioCraft.Game
             // renderer ever forgets to read them.
             if (HurtTimer  > 0f) { HurtTimer  -= dt; if (HurtTimer  < 0f) HurtTimer  = 0f; }
             if (SwingTimer > 0f) { SwingTimer -= dt; if (SwingTimer < 0f) SwingTimer = 0f; }
+
+            // Tier 4 #21 — Mounted pig override. While Riding != null
+            // the player is glued to the pig's back: no gravity, no
+            // wish-velocity integration, no AABB collision. Position is
+            // teleported each frame to the pig's back-Y (pig.Height +
+            // a small extra offset so the player AABB clears the
+            // saddle pad, with the player's feet sitting on top of
+            // the saddle). Velocity is zeroed so a dismount doesn't
+            // inherit some stale walking velocity.
+            //
+            // Force-dismount if the ridden pig dies (the bestPassive in
+            // TryHitMob would otherwise leave the player still pointed
+            // at a dead-flagged Pig the chunk reaper is about to
+            // remove). Pushing the player up by 1 block on dismount
+            // matches the manual-dismount path so a death-dismount
+            // doesn't drop them inside the pig's geometry.
+            //
+            // Space (wantJump) dismounts manually — Alpha bound
+            // dismount to the same key as jump. We DON'T also gate on
+            // wasOnGround because the pig could be airborne (e.g.
+            // walked off a cliff); dismounting mid-fall is fine and
+            // the player resumes normal physics from there.
+            //
+            // TODO: a cleaner refactor would split Player.Update into
+            // a "physics tick" method gated on Riding == null and a
+            // "common timers" method that always runs; for now the
+            // early-return after the timer block keeps the change
+            // surface small.
+            if (Riding != null)
+            {
+                if (Riding.IsDead)
+                {
+                    // Force-dismount on death — push up so the player
+                    // doesn't end up clipped into the dying pig.
+                    Position = new Vector3(Position.X, Riding.Position.Y + 1.0f, Position.Z);
+                    Velocity = Vector3.Zero;
+                    Riding = null;
+                    OnGround = false;
+                }
+                else if (wantJump)
+                {
+                    // Manual dismount — push up by 1 block so the
+                    // player's feet land above the pig's back instead
+                    // of inside the pig's body AABB.
+                    Position = new Vector3(Position.X, Riding.Position.Y + Riding.Height + 1.0f, Position.Z);
+                    Velocity = Vector3.Zero;
+                    Riding = null;
+                    OnGround = false;
+                }
+                else
+                {
+                    // Glued to the pig. Camera follows via
+                    // SyncCameraToPlayer; eye is Position.Y +
+                    // EyeHeight, so feet sit at pig back-Y and the
+                    // player's view sits ~1.62 blocks above the pig.
+                    Position = new Vector3(
+                        Riding.Position.X,
+                        Riding.Position.Y + Riding.Height + 0.4f,
+                        Riding.Position.Z);
+                    Velocity = Vector3.Zero;
+                    OnGround = true;
+                    // Sample water state for the HUD (dismounting into
+                    // water is a thing) but skip swim physics — the pig
+                    // is the one being affected by water, not us.
+                    WasInWater = ScanInWater(world, fromY: Position.Y, toY: Position.Y + Height);
+                    WasHeadInWater = ScanInWater(world,
+                        fromY: Position.Y + EyeHeight - 0.1f,
+                        toY:   Position.Y + EyeHeight + 0.1f);
+                    return;
+                }
+            }
 
             // Sample water state once per tick — both the "any contact"
             // version (drives swim physics) and the "head submerged" version

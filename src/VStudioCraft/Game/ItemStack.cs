@@ -65,7 +65,34 @@ namespace VStudioCraft.Game
         public int MaxStackSize => MaxStackSizeFor(Type);
 
         public static int MaxStackSizeFor(BlockType type)
-            => BlockData.IsTool(type) ? 1 : MaxCount;
+        {
+            if (BlockData.IsTool(type)) return 1;
+            // Tier 4 #20 — Snowball stacks to 16 in Alpha 1.1.2_01
+            // (vs the default 64). Eggs also cap at 16 in canonical
+            // Alpha — included here so the stack-cap surface stays
+            // canonically correct alongside the new Snowball entry,
+            // even though Tier 3 #12's chicken-lay path only ever
+            // drops 1 at a time. Inventory merge respects this cap
+            // because it reads MaxStackSize on every merge attempt.
+            if (type == BlockType.Snowball || type == BlockType.Egg) return 16;
+            // Tier 4 #15 — Bucket family. Empty bucket caps at 16
+            // (matches Alpha 1.1.2_01 — empty buckets stack so the
+            // player can carry a small pile without burning a hotbar
+            // slot per pail), but the THREE filled variants are
+            // unstackable. The Alpha rule for filled buckets is "one
+            // per slot" — a single pail of water-or-lava is heavy
+            // enough that it can't share a stack with another. Milk
+            // joins the unstackable set for parity.
+            if (type == BlockType.BucketEmpty) return 16;
+            if (type == BlockType.BucketWater
+             || type == BlockType.BucketLava
+             || type == BlockType.BucketMilk) return 1;
+            // Tier 4 #21 — Saddles are unstackable in Alpha 1.1.2_01.
+            // One saddle per slot; the player can carry multiple by
+            // burning multiple slots.
+            if (type == BlockType.Saddle) return 1;
+            return MaxCount;
+        }
 
         public static ItemStack Empty => default;
 

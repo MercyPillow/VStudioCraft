@@ -263,4 +263,201 @@ namespace VStudioCraft.Game
                 (float)Math.Sin(angle) * speed);
         }
     }
+
+    // Tier 4 #18 — Slime. Bouncing cube mob that splits into smaller
+    // copies on death. Three sized variants — Big (size=2), Medium
+    // (size=1), Small (size=0) — sharing one class so the split path
+    // can spawn a constructor-call chain that doesn't need a per-size
+    // subclass. Size determines hitbox, HP, attack damage, and walk
+    // speed (smaller = faster — matches Alpha 1.1.2_01 where the tiny
+    // baby slimes are visibly twitchy compared to the lumbering big
+    // ones).
+    //
+    // Locomotion is "bounce, don't walk": every BounceInterval seconds
+    // the slime checks OnGround and, if it's standing, sets Velocity.Y
+    // to BounceJump and Velocity.XZ to a step toward the player (or a
+    // random heading if the player is out of detect range). Mid-air
+    // it lets gravity finish the arc — the standard chase-loop's
+    // continuous XZ steering would cancel the airborne ballistic feel,
+    // so we override Update entirely instead of layering a "jump
+    // sometimes" hook on top of HostileMob.Update. The auto-jump in
+    // the base class is also redundant for a mob whose every move is
+    // already a jump, so skipping it keeps the silhouette clean.
+    //
+    // Drops: only Small slimes drop slimeballs (0..2). Big and Medium
+    // drop nothing on death — the visible "drop" of a big slime is
+    // its split into smaller copies, not an item drop. Match Alpha
+    // 1.1.2_01 exactly here.
+    //
+    // Spawn rule: the slime-chunk pattern in World.SpawnHostilesInChunk
+    // (every chunk where the chunkX/chunkZ hash matches a 1-in-1024
+    // mask) at Y < 40, regardless of light. Slimes don't gate on
+    // light the way the other hostiles do — that's the whole reason
+    // they feel like a different species despite sharing the chase
+    // surface.
+    internal sealed class Slime : HostileMob
+    {
+        public const float BounceJump     = 4.5f;  // m/s upward kick on each bounce
+        public const float BounceInterval = 1.2f;  // seconds between bounces while grounded
+
+        public readonly int Size;
+
+        // Hitbox + tunable tables, indexed by Size. Big slimes are the
+        // size of a player AABB; Medium are half-scale; Small are
+        // quarter-scale. HP / damage / walk speed all scale with size
+        // per the Alpha rule (smaller = faster).
+        public Slime(Vector3 spawnPos, int seed, int size) : base(spawnPos, seed)
+        {
+            Size = size < 0 ? 0 : (size > 2 ? 2 : size);
+            switch (Size)
+            {
+                case 2: HalfWidth = 1.0f;  Height = 2.0f; break;
+                case 1: HalfWidth = 0.5f;  Height = 1.0f; break;
+                default: HalfWidth = 0.25f; Height = 0.5f; break;
+            }
+            // MaxHealth is read in base() before HalfWidth/Height are
+            // assigned (Health = MaxHealth in the base ctor). MaxHealth
+            // depends on Size which the derived ctor sets above, AFTER
+            // base() has run. So we re-seed Health here from the now-
+            // correct Size-driven MaxHealth.
+            Health = MaxHealth;
+        }
+
+        public override int   MaxHealth
+            => Size == 2 ? 16 : (Size == 1 ? 4 : 1);
+        public override float WalkSpeed
+            => Size == 2 ? 0.6f : (Size == 1 ? 0.9f : 1.2f);
+        public override float DetectRange => 16f;
+        public override float AttackRange
+            => Size == 2 ? 1.6f : (Size == 1 ? 1.0f : 0.6f);
+        public override int   AttackDamage
+            => Size == 2 ? 4 : (Size == 1 ? 2 : 0);
+        public override float AttackCooldownSeconds => 0.8f;
+
+        // Per-instance bounce countdown — drives the "every ~1.2 s,
+        // hop again" rhythm. Stays in sync across the three sizes so
+        // a freshly-split slime cluster lands its first bounces in
+        // unison (visually reads as a "shatter").
+        private float _bounceTimer;
+
+        // Squish wobble — incremented every Update so the renderer can
+        // sample sin(_squashTimer) for a height-pulse on the cube.
+        public float SquashTimer;
+
+        public override void Update(float dt, World world, Vector3 playerPos, IPlayerDamageSink damageSink)
+        {
+            if (IsDead) return;
+
+            if (HurtTimer > 0f)      { HurtTimer      -= dt; if (HurtTimer      < 0f) HurtTimer      = 0f; }
+            if (AttackCooldown > 0f) { AttackCooldown -= dt; if (AttackCooldown < 0f) AttackCooldown = 0f; }
+            SquashTimer += dt * 6f;
+
+            float dx = playerPos.X - Position.X;
+            float dy = playerPos.Y - Position.Y;
+            float dz = playerPos.Z - Position.Z;
+            float horizDist = (float)Math.Sqrt(dx * dx + dz * dz);
+
+            // Bounce trigger — only on the ground, only when the
+            // bounce-interval has elapsed. Mid-air the slime is purely
+            // ballistic — gravity finishes the arc, the next bounce
+            // arms once OnGround flips back to true.
+            _bounceTimer -= dt;
+            if (OnGround && _bounceTimer <= 0f)
+            {
+                _bounceTimer = BounceInterval;
+                Velocity.Y = BounceJump;
+
+                // Heading: chase the player if they're in detect range,
+                // otherwise pick a random direction. The XZ speed is
+                // applied as an impulse on this tick — gravity then
+                // shapes the rest of the arc.
+                float headingYaw;
+                if (horizDist <= DetectRange && horizDist > 1e-3f)
+                {
+                    headingYaw = (float)Math.Atan2(dx, dz);
+                }
+                else
+                {
+                    headingYaw = (float)(_rng.NextDouble() * Math.PI * 2.0);
+                }
+                Yaw = headingYaw;
+                Velocity.X = (float)Math.Sin(headingYaw) * WalkSpeed;
+                Velocity.Z = (float)Math.Cos(headingYaw) * WalkSpeed;
+            }
+
+            // Melee — same Y-gate as the base chase-loop. Small slimes
+            // have AttackDamage=0 so the call short-circuits inside
+            // DamagePlayer (no-op), matching Alpha's "small slimes
+            // don't damage" rule without a special branch here.
+            if (AttackDamage > 0 && horizDist <= AttackRange + HalfWidth
+                && Math.Abs(dy) <= 1.5f && AttackCooldown <= 0f)
+            {
+                damageSink.DamagePlayer(AttackDamage);
+                AttackCooldown = AttackCooldownSeconds;
+            }
+
+            // Gravity + terminal velocity, identical to the base mob.
+            Velocity.Y -= Gravity * dt;
+            if (Velocity.Y < -MaxFallSpeed) Velocity.Y = -MaxFallSpeed;
+
+            IntegrateMotion(dt, world);
+        }
+
+        public override void SpawnDeathDrops(IDropSink drops)
+        {
+            // Drops — only Small slimes (Size=0) drop slimeballs.
+            // 0..2 per Alpha 1.1.2_01.
+            if (Size == 0)
+            {
+                int balls = _rng.Next(0, 3);
+                for (int i = 0; i < balls; i++)
+                {
+                    drops.SpawnDrop(
+                        Position + new Vector3(0, 0.2f, 0),
+                        BlockType.Slimeball, 1,
+                        RandomScatterVelocity());
+                }
+                return;
+            }
+
+            // Split — Big (Size=2) → Medium (Size=1) × 2..4
+            //        Medium (Size=1) → Small  (Size=0) × 2..4
+            // Children spawn at the death position with a small
+            // outward scatter so they don't all stack into one cell
+            // and immediately collide-merge. Each child gets its own
+            // RNG seed derived from the parent's so the scatter
+            // pattern is deterministic for a given kill.
+            int childCount = 2 + _rng.Next(0, 3); // 2..4 inclusive
+            int childSize = Size - 1;
+            for (int i = 0; i < childCount; i++)
+            {
+                float angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
+                float radius = 0.3f;
+                var spawnPos = Position + new Vector3(
+                    (float)Math.Cos(angle) * radius,
+                    0f,
+                    (float)Math.Sin(angle) * radius);
+                var child = new Slime(spawnPos, _rng.Next(), childSize);
+                // Outward kick so the cluster reads as a shatter — the
+                // children visibly fly apart instead of pile on the
+                // parent's footprint. XZ proportional to the outward
+                // radius vector, plus a tiny upward pop.
+                child.Velocity = new Vector3(
+                    (float)Math.Cos(angle) * 2.0f,
+                    2.0f + (float)_rng.NextDouble() * 1.0f,
+                    (float)Math.Sin(angle) * 2.0f);
+                drops.SpawnHostile(child);
+            }
+        }
+
+        private Vector3 RandomScatterVelocity()
+        {
+            float angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            float speed = 1.0f + (float)_rng.NextDouble() * 0.6f;
+            return new Vector3(
+                (float)Math.Cos(angle) * speed,
+                2.0f + (float)_rng.NextDouble() * 1.0f,
+                (float)Math.Sin(angle) * speed);
+        }
+    }
 }

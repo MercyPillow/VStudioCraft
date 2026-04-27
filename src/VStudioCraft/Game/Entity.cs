@@ -49,8 +49,30 @@ namespace VStudioCraft.Game
         {
             var step = Velocity * dt;
             MoveAxis(0, step.X, world);
-            MoveAxis(1, step.Y, world);
             MoveAxis(2, step.Z, world);
+
+            // Fast path for grounded entities under gravity: if we were on
+            // the floor going in and the only Y velocity is gravity (≤0),
+            // skip the per-substep Y collision sweep. A stationary mob on
+            // flat ground can't fall through; a mob that walked horizontally
+            // might have stepped off a ledge, so we still pay one
+            // IsStandingOnSomething probe in that case. This collapses the
+            // common idle-mob path from 1-2 Collides() per tick to 0 (and
+            // is a wash for walking mobs), which adds up across PassiveCap
+            // (10) + HostileCap (70) every 50 ms tick.
+            if (OnGround && Velocity.Y <= 0f)
+            {
+                bool movedXZ = Math.Abs(step.X) > 1e-6f || Math.Abs(step.Z) > 1e-6f;
+                if (!movedXZ || IsStandingOnSomething(world))
+                {
+                    Velocity.Y = 0f;
+                    return;
+                }
+                // Walked off a ledge — let gravity integrate this tick.
+                OnGround = false;
+            }
+
+            MoveAxis(1, step.Y, world);
         }
 
         protected void MoveAxis(int axis, float delta, World world)

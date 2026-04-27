@@ -86,7 +86,11 @@ namespace VStudioCraft.Game
         // dependency on Player (keeps the testing surface small + lets
         // the renderer freeze the mob during modals by just not calling
         // Update, same as PassiveMob.TickPassives).
-        public void Update(float dt, World world, Vector3 playerPos, IPlayerDamageSink damageSink)
+        //
+        // Marked virtual so movement-shape-divergent subclasses (Slime —
+        // bouncing locomotion, Tier 4 #18) can replace the
+        // walk-toward-player chase loop without monkey-patching the base.
+        public virtual void Update(float dt, World world, Vector3 playerPos, IPlayerDamageSink damageSink)
         {
             if (IsDead) return;
 
@@ -224,8 +228,16 @@ namespace VStudioCraft.Game
     // Decoupling shim — HostileMob.SpawnDeathDrops asks for a drop
     // entity to be inserted into the world without the mob class
     // knowing how the renderer's _drops list is structured.
+    //
+    // Tier 4 #18 — Slime split. SpawnHostile lets a dying slime push
+    // smaller-size copies into the world's hostile list (the renderer
+    // owns _world.Hostiles); kept on the same sink as the item drop
+    // hook so SpawnDeathDrops can do "drop a slimeball + spawn 2..4
+    // smaller slimes" in one call without the mob class knowing about
+    // World or the hostile list directly.
     internal interface IDropSink
     {
         void SpawnDrop(Vector3 pos, BlockType item, int count, Vector3 velocity);
+        void SpawnHostile(HostileMob mob);
     }
 }
