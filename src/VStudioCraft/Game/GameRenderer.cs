@@ -338,6 +338,22 @@ void main()
         private readonly System.Collections.Generic.List<ThrownProjectile> _thrown
             = new System.Collections.Generic.List<ThrownProjectile>();
 
+        // Tier 4 #23 — Cast fishing-rod bobbers. Same renderer-owned-
+        // list pattern as _arrows / _thrown; TickBobbers advances the
+        // catch timer + auto-despawn timer, RenderBobbers paints each
+        // as a small white cuboid. Not persisted (Alpha didn't either)
+        // — SetWorld clears them. Player.ActiveBobber holds a back-
+        // reference to the entry in this list so TryInteract can
+        // distinguish "first RMB cast" from "second RMB reel".
+        private readonly System.Collections.Generic.List<Bobber> _bobbers
+            = new System.Collections.Generic.List<Bobber>();
+
+        // Per-bobber RNG. Same pattern as _dropRng — stable seed so a
+        // future deterministic-replay path stays reproducible; the
+        // digits don't carry meaning beyond "not shared with any
+        // other Random in the renderer".
+        private readonly System.Random _bobberRng = new System.Random(0xB0BB);
+
         // Bow charge state — only meaningful when the held item is Bow.
         // Single-thread-owned (render thread) so no synchronisation;
         // the host's RMB-state setters cross threads but only write to
@@ -521,6 +537,16 @@ void main()
         private bool _initialized;
 
         private Frustum _frustum;
+
+        // Per-frame camera matrices, computed once at the top of Render()
+        // and read by every Render*(...) helper. Camera.GetView() runs 3
+        // sin/cos + a Matrix4.LookAt; GetProjection() builds a perspective
+        // matrix. Both are pure functions of camera state, which doesn't
+        // change inside a frame, so a single rebuild per frame replaces
+        // ~10 redundant calls in the previous code.
+        private Matrix4 _frameView;
+        private Matrix4 _frameProj;
+        private Matrix4 _frameVp;
 
         // Reusable sort scratch used by ProcessDirtyChunks / streaming so the
         // per-frame hot path doesn't allocate.
@@ -1306,6 +1332,14 @@ void main()
             _arrows.Clear();
             // Tier 4 #20 — same reasoning for thrown snowballs/eggs.
             _thrown.Clear();
+            // Tier 4 #23 — same reasoning for cast bobbers. Player's
+            // ActiveBobber back-reference also has to clear so the
+            // next world load doesn't think a stale bobber is in
+            // flight; the assignment runs after the list clear so
+            // there's no window where the back-ref is live but the
+            // list is empty.
+            _bobbers.Clear();
+            if (Player != null) Player.ActiveBobber = null;
             _bowDrawSec = 0f;
             _bowWasDrawing = false;
             // Same reasoning for cosmetic particles — a leftover lava
@@ -1903,6 +1937,28 @@ void main()
                     // (a closest-hit-pig pick from inside the AABB
                     // would otherwise re-mount immediately).
                     if (TryMountSaddledPig()) return true;
+                }
+
+                // Tier 4 #23 — Fishing Rod cast / reel. Runs BEFORE
+                // the block raycast for the same reason the throw
+                // and saddle paths do: a cast doesn't depend on
+                // hitting a block (the rod's own raycast picks the
+                // endpoint or falls through to a forward offset),
+                // and a reel doesn't depend on aiming at anything —
+                // it always pulls the active bobber regardless of
+                // where the player is now looking. First RMB with no
+                // active bobber casts; second RMB reels (with or
+                // without a catch — Caught flag decides the payout).
+                // No survival decrement: the rod isn't consumed by
+                // either action; durability would tick here once
+                // tool-break ladder lands.
+                if (preHeld == BlockType.FishingRod)
+                {
+                    if (Player.ActiveBobber == null)
+                        CastFishingBobber();
+                    else
+                        ReelFishingBobber();
+                    return true;
                 }
             }
 
@@ -3431,6 +3487,167 @@ void main()
                 // frame.
                 p.Position += step;
             }
+        }
+
+        // Tier 4 #23 — Per-frame bobber tick. The bobber itself has
+        // no physics — it sits at the cast position — so the tick is
+        // just two timers:
+        //   * CatchTimer counts down. Once it crosses zero the bobber
+        //     flips Caught=true; the renderer reads Caught to add a
+        //     small wiggle and the player's next reel will pull a
+        //     Raw Porkchop.
+        //   * AgeSec counts up. Past AutoDespawnSec a bobber that's
+        //     still in the list (player walked off, never reeled)
+        //     auto-despawns. Alpha didn't have this safety net but
+        //     without it the bobber list grows every cast that ends
+        //     in the player just walking away — no gameplay loss,
+        //     pure leak protection.
+        // Same gate-and-call pattern the host uses for TickArrows /
+        // TickThrown so all three projectile-like entity systems
+        // freeze under pause / inventory together.
+        public void TickBobbers(float dt)
+        {
+            if (_bobbers.Count == 0) return;
+
+            for (int i = _bobbers.Count - 1; i >= 0; i--)
+            {
+                var b = _bobbers[i];
+                b.AgeSec += dt;
+                if (!b.Caught)
+                {
+                    b.CatchTimer -= dt;
+                    if (b.CatchTimer <= 0f)
+                    {
+                        b.Caught = true;
+                        // Visual cue at the moment the catch lands —
+                        // reuse the wool-place chirp the bow / throw
+                        // paths use. Polish-only audio; the gameplay
+                        // signal is the renderer's wiggle.
+                        SfxBank.PlayPlace(BlockType.Wool);
+                    }
+                }
+
+                if (b.AgeSec >= Bobber.AutoDespawnSec)
+                {
+                    // Safety despawn — player never reeled. Clear the
+                    // back-ref so the next cast doesn't think a stale
+                    // bobber is still in flight, then drop the entry.
+                    if (b.Owner != null && b.Owner.ActiveBobber == b)
+                        b.Owner.ActiveBobber = null;
+                    _bobbers.RemoveAt(i);
+                }
+            }
+        }
+
+        // Tier 4 #23 — Cast a new bobber. Called from TryInteract when
+        // the held item is a Fishing Rod and the player has no active
+        // bobber. The bobber's world position is the first non-Air
+        // cell along the camera ray (clamped to castReach), or a
+        // fixed forward offset if the ray misses entirely. Stores the
+        // new bobber on Player.ActiveBobber so the next RMB is
+        // treated as a reel.
+        private void CastFishingBobber()
+        {
+            if (Player == null || _world == null) return;
+
+            var eye = new Vector3(
+                Player.Position.X,
+                Player.Position.Y + Player.EyeHeight,
+                Player.Position.Z);
+            var dir = Camera.Forward;
+            if (dir.LengthSquared > 1e-8f) dir.Normalize();
+
+            // Cast endpoint — try the standard block raycast first so
+            // a cast aimed at a wall lands at the wall face, not 5
+            // blocks past it. Reach distance kept short (5 blocks)
+            // matches the "you can't cast across a chunk" feel of
+            // Alpha 1.1.2_01 fishing.
+            const float castReach = 5f;
+            Vector3 endpoint;
+            if (Raycast.Cast(_world, Camera.Position, dir, castReach, out var hit))
+            {
+                // Hit cell coords are integer block coords; place the
+                // bobber at the cell centre so it visually sits on
+                // the targeted surface.
+                endpoint = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
+            }
+            else
+            {
+                // No block in range — cast lands in open air at the
+                // reach distance, matching the "you can fish into a
+                // pond from the bank" expectation.
+                endpoint = eye + dir * castReach;
+            }
+
+            float catchSec = Bobber.MinCatchSec
+                + (float)_bobberRng.NextDouble() * (Bobber.MaxCatchSec - Bobber.MinCatchSec);
+
+            var bobber = new Bobber
+            {
+                Position    = endpoint,
+                CatchTimer  = catchSec,
+                Caught      = false,
+                AgeSec      = 0f,
+                Owner       = Player,
+            };
+            _bobbers.Add(bobber);
+            Player.ActiveBobber = bobber;
+            // Reuse the place chirp as a "line out" cue. There's no
+            // dedicated cast SFX in the bank (TODO: add a proper
+            // whoosh) and the wool chirp matches the bow/throw audio
+            // style for ranged actions.
+            SfxBank.PlayPlace(BlockType.Wool);
+        }
+
+        // Tier 4 #23 — Reel the player's currently-cast bobber back
+        // in. If the bobber's catch timer has elapsed (Caught=true),
+        // the player gets one Raw Porkchop in their inventory; reels
+        // before that just despawn the line with no payout. In either
+        // case the bobber is removed from the list and ActiveBobber
+        // is cleared.
+        //
+        // Why Raw Porkchop and not Raw Cod / Raw Salmon: Alpha 1.1.2_01
+        // predates Raw Cod (Raw Fish landed in 1.2.0). The codebase
+        // has no RawBeef / Beef BlockType either (verified via grep),
+        // so the simplest era-faithful catch is one Raw Porkchop per
+        // successful reel.
+        private void ReelFishingBobber()
+        {
+            if (Player == null) return;
+            var b = Player.ActiveBobber;
+            if (b == null) return;
+
+            // Drop the bobber from the list. Linear scan is fine —
+            // the list almost always has one entry (single-player,
+            // one-bobber-per-player) and at worst a handful in a
+            // multiplayer port.
+            for (int i = _bobbers.Count - 1; i >= 0; i--)
+            {
+                if (_bobbers[i] == b)
+                {
+                    _bobbers.RemoveAt(i);
+                    break;
+                }
+            }
+            Player.ActiveBobber = null;
+
+            if (!b.Caught) return;
+
+            // Catch payout — one Raw Porkchop. TryAdd respects the
+            // hotbar-first / main-grid-second pickup order matching
+            // Alpha behaviour. If the inventory is full the leftover
+            // is silently dropped (no DroppedItem spawn here — Alpha
+            // didn't either, the catch just disappeared if there was
+            // no room).
+            if (Input != null)
+            {
+                Input.Inventory.TryAdd(new ItemStack(BlockType.RawPorkchop, 1));
+            }
+            // Pickup-style chirp for the reel-with-catch — louder
+            // than the per-frame wiggle would warrant. Reuse
+            // PlayPickup (the one drops use when absorbed) so the
+            // audio matches the inventory event.
+            SfxBank.PlayPickup();
         }
 
         // Tier 4 #20 — Egg-only chicken-spawn roll. Alpha 1.1.2_01
@@ -5086,6 +5303,9 @@ void main()
             var proj = Camera.GetProjection(width, height);
             var view = Camera.GetView();
             var vp = view * proj;
+            _frameView = view;
+            _frameProj = proj;
+            _frameVp = vp;
             _frustum.UpdateFromViewProj(ref vp);
 
             // Celestial bodies (stars, sun, moon) draw first with depth
@@ -5195,6 +5415,12 @@ void main()
             // entities. Reuses the flat-colour overlay shader; per-
             // projectile tint set inside the helper.
             RenderThrown(width, height);
+            // Tier 4 #23 — Cast fishing-rod bobbers. Same entity-layer
+            // slot as arrows / thrown projectiles so depth occludes
+            // consistently against mobs / drops. A bobber is a small
+            // white cuboid; the line from the rod tip back to the
+            // bobber is a polish TODO (see RenderBobbers).
+            RenderBobbers(width, height);
             // Tier 3 #12 third-person Steve. Drawn first in the entity
             // layer so passives + hostiles + particles can occlude /
             // overlay the player rig naturally; only renders when F5 is
@@ -5457,7 +5683,7 @@ void main()
             else if (frame >= CrackTextures.FrameCount) frame = CrackTextures.FrameCount - 1;
 
             var model = Matrix4.CreateTranslation(_breakTargetX, _breakTargetY, _breakTargetZ);
-            var mvp = model * Camera.GetView() * Camera.GetProjection(width, height);
+            var mvp = model * _frameVp;
 
             _crackShader.Use();
             _crackShader.SetMatrix4("uMVP", mvp);
@@ -5493,8 +5719,8 @@ void main()
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
 
-            var view = Camera.GetView();
-            var proj = Camera.GetProjection(width, height);
+            var view = _frameView;
+            var proj = _frameProj;
 
             // Constant 0.25-block cube around drop centre. The base mesh
             // (_breakCubeMesh) spans [0,1]^3 (with tiny inflation), so we
@@ -5549,9 +5775,7 @@ void main()
             var arrowColor = new Vector3(0.55f, 0.55f, 0.55f);
             _overlayShader.SetVector3("uColor", arrowColor);
 
-            var view = Camera.GetView();
-            var proj = Camera.GetProjection(width, height);
-            var vp = view * proj;
+            var vp = _frameVp;
 
             // _breakCubeMesh spans [0,1]^3 — translate by -0.5 to
             // centre on origin then scale to 2 × HalfSize.
@@ -5583,9 +5807,7 @@ void main()
             _overlayShader.Use();
             _overlayShader.SetFloat("uAlpha", 1f);
 
-            var view = Camera.GetView();
-            var proj = Camera.GetProjection(width, height);
-            var vp = view * proj;
+            var vp = _frameVp;
 
             // Same cube-as-marker geometry as RenderArrows. Per-frame
             // matrix build is cheap (only as many entries as live
@@ -5598,6 +5820,63 @@ void main()
                 var p = _thrown[i];
                 _overlayShader.SetVector3("uColor", p.GetRenderColor());
                 var trans = Matrix4.CreateTranslation(p.Position);
+                var model = localCentre * sizeScale * trans;
+                var mvp = model * vp;
+                _overlayShader.SetMatrix4("uMVP", mvp);
+                _breakCubeMesh.Draw();
+            }
+        }
+
+        // Tier 4 #23 — Render every cast fishing bobber as a small
+        // white cuboid in the world. Mirrors RenderArrows / RenderThrown
+        // — same flat-colour overlay shader, same _breakCubeMesh
+        // geometry, just a smaller scale and a different tint.
+        //
+        // The line from the rod tip back to the bobber is intentionally
+        // NOT drawn here. The renderer doesn't have an extruded-line
+        // primitive yet (Tier 4 #19's hitbox-line debug uses a stretched
+        // cuboid that I'd rather not vandalise for a one-off use), and
+        // the spec explicitly OK'd shipping without it. TODO: add a
+        // proper line / billboard quad and route it through this pass
+        // once a thin-segment primitive is available.
+        //
+        // Caught bobbers get a tiny vertical wiggle so the player has
+        // a visual cue to reel — sin(time * frequency) * amplitude
+        // applied to Y. Pre-catch bobbers sit perfectly still.
+        private void RenderBobbers(int width, int height)
+        {
+            if (_bobbers.Count == 0) return;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+            // Off-white tint — bright enough to read against grass /
+            // water / sky, dim enough to not look like a UI overlay
+            // sitting in 3D space. Matches the snowball tint family
+            // (white-ish projectiles share a visual language).
+            var bobberColor = new Vector3(0.95f, 0.95f, 0.92f);
+            _overlayShader.SetVector3("uColor", bobberColor);
+
+            var vp = _frameVp;
+
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var sizeScale   = Matrix4.CreateScale(Bobber.RenderHalfSize * 2f);
+
+            for (int i = 0; i < _bobbers.Count; i++)
+            {
+                var b = _bobbers[i];
+                Vector3 drawPos = b.Position;
+                if (b.Caught)
+                {
+                    // Tiny wiggle once a fish is on the line. The
+                    // amplitude is sub-block scale so the bobber
+                    // doesn't visibly fly off into the air; the
+                    // frequency is fast enough to read as a "dip"
+                    // motion without crossing into seizure-inducing.
+                    float wiggle = Bobber.WiggleAmplitude
+                        * (float)System.Math.Sin(b.AgeSec * Bobber.WiggleFrequency);
+                    drawPos.Y += wiggle;
+                }
+                var trans = Matrix4.CreateTranslation(drawPos);
                 var model = localCentre * sizeScale * trans;
                 var mvp = model * vp;
                 _overlayShader.SetMatrix4("uMVP", mvp);
@@ -5624,9 +5903,7 @@ void main()
             var passives = _world.Passives;
             if (passives == null || passives.Count == 0) return;
 
-            var view = Camera.GetView();
-            var proj = Camera.GetProjection(width, height);
-            var vp = view * proj;
+            var vp = _frameVp;
 
             _overlayShader.Use();
             _overlayShader.SetFloat("uAlpha", 1f);
@@ -5946,9 +6223,7 @@ void main()
         // mouth are tiny dark cuboids on the front face for character.
         private void RenderPlayer(int width, int height)
         {
-            var view = Camera.GetView();
-            var proj = Camera.GetProjection(width, height);
-            var vp = view * proj;
+            var vp = _frameVp;
 
             _overlayShader.Use();
             _overlayShader.SetFloat("uAlpha", 1f);
@@ -6123,9 +6398,7 @@ void main()
             var hostiles = _world.Hostiles;
             if (hostiles == null || hostiles.Count == 0) return;
 
-            var view = Camera.GetView();
-            var proj = Camera.GetProjection(width, height);
-            var vp = view * proj;
+            var vp = _frameVp;
 
             _overlayShader.Use();
             _overlayShader.SetFloat("uAlpha", 1f);
@@ -6360,13 +6633,7 @@ void main()
             GL.Enable(EnableCap.Blend);
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
-            var view = Camera.GetView();
-            var proj = Camera.GetProjection(width, height);
-
-            // The break-cube mesh spans [0,1]^3 (with a tiny inflation we
-            // don't care about here). Centre it on origin so the spin
-            // happens around the particle's centre instead of a corner.
-            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var vp = _frameVp;
 
             int lastLayer = -1;
             var pool = _particles.Pool;
@@ -6381,7 +6648,7 @@ void main()
                 if (p.TileLayer != lastLayer)
                 {
                     for (int f = 0; f < 6; f++)
-                        _multiFaceCubeShader.SetFloat("uLayers[" + f + "]", p.TileLayer);
+                        _multiFaceCubeShader.SetFloat(_uLayersNames[f], p.TileLayer);
                     lastLayer = p.TileLayer;
                 }
 
@@ -6395,12 +6662,21 @@ void main()
                 _multiFaceCubeShader.SetVector4("uTint",
                     new Vector4(p.TintR, p.TintG, p.TintB, alpha));
 
+                // Fold (localCentre = translate(-0.5)) * (sizeScale = uniform
+                // scale s = p.Size*2) into one matrix: uniform diagonal s,
+                // translate -0.5*s in the last row. Saves 2 Matrix4.Create
+                // calls + 1 multiply per particle versus the chain above.
+                float s = p.Size * 2f;
+                var localScale = new Matrix4(
+                    s,  0f, 0f, 0f,
+                    0f, s,  0f, 0f,
+                    0f, 0f, s,  0f,
+                    -0.5f * s, -0.5f * s, -0.5f * s, 1f);
+
                 float angle = p.Age * p.SpinRate;
                 var rot = Matrix4.CreateFromAxisAngle(p.SpinAxis, angle);
-                var sizeScale = Matrix4.CreateScale(p.Size * 2f); // Size = half-extent
                 var trans = Matrix4.CreateTranslation(p.Position.X, p.Position.Y, p.Position.Z);
-                var model = localCentre * sizeScale * rot * trans;
-                _multiFaceCubeShader.SetMatrix4("uMVP", model * view * proj);
+                _multiFaceCubeShader.SetMatrix4("uMVP", localScale * rot * trans * vp);
                 _breakCubeMesh.Draw();
             }
 
@@ -6429,17 +6705,27 @@ void main()
         // front face rotates through every position over the spin cycle
         // — the choice of starting facing only sets which side the
         // viewer sees first.
+        // Cached uniform name strings for the indexed array uniforms on
+        // the multi-face-cube shader. Without these, every call site below
+        // (and the per-particle path in RenderParticles) builds the name
+        // via "uLayers[" + i + "]" — six string allocations per particle
+        // layer change, hashed through Shader._uniforms each time.
+        private static readonly string[] _uLayersNames =
+            { "uLayers[0]", "uLayers[1]", "uLayers[2]", "uLayers[3]", "uLayers[4]", "uLayers[5]" };
+        private static readonly string[] _uFaceShadeNames =
+            { "uFaceShade[0]", "uFaceShade[1]", "uFaceShade[2]", "uFaceShade[3]", "uFaceShade[4]", "uFaceShade[5]" };
+
         private static void SetCubeFaceLayers(Shader sh, BlockType type)
             => SetCubeFaceLayers(sh, type, BlockFacing.South);
 
         private static void SetCubeFaceLayers(Shader sh, BlockType type, BlockFacing facing)
         {
-            sh.SetFloat("uLayers[0]", BlockData.GetTileIndexForOriented(type, 0, -1, facing)); // -X
-            sh.SetFloat("uLayers[1]", BlockData.GetTileIndexForOriented(type, 0, +1, facing)); // +X
-            sh.SetFloat("uLayers[2]", BlockData.GetTileIndexForOriented(type, 1, -1, facing)); // -Y
-            sh.SetFloat("uLayers[3]", BlockData.GetTileIndexForOriented(type, 1, +1, facing)); // +Y
-            sh.SetFloat("uLayers[4]", BlockData.GetTileIndexForOriented(type, 2, -1, facing)); // -Z
-            sh.SetFloat("uLayers[5]", BlockData.GetTileIndexForOriented(type, 2, +1, facing)); // +Z
+            sh.SetFloat(_uLayersNames[0], BlockData.GetTileIndexForOriented(type, 0, -1, facing)); // -X
+            sh.SetFloat(_uLayersNames[1], BlockData.GetTileIndexForOriented(type, 0, +1, facing)); // +X
+            sh.SetFloat(_uLayersNames[2], BlockData.GetTileIndexForOriented(type, 1, -1, facing)); // -Y
+            sh.SetFloat(_uLayersNames[3], BlockData.GetTileIndexForOriented(type, 1, +1, facing)); // +Y
+            sh.SetFloat(_uLayersNames[4], BlockData.GetTileIndexForOriented(type, 2, -1, facing)); // -Z
+            sh.SetFloat(_uLayersNames[5], BlockData.GetTileIndexForOriented(type, 2, +1, facing)); // +Z
         }
 
         // Set per-face shade multipliers on the multi-face cube shader.
@@ -6450,12 +6736,12 @@ void main()
         // same colour (e.g. cobblestone).
         private static void SetCubeFaceShade(Shader sh, float top, float side, float bottom)
         {
-            sh.SetFloat("uFaceShade[0]", side);
-            sh.SetFloat("uFaceShade[1]", side);
-            sh.SetFloat("uFaceShade[2]", bottom);
-            sh.SetFloat("uFaceShade[3]", top);
-            sh.SetFloat("uFaceShade[4]", side);
-            sh.SetFloat("uFaceShade[5]", side);
+            sh.SetFloat(_uFaceShadeNames[0], side);
+            sh.SetFloat(_uFaceShadeNames[1], side);
+            sh.SetFloat(_uFaceShadeNames[2], bottom);
+            sh.SetFloat(_uFaceShadeNames[3], top);
+            sh.SetFloat(_uFaceShadeNames[4], side);
+            sh.SetFloat(_uFaceShadeNames[5], side);
         }
 
         // First-person held-item gizmo: draws the currently selected
@@ -6810,7 +7096,7 @@ void main()
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit)) return;
 
             var model = Matrix4.CreateTranslation(hit.X, hit.Y, hit.Z);
-            var mvp = model * Camera.GetView() * Camera.GetProjection(width, height);
+            var mvp = model * _frameVp;
 
             _overlayShader.Use();
             _overlayShader.SetMatrix4("uMVP", mvp);

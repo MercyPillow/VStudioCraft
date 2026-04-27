@@ -335,6 +335,16 @@ namespace VStudioCraft.Game
         // saddle is a creative-catalog-only entry. Append-only past
         // Compass=112 so existing v8/v9 saves stay byte-stable.
         Saddle      = 113, // Alpha 329
+
+        // Tier 4 #23 — Fishing Rod (Alpha 346). Held item; RMB casts a
+        // Bobber entity at the camera-forward raycast endpoint (or
+        // 5 blocks ahead if the ray misses). Second RMB while the rod
+        // has an active bobber reels it in — if a catch landed (random
+        // 5..30s timer) the player gets one Raw Porkchop, otherwise
+        // nothing. Unstackable (one rod per slot — Alpha behaviour;
+        // damage values would distinguish two rods anyway). Append-only
+        // past Saddle=113 so existing v8/v9 saves stay byte-stable.
+        FishingRod  = 114, // Alpha 346
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -418,6 +428,12 @@ namespace VStudioCraft.Game
         // until then the saddle ships as a creative-catalog-only entry
         // and the recipe gap is documented in features.md.
         public const BlockType Saddle        = BlockType.Saddle;
+        // Tier 4 #23 — Fishing Rod. Recipe is the Alpha-canonical
+        // diagonal stick + string ladder; cast/reel mechanic lives
+        // entirely in GameRenderer.TryInteract + the Bobber entity
+        // (no world block, no tile-entity, no save data — all
+        // ephemeral state on the player).
+        public const BlockType FishingRod    = BlockType.FishingRod;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -485,6 +501,8 @@ namespace VStudioCraft.Game
                 case BlockType.Compass:        return 345;
                 // Tier 4 #21 — Saddle. Alpha numeric id 329.
                 case BlockType.Saddle:         return 329;
+                // Tier 4 #23 — Fishing Rod. Alpha numeric id 346.
+                case BlockType.FishingRod:     return 346;
                 default:                       return -1;
             }
         }
@@ -547,6 +565,7 @@ namespace VStudioCraft.Game
                 case BlockType.Slimeball:      return "Slimeball";
                 case BlockType.Compass:        return "Compass";
                 case BlockType.Saddle:         return "Saddle";
+                case BlockType.FishingRod:     return "Fishing Rod";
                 default:                       return t.ToString();
             }
         }
@@ -705,7 +724,9 @@ namespace VStudioCraft.Game
             // continue to extend it.
             // Tier 4 #21 — Saddle appended past Compass. Slice upper
             // bound bumps to Saddle=113.
-            || ((byte)t >= (byte)BlockType.FlintAndSteel && (byte)t <= (byte)BlockType.Saddle);
+            // Tier 4 #23 — Fishing Rod appended past Saddle. Slice
+            // upper bound bumps to FishingRod=114.
+            || ((byte)t >= (byte)BlockType.FlintAndSteel && (byte)t <= (byte)BlockType.FishingRod);
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -1304,6 +1325,11 @@ namespace VStudioCraft.Game
                 // coord; the sentinel entry in AlphaTileCoords keeps the
                 // slicer from overlaying garbage.
                 case BlockType.Saddle:              return BlockTextures.TileSaddle;
+                // Tier 4 #23 — Fishing Rod icon. Procedural — small
+                // brown rod with a diagonal line and a hook at the
+                // tip; sentinel atlas coord keeps the slicer out of
+                // this layer in alpha-textures mode.
+                case BlockType.FishingRod:          return BlockTextures.TileFishingRod;
                 default:
                     return BlockTextures.TileStone;
             }

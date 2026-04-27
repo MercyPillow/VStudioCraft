@@ -108,6 +108,19 @@ namespace VStudioCraft.Game
         // kind.
         public Pig Riding;
 
+        // Tier 4 #23 — Currently-cast fishing bobber, or null if no
+        // line is out. Set by GameRenderer.TryInteract on the cast
+        // RMB and cleared when the player reels (or when the bobber
+        // auto-despawns past its safety window). Single-bobber-per-
+        // player matches Alpha 1.1.2_01 — you couldn't have two
+        // simultaneous casts in flight.
+        //
+        // The reference is ephemeral the same way Riding is: on
+        // world load it's always null, and a despawned bobber
+        // force-clears it via the Tick pass so a stale reference
+        // can't "ghost reel" empty world.
+        public Bobber ActiveBobber;
+
         // Highest Y reached while airborne — the "peak" from which fall distance
         // is measured. Reset to current Y while on the ground so small hops
         // don't accumulate.

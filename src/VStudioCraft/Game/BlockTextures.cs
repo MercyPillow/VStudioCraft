@@ -137,7 +137,14 @@ namespace VStudioCraft.Game
         // preceding atlas index is unchanged).
         public const int FirstTailSaddleLayer  = FirstTailCompassLayer + TailCompassLayerCount; // 122
         public const int TailSaddleLayerCount  = 1;
-        public const int LayerCount = FirstTailSaddleLayer + TailSaddleLayerCount;              // 123
+        // Tier 4 #23 — Fishing Rod icon (Alpha 346). One sprite
+        // appended past the saddle pack. Procedural-only — no verified
+        // alpha_tools.png coord, sentinel below. Append-only past the
+        // saddle pack so existing v8/v9 saves stay byte-stable (every
+        // preceding atlas index is unchanged).
+        public const int FirstTailFishingRodLayer = FirstTailSaddleLayer + TailSaddleLayerCount; // 123
+        public const int TailFishingRodLayerCount = 1;
+        public const int LayerCount = FirstTailFishingRodLayer + TailFishingRodLayerCount;       // 124
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -240,6 +247,15 @@ namespace VStudioCraft.Game
         // are dungeon loot only); item ships as a creative-catalog
         // entry until dungeons land in Tier 6 #32.
         public const int TileSaddle         = 122;
+        // Tier 4 #23 — Fishing Rod icon (Alpha 346). Procedural — no
+        // verified alpha_tools.png coord, sentinel entry below. Brown
+        // rod shaft running corner-to-corner with a thin grey line
+        // running off the tip and a small hook silhouette at the line
+        // end so the icon reads as "fishing rod, not stick or
+        // arrow". Cast/reel mechanic ships in Tier 4 #23; the line
+        // entity itself (the Bobber) is rendered as a small white
+        // cuboid in the world, not from an atlas tile.
+        public const int TileFishingRod     = 123;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -474,6 +490,10 @@ namespace VStudioCraft.Game
             // Tier 4 #21 — Saddle sprite. Procedural-only, same
             // sentinel-coord story as the compass pack.
             GenerateProceduralSaddleLayers(layerPixels);
+
+            // Tier 4 #23 — Fishing Rod sprite. Procedural-only, same
+            // sentinel-coord story as the saddle pack.
+            GenerateProceduralFishingRodLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -1560,6 +1580,72 @@ namespace VStudioCraft.Game
         private static void GenerateProceduralSaddleLayers(byte[] layerPixels)
         {
             UploadItem(layerPixels, TileSaddle, GenerateSaddleItem);
+        }
+
+        // Tier 4 #23 — Fishing Rod icon painter. Single sprite — a
+        // brown rod shaft running corner-to-corner across the tile,
+        // with a thin grey "line" trailing off the tip into a small
+        // hook silhouette so the icon is unmistakably a rod (and not
+        // a stick / arrow / bow). Same procedural-only story as the
+        // saddle pack (sentinel atlas coord), so both atlas modes
+        // paint identically.
+        private static void GenerateProceduralFishingRodLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TileFishingRod, GenerateFishingRodItem);
+        }
+
+        // Tier 4 #23 — Fishing Rod sprite. 16×16 pixel painter:
+        //   - Rod shaft: a brown diagonal from (2,13) to (10,5),
+        //     widened to a 2-pixel band so the shaft reads as
+        //     thicker than the line. The shaft tapers visually
+        //     from butt (lower-left) to tip (upper-right) by
+        //     dropping the highlight band over the upper half.
+        //   - Wrap band: a single dark-leather pixel near the
+        //     butt (col 3-4, row 12) hints at a hand-grip wrap.
+        //   - Line: a thin off-white diagonal trailing from the
+        //     tip (10,5) up to (13,2) — drawn as single pixels
+        //     so it visually reads as a fine fishing line, not a
+        //     solid bar.
+        //   - Hook: a tiny J-shape at the line end ((13,2),
+        //     (14,3), (14,4), (13,4)) — three iron-grey pixels
+        //     that read as a bent hook even at 16×16.
+        // Palette mirrors the Bow sprite's wood tone (warm brown)
+        // so a glance at the hotbar groups them visually as the
+        // two "stick + string" tools.
+        private static void GenerateFishingRodItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) wood   = (130, 80, 40);
+            (byte r, byte g, byte b) woodHi = (170, 110, 60);
+            (byte r, byte g, byte b) woodLo = (85,  50, 25);
+            (byte r, byte g, byte b) line   = (230, 225, 215);
+            (byte r, byte g, byte b) hook   = (170, 170, 175);
+            // Diagonal rod shaft: walks from (2,13) up-right to
+            // (10,5). At each step paint a 2-pixel-thick band
+            // (the cell + its right neighbour) so the shaft has
+            // visible width. Highlight on the upper-right pixel
+            // and shadow on the lower-left for a hint of round.
+            for (int s = 0; s <= 8; s++)
+            {
+                int x = 2 + s;
+                int y = 13 - s;
+                SetPixel(pixels, x,     y,     wood.r,   wood.g,   wood.b);
+                SetPixel(pixels, x + 1, y,     woodHi.r, woodHi.g, woodHi.b);
+                SetPixel(pixels, x,     y + 1, woodLo.r, woodLo.g, woodLo.b);
+            }
+            // Grip-wrap band near the butt — a darker pip so the
+            // lower-left end reads as the handle, not just a
+            // continuation of the shaft.
+            SetPixel(pixels, 3, 12, woodLo.r, woodLo.g, woodLo.b);
+            SetPixel(pixels, 4, 12, woodLo.r, woodLo.g, woodLo.b);
+            // Line trailing off the tip. Three single pixels
+            // walking up-right toward the hook.
+            SetPixel(pixels, 11, 4, line.r, line.g, line.b);
+            SetPixel(pixels, 12, 3, line.r, line.g, line.b);
+            SetPixel(pixels, 13, 2, line.r, line.g, line.b);
+            // Hook — small J at the line end.
+            SetPixel(pixels, 14, 3, hook.r, hook.g, hook.b);
+            SetPixel(pixels, 14, 4, hook.r, hook.g, hook.b);
+            SetPixel(pixels, 13, 4, hook.r, hook.g, hook.b);
         }
 
         // Tier 4 #21 — Saddle sprite. 16×16 pixel painter:
@@ -2734,6 +2820,13 @@ namespace VStudioCraft.Game
             // embedded sheet. The procedural generator paints a small
             // brown leather pad in both atlas modes.
             /* TileSaddle            */ (-1, -1),
+            // Tier 4 #23 — Fishing Rod icon. Procedural-only, same
+            // sentinel story as the saddle pack — alpha_tools.png
+            // coord for the rod sprite hasn't been verified against
+            // the embedded sheet. The procedural generator paints
+            // the diagonal rod + line + hook silhouette in both
+            // atlas modes.
+            /* TileFishingRod        */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -2893,6 +2986,10 @@ namespace VStudioCraft.Game
             // Tier 4 #21 — Saddle sprite. Procedural-always — same
             // sentinel-coord story as the compass pack.
             GenerateProceduralSaddleLayers(layerPixels);
+
+            // Tier 4 #23 — Fishing Rod sprite. Procedural-always —
+            // same sentinel-coord story as the saddle pack.
+            GenerateProceduralFishingRodLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);

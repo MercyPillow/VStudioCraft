@@ -91,6 +91,11 @@ namespace VStudioCraft.Game
             // One saddle per slot; the player can carry multiple by
             // burning multiple slots.
             if (type == BlockType.Saddle) return 1;
+            // Tier 4 #23 — Fishing rods are unstackable in Alpha
+            // 1.1.2_01 (each rod has its own durability metadata, so
+            // they couldn't share a slot even if stacking were
+            // permitted; the cap is the explicit Alpha rule).
+            if (type == BlockType.FishingRod) return 1;
             return MaxCount;
         }
 

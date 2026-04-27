@@ -387,6 +387,24 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.BucketEmpty, 1)));
 
+            // Tier 4 #23 — Fishing Rod. Alpha pattern is sticks
+            // running diagonally from bottom-left to top-right with
+            // string down the right column:
+            //   . . S
+            //   . S T
+            //   S . T
+            // Where S=Stick, T=String. Three sticks form the rod
+            // along the diagonal, two strings dangle down the right
+            // edge as the line. Output: 1 fishing rod.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Air,   BlockType.Air,   BlockType.Stick  },
+                    { BlockType.Air,   BlockType.Stick, BlockType.String },
+                    { BlockType.Stick, BlockType.Air,   BlockType.String },
+                },
+                new ItemStack(BlockType.FishingRod, 1)));
+
             // Tier 4 #22 — Compass recipe is DEFERRED to Tier 8 #42 (the
             // tier that ships Redstone Dust). Alpha's pattern is four
             // iron ingots arranged in a + with a single redstone dust

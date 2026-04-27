@@ -80,7 +80,12 @@ namespace VStudioCraft.Game
             if (_indexCount == 0) return;
             GL.BindVertexArray(_vao);
             GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
-            GL.BindVertexArray(0);
+            // Intentionally do NOT BindVertexArray(0) here — every other
+            // draw site in the renderer binds its own VAO before drawing,
+            // so leaving the previous binding is harmless and saves one
+            // GL crossing per chunk. The chunk pass alone draws ~100
+            // visible chunks per frame; eliminating the trailing rebind
+            // halves the BindVertexArray traffic for that pass.
         }
 
         public void DrawTransparent()
@@ -88,7 +93,6 @@ namespace VStudioCraft.Game
             if (_tIndexCount == 0) return;
             GL.BindVertexArray(_tVao);
             GL.DrawElements(PrimitiveType.Triangles, _tIndexCount, DrawElementsType.UnsignedInt, 0);
-            GL.BindVertexArray(0);
         }
 
         public void Dispose()

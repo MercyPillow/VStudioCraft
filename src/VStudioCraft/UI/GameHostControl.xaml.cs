@@ -286,6 +286,13 @@ namespace VStudioCraft.UI
                         try { work(); } catch { /* swallow; next frame still draws */ }
                     }
 
+                    // GetPhysicalSize is a Win32 GetClientRect p/invoke. The
+                    // viewport doesn't change inside one render-loop iteration,
+                    // so call it once and reuse for every modal-click handler
+                    // and the final Render() call below. Modal-heavy frames
+                    // were paying 4–6 GetClientRect crossings per frame.
+                    var (pw, ph) = GetPhysicalSize();
+
                     double now = _clock.Elapsed.TotalSeconds;
                     float dt = (float)Math.Min(0.1, now - lastSeconds);
                     lastSeconds = now;
@@ -353,12 +360,11 @@ namespace VStudioCraft.UI
                     // Inventory mutations stay on the render thread.
                     if (_renderer.IsInventoryOpen && _input.InventoryClickButton != 0)
                     {
-                        var (pw0, ph0) = GetPhysicalSize();
                         _renderer.HandleInventoryClick(
                             _input.InventoryClickButton,
                             _input.InventoryClickX,
                             _input.InventoryClickY,
-                            pw0, ph0,
+                            pw, ph,
                             _input.InventoryClickShift);
                         _input.InventoryClickButton = 0;
                         _input.InventoryClickShift = false;
@@ -371,12 +377,11 @@ namespace VStudioCraft.UI
                     // crafting handler applies them on this thread.
                     if (_renderer.IsCraftingOpen && _input.InventoryClickButton != 0)
                     {
-                        var (pw0, ph0) = GetPhysicalSize();
                         _renderer.HandleCraftingClick(
                             _input.InventoryClickButton,
                             _input.InventoryClickX,
                             _input.InventoryClickY,
-                            pw0, ph0,
+                            pw, ph,
                             _input.InventoryClickShift);
                         _input.InventoryClickButton = 0;
                         _input.InventoryClickShift = false;
@@ -385,12 +390,11 @@ namespace VStudioCraft.UI
                     // Same drain pattern for the furnace screen.
                     if (_renderer.IsFurnaceOpen && _input.InventoryClickButton != 0)
                     {
-                        var (pw0, ph0) = GetPhysicalSize();
                         _renderer.HandleFurnaceClick(
                             _input.InventoryClickButton,
                             _input.InventoryClickX,
                             _input.InventoryClickY,
-                            pw0, ph0,
+                            pw, ph,
                             _input.InventoryClickShift);
                         _input.InventoryClickButton = 0;
                         _input.InventoryClickShift = false;
@@ -399,12 +403,11 @@ namespace VStudioCraft.UI
                     // Same drain pattern for the chest screen.
                     if (_renderer.IsChestOpen && _input.InventoryClickButton != 0)
                     {
-                        var (pw0, ph0) = GetPhysicalSize();
                         _renderer.HandleChestClick(
                             _input.InventoryClickButton,
                             _input.InventoryClickX,
                             _input.InventoryClickY,
-                            pw0, ph0,
+                            pw, ph,
                             _input.InventoryClickShift);
                         _input.InventoryClickButton = 0;
                         _input.InventoryClickShift = false;
@@ -465,8 +468,7 @@ namespace VStudioCraft.UI
                         bool whole = _input.DropStackPressed;
                         if (_renderer.IsInventoryOpen)
                         {
-                            var (pwQ, phQ) = GetPhysicalSize();
-                            _renderer.DropFromInventoryHover(whole, pwQ, phQ);
+                            _renderer.DropFromInventoryHover(whole, pw, ph);
                         }
                         else
                         {
@@ -517,6 +519,12 @@ namespace VStudioCraft.UI
                         // physics. Same gating as TickArrows (frozen
                         // under pause / inventory).
                         _renderer.TickThrown(dt);
+                        // Tier 4 #23 — Fishing bobber timers (catch +
+                        // auto-despawn). No physics — same gating as
+                        // TickArrows so a paused world doesn't have
+                        // bobbers silently catching fish in the
+                        // background.
+                        _renderer.TickBobbers(dt);
                     }
                     else if (!_renderer.IsPaused)
                     {
@@ -531,7 +539,6 @@ namespace VStudioCraft.UI
 
                     long t1 = Stopwatch.GetTimestamp();
 
-                    var (pw, ph) = GetPhysicalSize();
                     _renderer.Render(pw, ph);
 
                     long t2 = Stopwatch.GetTimestamp();
