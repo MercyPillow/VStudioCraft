@@ -504,6 +504,7 @@ namespace VStudioCraft.UI
                         _renderer.TickDrops(dt);
                         _renderer.TickPigs(dt);
                         _renderer.TickHostiles(dt);
+                        _renderer.TickMobSpawns(dt);
                         _renderer.TickFurnacesIfDue(dt);
                     }
                     else if (!_renderer.IsPaused)

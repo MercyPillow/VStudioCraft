@@ -4,43 +4,44 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 `src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
 Items marked **Have** exist today; items under **Missing** are the gap.
 
-Last updated after Tier 3 #10 — first hostile mobs (zombie, skeleton,
-spider, creeper). A new abstract `HostileMob` base extends `Entity`
-with shared chase-AI plumbing: aggro inside `DetectRange`, atan2-yaw
-toward the player, normalised-XZ steering at the mob's `WalkSpeed`,
-single-block auto-jump on a 1-block lip in front of the chase
-heading (no path-planner — A* on a 16-block window is deferred), and
-a melee `TryAttack` gated by `AttackCooldown` that calls back into
-`Player.TakeDamage` through the new `IPlayerDamageSink` shim. Outside
-detect range the mob falls back to Pig-style wander on a 5 s timer.
-The four concrete subclasses tune HP / walk speed / detect+attack
-range / per-mob death drops:
-**Zombie** (HP 20, walk 1.0, dmg 2, no drops — Alpha 1.1.2 zombies
-were drop-empty); **Skeleton** (HP 20, walk 1.1, dmg 2, drops 0..2
-**Arrow (262)** + 1-in-3 chance of **Bow (261)**; bow combat itself
-is roadmap-deferred to Tier 4 #17, the bow ships as an inert
-collectible until then); **Spider** (HP 16, walk 1.6, dmg 2, drops
-0..2 **String (287)**; wall-climb deferred); **Creeper** (HP 20,
-walk 1.05, no melee — first contact lights a 1.5 s fuse via an
-`OnAttacked` override; `TickFuse` advances the timer separately
-from chase, defuses if the player sprints out of 2× attack range,
-and detonates for a flat 6 HP hit on the player; player-kill drops
-0..2 **Gunpowder (289)**; explosion-death drops nothing). Hostiles
-are spawned during chunk terrain-gen via `World.SpawnHostilesInChunk`
-with a per-column 1-in-360 hashed gate, light ≤ 7 (Alpha hostile
-spawn rule), 35/25/25/15 weighted between zombie/skeleton/spider/
-creeper. The renderer ticks them in `TickHostiles` (mirrors
-`TickPigs` lifecycle, reaping `IsDead` entries) and renders each as
-a procedural cuboid model through the shared `_overlayShader` +
-`_breakCubeMesh` pipe — humanoid for zombie/skeleton, low+wide
-abdomen + cephalothorax + 8 legs for spider, tall slim torso + 4
-stubby legs for creeper with a fuse-flash colour ramp from green
-toward white as the timer counts down. LMB melee is now mob-type
-agnostic — `TryHitMob` scans pigs and hostiles together, picks the
-closest hit, and calls the new `IDropSink.SpawnDrop` shim on death
-so per-mob `SpawnDeathDrops` can append items without taking a
-hard ref to the renderer. Pig spawn density quartered (1-in-720)
-to make room for the hostiles in the chunk-spawn budget.
+Last updated after Tier 3 #11 — light-level-gated live spawn loop.
+The chunk-gen seed pass (Tier 3 #9 / #10) remains the deterministic
+"what mobs are in a fresh chunk" pass; on top of it, `World.TickMobSpawns`
+runs every 1 s and tops up the live mob population as the player
+travels. Each tick: instant-despawn every mob >128 blocks XZ from
+the player + 5%/tick stochastic despawn at 32..128 blocks
+(matches Alpha 1.1.2's "mob keep-alive radius"); enforce global
+caps (PassiveCap = 10, HostileCap = 70 — Alpha defaults); for up
+to AttemptsPerTick = 12 random columns drawn from chunks within
+SpawnRadiusChunks = 6 around the player, gate by per-chunk cap
+(PerChunkCap = 4 — prevents stacking) + min spawn distance
+(MinSpawnDistance = 24 blocks — Alpha never spawns next to you)
++ surface/headroom/light, then dispatch: light ≤ 7 → weighted-draw
+hostile (35/25/25/15 zombie/skeleton/spider/creeper, same mix as
+the chunk-gen pass); light ≥ 9 with grass surface → Pig; light 8
+is a deliberate dead band (Alpha behaviour). World owns its own
+`Random` for the dice rolls (live spawns are non-deterministic —
+mobs aren't persisted across save/load anyway). The renderer
+exposes a 1-line `TickMobSpawns(dt)` wrapper that hands the
+player position to the world and is gated by the same pause /
+modal logic as `TickPigs` / `TickHostiles`. Result: kill all the
+hostiles in a cave, walk away, come back at night → it's full of
+new ones, exactly the way Alpha plays.
+
+Earlier: Tier 3 #10 — first hostile mobs. Abstract `HostileMob`
+base extends `Entity` with shared chase-AI plumbing (aggro inside
+`DetectRange`, atan2-yaw + normalised-XZ steering, 1-block
+auto-jump, melee `TryAttack` gated by per-instance cooldown,
+wander fallback). Four concrete subclasses: Zombie (HP 20, no
+drops — Alpha 1.1.2 was drop-empty), Skeleton (HP 20, drops 0..2
+**Arrow (262)** + 1-in-3 **Bow (261)** — combat deferred to Tier
+4 #17), Spider (HP 16, walk 1.6, drops 0..2 **String (287)**),
+Creeper (1.5 s fuse via `OnAttacked` override + `TickFuse`,
+6 HP detonation, drops 0..2 **Gunpowder (289)** on player-kill).
+`World.SpawnHostilesInChunk` seeds them at terrain-gen with a
+1-in-360 hashed gate + light ≤ 7. Renderer dispatches per-type
+cuboid rigs through `_overlayShader`. `IPlayerDamageSink` and
+`IDropSink` shims decouple `HostileMob` from the renderer.
 
 Earlier: Tier 3 #9 entity framework + first passive mob — abstract
 `Entity` base hoists AABB sub-step physics out of `Player`; `Pig`
@@ -219,14 +220,14 @@ clipping at ~3.5 rows).
 - Hostile mob render — same procedural-cuboid pipe pigs use (`_overlayShader` + `_breakCubeMesh`). Type-dispatched in `RenderHostiles`: humanoid head+torso+arms+legs for zombie/skeleton, low oval body + cephalothorax + 8 stubby legs + two red eyes for spider, tall slim torso + 4 short legs + small head for creeper. Hurt flash lerps the body colour toward red over `HostileMob.HurtFlashSeconds` (0.30 s). Creeper additionally lerps body colour from green toward white as `FuseTimer` counts down — the white peak hits the frame before detonation.
 - LMB melee on mobs — `TryHitMob` runs before `TryBreak`'s block hit so a mob in front of the cursor takes priority. Damage table (`MeleeDamageForHeldItem`) follows Alpha 1.1.2: bare-hand 1; sword wood 5 / stone 6 / iron 7 / gold 5 / diamond 8; axe -2 from sword tier; pickaxe -3; shovel -4; clamped to ≥1. Scans pigs and hostiles together, picks the closest by ray-AABB distance, blocked by walls. Held tool's durability ticks one use per hit (`DamageHeldTool(1)`). Arm-swing fires (`Player.TriggerSwing`) and the place SFX bank's wool-thwack stub plays as a placeholder mob-hit cue. Death drops route per-mob: pigs → 1..3 Raw Porkchop, hostiles → their `SpawnDeathDrops` implementation, both through the `DroppedItem` pickup loop.
 - Dropped-item entity — block + mob drops bob, spin, fall under gravity, settle, and get picked up; one entry per `_drops` list entry, ticked in `TickDrops`.
+- **Live mob-spawn attempt loop** (Tier 3 #11). Layered on top of the chunk-gen seed pass — `World.TickMobSpawns` runs every `SpawnTickInterval` (1 s) and tops up the live mob population as the player travels. Each tick: instant-despawn every mob > `InstantDespawnDist` (128 blocks) XZ from the player + 5%/tick stochastic despawn at `StochasticDespawnDist..InstantDespawnDist` (32..128 blocks), enforce global caps (`PassiveCap` 10, `HostileCap` 70 — Alpha defaults), then for `AttemptsPerTick` (12) random columns drawn from chunks within `SpawnRadiusChunks` (6) of the player gate by per-chunk cap (`PerChunkCap` 4 — prevents stacking) + min spawn distance (`MinSpawnDistance` 24 blocks — Alpha never spawns next to the player) + surface/headroom rules. Light dispatch: ≤ 7 → weighted hostile draw (35/25/25/15 zombie/skeleton/spider/creeper, mirroring the chunk-gen mix); ≥ 9 with grass surface → Pig; light = 8 is a deliberate dead band (Alpha behaviour). World owns its own `Random` for the dice rolls; `GameRenderer.TickMobSpawns(dt)` is a one-line wrapper that hands the player position to the world and is gated by the same pause / modal logic as `TickPigs` / `TickHostiles`.
 
 **Missing**
 - Mob AI / pathfinding — chase is straight-line steering + 1-block auto-jump (no A*); wander is a 5 s yaw-pick. No path queries, no real terrain navigation.
 - Slime mob (the fifth Alpha hostile) — splits-on-hit semantics, low-Y light-independent spawn. Slated for Tier 4 #18.
 - Spider wall-climb (Alpha spiders climb walls — vertical pathing is a bigger surface than the chase plumbing handles today)
-- Live mob-spawn loop — hostiles + pigs spawn at terrain-gen only; Alpha's per-tick spawn-attempt loop (light < 7 in dark night, mob cap, density curve) is absent
+- Density-curve / pack spawning — Alpha clusters spawns of the same kind in a 1..4-mob "pack" near the seed cell. Our spawn pass is one mob per attempt, which gives a flatter distribution than vanilla.
 - Other passive mobs: cow, sheep, chicken
-- Per-chunk spawn cap
 - Player skin / third-person model (player is currently invisible; F5 third-person will need a model + texture)
 - Projectiles: arrow, snowball, egg
 - Vehicles: minecart, boat
@@ -473,7 +474,6 @@ multiple subsystems at once.
 	
 ### Tier 3 — Mobs (the world stops feeling empty)
 
-11. **Light-level-gated spawn loop** — Live per-tick spawn-attempt loop on top of today's terrain-gen-only spawns. Hostile spawns at light < 7 (refines the current chunk-gen gate into a per-tick attempt), passive on grass at light ≥ 9, per-chunk spawn cap, density curve.
 12. **Cow / sheep / chicken** — Variants of pig. Cow drops **Leather (334)** + Raw Beef (Beef wasn't added until Beta 1.8 — Alpha cows actually dropped raw porkchop alongside leather; we'll match the era). Chicken drops **Feather (288)** on death and lays **Egg (344)** every ~5 min while alive. Sheep drops Wool (block) when sheared / killed.
 13. **Player skin + third-person model** — Required for F5 + future multiplayer.
 

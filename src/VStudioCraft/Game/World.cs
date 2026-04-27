@@ -233,6 +233,205 @@ namespace VStudioCraft.Game
             }
         }
 
+        // Live mob-spawn attempt loop (Tier 3 #11). Layered ON TOP of the
+        // chunk-gen seed pass — that pass remains the deterministic, hashed
+        // RNG-driven "what mobs are in a fresh chunk", and this method adds
+        // the every-second top-up that keeps the world populated as the
+        // player travels. Cadence: one batch every SpawnTickInterval seconds
+        // (1 s — Alpha actually runs the spawn attempt every game tick at
+        // 20 Hz, but our world is small and 1 s is more than fast enough to
+        // refill what the player burns down).
+        //
+        // Each batch:
+        //   1. Despawn — instant despawn at >128 blocks XZ from player
+        //      (Alpha "hard cap"), stochastic 5%/sec despawn at 32..128
+        //      blocks. Keeps the live-mob list from accumulating across
+        //      a long traversal.
+        //   2. Cap check — global passive cap (10) and hostile cap (70)
+        //      mirror Alpha's defaults. If both are full, no spawn attempts
+        //      this tick.
+        //   3. Attempts — AttemptsPerTick random columns picked from
+        //      chunks within SpawnRadiusChunks (6 chunks ≈ 96 blocks, the
+        //      same band the renderer's been told to keep loaded). Each
+        //      attempt:
+        //        - Skip the column if the player is within MinSpawnDistance
+        //          (24 blocks — Alpha doesn't spawn next to you)
+        //        - Skip if the chunk's local mob count is already at
+        //          PerChunkCap (4). Prevents stacking inside one chunk.
+        //        - Pick the topmost solid surface, require 2 blocks of
+        //          headroom, decide:
+        //            light ≤ 7  → attempt hostile spawn (gates on global
+        //                          hostile cap; weighted draw 35/25/25/15
+        //                          across zombie/skeleton/spider/creeper)
+        //            light ≥ 9 + grass surface → attempt passive (Pig)
+        //                          spawn (gates on global passive cap)
+        //          Light range 8 (the dead band between hostile-eligible
+        //          and passive-eligible) is deliberately a no-spawn zone,
+        //          matching Alpha.
+        //
+        // RNG: a single Random instance owned by the world. Spawn outcomes
+        // are non-deterministic (don't replay across loads — fine, mobs
+        // aren't persisted anyway). Callers pass the player position each
+        // tick so World doesn't need a back-ref to Player.
+        public const float SpawnTickInterval     = 1.0f;
+        public const int   PassiveCap            = 10;
+        public const int   HostileCap            = 70;
+        public const int   PerChunkCap           = 4;
+        public const int   SpawnRadiusChunks     = 6;
+        public const int   AttemptsPerTick       = 12;
+        public const int   MinSpawnDistance      = 24;
+        public const int   StochasticDespawnDist = 32;
+        public const int   InstantDespawnDist    = 128;
+
+        private float _spawnTimer;
+        private readonly Random _spawnRng = new Random();
+
+        public void TickMobSpawns(float dt, OpenTK.Vector3 playerPos)
+        {
+            _spawnTimer -= dt;
+            if (_spawnTimer > 0f) return;
+            _spawnTimer = SpawnTickInterval;
+
+            DespawnFarMobs(playerPos);
+
+            int passiveCount = _pigs.Count;
+            int hostileCount = _hostiles.Count;
+            bool passiveFull = passiveCount >= PassiveCap;
+            bool hostileFull = hostileCount >= HostileCap;
+            if (passiveFull && hostileFull) return;
+
+            int playerCx = (int)Math.Floor(playerPos.X / (float)Chunk.SizeX);
+            int playerCz = (int)Math.Floor(playerPos.Z / (float)Chunk.SizeZ);
+            int minSpawnDistSq = MinSpawnDistance * MinSpawnDistance;
+
+            for (int attempt = 0; attempt < AttemptsPerTick; attempt++)
+            {
+                // Pick a random chunk in the radius band around the player.
+                int dx = _spawnRng.Next(-SpawnRadiusChunks, SpawnRadiusChunks + 1);
+                int dz = _spawnRng.Next(-SpawnRadiusChunks, SpawnRadiusChunks + 1);
+                int cx = playerCx + dx;
+                int cz = playerCz + dz;
+                var chunk = GetChunk(cx, cz);
+                if (chunk == null) continue;
+
+                // Per-chunk cap — count current mobs sitting inside this
+                // chunk's XZ extent. Cheap on the small live list (well
+                // under the global cap) and avoids the maintenance burden
+                // of an incremental per-chunk counter.
+                int chunkBaseX = cx * Chunk.SizeX;
+                int chunkBaseZ = cz * Chunk.SizeZ;
+                if (CountMobsInChunkXZ(chunkBaseX, chunkBaseZ) >= PerChunkCap) continue;
+
+                int lx = _spawnRng.Next(Chunk.SizeX);
+                int lz = _spawnRng.Next(Chunk.SizeZ);
+                int wx = chunkBaseX + lx;
+                int wz = chunkBaseZ + lz;
+
+                // Min-distance gate — never spawn right under the player's
+                // feet or in the cluster directly around the camera.
+                float ddx = (wx + 0.5f) - playerPos.X;
+                float ddz = (wz + 0.5f) - playerPos.Z;
+                if (ddx * ddx + ddz * ddz < minSpawnDistSq) continue;
+
+                // Topmost solid surface. Same rule as the gen-time spawn
+                // passes: skip air + light-transparent caps (flora /
+                // glass / leaves) so we land on real terrain.
+                int surfaceY = -1;
+                for (int y = Chunk.SizeY - 1; y >= 0; y--)
+                {
+                    var b = chunk.Get(lx, y, lz);
+                    if (b == BlockType.Air || BlockData.IsLightTransparent(b)) continue;
+                    surfaceY = y;
+                    break;
+                }
+                if (surfaceY < 0) continue;
+                var surface = chunk.Get(lx, surfaceY, lz);
+                if (!BlockData.IsSolid(surface)) continue;
+                if (surfaceY + 2 >= Chunk.SizeY) continue;
+                if (chunk.Get(lx, surfaceY + 1, lz) != BlockType.Air) continue;
+                if (chunk.Get(lx, surfaceY + 2, lz) != BlockType.Air) continue;
+
+                int sky = chunk.GetSkyLight(lx, surfaceY + 1, lz);
+                int blk = chunk.GetBlockLight(lx, surfaceY + 1, lz);
+                int eff = sky > blk ? sky : blk;
+
+                var spawnPos = new OpenTK.Vector3(wx + 0.5f, surfaceY + 1f, wz + 0.5f);
+                int seedForMob = _spawnRng.Next();
+
+                if (eff <= 7 && !hostileFull)
+                {
+                    // Hostile attempt — same weighted draw as the gen-time
+                    // pass so live spawns and chunk-gen spawns share a
+                    // species mix.
+                    int kindRoll = _spawnRng.Next(100);
+                    HostileMob mob;
+                    if      (kindRoll < 35) mob = new Zombie(spawnPos,   seedForMob);
+                    else if (kindRoll < 60) mob = new Skeleton(spawnPos, seedForMob);
+                    else if (kindRoll < 85) mob = new Spider(spawnPos,   seedForMob);
+                    else                    mob = new Creeper(spawnPos,  seedForMob);
+                    _hostiles.Add(mob);
+                    hostileCount++;
+                    if (hostileCount >= HostileCap) hostileFull = true;
+                }
+                else if (eff >= 9 && surface == BlockType.Grass && !passiveFull)
+                {
+                    _pigs.Add(new Pig(spawnPos, seedForMob));
+                    passiveCount++;
+                    if (passiveCount >= PassiveCap) passiveFull = true;
+                }
+                // Light 8 (or grass-less light-≥9 surface) — no spawn.
+
+                if (passiveFull && hostileFull) return;
+            }
+        }
+
+        // Count mobs whose XZ position falls inside this chunk's XZ box.
+        // Used by the per-chunk spawn cap. O(mobs) — mob list is small.
+        private int CountMobsInChunkXZ(int chunkBaseX, int chunkBaseZ)
+        {
+            int n = 0;
+            int xMin = chunkBaseX, xMax = chunkBaseX + Chunk.SizeX;
+            int zMin = chunkBaseZ, zMax = chunkBaseZ + Chunk.SizeZ;
+            for (int i = 0; i < _pigs.Count; i++)
+            {
+                var p = _pigs[i].Position;
+                if (p.X >= xMin && p.X < xMax && p.Z >= zMin && p.Z < zMax) n++;
+            }
+            for (int i = 0; i < _hostiles.Count; i++)
+            {
+                var p = _hostiles[i].Position;
+                if (p.X >= xMin && p.X < xMax && p.Z >= zMin && p.Z < zMax) n++;
+            }
+            return n;
+        }
+
+        // Despawn far mobs. Alpha 1.1.2 instant-despawns mobs > 128 blocks
+        // from the player and stochastically despawns at 32..128. We mirror
+        // both rules: the >128 cull runs every spawn tick, and a 5% per-tick
+        // cull runs on the 32..128 band so mobs trail off as the player
+        // walks rather than persisting indefinitely.
+        private void DespawnFarMobs(OpenTK.Vector3 playerPos)
+        {
+            int instantSq    = InstantDespawnDist    * InstantDespawnDist;
+            int stochasticSq = StochasticDespawnDist * StochasticDespawnDist;
+            for (int i = _pigs.Count - 1; i >= 0; i--)
+            {
+                var p = _pigs[i].Position;
+                float fx = p.X - playerPos.X, fz = p.Z - playerPos.Z;
+                float dsq = fx * fx + fz * fz;
+                if (dsq > instantSq) { _pigs.RemoveAt(i); continue; }
+                if (dsq > stochasticSq && _spawnRng.NextDouble() < 0.05) _pigs.RemoveAt(i);
+            }
+            for (int i = _hostiles.Count - 1; i >= 0; i--)
+            {
+                var p = _hostiles[i].Position;
+                float fx = p.X - playerPos.X, fz = p.Z - playerPos.Z;
+                float dsq = fx * fx + fz * fz;
+                if (dsq > instantSq) { _hostiles.RemoveAt(i); continue; }
+                if (dsq > stochasticSq && _spawnRng.NextDouble() < 0.05) _hostiles.RemoveAt(i);
+            }
+        }
+
         public static World Empty(int seed) => new World(seed);
 
         // Streaming entry point. Generates the chunk if missing and marks it + its

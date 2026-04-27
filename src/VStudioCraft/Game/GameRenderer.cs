@@ -2361,6 +2361,18 @@ void main()
             }
         }
 
+        // Live mob-spawn attempt loop driver (Tier 3 #11). One-line
+        // wrapper around World.TickMobSpawns — the renderer owns the
+        // call site so spawning shares the same pause/modal gating as
+        // TickPigs / TickHostiles (callers freeze it the same way).
+        // The world internally rate-limits to one batch every
+        // SpawnTickInterval seconds, so a per-frame call is cheap.
+        public void TickMobSpawns(float dt)
+        {
+            if (_world == null || Player == null) return;
+            _world.TickMobSpawns(dt, Player.Position);
+        }
+
         // IPlayerDamageSink: HostileMob calls this to inflict melee
         // damage. Wraps Player.TakeDamage with a null guard since the
         // mob list can outlive a Player swap (eg. world reload during
