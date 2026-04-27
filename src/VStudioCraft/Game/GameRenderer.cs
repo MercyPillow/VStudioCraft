@@ -1246,13 +1246,13 @@ void main()
                 if (dx * dx + dz * dz <= unloadR2)
                 {
                     bool freshlyInstalled = _world.InstallGeneratedChunk(r.Chunk);
-                    // Only spawn pigs in genuinely fresh terrain — a
-                    // chunk re-installed from the modified cache (player
-                    // edits survived an unload) skips because pigs were
-                    // already considered for it the first time around.
+                    // Only spawn passive mobs in genuinely fresh terrain
+                    // — a chunk re-installed from the modified cache
+                    // (player edits survived an unload) skips because
+                    // mobs were already considered for it the first time.
                     if (freshlyInstalled && !r.Chunk.IsModified)
                     {
-                        _world.SpawnPigsInChunk(r.Chunk);
+                        _world.SpawnPassivesInChunk(r.Chunk);
                         _world.SpawnHostilesInChunk(r.Chunk);
                     }
                 }
@@ -2122,39 +2122,39 @@ void main()
         }
 
         // Click-attack on the closest mob along the camera ray within
-        // ReachDistance. Returns true if a pig was struck (caller should
+        // ReachDistance. Returns true if a mob was struck (caller should
         // then skip the block break). The damage value follows Alpha
         // 1.1.2_01's tool-vs-mob table: sword > axe > pickaxe/shovel >
         // bare hand, with a per-material multiplier. On lethal hits the
-        // pig drops 1–3 RawPorkchops at its feet (Alpha pig drop range)
-        // and is flagged dead — TickPigs will reap it next tick.
+        // mob's per-type SpawnDeathDrops fires and the entity is flagged
+        // dead — TickPassives / TickHostiles will reap it next tick.
         private bool TryHitMob(float blockDist)
         {
             if (_world == null) return false;
-            var pigs = _world.Pigs;
+            var passives = _world.Passives;
             var hostiles = _world.Hostiles;
-            if (pigs.Count == 0 && hostiles.Count == 0) return false;
+            if (passives.Count == 0 && hostiles.Count == 0) return false;
 
             // Find the closest live mob the camera ray pierces. We scan
-            // pigs and hostiles in one pass so the closest mob (whether
-            // passive or hostile) wins — there's no "hostiles take
-            // priority" rule in Alpha, the click just hits whatever's
+            // passives and hostiles in one pass so the closest mob
+            // (whether passive or hostile) wins — there's no "hostiles
+            // take priority" rule in Alpha, the click just hits whatever's
             // physically closer along the look ray.
             float bestT = float.MaxValue;
-            Pig bestPig = null;
+            PassiveMob bestPassive = null;
             HostileMob bestHostile = null;
             var origin = Camera.Position;
             var dir = Camera.Forward;
-            for (int i = 0; i < pigs.Count; i++)
+            for (int i = 0; i < passives.Count; i++)
             {
-                var pig = pigs[i];
-                if (pig.IsDead) continue;
-                pig.GetAabb(out var min, out var max);
+                var p = passives[i];
+                if (p.IsDead) continue;
+                p.GetAabb(out var min, out var max);
                 if (!RayAabbIntersect(origin, dir, min, max, ReachDistance, out float t)) continue;
                 if (t < bestT)
                 {
                     bestT = t;
-                    bestPig = pig;
+                    bestPassive = p;
                     bestHostile = null;
                 }
             }
@@ -2168,10 +2168,10 @@ void main()
                 {
                     bestT = t;
                     bestHostile = mob;
-                    bestPig = null;
+                    bestPassive = null;
                 }
             }
-            if (bestPig == null && bestHostile == null) return false;
+            if (bestPassive == null && bestHostile == null) return false;
             // Skip if a block is closer along the same ray — wall in
             // front of the mob blocks the hit (matches Alpha behaviour).
             if (bestT >= blockDist) return false;
@@ -2180,12 +2180,12 @@ void main()
             DamageHeldTool(1);
             SfxBank.PlayPlace(BlockType.Wool);
 
-            if (bestPig != null)
+            if (bestPassive != null)
             {
-                bestPig.TakeDamage(dmg);
-                if (bestPig.IsDead)
+                bestPassive.TakeDamage(dmg);
+                if (bestPassive.IsDead)
                 {
-                    SpawnPigDeathDrops(bestPig);
+                    bestPassive.SpawnDeathDrops(this);
                 }
             }
             else
@@ -2275,57 +2275,43 @@ void main()
             return System.Math.Max(1, dmg);
         }
 
-        // On pig death: 1–3 RawPorkchop drops scattered at the pig's
-        // feet (matches the Alpha 1.1.2 raw-porkchop drop range).
-        // Cooked porkchop drops only when the pig was on fire at death,
-        // which we don't simulate yet — so death always drops raw.
-        private void SpawnPigDeathDrops(Pig pig)
-        {
-            int count = 1 + (System.Math.Abs(pig.GetHashCode()) % 3); // 1..3
-            for (int i = 0; i < count; i++)
-            {
-                var d = new DroppedItem
-                {
-                    Position = new Vector3(pig.Position.X,
-                                           pig.Position.Y + 0.4f,
-                                           pig.Position.Z),
-                    Velocity = new Vector3(
-                        ((float)_dropRng.NextDouble() - 0.5f) * 2f,
-                        2.5f + (float)_dropRng.NextDouble() * 1f,
-                        ((float)_dropRng.NextDouble() - 0.5f) * 2f),
-                    Stack = new ItemStack(BlockType.RawPorkchop, 1),
-                    AgeSec = 0f,
-                    PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
-                };
-                _drops.Add(d);
-            }
-        }
-
-        // Per-tick mob update. Walks the world's pig list (Tier 3 #9
-        // Entities & mobs); each pig drives its own wander AI + physics
-        // through the shared Entity walker. Dead pigs are removed at the
-        // end of the sweep — they linger one tick after IsDead so the
-        // kill drop spawn (in TryHitMob) sees the pig before it goes
-        // away. Mob ticks freeze under a true pause but continue while
-        // an inventory-style modal is open, mirroring TickDrops.
-        public void TickPigs(float dt)
+        // Per-tick passive-mob update (Tier 3 #9 + #12). Walks the world's
+        // passive list — Pig / Cow / Sheep / Chicken share the same
+        // PassiveMob base, so a single sweep drives every passive's wander
+        // AI + physics through the shared Entity walker. Dead mobs are
+        // reaped at the end of the sweep — they linger one tick after
+        // IsDead so the kill drop spawn (in TryHitMob) sees the entity
+        // before it goes away. Chicken additionally ticks its egg-lay
+        // timer, which spawns an Egg drop into the world ~every 5–10
+        // minutes via the IDropSink (this renderer). Mob ticks freeze
+        // under a true pause but continue while an inventory-style modal
+        // is open, mirroring TickDrops.
+        public void TickPassives(float dt)
         {
             if (_world == null) return;
-            var pigs = _world.Pigs;
-            for (int i = pigs.Count - 1; i >= 0; i--)
+            var passives = _world.Passives;
+            for (int i = passives.Count - 1; i >= 0; i--)
             {
-                var pig = pigs[i];
-                if (pig.IsDead)
+                var mob = passives[i];
+                if (mob.IsDead)
                 {
-                    pigs.RemoveAt(i);
+                    passives.RemoveAt(i);
                     continue;
                 }
-                pig.Update(dt, _world);
+                mob.Update(dt, _world);
+                if (mob is Chicken chicken)
+                {
+                    // Egg-lay countdown is decoupled from the base wander
+                    // tick so PassiveMob.Update can stay sink-free; the
+                    // chicken-only path threads `this` (the IDropSink)
+                    // through here.
+                    chicken.TickEggLay(dt, this);
+                }
             }
         }
 
         // Per-tick hostile-mob update (Tier 3 #10). Runs alongside
-        // TickPigs and follows the same lifecycle: dead mobs are
+        // TickPassives and follows the same lifecycle: dead mobs are
         // reaped one tick after IsDead so kill drops can spawn before
         // the entity disappears. The shared HostileMob.Update takes
         // the player position + IPlayerDamageSink so chase steering and
@@ -2364,7 +2350,7 @@ void main()
         // Live mob-spawn attempt loop driver (Tier 3 #11). One-line
         // wrapper around World.TickMobSpawns — the renderer owns the
         // call site so spawning shares the same pause/modal gating as
-        // TickPigs / TickHostiles (callers freeze it the same way).
+        // TickPassives / TickHostiles (callers freeze it the same way).
         // The world internally rate-limits to one batch every
         // SpawnTickInterval seconds, so a per-frame call is cheap.
         public void TickMobSpawns(float dt)
@@ -3531,13 +3517,13 @@ void main()
             }
 
             RenderDrops(width, height);
-            // Mob bodies (Tier 3 #9 — Pig). Layered after drops so a
-            // pig walking past a drop occludes it correctly via depth
-            // testing, and before particles so a break-burst at the
-            // pig's feet draws on top.
-            RenderPigs(width, height);
+            // Passive mob bodies (Tier 3 #9 + #12 — Pig / Cow / Sheep /
+            // Chicken). Layered after drops so a passive walking past a
+            // drop occludes it correctly via depth testing, and before
+            // particles so a break-burst at the mob's feet draws on top.
+            RenderPassives(width, height);
             // Hostile mobs (Tier 3 #10 — Zombie/Skeleton/Spider/Creeper).
-            // Same layering rule as RenderPigs: after drops, before
+            // Same layering rule as RenderPassives: after drops, before
             // particles, so a hostile occludes drops correctly and a
             // burst of break particles spawned at the mob's feet draws
             // on top.
@@ -3857,23 +3843,24 @@ void main()
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
-        // Pig body renderer. Each pig is a small cluster of solid-coloured
-        // cuboids: body, head, snout, plus four legs. We re-use the world's
-        // 1×1×1 cube mesh (`_breakCubeMesh`, already centred at [0,1]^3) and
-        // the flat-colour overlay shader — the overlay shader only reads
-        // `aPos`, so the cube mesh's UV stream is harmlessly ignored.
+        // Passive-mob body renderer (Tier 3 #9 + #12). Each passive is a
+        // small cluster of solid-coloured cuboids; the per-type body shape
+        // is dispatched on concrete type (Pig / Cow / Sheep / Chicken).
+        // We re-use the world's 1×1×1 cube mesh (`_breakCubeMesh`, already
+        // centred at [0,1]^3) and the flat-colour overlay shader — the
+        // overlay shader only reads `aPos`, so the cube mesh's UV stream
+        // is harmlessly ignored.
         //
-        // Yaw rotates the whole rig around the pig's vertical axis so the
+        // Yaw rotates the whole rig around the mob's vertical axis so the
         // wander AI's heading is visually obvious; HurtTimer flashes the
         // tint toward red for the brief hurt window. No skeletal animation
-        // — the pig stays in a stiff "T-pose" (matches Alpha's first-pass
-        // mob look closely enough; we'll layer leg-swing onto the leg
-        // cuboids in a follow-up if it bugs anyone).
-        private void RenderPigs(int width, int height)
+        // — the mobs stay in a stiff pose (matches Alpha's first-pass mob
+        // look closely enough; leg-swing can be layered on later).
+        private void RenderPassives(int width, int height)
         {
             if (_world == null) return;
-            var pigs = _world.Pigs;
-            if (pigs == null || pigs.Count == 0) return;
+            var passives = _world.Passives;
+            if (passives == null || passives.Count == 0) return;
 
             var view = Camera.GetView();
             var proj = Camera.GetProjection(width, height);
@@ -3882,63 +3869,185 @@ void main()
             _overlayShader.Use();
             _overlayShader.SetFloat("uAlpha", 1f);
 
-            // Pose constants. Pig is HalfWidth=0.45 × Height=0.9, so the
-            // AABB is a 0.9 cube centred above feet — these cuboids fill
-            // it loosely (slight overhang for the head/snout reads as
-            // "snout sticking forward" vs. "snout flush with body").
-            // Local +Z is the pig's forward direction; Yaw rotates about
-            // the world Y axis to align with the heading.
-            var bodySize  = new Vector3(0.6f, 0.45f, 0.9f);
-            var bodyOff   = new Vector3(0f, 0.40f, 0f);
+            var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
 
-            var headSize  = new Vector3(0.50f, 0.50f, 0.50f);
-            var headOff   = new Vector3(0f, 0.50f, 0.55f);
-
-            var snoutSize = new Vector3(0.30f, 0.25f, 0.18f);
-            var snoutOff  = new Vector3(0f, 0.45f, 0.85f);
-
-            var legSize   = new Vector3(0.20f, 0.40f, 0.20f);
-            var legZ      = 0.30f;     // front legs +z, back legs -z
-            var legX      = 0.20f;
-            var legYTop   = 0.40f;     // legs span 0..0.40 in local Y
-
-            for (int i = 0; i < pigs.Count; i++)
+            for (int i = 0; i < passives.Count; i++)
             {
-                var pig = pigs[i];
-                if (pig.IsDead) continue;
+                var mob = passives[i];
+                if (mob.IsDead) continue;
 
-                // Pink, lerped to red while the hurt timer is active so the
-                // pig flashes when struck. HurtFlashSeconds is 0.30s; alpha
-                // starts at 1 and fades to 0 over that window.
-                float hurt = pig.HurtTimer > 0f
-                    ? pig.HurtTimer / Pig.HurtFlashSeconds
+                float hurt = mob.HurtTimer > 0f
+                    ? mob.HurtTimer / PassiveMob.HurtFlashSeconds
                     : 0f;
-                var basePink = new Vector3(0.96f, 0.55f, 0.65f);
-                var hurtRed  = new Vector3(1.00f, 0.30f, 0.30f);
-                var bodyColor  = Vector3.Lerp(basePink, hurtRed, hurt);
-                var snoutColor = Vector3.Lerp(new Vector3(0.78f, 0.42f, 0.50f),
-                                              hurtRed, hurt);
 
-                // Build the pig-local → world transform: yaw around Y,
+                // Build the mob-local → world transform: yaw around Y,
                 // then translate to feet position. Local origin is feet
                 // (matches Position).
-                var rot   = Matrix4.CreateRotationY(pig.Yaw);
-                var trans = Matrix4.CreateTranslation(pig.Position);
+                var rot = Matrix4.CreateRotationY(mob.Yaw);
+                var trans = Matrix4.CreateTranslation(mob.Position);
                 var rigToWorld = rot * trans;
 
-                DrawPigCuboid(bodyOff,  bodySize,  rigToWorld, vp, bodyColor);
-                DrawPigCuboid(headOff,  headSize,  rigToWorld, vp, bodyColor);
-                DrawPigCuboid(snoutOff, snoutSize, rigToWorld, vp, snoutColor);
-                // Four legs at ±X × ±Z corners under the body.
-                DrawPigCuboid(new Vector3(+legX, legYTop * 0.5f, +legZ), legSize, rigToWorld, vp, bodyColor);
-                DrawPigCuboid(new Vector3(-legX, legYTop * 0.5f, +legZ), legSize, rigToWorld, vp, bodyColor);
-                DrawPigCuboid(new Vector3(+legX, legYTop * 0.5f, -legZ), legSize, rigToWorld, vp, bodyColor);
-                DrawPigCuboid(new Vector3(-legX, legYTop * 0.5f, -legZ), legSize, rigToWorld, vp, bodyColor);
+                if (mob is Pig)
+                {
+                    var basePink   = new Vector3(0.96f, 0.55f, 0.65f);
+                    var baseSnout  = new Vector3(0.78f, 0.42f, 0.50f);
+                    var bodyColor  = Vector3.Lerp(basePink,  hurtRed, hurt);
+                    var snoutColor = Vector3.Lerp(baseSnout, hurtRed, hurt);
+                    DrawPig(rigToWorld, vp, bodyColor, snoutColor);
+                }
+                else if (mob is Cow)
+                {
+                    // Cow body is dark brown with a paler underbelly /
+                    // snout; horns are bone white. Hurt-flash lerps the
+                    // body toward red.
+                    var hide   = Vector3.Lerp(new Vector3(0.32f, 0.20f, 0.12f), hurtRed, hurt);
+                    var udder  = Vector3.Lerp(new Vector3(0.85f, 0.62f, 0.55f), hurtRed, hurt);
+                    var horn   = new Vector3(0.85f, 0.82f, 0.74f);
+                    DrawCow(rigToWorld, vp, hide, udder, horn);
+                }
+                else if (mob is Sheep)
+                {
+                    // Wool off-white, head + legs the bare-skin pink-grey.
+                    var wool = Vector3.Lerp(new Vector3(0.92f, 0.92f, 0.88f), hurtRed, hurt);
+                    var skin = Vector3.Lerp(new Vector3(0.85f, 0.72f, 0.65f), hurtRed, hurt);
+                    DrawSheep(rigToWorld, vp, wool, skin);
+                }
+                else if (mob is Chicken)
+                {
+                    // Off-white body, yellow beak + legs, red comb +
+                    // wattle accent.
+                    var feathers = Vector3.Lerp(new Vector3(0.95f, 0.95f, 0.92f), hurtRed, hurt);
+                    var beak     = Vector3.Lerp(new Vector3(0.95f, 0.75f, 0.20f), hurtRed, hurt);
+                    var comb     = new Vector3(0.85f, 0.20f, 0.20f);
+                    DrawChicken(rigToWorld, vp, feathers, beak, comb);
+                }
             }
         }
 
-        // Inner helper for RenderPigs: draw one solid-coloured cuboid
-        // positioned in the pig's local rig (Y=0 = feet, +Z = forward).
+        // Pig body: 0.6×0.45×0.9 box body, 0.5 head + 0.3×0.25×0.18 snout
+        // sticking forward, four 0.20×0.40×0.20 legs at ±X × ±Z corners.
+        // Sized to fill HalfWidth=0.45 × Height=0.9 hitbox.
+        private void DrawPig(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 bodyColor, Vector3 snoutColor)
+        {
+            var bodySize  = new Vector3(0.6f, 0.45f, 0.9f);
+            var bodyOff   = new Vector3(0f, 0.40f, 0f);
+            var headSize  = new Vector3(0.50f, 0.50f, 0.50f);
+            var headOff   = new Vector3(0f, 0.50f, 0.55f);
+            var snoutSize = new Vector3(0.30f, 0.25f, 0.18f);
+            var snoutOff  = new Vector3(0f, 0.45f, 0.85f);
+            var legSize   = new Vector3(0.20f, 0.40f, 0.20f);
+            float legZ = 0.30f, legX = 0.20f, legYTop = 0.40f;
+
+            DrawPigCuboid(bodyOff,  bodySize,  rigToWorld, vp, bodyColor);
+            DrawPigCuboid(headOff,  headSize,  rigToWorld, vp, bodyColor);
+            DrawPigCuboid(snoutOff, snoutSize, rigToWorld, vp, snoutColor);
+            DrawPigCuboid(new Vector3(+legX, legYTop * 0.5f, +legZ), legSize, rigToWorld, vp, bodyColor);
+            DrawPigCuboid(new Vector3(-legX, legYTop * 0.5f, +legZ), legSize, rigToWorld, vp, bodyColor);
+            DrawPigCuboid(new Vector3(+legX, legYTop * 0.5f, -legZ), legSize, rigToWorld, vp, bodyColor);
+            DrawPigCuboid(new Vector3(-legX, legYTop * 0.5f, -legZ), legSize, rigToWorld, vp, bodyColor);
+        }
+
+        // Cow body: a taller, longer pig-shape with a pale underbelly
+        // patch, horns sticking out of the head, and slightly thicker
+        // legs. Sized to fill HalfWidth=0.45 × Height=1.4 hitbox.
+        private void DrawCow(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 hide, Vector3 udder, Vector3 horn)
+        {
+            // Torso: 0.80×0.70×1.00, sat above the four legs (legs span
+            // 0..0.70 high, torso starts at 0.70 → centred at ~1.05).
+            var torsoSize = new Vector3(0.80f, 0.70f, 1.00f);
+            DrawPigCuboid(new Vector3(0f, 1.05f, 0f), torsoSize, rigToWorld, vp, hide);
+
+            // Pale underbelly patch — slightly smaller cube intersecting
+            // the torso bottom for a two-tone read.
+            var bellySize = new Vector3(0.78f, 0.20f, 0.95f);
+            DrawPigCuboid(new Vector3(0f, 0.78f, 0f), bellySize, rigToWorld, vp, udder);
+
+            // Head: 0.55 cube forward of torso, raised slightly so it
+            // reads as a head + neck rather than flush with the body.
+            var headSize = new Vector3(0.55f, 0.55f, 0.55f);
+            DrawPigCuboid(new Vector3(0f, 1.10f, 0.70f), headSize, rigToWorld, vp, hide);
+
+            // Snout — pale patch centred on the head front.
+            var snoutSize = new Vector3(0.35f, 0.25f, 0.15f);
+            DrawPigCuboid(new Vector3(0f, 1.00f, 1.00f), snoutSize, rigToWorld, vp, udder);
+
+            // Two horns sticking forward+out from the top of the head.
+            var hornSize = new Vector3(0.08f, 0.08f, 0.25f);
+            DrawPigCuboid(new Vector3(+0.20f, 1.30f, 0.85f), hornSize, rigToWorld, vp, horn);
+            DrawPigCuboid(new Vector3(-0.20f, 1.30f, 0.85f), hornSize, rigToWorld, vp, horn);
+
+            // Four legs: 0.22×0.70×0.22.
+            var legSize = new Vector3(0.22f, 0.70f, 0.22f);
+            float legZ = 0.32f, legX = 0.22f, legHalf = 0.35f;
+            DrawPigCuboid(new Vector3(+legX, legHalf, +legZ), legSize, rigToWorld, vp, hide);
+            DrawPigCuboid(new Vector3(-legX, legHalf, +legZ), legSize, rigToWorld, vp, hide);
+            DrawPigCuboid(new Vector3(+legX, legHalf, -legZ), legSize, rigToWorld, vp, hide);
+            DrawPigCuboid(new Vector3(-legX, legHalf, -legZ), legSize, rigToWorld, vp, hide);
+        }
+
+        // Sheep body: a chunky woolly torso with a small head and four
+        // short skin-coloured legs. HalfWidth=0.45 × Height=1.3.
+        private void DrawSheep(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 wool, Vector3 skin)
+        {
+            // Torso: 0.80×0.65×0.95 of wool, sat above the legs.
+            var torsoSize = new Vector3(0.80f, 0.65f, 0.95f);
+            DrawPigCuboid(new Vector3(0f, 0.95f, 0f), torsoSize, rigToWorld, vp, wool);
+
+            // Small head — bare skin, sticking forward like the cow.
+            var headSize = new Vector3(0.45f, 0.45f, 0.45f);
+            DrawPigCuboid(new Vector3(0f, 0.95f, 0.65f), headSize, rigToWorld, vp, skin);
+
+            // Four legs (skin colour, short stubs): 0.18×0.55×0.18.
+            var legSize = new Vector3(0.18f, 0.55f, 0.18f);
+            float legZ = 0.30f, legX = 0.22f, legHalf = 0.275f;
+            DrawPigCuboid(new Vector3(+legX, legHalf, +legZ), legSize, rigToWorld, vp, skin);
+            DrawPigCuboid(new Vector3(-legX, legHalf, +legZ), legSize, rigToWorld, vp, skin);
+            DrawPigCuboid(new Vector3(+legX, legHalf, -legZ), legSize, rigToWorld, vp, skin);
+            DrawPigCuboid(new Vector3(-legX, legHalf, -legZ), legSize, rigToWorld, vp, skin);
+        }
+
+        // Chicken body: small upright biped — round torso, head with
+        // beak + comb up top, two yellow legs underneath, two stubby
+        // wing flaps on the sides. HalfWidth=0.2 × Height=0.7.
+        private void DrawChicken(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 feathers, Vector3 beak, Vector3 comb)
+        {
+            // Torso: 0.30×0.35×0.40, sits just above the legs.
+            var torsoSize = new Vector3(0.30f, 0.35f, 0.40f);
+            DrawPigCuboid(new Vector3(0f, 0.40f, 0f), torsoSize, rigToWorld, vp, feathers);
+
+            // Head: 0.22 cube on top of the torso, slightly forward.
+            var headSize = new Vector3(0.22f, 0.22f, 0.22f);
+            DrawPigCuboid(new Vector3(0f, 0.65f, 0.10f), headSize, rigToWorld, vp, feathers);
+
+            // Beak — small yellow cuboid on the head front.
+            var beakSize = new Vector3(0.10f, 0.06f, 0.10f);
+            DrawPigCuboid(new Vector3(0f, 0.62f, 0.24f), beakSize, rigToWorld, vp, beak);
+
+            // Comb — red flap on top of the head.
+            var combSize = new Vector3(0.06f, 0.06f, 0.18f);
+            DrawPigCuboid(new Vector3(0f, 0.78f, 0.10f), combSize, rigToWorld, vp, comb);
+
+            // Wings: two thin rectangles hugging the torso sides.
+            var wingSize = new Vector3(0.05f, 0.25f, 0.30f);
+            DrawPigCuboid(new Vector3(+0.17f, 0.42f, 0f), wingSize, rigToWorld, vp, feathers);
+            DrawPigCuboid(new Vector3(-0.17f, 0.42f, 0f), wingSize, rigToWorld, vp, feathers);
+
+            // Two yellow legs visible under the body. Chickens have
+            // distinctly skinny legs — keep them narrow.
+            var legSize = new Vector3(0.06f, 0.22f, 0.06f);
+            DrawPigCuboid(new Vector3(+0.07f, 0.11f, 0f), legSize, rigToWorld, vp, beak);
+            DrawPigCuboid(new Vector3(-0.07f, 0.11f, 0f), legSize, rigToWorld, vp, beak);
+        }
+
+        // Inner helper for RenderPassives / RenderHostiles: draw one
+        // solid-coloured cuboid positioned in the mob's local rig
+        // (Y=0 = feet, +Z = forward). Named after the original pig
+        // renderer that introduced it; reused verbatim by every passive
+        // and hostile mob's body draw.
         // The 1×1×1 cube mesh is centred on origin (after a -0.5 shift),
         // scaled to `size`, lifted to `offset`, then rigged + projected.
         private void DrawPigCuboid(Vector3 offset, Vector3 size,
@@ -3955,8 +4064,8 @@ void main()
         }
 
         // Tier 3 #10 hostile-mob renderer. Same overall shape as
-        // RenderPigs (solid-coloured cuboids built from the break-cube
-        // mesh) but the per-mob rig differs: zombie/skeleton are the
+        // RenderPassives (solid-coloured cuboids built from the break-
+        // cube mesh) but the per-mob rig differs: zombie/skeleton are the
         // humanoid head+torso+arms+legs you'd expect, spider is a low
         // four-piece arachnid with eight stubby legs, creeper is a tall
         // slim torso on four short legs with a fuse-flash that ramps the

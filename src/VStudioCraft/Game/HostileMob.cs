@@ -85,7 +85,7 @@ namespace VStudioCraft.Game
         // can do the chase decision without HostileMob taking a hard
         // dependency on Player (keeps the testing surface small + lets
         // the renderer freeze the mob during modals by just not calling
-        // Update, same as Pig.TickPigs).
+        // Update, same as PassiveMob.TickPassives).
         public void Update(float dt, World world, Vector3 playerPos, IPlayerDamageSink damageSink)
         {
             if (IsDead) return;

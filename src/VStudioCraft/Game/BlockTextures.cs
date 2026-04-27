@@ -54,8 +54,8 @@ namespace VStudioCraft.Game
         // #10 hostile-mob drops) live here so we don't have to renumber
         // the existing item / tail-block indices and break v7 saves.
         public const int FirstTailItemLayer = FirstTailBlockLayer + TailBlockLayerCount; // 76
-        public const int TailItemLayerCount = 6;
-        public const int LayerCount = FirstTailItemLayer + TailItemLayerCount;          // 82
+        public const int TailItemLayerCount = 9;
+        public const int LayerCount = FirstTailItemLayer + TailItemLayerCount;          // 85
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -64,6 +64,10 @@ namespace VStudioCraft.Game
         public const int TileArrow          = 79;
         public const int TileString         = 80;
         public const int TileGunpowder      = 81;
+        // Passive-mob drop tile indices (Tier 3 #12).
+        public const int TileLeather        = 82;
+        public const int TileFeather        = 83;
+        public const int TileEgg            = 84;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -590,6 +594,14 @@ namespace VStudioCraft.Game
             UploadItem(layerPixels, TileArrow,     GenerateArrowItem);
             UploadItem(layerPixels, TileString,    GenerateStringItem);
             UploadItem(layerPixels, TileGunpowder, GenerateGunpowderItem);
+            // Tail-item passive-mob drops (Tier 3 #12). Cow drops Leather,
+            // chicken drops Feather + lays Egg. All three are visual
+            // collectibles for the current era; Egg becomes a throwable
+            // projectile in Tier 4 #20, and Leather feeds into the
+            // armor recipes in Tier 4 #19.
+            UploadItem(layerPixels, TileLeather, GenerateLeatherItem);
+            UploadItem(layerPixels, TileFeather, GenerateFeatherItem);
+            UploadItem(layerPixels, TileEgg,     GenerateEggItem);
         }
 
         // Local helper mirroring UploadLayer (which is private elsewhere
@@ -1041,6 +1053,102 @@ namespace VStudioCraft.Game
             SetPixel(pixels, 11, 11, spark.r, spark.g, spark.b);
         }
 
+        // Leather item — a tan rectangle with stitching pattern, reading
+        // as a flat folded hide. Drops from cows. Mid-tile centred so it
+        // looks like a held item rather than ground litter.
+        private static void GenerateLeatherItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) tan    = (170, 110,  72);
+            (byte r, byte g, byte b) tanHi  = (200, 142,  92);
+            (byte r, byte g, byte b) tanLo  = (122,  80,  52);
+            (byte r, byte g, byte b) stitch = ( 90,  62,  40);
+            // 9×8 hide rectangle, centred ~(7,8).
+            for (int y = 4; y <= 11; y++)
+            for (int x = 4; x <= 12; x++)
+                SetPixel(pixels, x, y, tan.r, tan.g, tan.b);
+            // Top-edge highlight.
+            for (int x = 4; x <= 12; x++) SetPixel(pixels, x, 4, tanHi.r, tanHi.g, tanHi.b);
+            // Bottom-edge shadow.
+            for (int x = 4; x <= 12; x++) SetPixel(pixels, x, 11, tanLo.r, tanLo.g, tanLo.b);
+            // Stitched border — left/right edges + dashed inner row.
+            for (int y = 5; y <= 10; y++)
+            {
+                SetPixel(pixels, 4, y, tanLo.r, tanLo.g, tanLo.b);
+                SetPixel(pixels, 12, y, tanLo.r, tanLo.g, tanLo.b);
+            }
+            // Two horizontal dashed stitch rows so it reads "tanned".
+            int[] stitchX = { 5, 7, 9, 11 };
+            foreach (var sx in stitchX)
+            {
+                SetPixel(pixels, sx, 6, stitch.r, stitch.g, stitch.b);
+                SetPixel(pixels, sx, 9, stitch.r, stitch.g, stitch.b);
+            }
+        }
+
+        // Feather item — diagonal quill with cream-coloured barbs and a
+        // dark central rachis. Drops from chickens.
+        private static void GenerateFeatherItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) barb    = (245, 245, 230);
+            (byte r, byte g, byte b) barbLo  = (200, 200, 180);
+            (byte r, byte g, byte b) rachis  = (160, 130, 100);
+            (byte r, byte g, byte b) shadow  = ( 90,  78,  60);
+            // Diagonal rachis from top-right to bottom-left, 9 cells long.
+            int[] rx = { 11, 10, 9, 8, 7, 6, 5, 4, 3 };
+            int[] ry = {  3,  4, 5, 6, 7, 8, 9, 10, 11 };
+            for (int i = 0; i < rx.Length; i++)
+                SetPixel(pixels, rx[i], ry[i], rachis.r, rachis.g, rachis.b);
+            // Barbs flair off both sides of the rachis. Upper side =
+            // brighter (catches the light), lower side = shaded.
+            for (int i = 1; i < rx.Length - 1; i++)
+            {
+                int x = rx[i], y = ry[i];
+                if (x + 1 < 16) SetPixel(pixels, x + 1, y - 1, barb.r, barb.g, barb.b);
+                if (y + 1 < 16) SetPixel(pixels, x - 1, y + 1, barbLo.r, barbLo.g, barbLo.b);
+            }
+            // Wider tip near the top of the feather.
+            SetPixel(pixels, 12, 2, barb.r, barb.g, barb.b);
+            SetPixel(pixels, 11, 2, barb.r, barb.g, barb.b);
+            SetPixel(pixels, 10, 3, barb.r, barb.g, barb.b);
+            // Quill base shadow at the bottom-left.
+            SetPixel(pixels, 2, 12, shadow.r, shadow.g, shadow.b);
+            SetPixel(pixels, 3, 12, shadow.r, shadow.g, shadow.b);
+        }
+
+        // Egg item — egg-shaped oval with cream colour and a soft
+        // highlight. Laid by chickens; in this era it just sits in the
+        // inventory (throwing comes with Tier 4 #20).
+        private static void GenerateEggItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) shell    = (240, 232, 208);
+            (byte r, byte g, byte b) shellHi  = (255, 250, 235);
+            (byte r, byte g, byte b) shellLo  = (195, 185, 160);
+            (byte r, byte g, byte b) shellBot = (165, 155, 130);
+            // Oval — taller than wide, top narrower than bottom.
+            // Row 4: tip (2 pixels).
+            SetPixel(pixels, 7, 4, shell.r, shell.g, shell.b);
+            SetPixel(pixels, 8, 4, shell.r, shell.g, shell.b);
+            // Row 5: 4 wide.
+            for (int x = 6; x <= 9; x++) SetPixel(pixels, x, 5, shell.r, shell.g, shell.b);
+            // Row 6: 6 wide.
+            for (int x = 5; x <= 10; x++) SetPixel(pixels, x, 6, shell.r, shell.g, shell.b);
+            // Rows 7..10: 6 wide, full body.
+            for (int y = 7; y <= 10; y++)
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, y, shell.r, shell.g, shell.b);
+            // Row 11: 6 wide, base.
+            for (int x = 5; x <= 10; x++) SetPixel(pixels, x, 11, shellLo.r, shellLo.g, shellLo.b);
+            // Row 12: 4 wide, rounded bottom.
+            for (int x = 6; x <= 9; x++) SetPixel(pixels, x, 12, shellBot.r, shellBot.g, shellBot.b);
+            // Highlight on the upper-left so it reads as a sphere.
+            SetPixel(pixels, 6, 6, shellHi.r, shellHi.g, shellHi.b);
+            SetPixel(pixels, 6, 7, shellHi.r, shellHi.g, shellHi.b);
+            SetPixel(pixels, 7, 6, shellHi.r, shellHi.g, shellHi.b);
+            // Bottom-right shading.
+            SetPixel(pixels, 9, 10, shellLo.r, shellLo.g, shellLo.b);
+            SetPixel(pixels, 10, 10, shellLo.r, shellLo.g, shellLo.b);
+        }
+
         // Tile coordinates in Alpha 1.1.2_01's terrain.png. Format is
         // (col, row), each cell 16×16 pixels in a 16×16 grid (256×256
         // total). The embedded PNG is sliced once at atlas-build time
@@ -1193,6 +1301,14 @@ namespace VStudioCraft.Game
             /* TileArrow             */ (-1, -1),
             /* TileString            */ (-1, -1),
             /* TileGunpowder         */ (-1, -1),
+            // Tail items (Tier 3 #12 — passive-mob drops). Same sentinel
+            // pattern as the hostile-mob drops above. Cow drops Leather
+            // (Alpha id 334), chicken drops Feather (288) + lays Egg
+            // (344). Procedural icons always win until the canonical
+            // alpha-tools coords are wired.
+            /* TileLeather           */ (-1, -1),
+            /* TileFeather           */ (-1, -1),
+            /* TileEgg               */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for

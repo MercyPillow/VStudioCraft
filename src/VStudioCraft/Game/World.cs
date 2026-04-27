@@ -35,20 +35,22 @@ namespace VStudioCraft.Game
         private readonly Dictionary<(int x, int y, int z), ChestTileEntity> _chestEntities
             = new Dictionary<(int x, int y, int z), ChestTileEntity>();
 
-        // Live mob list. Pig is the first entity added in Tier 3 #9; the
-        // list is flat (not chunk-bucketed) because the per-tick mob count
-        // is small (caps in the hundreds even on a fully-populated world)
-        // and a flat scan is fine. Tile-entity-style per-coord storage
-        // doesn't fit since mobs move freely across cells. The renderer
-        // reads `Pigs` each frame to draw the body cuboids; combat reads
-        // it to scan for a click target before block-raycasting; spawning
-        // appends new pigs at chunk-gen time. We don't currently persist
-        // pigs across save/load (matches Alpha 1.1.2_01 behaviour for
-        // unloaded chunks — entities outside the active radius despawn).
-        private readonly List<Pig> _pigs = new List<Pig>();
-        public List<Pig> Pigs => _pigs;
+        // Live passive-mob list. Pig was the first entity added in Tier 3
+        // #9; Tier 3 #12 generalised the list to PassiveMob so Cow, Sheep
+        // and Chicken share the same flat container. The list stays flat
+        // (not chunk-bucketed) because the per-tick mob count is small
+        // (caps in the tens for passives) and a flat scan is fine. The
+        // renderer reads `Passives` each frame to draw the body cuboids
+        // (dispatching on concrete type for shape); combat reads it to
+        // scan for a click target before block-raycasting; spawning
+        // appends new passives at chunk-gen time and via the live spawn
+        // loop. We don't currently persist passives across save/load
+        // (matches Alpha 1.1.2_01 behaviour for unloaded chunks —
+        // entities outside the active radius despawn).
+        private readonly List<PassiveMob> _passives = new List<PassiveMob>();
+        public List<PassiveMob> Passives => _passives;
 
-        // Hostile mob list (Tier 3 #10). Same flat-list shape as Pigs —
+        // Hostile mob list (Tier 3 #10). Same flat-list shape as Passives —
         // small per-tick count, the four hostile types share a common
         // base (HostileMob) so a single list captures them all and the
         // renderer can dispatch on concrete type for the cuboid shape.
@@ -80,24 +82,29 @@ namespace VStudioCraft.Game
                 LightCalculator.RecomputeChunk(c);
                 w._chunks[(cx, cz)] = c;
                 // Initial spawn pass uses the same per-chunk hashed RNG
-                // as the streaming path, so pigs scattered in the initial
-                // 5×5 patch stay deterministic for a given seed.
-                w.SpawnPigsInChunk(c);
+                // as the streaming path, so passives scattered in the
+                // initial 5×5 patch stay deterministic for a given seed.
+                w.SpawnPassivesInChunk(c);
                 w.SpawnHostilesInChunk(c);
             }
             return w;
         }
 
-        // Pig-spawn pass for a freshly generated chunk. Walks every (lx,
-        // lz) column at a low density (per-column hashed RNG, ~1-in-180
-        // grass cells = roughly one pig per 11×11 area, matching Alpha's
-        // sparse passive-mob spread), checks that the surface block is
-        // grass and the cell directly above has block-light + sky-light
-        // ≥ 9 (Alpha rule for passive spawns), then inserts a Pig at the
-        // foot of the column. The hashed RNG keys on (Seed, chunkX,
-        // chunkZ, lx, lz) so the same chunk in the same world always
-        // gets the same pig set even if it unloads + reloads.
-        public void SpawnPigsInChunk(Chunk c)
+        // Passive-spawn pass for a freshly generated chunk. Walks every
+        // (lx, lz) column at a low density (per-column hashed RNG,
+        // ~1-in-720 grass cells, matching Alpha's sparse passive-mob
+        // spread), checks that the surface block is grass and the cell
+        // directly above has block-light + sky-light ≥ 9 (Alpha rule for
+        // passive spawns), then picks one of Pig / Cow / Sheep / Chicken
+        // via a weighted draw and inserts it at the foot of the column.
+        // The hashed RNG keys on (Seed, chunkX, chunkZ, lx, lz) so the
+        // same chunk in the same world always gets the same passive set
+        // even if it unloads + reloads.
+        //
+        // Species mix mirrors Alpha 1.1.2_01's overworld passive spawn
+        // weights: 30% Pig, 30% Cow, 25% Sheep, 15% Chicken — pig and
+        // cow are the most common, chickens the rarest.
+        public void SpawnPassivesInChunk(Chunk c)
         {
             const int RareDenominator = 720; // ~1 chance per 720 grass cells (¼ of the original 180)
             int chunkBaseX = c.ChunkX * Chunk.SizeX;
@@ -148,8 +155,19 @@ namespace VStudioCraft.Game
                 // Spawn at the centre of the cell, feet on the grass top.
                 var spawnPos = new OpenTK.Vector3(
                     wx + 0.5f, surfaceY + 1f, wz + 0.5f);
-                int pigSeed = hash ^ 0x55AA55AA;
-                _pigs.Add(new Pig(spawnPos, pigSeed));
+                int mobSeed = hash ^ 0x55AA55AA;
+
+                // Species-pick: derive a second hash so kind selection
+                // doesn't share bits with the spawn-rate gate. Same trick
+                // we use for hostile kinds.
+                int kindHash = unchecked((int)((uint)hash * 0x85EBCA6Bu ^ 0x9E3779B1u));
+                int kindRoll = (int)((uint)kindHash % 100u);
+                PassiveMob mob;
+                if      (kindRoll < 30) mob = new Pig(spawnPos,     mobSeed);
+                else if (kindRoll < 60) mob = new Cow(spawnPos,     mobSeed);
+                else if (kindRoll < 85) mob = new Sheep(spawnPos,   mobSeed);
+                else                    mob = new Chicken(spawnPos, mobSeed);
+                _passives.Add(mob);
             }
         }
 
@@ -294,7 +312,7 @@ namespace VStudioCraft.Game
 
             DespawnFarMobs(playerPos);
 
-            int passiveCount = _pigs.Count;
+            int passiveCount = _passives.Count;
             int hostileCount = _hostiles.Count;
             bool passiveFull = passiveCount >= PassiveCap;
             bool hostileFull = hostileCount >= HostileCap;
@@ -375,7 +393,14 @@ namespace VStudioCraft.Game
                 }
                 else if (eff >= 9 && surface == BlockType.Grass && !passiveFull)
                 {
-                    _pigs.Add(new Pig(spawnPos, seedForMob));
+                    // Same 30/30/25/15 species mix as the chunk-gen pass.
+                    int kindRoll = _spawnRng.Next(100);
+                    PassiveMob mob;
+                    if      (kindRoll < 30) mob = new Pig(spawnPos,     seedForMob);
+                    else if (kindRoll < 60) mob = new Cow(spawnPos,     seedForMob);
+                    else if (kindRoll < 85) mob = new Sheep(spawnPos,   seedForMob);
+                    else                    mob = new Chicken(spawnPos, seedForMob);
+                    _passives.Add(mob);
                     passiveCount++;
                     if (passiveCount >= PassiveCap) passiveFull = true;
                 }
@@ -392,9 +417,9 @@ namespace VStudioCraft.Game
             int n = 0;
             int xMin = chunkBaseX, xMax = chunkBaseX + Chunk.SizeX;
             int zMin = chunkBaseZ, zMax = chunkBaseZ + Chunk.SizeZ;
-            for (int i = 0; i < _pigs.Count; i++)
+            for (int i = 0; i < _passives.Count; i++)
             {
-                var p = _pigs[i].Position;
+                var p = _passives[i].Position;
                 if (p.X >= xMin && p.X < xMax && p.Z >= zMin && p.Z < zMax) n++;
             }
             for (int i = 0; i < _hostiles.Count; i++)
@@ -414,13 +439,13 @@ namespace VStudioCraft.Game
         {
             int instantSq    = InstantDespawnDist    * InstantDespawnDist;
             int stochasticSq = StochasticDespawnDist * StochasticDespawnDist;
-            for (int i = _pigs.Count - 1; i >= 0; i--)
+            for (int i = _passives.Count - 1; i >= 0; i--)
             {
-                var p = _pigs[i].Position;
+                var p = _passives[i].Position;
                 float fx = p.X - playerPos.X, fz = p.Z - playerPos.Z;
                 float dsq = fx * fx + fz * fz;
-                if (dsq > instantSq) { _pigs.RemoveAt(i); continue; }
-                if (dsq > stochasticSq && _spawnRng.NextDouble() < 0.05) _pigs.RemoveAt(i);
+                if (dsq > instantSq) { _passives.RemoveAt(i); continue; }
+                if (dsq > stochasticSq && _spawnRng.NextDouble() < 0.05) _passives.RemoveAt(i);
             }
             for (int i = _hostiles.Count - 1; i >= 0; i--)
             {

@@ -154,6 +154,17 @@ namespace VStudioCraft.Game
         Arrow     = 77, // Alpha 262
         String    = 78, // Alpha 287
         Gunpowder = 79, // Alpha 289
+
+        // Tier 3 #12 — Cow / Sheep / Chicken passive-mob drops. Cow drops
+        // Leather + Raw Porkchop (the Alpha 1.1.2_01 era — beef wasn't
+        // added until Beta 1.8 so cows shared the pig drop), Chicken
+        // drops Feather on death and lays Egg every ~5 min while alive,
+        // Sheep drops Wool (block, already exists). Same id-space trick
+        // as the other items. Append-only past Gunpowder so existing
+        // saves continue to load.
+        Leather = 80, // Alpha 334
+        Feather = 81, // Alpha 288
+        Egg     = 82, // Alpha 344
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -180,6 +191,9 @@ namespace VStudioCraft.Game
         public const BlockType Arrow          = BlockType.Arrow;
         public const BlockType String         = BlockType.String;
         public const BlockType Gunpowder      = BlockType.Gunpowder;
+        public const BlockType Leather        = BlockType.Leather;
+        public const BlockType Feather        = BlockType.Feather;
+        public const BlockType Egg            = BlockType.Egg;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -204,6 +218,9 @@ namespace VStudioCraft.Game
                 case BlockType.Arrow:          return 262;
                 case BlockType.String:         return 287;
                 case BlockType.Gunpowder:      return 289;
+                case BlockType.Leather:        return 334;
+                case BlockType.Feather:        return 288;
+                case BlockType.Egg:            return 344;
                 default:                       return -1;
             }
         }
@@ -232,6 +249,9 @@ namespace VStudioCraft.Game
                 case BlockType.Arrow:          return "Arrow";
                 case BlockType.String:         return "String";
                 case BlockType.Gunpowder:      return "Gunpowder";
+                case BlockType.Leather:        return "Leather";
+                case BlockType.Feather:        return "Feather";
+                case BlockType.Egg:            return "Egg";
                 default:                       return t.ToString();
             }
         }
@@ -327,16 +347,17 @@ namespace VStudioCraft.Game
 
         // True if this BlockType id refers to a non-placeable, non-tool
         // inventory item (Stick, Coal, ingots, gem, Flint, ClayBall /
-        // Brick, Bowl, RawPorkchop..Gunpowder). The original ingredient
+        // Brick, Bowl, RawPorkchop..Egg). The original ingredient
         // slice [Stick..Bowl] is contiguous, but Tier 3 #9 appended
-        // porkchops past the wall-torch ids (70..73) and Tier 3 #10
-        // appended Bow/Arrow/String/Gunpowder past the porkchops — so
-        // the range check is now two slices [Stick..Bowl] +
-        // [RawPorkchop..Gunpowder]. New items added past Gunpowder
-        // automatically extend the second slice, no edit needed here.
+        // porkchops past the wall-torch ids (70..73), Tier 3 #10
+        // appended Bow/Arrow/String/Gunpowder past the porkchops, and
+        // Tier 3 #12 appended Leather/Feather/Egg past Gunpowder — so
+        // the range check is two slices [Stick..Bowl] +
+        // [RawPorkchop..Egg]. New items added past Egg automatically
+        // extend the second slice, no edit needed here.
         public static bool IsItem(BlockType t)
             => ((byte)t >= (byte)BlockType.Stick       && (byte)t <= (byte)BlockType.Bowl)
-            || ((byte)t >= (byte)BlockType.RawPorkchop && (byte)t <= (byte)BlockType.Gunpowder);
+            || ((byte)t >= (byte)BlockType.RawPorkchop && (byte)t <= (byte)BlockType.Egg);
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -756,6 +777,9 @@ namespace VStudioCraft.Game
                 case BlockType.Arrow:          return BlockTextures.TileArrow;
                 case BlockType.String:         return BlockTextures.TileString;
                 case BlockType.Gunpowder:      return BlockTextures.TileGunpowder;
+                case BlockType.Leather:        return BlockTextures.TileLeather;
+                case BlockType.Feather:        return BlockTextures.TileFeather;
+                case BlockType.Egg:            return BlockTextures.TileEgg;
                 default:
                     return BlockTextures.TileStone;
             }

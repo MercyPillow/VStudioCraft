@@ -502,7 +502,7 @@ namespace VStudioCraft.UI
                         _renderer.AdvanceTime(dt);
                         UpdatePlayer(dt);
                         _renderer.TickDrops(dt);
-                        _renderer.TickPigs(dt);
+                        _renderer.TickPassives(dt);
                         _renderer.TickHostiles(dt);
                         _renderer.TickMobSpawns(dt);
                         _renderer.TickFurnacesIfDue(dt);
