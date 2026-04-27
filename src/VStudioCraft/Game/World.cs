@@ -48,6 +48,16 @@ namespace VStudioCraft.Game
         private readonly List<Pig> _pigs = new List<Pig>();
         public List<Pig> Pigs => _pigs;
 
+        // Hostile mob list (Tier 3 #10). Same flat-list shape as Pigs —
+        // small per-tick count, the four hostile types share a common
+        // base (HostileMob) so a single list captures them all and the
+        // renderer can dispatch on concrete type for the cuboid shape.
+        // Spawn density gates on light < 7 (Alpha hostile rule) instead
+        // of the passive rule's ≥ 9 — see SpawnHostilesInChunk. Like
+        // pigs, we don't currently persist these across save/load.
+        private readonly List<HostileMob> _hostiles = new List<HostileMob>();
+        public List<HostileMob> Hostiles => _hostiles;
+
         private readonly Noise _noise;
 
         public int Seed { get; }
@@ -73,6 +83,7 @@ namespace VStudioCraft.Game
                 // as the streaming path, so pigs scattered in the initial
                 // 5×5 patch stay deterministic for a given seed.
                 w.SpawnPigsInChunk(c);
+                w.SpawnHostilesInChunk(c);
             }
             return w;
         }
@@ -139,6 +150,86 @@ namespace VStudioCraft.Game
                     wx + 0.5f, surfaceY + 1f, wz + 0.5f);
                 int pigSeed = hash ^ 0x55AA55AA;
                 _pigs.Add(new Pig(spawnPos, pigSeed));
+            }
+        }
+
+        // Hostile-mob spawn pass for a freshly generated chunk (Tier 3
+        // #10). Walks every column at low density (~1-in-360, twice as
+        // dense as pigs because hostiles cluster around darkness rather
+        // than scattering on grass). Surface block must be solid + non-
+        // fluid + non-cube-flora; the cell above must have 2 blocks of
+        // headroom; and the spawn-cell light level (max of sky + block)
+        // must be ≤ 7 to match Alpha's hostile-spawn rule. Mob kind is
+        // picked from the per-column hashed RNG with weights matching
+        // Alpha's overworld distribution: 35% zombie, 25% skeleton,
+        // 25% spider, 15% creeper.
+        //
+        // Continuous live spawning at runtime is roadmap-pending (the
+        // separate "spawn loop" Tier 3 #11). For Tier 3 #10 we seed
+        // the hostiles at chunk-gen and they persist until killed; this
+        // is enough for the player to encounter them on first walk-out
+        // and for the combat / drop / pathing systems to be exercised.
+        public void SpawnHostilesInChunk(Chunk c)
+        {
+            const int RareDenominator = 360;
+            int chunkBaseX = c.ChunkX * Chunk.SizeX;
+            int chunkBaseZ = c.ChunkZ * Chunk.SizeZ;
+            for (int lx = 0; lx < Chunk.SizeX; lx++)
+            for (int lz = 0; lz < Chunk.SizeZ; lz++)
+            {
+                int surfaceY = -1;
+                for (int y = Chunk.SizeY - 1; y >= 0; y--)
+                {
+                    var b = c.Get(lx, y, lz);
+                    if (b == BlockType.Air || BlockData.IsLightTransparent(b)) continue;
+                    surfaceY = y;
+                    break;
+                }
+                if (surfaceY < 0) continue;
+                var surface = c.Get(lx, surfaceY, lz);
+                // Stand on solid land — no fluids, no flora cap.
+                if (!BlockData.IsSolid(surface)) continue;
+                if (surfaceY + 2 >= Chunk.SizeY) continue;
+                if (c.Get(lx, surfaceY + 1, lz) != BlockType.Air) continue;
+                if (c.Get(lx, surfaceY + 2, lz) != BlockType.Air) continue;
+
+                int wx = chunkBaseX + lx;
+                int wz = chunkBaseZ + lz;
+                // Mix is offset from the pig hash so a column that gates
+                // a pig spawn doesn't also gate a hostile (and vice
+                // versa). The 0xC2B2AE3D third multiplier becomes
+                // 0x27D4EB2D so the two streams are independent.
+                int hash = unchecked((int)(
+                    (uint)Seed * 0x9E3779B1u
+                    ^ (uint)wx * 0x85EBCA77u
+                    ^ (uint)wz * 0x27D4EB2Du));
+                hash = (hash ^ (hash >> 13)) * 0x5BD1E995;
+                hash ^= hash >> 15;
+                int bucket = (int)((uint)hash % (uint)RareDenominator);
+                if (bucket != 0) continue;
+
+                // Light gate: hostile spawn requires the SPAWN cell
+                // (the cell above the surface where the mob's feet
+                // stand) to be at light ≤ 7. Combined sky + block.
+                int sky = c.GetSkyLight(lx, surfaceY + 1, lz);
+                int blk = c.GetBlockLight(lx, surfaceY + 1, lz);
+                int eff = sky > blk ? sky : blk;
+                if (eff > 7) continue;
+
+                var spawnPos = new OpenTK.Vector3(
+                    wx + 0.5f, surfaceY + 1f, wz + 0.5f);
+                int mobSeed = hash ^ 0x33CC33CC;
+
+                // Mob kind weighted draw — uses the next derivation of
+                // the column hash so kind is deterministic per column.
+                int kindHash = unchecked((int)((uint)hash * 0x85EBCA6Bu ^ 0xC2B2AE35u));
+                int kindRoll = (int)((uint)kindHash % 100u);
+                HostileMob mob;
+                if      (kindRoll < 35) mob = new Zombie(spawnPos, mobSeed);
+                else if (kindRoll < 60) mob = new Skeleton(spawnPos, mobSeed);
+                else if (kindRoll < 85) mob = new Spider(spawnPos, mobSeed);
+                else                    mob = new Creeper(spawnPos, mobSeed);
+                _hostiles.Add(mob);
             }
         }
 

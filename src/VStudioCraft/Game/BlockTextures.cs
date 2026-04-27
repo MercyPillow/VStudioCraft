@@ -50,15 +50,20 @@ namespace VStudioCraft.Game
         // terrain.png) stays untouched.
         public const int TailBlockLayerCount = 9;
         // Tail item layers — appended past the tail blocks. Items added
-        // after the original 9-item slice (Tier 3 #9 onward: porkchops
-        // raw + cooked) live here so we don't have to renumber the
-        // existing item / tail-block indices and break v7 saves.
+        // after the original 9-item slice (Tier 3 #9 porkchops, Tier 3
+        // #10 hostile-mob drops) live here so we don't have to renumber
+        // the existing item / tail-block indices and break v7 saves.
         public const int FirstTailItemLayer = FirstTailBlockLayer + TailBlockLayerCount; // 76
-        public const int TailItemLayerCount = 2;
-        public const int LayerCount = FirstTailItemLayer + TailItemLayerCount;          // 78
+        public const int TailItemLayerCount = 6;
+        public const int LayerCount = FirstTailItemLayer + TailItemLayerCount;          // 82
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
+        // Hostile-mob drop tile indices (Tier 3 #10).
+        public const int TileBow            = 78;
+        public const int TileArrow          = 79;
+        public const int TileString         = 80;
+        public const int TileGunpowder      = 81;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -577,6 +582,14 @@ namespace VStudioCraft.Game
             // past the tail-block range.
             UploadItem(layerPixels, TileRawPorkchop,    GenerateRawPorkchopItem);
             UploadItem(layerPixels, TileCookedPorkchop, GenerateCookedPorkchopItem);
+            // Tail-item hostile-mob drops (Tier 3 #10). All four are
+            // visual-only collectibles for now — Bow/Arrow gain combat
+            // in Tier 4 #17, Gunpowder fuels TNT priming in Tier 8 #43,
+            // String unlocks recipes alongside the bow.
+            UploadItem(layerPixels, TileBow,       GenerateBowItem);
+            UploadItem(layerPixels, TileArrow,     GenerateArrowItem);
+            UploadItem(layerPixels, TileString,    GenerateStringItem);
+            UploadItem(layerPixels, TileGunpowder, GenerateGunpowderItem);
         }
 
         // Local helper mirroring UploadLayer (which is private elsewhere
@@ -913,6 +926,121 @@ namespace VStudioCraft.Game
                 SetPixel(pixels, x, 6, crustHi.r, crustHi.g, crustHi.b);
         }
 
+        // Bow item — tan curved limb on a bottom-left → top-right
+        // diagonal with a string running between the limb tips. Reads
+        // as a drawn longbow at hotbar scale.
+        private static void GenerateBowItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) wood    = (140, 90, 40);
+            (byte r, byte g, byte b) woodHi  = (180, 130, 70);
+            (byte r, byte g, byte b) woodLo  = (90, 55, 22);
+            (byte r, byte g, byte b) str     = (235, 230, 215);
+            // Limb arc — a 9-pixel curve along a /-diagonal, fattened
+            // in the middle so it doesn't look like a stick.
+            int[] limbX = { 11, 10,  9,  8,  7,  6,  5,  4,  3 };
+            int[] limbY = {  3,  3,  4,  5,  6,  7,  8,  9,  9 };
+            for (int i = 0; i < limbX.Length; i++)
+            {
+                int x = limbX[i], y = limbY[i];
+                SetPixel(pixels, x,     y,     wood.r,   wood.g,   wood.b);
+                SetPixel(pixels, x - 1, y,     woodHi.r, woodHi.g, woodHi.b);
+                SetPixel(pixels, x,     y + 1, woodLo.r, woodLo.g, woodLo.b);
+            }
+            // Bowstring — a straight diagonal line from upper limb tip
+            // to lower limb tip, one pixel inside the limb.
+            int[] strX = { 11, 10,  9,  8,  7,  6,  5,  4,  3 };
+            int[] strY = {  4,  5,  6,  7,  8,  9, 10, 10, 10 };
+            for (int i = 0; i < strX.Length; i++)
+                SetPixel(pixels, strX[i], strY[i], str.r, str.g, str.b);
+        }
+
+        // Arrow item — wood shaft on a /-diagonal, grey iron point at
+        // the upper-right tip, and a 3-feather fletch at the lower-left
+        // tail. The fletch reads as 2 stacked white pixels offset slightly.
+        private static void GenerateArrowItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) shaft   = (160, 110, 60);
+            (byte r, byte g, byte b) shaftHi = (200, 155, 100);
+            (byte r, byte g, byte b) point   = (190, 195, 200);
+            (byte r, byte g, byte b) pointHi = (235, 240, 245);
+            (byte r, byte g, byte b) fletch  = (240, 240, 240);
+            (byte r, byte g, byte b) fletchLo = (180, 180, 180);
+            // Diagonal shaft.
+            for (int i = 0; i < 8; i++)
+            {
+                int x = 4 + i, y = 11 - i;
+                SetPixel(pixels, x, y, shaft.r, shaft.g, shaft.b);
+                if (i > 0 && i < 7)
+                    SetPixel(pixels, x, y - 1, shaftHi.r, shaftHi.g, shaftHi.b);
+            }
+            // Iron arrowhead — a 3-pixel triangle off the upper-right
+            // shaft tip.
+            SetPixel(pixels, 12, 3, point.r,   point.g,   point.b);
+            SetPixel(pixels, 13, 3, pointHi.r, pointHi.g, pointHi.b);
+            SetPixel(pixels, 12, 2, point.r,   point.g,   point.b);
+            SetPixel(pixels, 13, 2, point.r,   point.g,   point.b);
+            SetPixel(pixels, 13, 4, point.r,   point.g,   point.b);
+            // Fletch — three feather pixels at the lower-left tail.
+            SetPixel(pixels, 3, 12, fletch.r,   fletch.g,   fletch.b);
+            SetPixel(pixels, 2, 12, fletchLo.r, fletchLo.g, fletchLo.b);
+            SetPixel(pixels, 3, 13, fletchLo.r, fletchLo.g, fletchLo.b);
+            SetPixel(pixels, 2, 13, fletch.r,   fletch.g,   fletch.b);
+        }
+
+        // String item — a tangled cream-coloured loop. Drawn as an
+        // ellipse-ish ring with a cross-knot in the middle so it doesn't
+        // look like an empty O at small scale.
+        private static void GenerateStringItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) str   = (240, 235, 220);
+            (byte r, byte g, byte b) strLo = (185, 180, 165);
+            // Ring — top + bottom + sides.
+            int[] ringX = { 6, 7, 8, 9, 5, 10, 4, 11, 4, 11, 5, 10, 6, 7, 8, 9 };
+            int[] ringY = { 3, 3, 3, 3, 4, 4,  6, 6,  9, 9, 11, 11, 12, 12, 12, 12 };
+            for (int i = 0; i < ringX.Length; i++)
+                SetPixel(pixels, ringX[i], ringY[i], str.r, str.g, str.b);
+            // Inner shading ring.
+            int[] inX = { 5, 6, 9, 10, 4, 11, 5, 10 };
+            int[] inY = { 5, 5, 5,  5, 7,  8, 11, 11 };
+            for (int i = 0; i < inX.Length; i++)
+                SetPixel(pixels, inX[i], inY[i], strLo.r, strLo.g, strLo.b);
+            // Cross-knot in the middle so the loop reads as tangled.
+            SetPixel(pixels, 7, 7, str.r, str.g, str.b);
+            SetPixel(pixels, 8, 8, str.r, str.g, str.b);
+            SetPixel(pixels, 7, 8, strLo.r, strLo.g, strLo.b);
+            SetPixel(pixels, 8, 7, strLo.r, strLo.g, strLo.b);
+        }
+
+        // Gunpowder item — a dark grey-black mound with bright sparkle
+        // pixels scattered through it (Alpha gunpowder is a coarse pile
+        // with a few highlight grains). Sits low in the tile like a heap.
+        private static void GenerateGunpowderItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) ash    = (55, 55, 60);
+            (byte r, byte g, byte b) ashHi  = (95, 95, 100);
+            (byte r, byte g, byte b) ashLo  = (28, 28, 32);
+            (byte r, byte g, byte b) spark  = (220, 215, 195);
+            // Heap silhouette — wider at the bottom, tapering up.
+            // Row 11 (bottom): wide.
+            for (int x = 3; x <= 12; x++) SetPixel(pixels, x, 11, ashLo.r, ashLo.g, ashLo.b);
+            // Row 10: still wide, slight curve.
+            for (int x = 3; x <= 12; x++) SetPixel(pixels, x, 10, ash.r, ash.g, ash.b);
+            // Row 9: pull in.
+            for (int x = 4; x <= 11; x++) SetPixel(pixels, x, 9, ash.r, ash.g, ash.b);
+            // Row 8: narrower.
+            for (int x = 5; x <= 10; x++) SetPixel(pixels, x, 8, ash.r, ash.g, ash.b);
+            // Row 7: tip.
+            for (int x = 6; x <= 9; x++)  SetPixel(pixels, x, 7, ashHi.r, ashHi.g, ashHi.b);
+            // Row 6: cap.
+            SetPixel(pixels, 7, 6, ashHi.r, ashHi.g, ashHi.b);
+            SetPixel(pixels, 8, 6, ashHi.r, ashHi.g, ashHi.b);
+            // Sparkle grains — a few bright pixels scattered through.
+            SetPixel(pixels, 5, 9,  spark.r, spark.g, spark.b);
+            SetPixel(pixels, 9, 10, spark.r, spark.g, spark.b);
+            SetPixel(pixels, 7, 8,  spark.r, spark.g, spark.b);
+            SetPixel(pixels, 11, 11, spark.r, spark.g, spark.b);
+        }
+
         // Tile coordinates in Alpha 1.1.2_01's terrain.png. Format is
         // (col, row), each cell 16×16 pixels in a 16×16 grid (256×256
         // total). The embedded PNG is sliced once at atlas-build time
@@ -1053,6 +1181,18 @@ namespace VStudioCraft.Game
             // GenerateRawPorkchopItem / GenerateCookedPorkchopItem.
             /* TileRawPorkchop       */ (7, 5),
             /* TileCookedPorkchop    */ (8, 5),
+            // Tail items (Tier 3 #10 — hostile-mob drops). Sentinel
+            // (-1,-1) coords so the alpha-textures slice loop skips
+            // them and the procedural pixels (GenerateBowItem etc.)
+            // stay. Canonical Alpha items.png coords haven't been
+            // verified against the embedded sheet — better to ship
+            // procedural art that's guaranteed-correct than slice a
+            // wrong tile and end up with a stone-shovel icon for "Bow".
+            // Bumping these to real coords later is one-line edits.
+            /* TileBow               */ (-1, -1),
+            /* TileArrow             */ (-1, -1),
+            /* TileString            */ (-1, -1),
+            /* TileGunpowder         */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for

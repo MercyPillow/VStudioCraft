@@ -4,27 +4,50 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 `src/VStudioCraft.Standalone`) against Alpha 1.1.2_01 (released 2010-09-18).
 Items marked **Have** exist today; items under **Missing** are the gap.
 
-Last updated after Tier 3 #9 — entity framework + first passive mob.
-A new abstract `Entity` base class hoists the AABB sub-step physics
-(integrator, axis-by-axis voxel collision, IsStandingOnSomething,
-collide-against-world) out of `Player`, which now derives from it.
-The first concrete subclass is `Pig` — wandering AI on a 5 s timer
-(60% walk / 40% idle, random yaw), gravity + ground physics shared
-with the player, 10 HP with a 0.30 s hurt-flash tint that pulses the
-body texture from healthy pink to red. Pigs spawn during chunk
-terrain-gen on grass blocks with light ≥ 9 and 2 blocks of headroom
-(rare-1-in-180 per-column hashed RNG so distribution is reproducible).
-LMB melee uses the Alpha damage table — bare-hand 1, sword 5/6/7/5/8
-(wood/stone/iron/gold/diamond), axe -2 / pickaxe -3 / shovel -4 from
-the sword baseline, clamped to ≥1; held tool's durability ticks per
-hit, the arm-swing animation triggers, and the existing thwack SFX
-fires. Dead pigs spawn 1..3 Raw Porkchop drops via the standard
-`DroppedItem` path. Two new items — **Raw Porkchop** (id 319) and
-**Cooked Porkchop** (id 320) — live as BlockType entries 74..75 with
-Alpha-coord tile slices in `alpha_tools.png` (raw at (7,5), cooked
-at (8,5)) and procedural 16×16 fallbacks. The furnace recipe table
-gains `RawPorkchop → CookedPorkchop` so smelting the drop produces
-the cooked variant.
+Last updated after Tier 3 #10 — first hostile mobs (zombie, skeleton,
+spider, creeper). A new abstract `HostileMob` base extends `Entity`
+with shared chase-AI plumbing: aggro inside `DetectRange`, atan2-yaw
+toward the player, normalised-XZ steering at the mob's `WalkSpeed`,
+single-block auto-jump on a 1-block lip in front of the chase
+heading (no path-planner — A* on a 16-block window is deferred), and
+a melee `TryAttack` gated by `AttackCooldown` that calls back into
+`Player.TakeDamage` through the new `IPlayerDamageSink` shim. Outside
+detect range the mob falls back to Pig-style wander on a 5 s timer.
+The four concrete subclasses tune HP / walk speed / detect+attack
+range / per-mob death drops:
+**Zombie** (HP 20, walk 1.0, dmg 2, no drops — Alpha 1.1.2 zombies
+were drop-empty); **Skeleton** (HP 20, walk 1.1, dmg 2, drops 0..2
+**Arrow (262)** + 1-in-3 chance of **Bow (261)**; bow combat itself
+is roadmap-deferred to Tier 4 #17, the bow ships as an inert
+collectible until then); **Spider** (HP 16, walk 1.6, dmg 2, drops
+0..2 **String (287)**; wall-climb deferred); **Creeper** (HP 20,
+walk 1.05, no melee — first contact lights a 1.5 s fuse via an
+`OnAttacked` override; `TickFuse` advances the timer separately
+from chase, defuses if the player sprints out of 2× attack range,
+and detonates for a flat 6 HP hit on the player; player-kill drops
+0..2 **Gunpowder (289)**; explosion-death drops nothing). Hostiles
+are spawned during chunk terrain-gen via `World.SpawnHostilesInChunk`
+with a per-column 1-in-360 hashed gate, light ≤ 7 (Alpha hostile
+spawn rule), 35/25/25/15 weighted between zombie/skeleton/spider/
+creeper. The renderer ticks them in `TickHostiles` (mirrors
+`TickPigs` lifecycle, reaping `IsDead` entries) and renders each as
+a procedural cuboid model through the shared `_overlayShader` +
+`_breakCubeMesh` pipe — humanoid for zombie/skeleton, low+wide
+abdomen + cephalothorax + 8 legs for spider, tall slim torso + 4
+stubby legs for creeper with a fuse-flash colour ramp from green
+toward white as the timer counts down. LMB melee is now mob-type
+agnostic — `TryHitMob` scans pigs and hostiles together, picks the
+closest hit, and calls the new `IDropSink.SpawnDrop` shim on death
+so per-mob `SpawnDeathDrops` can append items without taking a
+hard ref to the renderer. Pig spawn density quartered (1-in-720)
+to make room for the hostiles in the chunk-spawn budget.
+
+Earlier: Tier 3 #9 entity framework + first passive mob — abstract
+`Entity` base hoists AABB sub-step physics out of `Player`; `Pig`
+ships with wander AI, 10 HP + hurt-flash, terrain-gen spawn on
+grass with light ≥ 9. LMB melee added with the Alpha damage table;
+dead pigs drop 1..3 **Raw Porkchop (319)**, smeltable into
+**Cooked Porkchop (320)** via a new furnace recipe.
 
 Earlier: Tier 2 visible-polish pass — wall torches + torch-fall
 (id-space orientation at BlockType 70..73 — chunk metadata isn't
@@ -83,7 +106,7 @@ clipping at ~3.5 rows).
 - Furnace + LitFurnace — paired blocks at IDs 67/68 with stone-cap top, iron-banded stone-wall sides, and a recessed-mouth front face (lit variant adds an orange/yellow glow inside the mouth). Crafted from 8 cobblestone in a U-shape on the crafting bench. RMB opens the 3-slot smelter screen (input / fuel / output) overlaid on the player inventory; `FurnaceTileEntity` carries the per-block input/fuel/output stacks plus burn / cook timers and a cardinal `Facing` byte. The world ticks every entity at 20 Hz: fuel drains 1 tick/tick (Coal 1600 = 80 s, Wood 300 = 15 s, Stick 100 = 5 s), the cook-progress counter advances while burning + smeltable, and at 200 ticks (10 s) one input → one output. Entity transitions between burning and idle automatically swap the world block between Furnace and LitFurnace, so the lit-front glow is observable from outside without needing the screen open. Smelting recipes match Alpha: IronOre→IronIngot, GoldOre→GoldIngot, Sand→Glass, Cobblestone→Stone, ClayBall→ClayBrick, RawPorkchop→CookedPorkchop. Breaking a furnace spills any contents as `DroppedItem`s and removes the entity. Persisted in the world save format (v6) with a count + per-entity (x, y, z, input, fuel, output, burnTime, maxBurnTime, cookProgress, facing) record. **Directionality**: at placement the front face is oriented to face the player who placed it (cardinal opposite of `Camera.Forward`); the mesher reads `FurnaceTileEntity.Facing` and routes that one side to the front tile while the other three sides show the plain side tile. The furnace-top tile is missing from the embedded `terrain.png` slot Alpha used (14, 3), so the atlas is patched at upload time to procedurally generate it from the side palette (stone-wall jitter + iron banding wrapped around all four edges + a 4×4 vent in the centre)
 - Chest — single-chest container at ID 69 with a planks-base block, iron-banded oriented front (lock plate + keyhole), plain plank sides, and a lid-plate top tile. Crafted from 8 planks in a U-shape on the crafting bench (centre slot empty, matches Alpha 1.1.2). RMB opens the chest screen (`ChestScreen`) — a 9×3 chest grid stacked over the player's main+hotbar inventory, same world-halt + cursor-release lifecycle as the inventory / crafting / furnace modals. `ChestTileEntity` owns a flat 27-slot `ItemStack[]` plus a cardinal `Facing` byte; the world keeps a `Dictionary<(x,y,z), ChestTileEntity>` so chest contents survive chunk unload/reload. Click handling routes through `HandleChestClick`: chest slots use the same Alpha pick / drop / swap / merge rules the player inventory uses (cursor stack is shared); shift-click on a player slot top-ups matching chest stacks then fills the first empty chest slot. Breaking a chest spills every non-empty slot as `DroppedItem`s in row-major order (top row first) plus the chest block itself, then removes the entity and auto-closes the screen if it was open. **Directionality**: at placement the front (locked) face is oriented to the cardinal opposite of `Camera.Forward` so it always faces the placer; the mesher reads `ChestTileEntity.Facing` and routes that one side to the front tile while the other three sides show the plain plank-side tile. Persisted in the world save format (v7) with a count + per-entity (x, y, z, facing, 27 ItemStacks) record appended after the furnace block — pre-v7 saves load with an empty chest table and zero chest blocks (the BlockType range simply wasn't populated before this version).
 - Per-face textures (grass top / side / bottom; log top/side; TNT top/bottom/side; bookshelf; crafting-table top/side; furnace top/side/front + lit-front variant — front is selected per-face based on `FurnaceTileEntity.Facing`; chest top/side/front — front is selected per-face based on `ChestTileEntity.Facing`)
-- 38-block + 20-tool + 9-item + 9-tail-block (crafting-table top/side, furnace top/side/front/lit-front, chest top/side/front) + 2-tail-item (raw + cooked porkchop) procedural 16×16 pixel-art atlas, nearest-neighbour sampled
+- 38-block + 20-tool + 9-item + 9-tail-block (crafting-table top/side, furnace top/side/front/lit-front, chest top/side/front) + 6-tail-item (raw + cooked porkchop, bow, arrow, string, gunpowder) procedural 16×16 pixel-art atlas, nearest-neighbour sampled
 - Transparent-block routing to a second alpha-blended render pass (water today)
 - Cross-sprite (X-shape) model path for non-cube blocks, alpha-tested in opaque pass via fragment-shader `discard`
 - Per-block shape category (`IsCubeShape`) and raycast/collision separation (`IsRaycastTarget` vs `IsSolid`) so torches/flowers/grass are targetable but non-collidable
@@ -192,14 +215,17 @@ clipping at ~3.5 rows).
 - Abstract `Entity` base class shared with `Player` — owns the AABB sub-step integrator (`MaxSubStep = 0.05f`), axis-by-axis voxel collision (`MoveAxis`), `IsStandingOnSomething`, and the world-collision check. `Player` derives from it (subtype-specific `HalfWidth`/`Height` inherited as virtual instance fields, kept as `public new const` static aliases for external static-style refs). Future entities (mobs, projectiles, vehicles) plug in by subclassing.
 - **Pig** — first concrete mob. 10 HP, 0.45 × 0.9 footprint, 1.2 m/s walk speed. Wander AI on a 5 s timer (60% walk / 40% idle, random yaw on each interval) with the entity-base physics (gravity 28 m/s², terminal 78, full ground collision against the voxel world). Hurt timer (0.30 s) tints the body texture from healthy pink (0.96, 0.55, 0.65) to red (1.00, 0.30, 0.30) on `TakeDamage`. Spawns during chunk terrain-gen — per-column hashed RNG with a 1-in-180 gate scans for grass-topped columns with 2 blocks of headroom and either sky-light ≥ 9 or block-light ≥ 9 (Alpha's passive-spawn light rule). Spawn fires both during the synchronous initial gen pass and on chunk install from off-thread workers (so worker-thread mutations don't race with `World`).
 - Pig render — procedural cuboid model (body, head, snout, four legs) drawn through the existing `_overlayShader` + `_breakCubeMesh` pipe with per-cuboid solid-colour `uColor`; cheap, no new shader or mesh, and the swung-rig pivot follows the entity's yaw + position.
-- LMB melee on mobs — `TryHitMob` runs before `TryBreak`'s block hit so a mob in front of the cursor takes priority. Damage table (`MeleeDamageForHeldItem`) follows Alpha 1.1.2: bare-hand 1; sword wood 5 / stone 6 / iron 7 / gold 5 / diamond 8; axe -2 from sword tier; pickaxe -3; shovel -4; clamped to ≥1. Held tool's durability ticks one use per hit (`DamageHeldTool(1)`). Arm-swing fires (`Player.TriggerSwing`) and the place SFX bank's wool-thwack stub plays as a placeholder mob-hit cue. Death spawns 1..3 Raw Porkchop drops (`SpawnPigDeathDrops`) with random scatter velocity through the existing `DroppedItem` pickup loop.
+- **Hostile mobs — Zombie / Skeleton / Spider / Creeper.** Shared `HostileMob` abstract base extending `Entity` owns the chase plumbing (atan2 yaw, normalised XZ steering, single-block auto-jump on a 1-block lip, melee `TryAttack` gated by per-instance `AttackCooldown`, wander fallback outside `DetectRange`). Each subclass tunes HP / walk speed / attack range+damage / drops. Spawn during chunk terrain-gen via `World.SpawnHostilesInChunk` (per-column 1-in-360 hashed RNG; gate at light ≤ 7 — Alpha hostile rule; weighted draw 35% Zombie / 25% Skeleton / 25% Spider / 15% Creeper). Hostile vs. player damage routes through the new `IPlayerDamageSink` shim (`GameRenderer` implements directly + null-guards `Player.TakeDamage`); death drops route through `IDropSink.SpawnDrop` so per-mob `SpawnDeathDrops` can append items without a hard ref to the renderer. **Zombie** — humanoid, HP 20, walk 1.0 m/s, dmg 2, no drops (Alpha 1.1.2 zombies dropped nothing — rotten flesh was Beta). **Skeleton** — humanoid, HP 20, walk 1.1, dmg 2 (melee-only for V1; bow combat is Tier 4 #17), drops 0..2 Arrow + 1-in-3 Bow. **Spider** — short+wide arachnid (HalfWidth 0.7, Height 0.9), HP 16, walk 1.6, dmg 2, drops 0..2 String. (Wall-climb deferred — vertical pathing slated for the path-planner overhaul.) **Creeper** — slim humanoid silhouette, HP 20, walk 1.05, no melee. First contact starts a 1.5 s fuse via `OnAttacked` override; `TickFuse` advances the timer independently from chase (so the fuse keeps counting down even if the player walks slightly out of detect range), defuses if the player retreats past 2× `AttackRange`, detonates for a flat 6 HP hit on the player + sets `Health=0` + `DetonatedThisFrame`. Player-kill drops 0..2 Gunpowder; explosion-death drops nothing (matches "explosion eats the corpse" Alpha behaviour). Real blast-block damage is roadmap-deferred to Tier 8 #43.
+- Hostile mob render — same procedural-cuboid pipe pigs use (`_overlayShader` + `_breakCubeMesh`). Type-dispatched in `RenderHostiles`: humanoid head+torso+arms+legs for zombie/skeleton, low oval body + cephalothorax + 8 stubby legs + two red eyes for spider, tall slim torso + 4 short legs + small head for creeper. Hurt flash lerps the body colour toward red over `HostileMob.HurtFlashSeconds` (0.30 s). Creeper additionally lerps body colour from green toward white as `FuseTimer` counts down — the white peak hits the frame before detonation.
+- LMB melee on mobs — `TryHitMob` runs before `TryBreak`'s block hit so a mob in front of the cursor takes priority. Damage table (`MeleeDamageForHeldItem`) follows Alpha 1.1.2: bare-hand 1; sword wood 5 / stone 6 / iron 7 / gold 5 / diamond 8; axe -2 from sword tier; pickaxe -3; shovel -4; clamped to ≥1. Scans pigs and hostiles together, picks the closest by ray-AABB distance, blocked by walls. Held tool's durability ticks one use per hit (`DamageHeldTool(1)`). Arm-swing fires (`Player.TriggerSwing`) and the place SFX bank's wool-thwack stub plays as a placeholder mob-hit cue. Death drops route per-mob: pigs → 1..3 Raw Porkchop, hostiles → their `SpawnDeathDrops` implementation, both through the `DroppedItem` pickup loop.
 - Dropped-item entity — block + mob drops bob, spin, fall under gravity, settle, and get picked up; one entry per `_drops` list entry, ticked in `TickDrops`.
 
 **Missing**
-- Hostile mobs: zombie, skeleton, spider, creeper, slime
-- Mob AI / pathfinding (Pig wander is a 5 s yaw-pick — no path queries, no targeting)
+- Mob AI / pathfinding — chase is straight-line steering + 1-block auto-jump (no A*); wander is a 5 s yaw-pick. No path queries, no real terrain navigation.
+- Slime mob (the fifth Alpha hostile) — splits-on-hit semantics, low-Y light-independent spawn. Slated for Tier 4 #18.
+- Spider wall-climb (Alpha spiders climb walls — vertical pathing is a bigger surface than the chase plumbing handles today)
+- Live mob-spawn loop — hostiles + pigs spawn at terrain-gen only; Alpha's per-tick spawn-attempt loop (light < 7 in dark night, mob cap, density curve) is absent
 - Other passive mobs: cow, sheep, chicken
-- Mob spawn cycles (Pig spawns at terrain-gen only — no live spawn-loop; hostile light < 7 spawns absent)
 - Per-chunk spawn cap
 - Player skin / third-person model (player is currently invisible; F5 third-person will need a model + texture)
 - Projectiles: arrow, snowball, egg
@@ -273,12 +299,13 @@ clipping at ~3.5 rows).
 - Non-block ItemType layer — 9 ingredient items (Stick / Coal / Iron Ingot / Gold Ingot / Diamond gem / Flint / Clay Ball / Clay Brick / Bowl) live as BlockType entries 58..66 (same id-space trick tools use). `BlockData.IsItem(t)` range-checks the slice; mesher / placement / collision / lighting all branch through it the same way they branch through `IsTool`. RMB on an item stack is rejected by `TryPlace`. The parallel `ItemType` static class exposes both the strongly-typed `BlockType` constants (`ItemType.Stick`) and Alpha 1.1.2 numeric ids (`ItemType.AlphaId(t)` returns 280 for Stick, 263 for Coal, etc.) for upcoming save / multiplayer work. Item icons live alongside the tool icons in the embedded `alpha_tools.png` at canonical Notch coordinates — Coal (7,0), Flint (6,0), Iron Ingot (7,1), Clay Brick (6,1), Gold Ingot (7,2), Stick (5,3), Diamond (7,3), Clay Ball (9,3), Bowl (7,4) — so the alpha-textures atlas slices items in the same loop that already handles tools (`UploadToolLayersFromAlphaTools` walks layers 38..66 with one decode of the PNG). Procedural mode synthesises 16×16 pixel-art equivalents (`GenerateProceduralItemLayers`).
 - Item drops: Coal Ore drops Coal (item, not the ore block) when broken with a wood-tier+ pickaxe; Diamond Ore drops the Diamond gem when broken with iron-tier+ pickaxe; Gravel has a 1-in-10 chance to drop Flint instead of the gravel block (matching Alpha); Clay always drops 4 Clay Balls (never the clay block itself). The 4 balls scatter as 4 separate `DroppedItem` entities so the pile fans out instead of stacking on the spot. Iron / Gold ores drop the ore block — players turn them into ingots by smelting in a furnace (see Blocks → Furnace).
 - **Raw Porkchop (319)** + **Cooked Porkchop (320)** — first food items, shipped alongside the Pig in Tier 3 #9. Live as BlockType entries 74..75 (the same id-space trick tools and ingredients use, past the wall-torch range). `BlockData.IsItem` is now a two-slice check that covers both the original 58..66 range and the new 74..75 porkchop slice. Atlas-textures mode pulls them from `alpha_tools.png` at canonical Notch coords (raw at (7,5), cooked at (8,5)) via `UploadTailItemLayersFromAlphaTools`, which mirrors the existing tool-slice loop but ranges past the tail-block layers; procedural mode synthesises 16×16 pixel-art equivalents (`GenerateRawPorkchopItem` paints a pink slab with marbling, `GenerateCookedPorkchopItem` browns the crust + tans the interior). Furnace smelting recipe `RawPorkchop → CookedPorkchop` ships in the same registry update, taking the standard 200-tick (10 s) cook time. Eating is still pending — the food UX (Tier 4 #14) hooks them up to the hunger / heal path.
+- **Bow (261)** + **Arrow (262)** + **String (287)** + **Gunpowder (289)** — hostile-mob drop items shipped with Tier 3 #10. Live as BlockType entries 76..79, extending the `BlockData.IsItem` porkchop slice from 74..75 to 74..79 (Gunpowder is now the highest-id BlockType). Procedural-mode art ships per-icon: Bow (tan curved limb + thin diagonal bowstring), Arrow (diagonal shaft + iron-grey arrowhead + cream fletch), String (cream tangle ring with cross-knot in the centre), Gunpowder (dark-grey heap with sparkle grains). Atlas-mode coords are placeholder sentinels `(-1, -1)` for now, so procedural always wins until the canonical Alpha tile coords are wired; `UploadTailItemLayersFromAlphaTools` already handles the sentinel case by skipping the slice. Combat behaviour is roadmap-deferred — bow/arrow ship as inert collectibles until Tier 4 #17 (bow combat + arrow projectile entity); gunpowder ships inert until TNT priming in Tier 8 #43. String currently has no recipes wired (bow recipe + fishing rod recipe both gate on Tier 4 #17 / #23). Mob-drop sources: skeleton drops 0..2 arrows + 1-in-3 bow on death; spider drops 0..2 string; creeper drops 0..2 gunpowder on player-kill (explosion-death drops nothing).
 
-**Missing** — Alpha 1.1.2_01 ships 88 distinct non-block items (IDs 256–346 plus 2256/2257). We currently have 29 (20 tools + 9 ingredients). This list covers the remaining 59. Items added in later versions (Cookie, Sugar, Bone, Bone-meal, Clock, Cake, Cocoa Beans, dyes, Ink Sac, Lapis, Map, Golden Apple, Raw/Cooked Cod, Glowstone Dust) are intentionally excluded — they're post-1.1.2_01.
+**Missing** — Alpha 1.1.2_01 ships 88 distinct non-block items (IDs 256–346 plus 2256/2257). We currently have 35 (20 tools + 9 ingredients + 2 porkchop + 4 mob-drop collectibles). This list covers the remaining 53. Items added in later versions (Cookie, Sugar, Bone, Bone-meal, Clock, Cake, Cocoa Beans, dyes, Ink Sac, Lapis, Map, Golden Apple, Raw/Cooked Cod, Glowstone Dust) are intentionally excluded — they're post-1.1.2_01.
 
 - **Tools — hoes (5)**: Wooden, Stone, Iron, Diamond, Gold. The hoe row in alpha_tools.png is already in the atlas image, just not mapped to BlockType entries (row gets used once farming lands).
-- **Combat (3)**: Bow (261), Arrow (262), Flint and Steel (259).
-- **Ingredients / materials from mob drops (5)**: String (287), Feather (288), Gunpowder (289), Leather (334), Slimeball (341). Ship with their source mobs in Tier 3.
+- **Combat (1)**: Flint and Steel (259). (Bow + Arrow are in `**Have**` as inert collectibles; combat hookup is Tier 4 #17.)
+- **Ingredients / materials from mob drops (2)**: Feather (288), Leather (334), Slimeball (341). Ship with their source mobs in remaining Tier 3 / Tier 4 entries. (String + Gunpowder are in `**Have**` as inert collectibles, dropped by spider + creeper respectively.)
 - **Sugar-cane derivatives (2)**: Paper (339), Book (340). Ship with sugar cane in Tier 8.
 - **Containers (4)**: Bucket empty (325), Water Bucket (326), Lava Bucket (327), Milk Bucket (335).
 - **Food (4)**: Apple (260), Mushroom Stew (282), Wheat (296), Bread (297). (Raw Porkchop (319) + Cooked Porkchop (320) shipped with Tier 3 #9.)
@@ -347,7 +374,7 @@ clipping at ~3.5 rows).
 - Greedy chunk meshing (~5–10× fewer verts than naive)
 - Face culling against opaque neighbours; internal water-water faces skipped
 - Two-pass rendering: opaque first, then alpha-blended transparents (water) with depth-write off
-- 16×16 nearest-neighbour texture atlas (78 layers — 38 blocks + 20 tools + 9 items + 9 tail blocks + 2 tail items)
+- 16×16 nearest-neighbour texture atlas (82 layers — 38 blocks + 20 tools + 9 items + 9 tail blocks + 6 tail items)
 - VAO/VBO/EBO per chunk mesh, separate VBOs for opaque + transparent streams
 - Frustum culling per chunk (both passes)
 - Dedicated render thread owning the GL context
@@ -446,8 +473,7 @@ multiple subsystems at once.
 	
 ### Tier 3 — Mobs (the world stops feeling empty)
 
-10. **First hostile mobs (creeper, skeleton, spider, zombie)** — A* on a 16-block window, chase/attack AI, attack hooks into the existing `Player.TakeDamage`. Brings the mob-drop ingredients into the world: creeper drops **Gunpowder (289)**, skeleton drops **Bow (261)** + **Arrow (262)**, spider drops **String (287)**. Survival now has a threat. (Bow combat itself ships in Tier 4 #17 — these drops are inert collectibles until then.)
-11. **Light-level-gated spawn loop** — Hostile spawns at light < 7, passive on grass at light ≥ 9. Per-chunk spawn cap.
+11. **Light-level-gated spawn loop** — Live per-tick spawn-attempt loop on top of today's terrain-gen-only spawns. Hostile spawns at light < 7 (refines the current chunk-gen gate into a per-tick attempt), passive on grass at light ≥ 9, per-chunk spawn cap, density curve.
 12. **Cow / sheep / chicken** — Variants of pig. Cow drops **Leather (334)** + Raw Beef (Beef wasn't added until Beta 1.8 — Alpha cows actually dropped raw porkchop alongside leather; we'll match the era). Chicken drops **Feather (288)** on death and lays **Egg (344)** every ~5 min while alive. Sheep drops Wool (block) when sheared / killed.
 13. **Player skin + third-person model** — Required for F5 + future multiplayer.
 

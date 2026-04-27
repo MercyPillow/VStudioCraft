@@ -142,7 +142,8 @@
       "PowerShell(Stop-Process -Force)",
       "PowerShell($ErrorActionPreference='SilentlyContinue')",
       "PowerShell(dotnet build src\\\\VStudioCraft\\\\VStudioCraft.csproj -c Debug -v minimal 2>&1)",
-      "PowerShell(dotnet build src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj -c Debug -v minimal 2>&1)"
+      "PowerShell(dotnet build src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj -c Debug -v minimal 2>&1)",
+      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\features.md\"\\).Count)"
     ]
   }
 }

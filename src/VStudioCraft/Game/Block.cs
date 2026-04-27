@@ -142,6 +142,18 @@ namespace VStudioCraft.Game
         // past TorchNorth so v7 saves continue to load.
         RawPorkchop    = 74, // Alpha 319
         CookedPorkchop = 75, // Alpha 320
+
+        // Tier 3 #10 — Hostile mob drops. All four ship as inert
+        // collectibles for now — Bow + Arrow get real combat in
+        // Tier 4 #17, Gunpowder fuels TNT priming in Tier 8 #43, and
+        // String unlocks the Bow recipe + Fishing Rod (Tier 4). They
+        // live in the BlockType id-space the same way other items do
+        // (IsItem branches the mesher / placement / collision paths).
+        // Append-only past CookedPorkchop so v7 saves continue to load.
+        Bow       = 76, // Alpha 261
+        Arrow     = 77, // Alpha 262
+        String    = 78, // Alpha 287
+        Gunpowder = 79, // Alpha 289
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -164,6 +176,10 @@ namespace VStudioCraft.Game
         public const BlockType Bowl      = BlockType.Bowl;
         public const BlockType RawPorkchop    = BlockType.RawPorkchop;
         public const BlockType CookedPorkchop = BlockType.CookedPorkchop;
+        public const BlockType Bow            = BlockType.Bow;
+        public const BlockType Arrow          = BlockType.Arrow;
+        public const BlockType String         = BlockType.String;
+        public const BlockType Gunpowder      = BlockType.Gunpowder;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -184,6 +200,10 @@ namespace VStudioCraft.Game
                 case BlockType.Bowl:           return 281;
                 case BlockType.RawPorkchop:    return 319;
                 case BlockType.CookedPorkchop: return 320;
+                case BlockType.Bow:            return 261;
+                case BlockType.Arrow:          return 262;
+                case BlockType.String:         return 287;
+                case BlockType.Gunpowder:      return 289;
                 default:                       return -1;
             }
         }
@@ -208,6 +228,10 @@ namespace VStudioCraft.Game
                 case BlockType.Bowl:           return "Bowl";
                 case BlockType.RawPorkchop:    return "Raw Porkchop";
                 case BlockType.CookedPorkchop: return "Cooked Porkchop";
+                case BlockType.Bow:            return "Bow";
+                case BlockType.Arrow:          return "Arrow";
+                case BlockType.String:         return "String";
+                case BlockType.Gunpowder:      return "Gunpowder";
                 default:                       return t.ToString();
             }
         }
@@ -303,13 +327,16 @@ namespace VStudioCraft.Game
 
         // True if this BlockType id refers to a non-placeable, non-tool
         // inventory item (Stick, Coal, ingots, gem, Flint, ClayBall /
-        // Brick, Bowl, RawPorkchop, CookedPorkchop). The original
-        // ingredient slice [Stick..Bowl] is contiguous, but Tier 3 #9
-        // appended porkchops past the wall-torch ids (70..73) — so the
-        // range check is now two slices instead of one.
+        // Brick, Bowl, RawPorkchop..Gunpowder). The original ingredient
+        // slice [Stick..Bowl] is contiguous, but Tier 3 #9 appended
+        // porkchops past the wall-torch ids (70..73) and Tier 3 #10
+        // appended Bow/Arrow/String/Gunpowder past the porkchops — so
+        // the range check is now two slices [Stick..Bowl] +
+        // [RawPorkchop..Gunpowder]. New items added past Gunpowder
+        // automatically extend the second slice, no edit needed here.
         public static bool IsItem(BlockType t)
             => ((byte)t >= (byte)BlockType.Stick       && (byte)t <= (byte)BlockType.Bowl)
-            || ((byte)t >= (byte)BlockType.RawPorkchop && (byte)t <= (byte)BlockType.CookedPorkchop);
+            || ((byte)t >= (byte)BlockType.RawPorkchop && (byte)t <= (byte)BlockType.Gunpowder);
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -725,6 +752,10 @@ namespace VStudioCraft.Game
                 case BlockType.Bowl:           return BlockTextures.TileBowl;
                 case BlockType.RawPorkchop:    return BlockTextures.TileRawPorkchop;
                 case BlockType.CookedPorkchop: return BlockTextures.TileCookedPorkchop;
+                case BlockType.Bow:            return BlockTextures.TileBow;
+                case BlockType.Arrow:          return BlockTextures.TileArrow;
+                case BlockType.String:         return BlockTextures.TileString;
+                case BlockType.Gunpowder:      return BlockTextures.TileGunpowder;
                 default:
                     return BlockTextures.TileStone;
             }

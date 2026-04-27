@@ -87,6 +87,8 @@
     <Compile Include="Game\DroppedItem.cs" />
     <Compile Include="Game\Entity.cs" />
     <Compile Include="Game\Pig.cs" />
+    <Compile Include="Game\HostileMob.cs" />
+    <Compile Include="Game\HostileMobs.cs" />
     <Compile Include="Game\SfxBank.cs" />
     <Compile Include="Game\Frustum.cs" />
     <Compile Include="Game\FurnaceRecipes.cs" />

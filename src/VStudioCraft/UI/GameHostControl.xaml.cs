@@ -503,6 +503,7 @@ namespace VStudioCraft.UI
                         UpdatePlayer(dt);
                         _renderer.TickDrops(dt);
                         _renderer.TickPigs(dt);
+                        _renderer.TickHostiles(dt);
                         _renderer.TickFurnacesIfDue(dt);
                     }
                     else if (!_renderer.IsPaused)

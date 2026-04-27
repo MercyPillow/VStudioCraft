@@ -5,7 +5,7 @@ using OpenTK.Graphics.OpenGL;
 
 namespace VStudioCraft.Game
 {
-    internal sealed class GameRenderer : IDisposable
+    internal sealed class GameRenderer : IDisposable, IPlayerDamageSink, IDropSink
     {
         private const string VertexSrc = @"#version 330 core
 layout(location = 0) in vec3 aPos;
@@ -1253,6 +1253,7 @@ void main()
                     if (freshlyInstalled && !r.Chunk.IsModified)
                     {
                         _world.SpawnPigsInChunk(r.Chunk);
+                        _world.SpawnHostilesInChunk(r.Chunk);
                     }
                 }
                 installed++;
@@ -2131,11 +2132,17 @@ void main()
         {
             if (_world == null) return false;
             var pigs = _world.Pigs;
-            if (pigs.Count == 0) return false;
+            var hostiles = _world.Hostiles;
+            if (pigs.Count == 0 && hostiles.Count == 0) return false;
 
-            // Find the closest live pig the camera ray pierces.
+            // Find the closest live mob the camera ray pierces. We scan
+            // pigs and hostiles in one pass so the closest mob (whether
+            // passive or hostile) wins — there's no "hostiles take
+            // priority" rule in Alpha, the click just hits whatever's
+            // physically closer along the look ray.
             float bestT = float.MaxValue;
             Pig bestPig = null;
+            HostileMob bestHostile = null;
             var origin = Camera.Position;
             var dir = Camera.Forward;
             for (int i = 0; i < pigs.Count; i++)
@@ -2148,28 +2155,46 @@ void main()
                 {
                     bestT = t;
                     bestPig = pig;
+                    bestHostile = null;
                 }
             }
-            if (bestPig == null) return false;
+            for (int i = 0; i < hostiles.Count; i++)
+            {
+                var mob = hostiles[i];
+                if (mob.IsDead) continue;
+                mob.GetAabb(out var min, out var max);
+                if (!RayAabbIntersect(origin, dir, min, max, ReachDistance, out float t)) continue;
+                if (t < bestT)
+                {
+                    bestT = t;
+                    bestHostile = mob;
+                    bestPig = null;
+                }
+            }
+            if (bestPig == null && bestHostile == null) return false;
             // Skip if a block is closer along the same ray — wall in
-            // front of the pig blocks the hit (matches Alpha behaviour).
+            // front of the mob blocks the hit (matches Alpha behaviour).
             if (bestT >= blockDist) return false;
 
-            // Compute damage from held item.
             int dmg = MeleeDamageForHeldItem();
-            bestPig.TakeDamage(dmg);
-            // Tool durability ticks one use on every connecting hit
-            // (Alpha rule). Gold/wood swords break fast under this.
             DamageHeldTool(1);
-            // SFX: piggyback the place sound of the broken-block path
-            // for now (no dedicated mob-hurt cue yet — Tier 3 follow-up).
-            // Fall-through: just play the generic step on cloth as a
-            // placeholder thwack so the hit reads.
             SfxBank.PlayPlace(BlockType.Wool);
 
-            if (bestPig.IsDead)
+            if (bestPig != null)
             {
-                SpawnPigDeathDrops(bestPig);
+                bestPig.TakeDamage(dmg);
+                if (bestPig.IsDead)
+                {
+                    SpawnPigDeathDrops(bestPig);
+                }
+            }
+            else
+            {
+                bestHostile.TakeDamage(dmg);
+                if (bestHostile.IsDead)
+                {
+                    bestHostile.SpawnDeathDrops(this);
+                }
             }
             return true;
         }
@@ -2297,6 +2322,71 @@ void main()
                 }
                 pig.Update(dt, _world);
             }
+        }
+
+        // Per-tick hostile-mob update (Tier 3 #10). Runs alongside
+        // TickPigs and follows the same lifecycle: dead mobs are
+        // reaped one tick after IsDead so kill drops can spawn before
+        // the entity disappears. The shared HostileMob.Update takes
+        // the player position + IPlayerDamageSink so chase steering and
+        // melee damage both route through this renderer instance.
+        // Creepers also tick their fuse via Creeper.TickFuse — kept
+        // separate from Update so the fuse keeps counting down even
+        // while the player is out of detect range (matches the
+        // "primed creeper doesn't always defuse" Alpha quirk).
+        public void TickHostiles(float dt)
+        {
+            if (_world == null) return;
+            var hostiles = _world.Hostiles;
+            var playerPos = Player != null ? Player.Position : Vector3.Zero;
+            for (int i = hostiles.Count - 1; i >= 0; i--)
+            {
+                var mob = hostiles[i];
+                if (mob.IsDead)
+                {
+                    hostiles.RemoveAt(i);
+                    continue;
+                }
+                mob.Update(dt, _world, playerPos, this);
+                if (mob is Creeper creeper)
+                {
+                    creeper.TickFuse(dt, playerPos, this);
+                    // A detonated creeper has 0 HP and IsDead = true,
+                    // so the next tick will reap it via the IsDead
+                    // guard above. SpawnDeathDrops is a no-op when
+                    // DetonatedThisFrame is set, so the player gets no
+                    // gunpowder from blowing themselves up — matches
+                    // the "explosion eats the corpse" Alpha behaviour.
+                }
+            }
+        }
+
+        // IPlayerDamageSink: HostileMob calls this to inflict melee
+        // damage. Wraps Player.TakeDamage with a null guard since the
+        // mob list can outlive a Player swap (eg. world reload during
+        // a hostile tick — rare but possible).
+        public void DamagePlayer(int amount)
+        {
+            if (Player == null || amount <= 0) return;
+            Player.TakeDamage(amount);
+        }
+
+        // IDropSink: HostileMob.SpawnDeathDrops calls this for each
+        // item drop. Matches the existing _drops.Add lifecycle (same
+        // SpawnPickupCooldown, same AgeSec=0 init) so a mob-drop and a
+        // block-drop look identical to the pickup tick.
+        void IDropSink.SpawnDrop(Vector3 pos, BlockType item, int count, Vector3 velocity)
+        {
+            if (count <= 0) return;
+            var d = new DroppedItem
+            {
+                Position = pos,
+                Velocity = velocity,
+                Stack = new ItemStack(item, count),
+                AgeSec = 0f,
+                PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+            };
+            _drops.Add(d);
         }
 
         // Inventory click dispatcher. Survival routes through the slot
@@ -3434,6 +3524,12 @@ void main()
             // testing, and before particles so a break-burst at the
             // pig's feet draws on top.
             RenderPigs(width, height);
+            // Hostile mobs (Tier 3 #10 — Zombie/Skeleton/Spider/Creeper).
+            // Same layering rule as RenderPigs: after drops, before
+            // particles, so a hostile occludes drops correctly and a
+            // burst of break particles spawned at the mob's feet draws
+            // on top.
+            RenderHostiles(width, height);
             // Cosmetic particles (block-break puffs, splashes, torch
             // smoke, lava bubbles). Drawn after drops so they layer
             // visually on top of any drop they overlap. Comes before
@@ -3844,6 +3940,179 @@ void main()
             _overlayShader.SetMatrix4("uMVP", mvp);
             _overlayShader.SetVector3("uColor", color);
             _breakCubeMesh.Draw();
+        }
+
+        // Tier 3 #10 hostile-mob renderer. Same overall shape as
+        // RenderPigs (solid-coloured cuboids built from the break-cube
+        // mesh) but the per-mob rig differs: zombie/skeleton are the
+        // humanoid head+torso+arms+legs you'd expect, spider is a low
+        // four-piece arachnid with eight stubby legs, creeper is a tall
+        // slim torso on four short legs with a fuse-flash that ramps the
+        // body colour from green toward white as the timer counts down.
+        //
+        // The DrawPigCuboid helper is reused verbatim — it doesn't have
+        // anything pig-specific, just "place a cuboid in a yawed local
+        // rig." We pass the mob's Yaw + feet position the same way.
+        //
+        // Hurt flash is implemented by lerping the body colour toward a
+        // bright red over HostileMob.HurtFlashSeconds, matching the pig
+        // hurt-tint pattern. For the creeper, the fuse-flash fights with
+        // the hurt-flash by simply running both lerps in sequence (hurt
+        // wins visually for its 0.30s window because the player will
+        // typically only land hits in short bursts; the fuse doesn't
+        // start until the creeper has actually attacked).
+        private void RenderHostiles(int width, int height)
+        {
+            if (_world == null) return;
+            var hostiles = _world.Hostiles;
+            if (hostiles == null || hostiles.Count == 0) return;
+
+            var view = Camera.GetView();
+            var proj = Camera.GetProjection(width, height);
+            var vp = view * proj;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            for (int i = 0; i < hostiles.Count; i++)
+            {
+                var mob = hostiles[i];
+                if (mob.IsDead) continue;
+
+                float hurt = mob.HurtTimer > 0f
+                    ? mob.HurtTimer / HostileMob.HurtFlashSeconds
+                    : 0f;
+                var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
+
+                var rot = Matrix4.CreateRotationY(mob.Yaw);
+                var trans = Matrix4.CreateTranslation(mob.Position);
+                var rigToWorld = rot * trans;
+
+                if (mob is Zombie)
+                {
+                    // Saturated zombie green for skin, dark teal for the
+                    // tattered shirt + pants; lerp to red on hit.
+                    var skin   = Vector3.Lerp(new Vector3(0.30f, 0.55f, 0.32f), hurtRed, hurt);
+                    var shirt  = Vector3.Lerp(new Vector3(0.20f, 0.35f, 0.50f), hurtRed, hurt);
+                    var pants  = Vector3.Lerp(new Vector3(0.18f, 0.20f, 0.32f), hurtRed, hurt);
+                    DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
+                }
+                else if (mob is Skeleton)
+                {
+                    // Bone-white head + torso + limbs. Skeletons in Alpha
+                    // are a single colour all over.
+                    var bone   = Vector3.Lerp(new Vector3(0.85f, 0.85f, 0.82f), hurtRed, hurt);
+                    DrawHumanoid(rigToWorld, vp, bone, bone, bone);
+                }
+                else if (mob is Spider)
+                {
+                    var body   = Vector3.Lerp(new Vector3(0.20f, 0.10f, 0.10f), hurtRed, hurt);
+                    var eyes   = Vector3.Lerp(new Vector3(0.85f, 0.05f, 0.05f), hurtRed, hurt);
+                    DrawSpider(rigToWorld, vp, body, eyes);
+                }
+                else if (mob is Creeper creeper)
+                {
+                    // Base creeper green. Fuse-flash ramps toward white
+                    // as the timer counts down (FuseTimer goes from
+                    // FuseTime → 0). Linear pulse — the white peak hits
+                    // right before detonation.
+                    float fuseT = 0f;
+                    if (creeper.FuseTimer >= 0f)
+                    {
+                        fuseT = 1f - (creeper.FuseTimer / Creeper.FuseTime);
+                        if (fuseT < 0f) fuseT = 0f;
+                        if (fuseT > 1f) fuseT = 1f;
+                    }
+                    var creeperGreen = new Vector3(0.30f, 0.65f, 0.25f);
+                    var flashWhite   = new Vector3(1.00f, 1.00f, 0.90f);
+                    var color = Vector3.Lerp(creeperGreen, flashWhite, fuseT);
+                    color = Vector3.Lerp(color, hurtRed, hurt);
+                    DrawCreeper(rigToWorld, vp, color);
+                }
+            }
+        }
+
+        // Humanoid (Zombie / Skeleton): head + torso + 2 arms + 2 legs
+        // sized to fill the player-shaped HalfWidth=0.3 × Height=1.8 AABB.
+        // skin colours head, shirt the torso/arms, pants the legs.
+        private void DrawHumanoid(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 skin, Vector3 shirt, Vector3 pants)
+        {
+            // Legs: each 0.20 wide × 0.90 tall × 0.20 deep, side by side.
+            var legSize = new Vector3(0.20f, 0.90f, 0.20f);
+            DrawPigCuboid(new Vector3(+0.12f, 0.45f, 0f), legSize, rigToWorld, vp, pants);
+            DrawPigCuboid(new Vector3(-0.12f, 0.45f, 0f), legSize, rigToWorld, vp, pants);
+
+            // Torso: 0.50 wide × 0.60 tall × 0.30 deep, sits on top of legs.
+            var torsoSize = new Vector3(0.50f, 0.60f, 0.30f);
+            DrawPigCuboid(new Vector3(0f, 1.20f, 0f), torsoSize, rigToWorld, vp, shirt);
+
+            // Arms: 0.20 × 0.60 × 0.20, hung at each shoulder.
+            var armSize = new Vector3(0.20f, 0.60f, 0.20f);
+            DrawPigCuboid(new Vector3(+0.35f, 1.20f, 0f), armSize, rigToWorld, vp, shirt);
+            DrawPigCuboid(new Vector3(-0.35f, 1.20f, 0f), armSize, rigToWorld, vp, shirt);
+
+            // Head: 0.45 cube on top of torso (1.50..1.95 — slight
+            // overhang on the 1.8 hitbox is fine, matches Alpha style).
+            var headSize = new Vector3(0.45f, 0.45f, 0.45f);
+            DrawPigCuboid(new Vector3(0f, 1.725f, 0.02f), headSize, rigToWorld, vp, skin);
+        }
+
+        // Spider: low oval body + smaller head + eight stubby legs at the
+        // four corners. Hitbox is HalfWidth=0.7 × Height=0.9 so the body
+        // is wide and flat; legs splay outside the AABB visually but
+        // physics only cares about the AABB itself.
+        private void DrawSpider(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 body, Vector3 eyes)
+        {
+            // Main abdomen: 0.85 wide × 0.45 tall × 0.70 deep, sits on
+            // legs roughly at body-mid height.
+            var abdSize  = new Vector3(0.85f, 0.45f, 0.70f);
+            DrawPigCuboid(new Vector3(0f, 0.45f, -0.10f), abdSize, rigToWorld, vp, body);
+
+            // Head/cephalothorax: smaller cube sticking forward.
+            var headSize = new Vector3(0.50f, 0.40f, 0.45f);
+            DrawPigCuboid(new Vector3(0f, 0.45f, +0.50f), headSize, rigToWorld, vp, body);
+
+            // Two tiny red eyes on the front of the head.
+            var eyeSize = new Vector3(0.08f, 0.08f, 0.08f);
+            DrawPigCuboid(new Vector3(+0.13f, 0.55f, +0.72f), eyeSize, rigToWorld, vp, eyes);
+            DrawPigCuboid(new Vector3(-0.13f, 0.55f, +0.72f), eyeSize, rigToWorld, vp, eyes);
+
+            // Eight stubby legs — one cuboid per leg, splayed at four
+            // corners with a forward and back cluster.
+            var legSize = new Vector3(0.10f, 0.30f, 0.10f);
+            float legY  = 0.15f;
+            float legX  = 0.55f;
+            for (int side = -1; side <= 1; side += 2)
+            {
+                DrawPigCuboid(new Vector3(side * legX, legY, +0.45f), legSize, rigToWorld, vp, body);
+                DrawPigCuboid(new Vector3(side * legX, legY, +0.15f), legSize, rigToWorld, vp, body);
+                DrawPigCuboid(new Vector3(side * legX, legY, -0.15f), legSize, rigToWorld, vp, body);
+                DrawPigCuboid(new Vector3(side * legX, legY, -0.45f), legSize, rigToWorld, vp, body);
+            }
+        }
+
+        // Creeper: tall slim torso on four short stubby legs, small head
+        // perched on top. Hitbox HalfWidth=0.3 × Height=1.7. Single colour
+        // throughout — caller already handles fuse-flash + hurt-flash by
+        // baking them into `color`.
+        private void DrawCreeper(Matrix4 rigToWorld, Matrix4 vp, Vector3 color)
+        {
+            // Four short legs, two pairs (front, back).
+            var legSize = new Vector3(0.18f, 0.30f, 0.18f);
+            DrawPigCuboid(new Vector3(+0.12f, 0.15f, +0.18f), legSize, rigToWorld, vp, color);
+            DrawPigCuboid(new Vector3(-0.12f, 0.15f, +0.18f), legSize, rigToWorld, vp, color);
+            DrawPigCuboid(new Vector3(+0.12f, 0.15f, -0.18f), legSize, rigToWorld, vp, color);
+            DrawPigCuboid(new Vector3(-0.12f, 0.15f, -0.18f), legSize, rigToWorld, vp, color);
+
+            // Tall slim torso — 0.45 × 0.95 × 0.30 from y=0.30 to y=1.25.
+            var torsoSize = new Vector3(0.45f, 0.95f, 0.30f);
+            DrawPigCuboid(new Vector3(0f, 0.775f, 0f), torsoSize, rigToWorld, vp, color);
+
+            // Head — 0.50 cube sat on top, y=1.25..1.70.
+            var headSize = new Vector3(0.50f, 0.45f, 0.50f);
+            DrawPigCuboid(new Vector3(0f, 1.475f, 0f), headSize, rigToWorld, vp, color);
         }
 
         // Draw every live particle as a tiny tumbling cube. Reuses the
