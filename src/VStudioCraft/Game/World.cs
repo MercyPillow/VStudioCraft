@@ -182,19 +182,42 @@ namespace VStudioCraft.Game
         // Alpha's overworld distribution: 35% zombie, 25% skeleton,
         // 25% spider, 15% creeper.
         //
-        // Continuous live spawning at runtime is roadmap-pending (the
-        // separate "spawn loop" Tier 3 #11). For Tier 3 #10 we seed
-        // the hostiles at chunk-gen and they persist until killed; this
-        // is enough for the player to encounter them on first walk-out
-        // and for the combat / drop / pathing systems to be exercised.
+        // Continuous live spawning at runtime is layered on top of this
+        // pass (TickMobSpawns). Chunk-gen runs two passes: a SURFACE pass
+        // walks every column at low density and drops a hostile if the
+        // topmost-solid cell is dark enough (mostly pre-night), and a
+        // CAVE pass samples a handful of subterranean Y values per
+        // column for cave hostiles. Without the cave pass, freshly
+        // generated chunks are devoid of underground hostiles until the
+        // live-spawn loop happens to roll one — that's a long wait,
+        // and breaks the "dig down into a cave and find mobs already
+        // there" feel the Alpha world gives.
         public void SpawnHostilesInChunk(Chunk c)
         {
-            const int RareDenominator = 360;
+            const int SurfaceRareDenominator = 360;
+            // Cave attempts per column. Per-column hashed RNG draws this
+            // many distinct Ys in the cave band; each Y is gated
+            // independently. 6 attempts × 16×16 columns × the cave
+            // fraction adds up to a small handful of cave hostiles per
+            // chunk, which matches the rate Alpha generates them at.
+            const int CaveAttemptsPerColumn = 6;
             int chunkBaseX = c.ChunkX * Chunk.SizeX;
             int chunkBaseZ = c.ChunkZ * Chunk.SizeZ;
             for (int lx = 0; lx < Chunk.SizeX; lx++)
             for (int lz = 0; lz < Chunk.SizeZ; lz++)
             {
+                int wx = chunkBaseX + lx;
+                int wz = chunkBaseZ + lz;
+                // Per-column hash — same scheme as passive spawns but
+                // offset so the two streams are independent.
+                int hash = unchecked((int)(
+                    (uint)Seed * 0x9E3779B1u
+                    ^ (uint)wx * 0x85EBCA77u
+                    ^ (uint)wz * 0x27D4EB2Du));
+                hash = (hash ^ (hash >> 13)) * 0x5BD1E995;
+                hash ^= hash >> 15;
+
+                // ---- SURFACE pass ----
                 int surfaceY = -1;
                 for (int y = Chunk.SizeY - 1; y >= 0; y--)
                 {
@@ -203,51 +226,78 @@ namespace VStudioCraft.Game
                     surfaceY = y;
                     break;
                 }
-                if (surfaceY < 0) continue;
-                var surface = c.Get(lx, surfaceY, lz);
-                // Stand on solid land — no fluids, no flora cap.
-                if (!BlockData.IsSolid(surface)) continue;
-                if (surfaceY + 2 >= Chunk.SizeY) continue;
-                if (c.Get(lx, surfaceY + 1, lz) != BlockType.Air) continue;
-                if (c.Get(lx, surfaceY + 2, lz) != BlockType.Air) continue;
+                if (surfaceY >= 0)
+                {
+                    var surface = c.Get(lx, surfaceY, lz);
+                    bool surfaceSpawnable =
+                        BlockData.IsSolid(surface) &&
+                        surfaceY + 2 < Chunk.SizeY &&
+                        c.Get(lx, surfaceY + 1, lz) == BlockType.Air &&
+                        c.Get(lx, surfaceY + 2, lz) == BlockType.Air;
+                    if (surfaceSpawnable)
+                    {
+                        int bucket = (int)((uint)hash % (uint)SurfaceRareDenominator);
+                        if (bucket == 0)
+                        {
+                            int sky = c.GetSkyLight(lx, surfaceY + 1, lz);
+                            int blk = c.GetBlockLight(lx, surfaceY + 1, lz);
+                            int eff = sky > blk ? sky : blk;
+                            if (eff <= 7)
+                            {
+                                int mobSeed = hash ^ 0x33CC33CC;
+                                int kindHash = unchecked((int)((uint)hash * 0x85EBCA6Bu ^ 0xC2B2AE35u));
+                                int kindRoll = (int)((uint)kindHash % 100u);
+                                var spawnPos = new OpenTK.Vector3(
+                                    wx + 0.5f, surfaceY + 1f, wz + 0.5f);
+                                HostileMob mob;
+                                if      (kindRoll < 35) mob = new Zombie(spawnPos, mobSeed);
+                                else if (kindRoll < 60) mob = new Skeleton(spawnPos, mobSeed);
+                                else if (kindRoll < 85) mob = new Spider(spawnPos, mobSeed);
+                                else                    mob = new Creeper(spawnPos, mobSeed);
+                                _hostiles.Add(mob);
+                            }
+                        }
+                    }
+                }
 
-                int wx = chunkBaseX + lx;
-                int wz = chunkBaseZ + lz;
-                // Mix is offset from the pig hash so a column that gates
-                // a pig spawn doesn't also gate a hostile (and vice
-                // versa). The 0xC2B2AE3D third multiplier becomes
-                // 0x27D4EB2D so the two streams are independent.
-                int hash = unchecked((int)(
-                    (uint)Seed * 0x9E3779B1u
-                    ^ (uint)wx * 0x85EBCA77u
-                    ^ (uint)wz * 0x27D4EB2Du));
-                hash = (hash ^ (hash >> 13)) * 0x5BD1E995;
-                hash ^= hash >> 15;
-                int bucket = (int)((uint)hash % (uint)RareDenominator);
-                if (bucket != 0) continue;
+                // ---- CAVE pass ----
+                // Take CaveAttemptsPerColumn random Ys in the cave band.
+                // Each draw is its own derivation of the column hash so
+                // an attempt that fails doesn't leak entropy into the
+                // next attempt's roll. Each successful Y gets its own
+                // light gate + kind roll.
+                uint caveHash = unchecked((uint)hash * 0xC2B2AE3Du);
+                for (int attempt = 0; attempt < CaveAttemptsPerColumn; attempt++)
+                {
+                    caveHash = unchecked(caveHash * 0x85EBCA6Bu + 0x9E3779B1u);
+                    // Independent roll for whether this attempt fires at all.
+                    // Match the surface density so cave + surface together
+                    // produce a similar overall hostile budget per chunk.
+                    if ((caveHash & 0xFFu) >= 32u) continue;
 
-                // Light gate: hostile spawn requires the SPAWN cell
-                // (the cell above the surface where the mob's feet
-                // stand) to be at light ≤ 7. Combined sky + block.
-                int sky = c.GetSkyLight(lx, surfaceY + 1, lz);
-                int blk = c.GetBlockLight(lx, surfaceY + 1, lz);
-                int eff = sky > blk ? sky : blk;
-                if (eff > 7) continue;
+                    int yRange = CaveSampleMaxY - CaveSampleMinY + 1;
+                    int yCandidate = CaveSampleMinY + (int)((caveHash >> 8) % (uint)yRange);
+                    if (yCandidate + 2 >= Chunk.SizeY) continue;
+                    if (!BlockData.IsSolid(c.Get(lx, yCandidate, lz))) continue;
+                    if (c.Get(lx, yCandidate + 1, lz) != BlockType.Air) continue;
+                    if (c.Get(lx, yCandidate + 2, lz) != BlockType.Air) continue;
 
-                var spawnPos = new OpenTK.Vector3(
-                    wx + 0.5f, surfaceY + 1f, wz + 0.5f);
-                int mobSeed = hash ^ 0x33CC33CC;
+                    int sky = c.GetSkyLight(lx, yCandidate + 1, lz);
+                    int blk = c.GetBlockLight(lx, yCandidate + 1, lz);
+                    int eff = sky > blk ? sky : blk;
+                    if (eff > 7) continue;
 
-                // Mob kind weighted draw — uses the next derivation of
-                // the column hash so kind is deterministic per column.
-                int kindHash = unchecked((int)((uint)hash * 0x85EBCA6Bu ^ 0xC2B2AE35u));
-                int kindRoll = (int)((uint)kindHash % 100u);
-                HostileMob mob;
-                if      (kindRoll < 35) mob = new Zombie(spawnPos, mobSeed);
-                else if (kindRoll < 60) mob = new Skeleton(spawnPos, mobSeed);
-                else if (kindRoll < 85) mob = new Spider(spawnPos, mobSeed);
-                else                    mob = new Creeper(spawnPos, mobSeed);
-                _hostiles.Add(mob);
+                    int mobSeed = unchecked((int)caveHash) ^ 0x33CC33CC;
+                    int kindRoll = (int)((caveHash >> 16) % 100u);
+                    var spawnPos = new OpenTK.Vector3(
+                        wx + 0.5f, yCandidate + 1f, wz + 0.5f);
+                    HostileMob mob;
+                    if      (kindRoll < 35) mob = new Zombie(spawnPos, mobSeed);
+                    else if (kindRoll < 60) mob = new Skeleton(spawnPos, mobSeed);
+                    else if (kindRoll < 85) mob = new Spider(spawnPos, mobSeed);
+                    else                    mob = new Creeper(spawnPos, mobSeed);
+                    _hostiles.Add(mob);
+                }
             }
         }
 
@@ -300,11 +350,22 @@ namespace VStudioCraft.Game
         public const int   MinSpawnDistance      = 24;
         public const int   StochasticDespawnDist = 32;
         public const int   InstantDespawnDist    = 128;
+        // Cave-attempt Y band — random subterranean Y picked uniformly in
+        // [CaveSampleMinY, CaveSampleMaxY] for the cave-spawn branch. The
+        // band straddles Alpha 1.1.2's typical cave depth: bottom of 8
+        // skips bedrock + the immediate-bedrock slab, top of 56 reaches
+        // up to the surface band where occasional skylit caverns sit.
+        // Most attempts in this band fail (column is solid or the cell
+        // isn't a 1-block-floor + 2-air pocket) — that's intended; the
+        // attempts are cheap and the cave fraction × attempts is enough
+        // to keep cave hostiles topped up.
+        public const int   CaveSampleMinY        = 8;
+        public const int   CaveSampleMaxY        = 56;
 
         private float _spawnTimer;
         private readonly Random _spawnRng = new Random();
 
-        public void TickMobSpawns(float dt, OpenTK.Vector3 playerPos)
+        public void TickMobSpawns(float dt, OpenTK.Vector3 playerPos, int skySubtract)
         {
             _spawnTimer -= dt;
             if (_spawnTimer > 0f) return;
@@ -351,29 +412,57 @@ namespace VStudioCraft.Game
                 float ddz = (wz + 0.5f) - playerPos.Z;
                 if (ddx * ddx + ddz * ddz < minSpawnDistSq) continue;
 
-                // Topmost solid surface. Same rule as the gen-time spawn
-                // passes: skip air + light-transparent caps (flora /
-                // glass / leaves) so we land on real terrain.
-                int surfaceY = -1;
-                for (int y = Chunk.SizeY - 1; y >= 0; y--)
+                // Pick a candidate Y for this attempt. Half the attempts
+                // probe the surface (topmost solid — covers passive
+                // spawns on grass + surface hostile spawns at night
+                // once skySubtract is applied). The other half sample
+                // a random subterranean Y *directly* for cave hostile
+                // spawns: pick yCandidate in [8, CaveSampleMaxY], check
+                // whether (lx, yCandidate, lz) is itself a valid floor
+                // (solid block with 2 air blocks above). If not, the
+                // attempt skips — we deliberately do NOT walk down to
+                // find the next floor, because walking down from above
+                // ground in a column with no caves just rediscovers the
+                // surface (every block above ground is air, every block
+                // below ground until the surface tile is also air, and
+                // the first solid hit IS the surface). Direct sampling
+                // means most attempts fail (column is solid rock or air
+                // at that Y) but the 50/50 cave budget × AttemptsPerTick
+                // × the world's cave fraction adds up to a steady cave-
+                // hostile drip.
+                int floorY;
+                if (_spawnRng.NextDouble() < 0.5)
                 {
-                    var b = chunk.Get(lx, y, lz);
-                    if (b == BlockType.Air || BlockData.IsLightTransparent(b)) continue;
-                    surfaceY = y;
-                    break;
+                    floorY = TopmostSolidY(chunk, lx, lz);
+                    if (floorY < 0) continue;
+                    if (floorY + 2 >= Chunk.SizeY) continue;
+                    if (chunk.Get(lx, floorY + 1, lz) != BlockType.Air) continue;
+                    if (chunk.Get(lx, floorY + 2, lz) != BlockType.Air) continue;
                 }
-                if (surfaceY < 0) continue;
-                var surface = chunk.Get(lx, surfaceY, lz);
-                if (!BlockData.IsSolid(surface)) continue;
-                if (surfaceY + 2 >= Chunk.SizeY) continue;
-                if (chunk.Get(lx, surfaceY + 1, lz) != BlockType.Air) continue;
-                if (chunk.Get(lx, surfaceY + 2, lz) != BlockType.Air) continue;
+                else
+                {
+                    int yCandidate = _spawnRng.Next(CaveSampleMinY, CaveSampleMaxY + 1);
+                    if (yCandidate + 2 >= Chunk.SizeY) continue;
+                    if (!BlockData.IsSolid(chunk.Get(lx, yCandidate, lz))) continue;
+                    if (chunk.Get(lx, yCandidate + 1, lz) != BlockType.Air) continue;
+                    if (chunk.Get(lx, yCandidate + 2, lz) != BlockType.Air) continue;
+                    floorY = yCandidate;
+                }
 
-                int sky = chunk.GetSkyLight(lx, surfaceY + 1, lz);
-                int blk = chunk.GetBlockLight(lx, surfaceY + 1, lz);
-                int eff = sky > blk ? sky : blk;
+                var surfaceBlock = chunk.Get(lx, floorY, lz);
+                if (!BlockData.IsSolid(surfaceBlock)) continue;
 
-                var spawnPos = new OpenTK.Vector3(wx + 0.5f, surfaceY + 1f, wz + 0.5f);
+                int sky = chunk.GetSkyLight(lx, floorY + 1, lz);
+                int blk = chunk.GetBlockLight(lx, floorY + 1, lz);
+                // Apply Alpha-style sky-light attenuation: stored sky=15
+                // on every surface cell, but the time-of-day clock ramps
+                // skySubtract from 0 (noon) to 11 (midnight). Effective
+                // brightness for the spawn gate is then max(sky - sub, blk).
+                int effSky = sky - skySubtract;
+                if (effSky < 0) effSky = 0;
+                int eff = effSky > blk ? effSky : blk;
+
+                var spawnPos = new OpenTK.Vector3(wx + 0.5f, floorY + 1f, wz + 0.5f);
                 int seedForMob = _spawnRng.Next();
 
                 if (eff <= 7 && !hostileFull)
@@ -391,7 +480,7 @@ namespace VStudioCraft.Game
                     hostileCount++;
                     if (hostileCount >= HostileCap) hostileFull = true;
                 }
-                else if (eff >= 9 && surface == BlockType.Grass && !passiveFull)
+                else if (eff >= 9 && surfaceBlock == BlockType.Grass && !passiveFull)
                 {
                     // Same 30/30/25/15 species mix as the chunk-gen pass.
                     int kindRoll = _spawnRng.Next(100);
@@ -408,6 +497,20 @@ namespace VStudioCraft.Game
 
                 if (passiveFull && hostileFull) return;
             }
+        }
+
+        // Topmost solid block in a column — skip air + light-transparent
+        // caps so we land on real terrain (not glass / flora / leaves).
+        // Returns -1 if the column has no solid block.
+        private static int TopmostSolidY(Chunk c, int lx, int lz)
+        {
+            for (int y = Chunk.SizeY - 1; y >= 0; y--)
+            {
+                var b = c.Get(lx, y, lz);
+                if (b == BlockType.Air || BlockData.IsLightTransparent(b)) continue;
+                return y;
+            }
+            return -1;
         }
 
         // Count mobs whose XZ position falls inside this chunk's XZ box.

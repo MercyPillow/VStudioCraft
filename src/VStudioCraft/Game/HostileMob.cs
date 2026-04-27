@@ -94,6 +94,7 @@ namespace VStudioCraft.Game
             if (AttackCooldown > 0f)  { AttackCooldown  -= dt; if (AttackCooldown  < 0f) AttackCooldown  = 0f; }
 
             float dx = playerPos.X - Position.X;
+            float dy = playerPos.Y - Position.Y;
             float dz = playerPos.Z - Position.Z;
             float horizDist = (float)Math.Sqrt(dx * dx + dz * dz);
 
@@ -137,9 +138,19 @@ namespace VStudioCraft.Game
                 }
 
                 // Melee attack — gated by cooldown, fires when player
-                // is in melee range. Subclass-supplied AttackDamage and
-                // cooldown control the cadence.
-                if (horizDist <= AttackRange && AttackCooldown <= 0f)
+                // is in melee range AND within ~1 block vertically. The
+                // Y gate is critical: without it, a mob in a cave 20
+                // blocks below the player at the same XZ slot would
+                // happily land hits through the rock floor (the chase
+                // check is XZ-only, intentionally, so mobs can still
+                // aggro vertically — but the hit itself must be
+                // adjacent to the player's body, not through it).
+                // VerticalReach of 1.5 blocks allows same-level hits
+                // (dy ~ 0), one-block step-up/down (dy ~ 1), and the
+                // edge case of a mob standing on the player's head, but
+                // blocks the cross-floor punch-through.
+                const float VerticalReach = 1.5f;
+                if (horizDist <= AttackRange && Math.Abs(dy) <= VerticalReach && AttackCooldown <= 0f)
                 {
                     damageSink.DamagePlayer(AttackDamage);
                     AttackCooldown = AttackCooldownSeconds;

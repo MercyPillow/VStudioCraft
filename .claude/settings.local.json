@@ -144,7 +144,12 @@
       "PowerShell(dotnet build src\\\\VStudioCraft\\\\VStudioCraft.csproj -c Debug -v minimal 2>&1)",
       "PowerShell(dotnet build src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj -c Debug -v minimal 2>&1)",
       "PowerShell(\\(Get-Content \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\features.md\"\\).Count)",
-      "PowerShell(dotnet build \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" -c Debug -nologo -v:m 2>&1)"
+      "PowerShell(dotnet build \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" -c Debug -nologo -v:m 2>&1)",
+      "PowerShell(dotnet build \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj\" -c Debug -nologo -v:m 2>&1)",
+      "PowerShell(dotnet msbuild \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" /t:Compile /p:Configuration=Debug -nologo -v:m)",
+      "PowerShell($out = dotnet msbuild \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" /t:CoreCompile /p:Configuration=Debug -nologo -v:m 2>&1; $out | Select-Object -Last 20; \"EXIT=$LASTEXITCODE\")",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone'; $output = dotnet msbuild /t:CoreCompile /p:Configuration=Debug /v:minimal 2>&1; $exit = $LASTEXITCODE; \"EXIT=$exit\"; $output | Select-String -Pattern 'error|Error\\\\\\(s\\\\\\)' | Select-Object -First 30)",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone'; $output = dotnet build /p:Configuration=Debug /v:minimal 2>&1; \"EXIT=$LASTEXITCODE\"; \"--- CS errors \\(real compile errors\\): ---\"; $output | Select-String -Pattern 'error CS' | Select-Object -First 20; \"--- MSB errors \\(build infra\\): ---\"; $output | Select-String -Pattern 'error MSB' | Select-Object -First 5)"
     ]
   }
 }

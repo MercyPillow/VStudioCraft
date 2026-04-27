@@ -216,10 +216,16 @@ namespace VStudioCraft.Game
             FuseTimer -= dt;
             // Defuse on retreat (Alpha behaviour for the early creeper
             // before priming was reworked): if the player walked out
-            // of attack range during the fuse, cancel.
+            // of attack range during the fuse, cancel. Same Y gate as
+            // the standard attack — a creeper in a cave underneath the
+            // player must NOT detonate up through the rock; if the
+            // player has gone vertically out of reach, cancel the fuse.
             float dx = playerPos.X - Position.X;
+            float dy = playerPos.Y - Position.Y;
             float dz = playerPos.Z - Position.Z;
-            if (dx * dx + dz * dz > AttackRange * AttackRange * 4f)
+            const float VerticalReach = 1.5f;
+            if (dx * dx + dz * dz > AttackRange * AttackRange * 4f
+                || Math.Abs(dy) > VerticalReach)
             {
                 FuseTimer = -1f;
                 return;

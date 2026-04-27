@@ -570,6 +570,33 @@ void main()
             set => _timeOfDay = ((value % 1f) + 1f) % 1f;
         }
 
+        // How much the world clock dims sky-light for spawn-eligibility
+        // checks. Alpha 1.1.2 stores `skyLight` as a static 0..15 (set
+        // once at chunk-light bake) but applies a per-tick darkness offset
+        // when *consuming* sky-light for things like spawn rules and
+        // sky-shading. At full noon the offset is 0; at midnight Alpha
+        // subtracts 11 (so a sky=15 cell ends up at effective brightness
+        // 4 — well under the hostile light gate of 7). We linearly ramp
+        // through dusk/dawn between those endpoints. Daytime returns 0,
+        // night returns 11, transitions interpolate proportionally.
+        public int SkyDarknessSubtract
+        {
+            get
+            {
+                float t = _timeOfDay;
+                float darkness;  // 0 = full day, 1 = full night
+                if (t < DayEndFrac)
+                    darkness = 0f;
+                else if (t < DuskEndFrac)
+                    darkness = (t - DayEndFrac) / (DuskEndFrac - DayEndFrac);
+                else if (t < NightEndFrac)
+                    darkness = 1f;
+                else
+                    darkness = 1f - (t - NightEndFrac) / (1f - NightEndFrac);
+                return (int)System.Math.Round(11f * darkness);
+            }
+        }
+
         public void InitializeGraphics()
         {
             GL.Enable(EnableCap.DepthTest);
@@ -2356,7 +2383,11 @@ void main()
         public void TickMobSpawns(float dt)
         {
             if (_world == null || Player == null) return;
-            _world.TickMobSpawns(dt, Player.Position);
+            // Pass the current sky-darkness offset so the world's spawn
+            // light gate can attenuate stored sky-light by time of day —
+            // without this, surface cells always read at sky=15 and
+            // hostile (light ≤ 7) spawns never trigger anywhere.
+            _world.TickMobSpawns(dt, Player.Position, SkyDarknessSubtract);
         }
 
         // IPlayerDamageSink: HostileMob calls this to inflict melee

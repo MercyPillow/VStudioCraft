@@ -5,7 +5,24 @@ Audit of the current VStudioCraft codebase (`src/VStudioCraft/Game`, `UI`,
 Items marked **Have** exist today; items under **Missing** are the gap.
 
 Last updated after Tier 3 #12 — Cow / Sheep / Chicken (the rest of
-the Alpha passive mob roster). The original `Pig` class refactored
+the Alpha passive mob roster), plus two follow-up fixes to the
+hostile-spawn pipeline: (a) the live spawn loop now consumes a
+time-of-day-modulated **sky-light subtraction** (0 at noon, ramping
+to 11 at midnight via `GameRenderer.SkyDarknessSubtract`) when
+gating hostile spawns, so surface hostiles actually appear at dusk
+instead of the previous "every cell reads sky=15" lockout; (b)
+both the chunk-gen seed pass and the live spawn loop now do a
+**direct cave-Y sample** (random Y in [8, 56], gated on solid+2air
+in place) alongside the topmost-solid surface scan — without this,
+columns with no caves walked the cave probe down through air and
+rediscovered the surface, so cave hostiles were never rolled. The
+melee hit also gained a `|dy| ≤ 1.5` vertical reach gate (chase
+stays XZ-only so mobs still aggro vertically, but the actual
+attack now requires the player to be within ~1 body-length on Y),
+fixing the report of a cave creeper landing hits up through the
+rock floor.
+
+The original `Pig` class refactored
 into an abstract `PassiveMob` base (mirrors the `HostileMob` pattern)
 that hoists wander AI + gravity + hurt-flash + per-instance RNG out
 of every passive subclass; concrete subclasses tune `MaxHealth`,
