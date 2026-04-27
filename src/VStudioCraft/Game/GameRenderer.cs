@@ -1471,6 +1471,17 @@ void main()
                     _isChestOpen = false;
                 }
             }
+            // Tier 4 #16 — Door cascade. Breaking either half of a
+            // door must clear the OTHER half too (a half-door is
+            // visually broken and would have no interact target). Run
+            // BEFORE the SetBlock-to-Air below so the partner half is
+            // already gone by the time particles / drops spawn for
+            // this cell — the partner clear is silent (no extra drop)
+            // because the broken-cell drop already covers the pair.
+            if (BlockData.IsDoor(t))
+            {
+                ClearDoorPartnerHalf(hit.X, hit.Y, hit.Z, t);
+            }
             bool ok = _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
             if (ok)
             {
@@ -1485,6 +1496,13 @@ void main()
                 // support for an adjacent torch (floor torch above, or a
                 // wall torch on a horizontal neighbour facing back at us).
                 ScanTorchFallAround(hit.X, hit.Y, hit.Z);
+                // Tier 4 #26 — Cane-cascade. If the broken cell was the
+                // bottom of a sugar-cane stack, every cane above it falls
+                // too (creative path: drops are suppressed by the
+                // SpawnBreakDrop GameMode gate inside the helper).
+                // Also runs when the broken cell was a SOIL block under
+                // a cane stack — losing the soil unsupports the stack.
+                ScanSugarCaneFallAbove(hit.X, hit.Y, hit.Z);
             }
             return ok;
         }
@@ -1578,6 +1596,21 @@ void main()
                 // somewhere else by the time the next frame runs.
                 int bx = hit.X, by = hit.Y, bz = hit.Z;
                 var brokenType = t;
+                // Tier 4 #14 — Snapshot wheat metadata BEFORE the
+                // SetBlock-to-Air below so SpawnBreakDrop knows whether
+                // this was ripe (stage 7 → bonus seeds + 1 wheat) or
+                // unripe (stage 0..6 → 1 seed only). Cleared after the
+                // drop call so stale state doesn't leak.
+                byte brokenMeta = 0;
+                if (brokenType == BlockType.Wheat)
+                {
+                    int cx = bx >> 4, cz = bz >> 4;
+                    var ch = _world.GetChunk(cx, cz);
+                    if (ch != null)
+                    {
+                        brokenMeta = ch.GetMeta(bx - (cx << 4), by, bz - (cz << 4));
+                    }
+                }
                 // Furnace tile entities: pop the entry before SetBlock so
                 // we can spill its contents as drops alongside the block
                 // drop itself. Tier-gated like any other survival break —
@@ -1607,17 +1640,30 @@ void main()
                         _isChestOpen = false;
                     }
                 }
+                // Tier 4 #16 — Door cascade (survival path). See the
+                // creative-break comment — same rationale: clear the
+                // partner half silently so the surviving SpawnBreakDrop
+                // call below emits exactly ONE door item per pair.
+                if (BlockData.IsDoor(brokenType))
+                {
+                    ClearDoorPartnerHalf(bx, by, bz, brokenType);
+                }
                 _world.SetBlock(bx, by, bz, BlockType.Air);
                 SfxBank.PlayBreak(brokenType);
                 // Cosmetic break-puff burst (see Tier 2 #5). Sourced from
                 // the broken block's side tile.
                 _particles.SpawnBreakBurst(brokenType, bx, by, bz);
-                SpawnBreakDrop(bx, by, bz, brokenType, heldType);
+                SpawnBreakDrop(bx, by, bz, brokenType, heldType, brokenMeta);
                 // Torch-fall: see ScanTorchFallAround comment. Runs after
                 // the drop spawn so the survival drop list is in source
                 // order (broken block first, then any unsupported
                 // torches that fell from the same break).
                 ScanTorchFallAround(bx, by, bz);
+                // Tier 4 #26 — Same cane-cascade as the creative break path.
+                // If the broken cell hosted a cane stack (or supported one),
+                // every cane above falls and (in survival) drops its own
+                // SugarCaneItem so the player gets one item per height.
+                ScanSugarCaneFallAbove(bx, by, bz);
                 if (spilled != null)
                 {
                     foreach (var stack in spilled.SpillContents())
@@ -1692,6 +1738,229 @@ void main()
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
                 return false;
             var target = _world.GetBlock(hit.X, hit.Y, hit.Z);
+
+            // Tier 4 #14 — Held-tool overrides come BEFORE the
+            // tile-entity switch so a hoe RMB on a workbench tills
+            // dirt under the workbench... no, wait — the workbench is
+            // a CUBE block and Grass/Dirt won't be its target. The
+            // raycast hits whatever cube we're aimed at, so checking
+            // by held item AND by target type is enough. Hoe on
+            // Grass/Dirt → Farmland; Seeds on Farmland → Wheat stage 0.
+            // Both consume one of the held stack in survival; hoes
+            // also (eventually) take a durability tick — durability is
+            // the enum field but not yet wired to break tools, so
+            // this is a TODO once the tool-break ladder is fleshed out.
+            if (Input != null)
+            {
+                var heldStack = Input.Inventory.GetHotbar(Input.HotbarIndex);
+                BlockType held = heldStack.IsEmpty ? BlockType.Air : heldStack.Type;
+                bool isHoe = held >= BlockType.WoodHoe && held <= BlockType.GoldHoe;
+                if (isHoe && (target == BlockType.Grass || target == BlockType.Dirt))
+                {
+                    // Till — convert the targeted Grass/Dirt cell to
+                    // Farmland in place. SetBlock triggers a chunk
+                    // remesh + dirty-flag so the tilled top tile
+                    // shows up next frame. Survival doesn't decrement
+                    // the hoe (the tool isn't consumed by the action;
+                    // durability would tick here once that lands).
+                    if (_world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Farmland))
+                    {
+                        SfxBank.PlayBreak(BlockType.Dirt); // closest match — soft soil thud
+                    }
+                    return true;
+                }
+                if (held == BlockType.WheatSeeds && target == BlockType.Farmland)
+                {
+                    // Plant — seeds need air directly above the
+                    // farmland to host the wheat sprite. Wheat is a
+                    // cross-sprite block (non-cube, non-solid) at
+                    // metadata stage 0; subsequent random ticks
+                    // promote the stage as light + time accrue.
+                    int ax = hit.X, ay = hit.Y + 1, az = hit.Z;
+                    if (_world.GetBlock(ax, ay, az) == BlockType.Air)
+                    {
+                        if (_world.SetBlock(ax, ay, az, BlockType.Wheat))
+                        {
+                            // Reach into the chunk to set meta=0 (the
+                            // freshly-set cell defaults to 0 already,
+                            // but explicit-is-better — when we add
+                            // bonemeal in a future tier this is where
+                            // a random-stage seed roll would sit).
+                            int cx = ax >> 4, cz = az >> 4;
+                            var chunk = _world.GetChunk(cx, cz);
+                            if (chunk != null)
+                            {
+                                int lx = ax - (cx << 4);
+                                int lz = az - (cz << 4);
+                                chunk.SetMeta(lx, ay, lz, 0);
+                            }
+                            if (GameMode == GameMode.Survival)
+                                Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                            SfxBank.PlayPlace(BlockType.Wheat);
+                        }
+                        return true;
+                    }
+                }
+                // Tier 4 #26 — Held SugarCaneItem RMB plants a cane
+                // block. Alpha placement rules:
+                //   1. Place onto an empty cell directly above the
+                //      clicked face (i.e. hit.Ny == 1 — clicking the
+                //      top of a block). Side / bottom face clicks fall
+                //      through, same as flowers / wheat / mushrooms.
+                //   2. The clicked block must be grass, dirt, sand,
+                //      OR another sugar cane (so the player can stack
+                //      cane on top of existing cane).
+                //   3. If clicking grass/dirt/sand, at least one of the
+                //      four horizontal neighbours of the placement cell
+                //      (the cell ABOVE the click target) must contain
+                //      water — water adjacency is what makes cane grow.
+                //      Stacking on top of an existing cane bypasses the
+                //      water check (the stack already has water under
+                //      its base; the check is one-time at first place).
+                if (held == BlockType.SugarCaneItem)
+                {
+                    if (hit.Ny == 1)
+                    {
+                        int ax = hit.X, ay = hit.Y + 1, az = hit.Z;
+                        BlockType under = target;
+                        bool stackingOnCane = (under == BlockType.SugarCane);
+                        bool soilOk = (under == BlockType.Grass
+                                    || under == BlockType.Dirt
+                                    || under == BlockType.Sand);
+                        if ((stackingOnCane || soilOk)
+                            && _world.GetBlock(ax, ay, az) == BlockType.Air)
+                        {
+                            // Water adjacency — only required when planting
+                            // on bare soil. Check the four horizontal
+                            // neighbours of the SOIL cell (not the cane
+                            // cell) — Alpha's rule is about water touching
+                            // the ground beside the cane base.
+                            bool waterOk = stackingOnCane;
+                            if (!waterOk)
+                            {
+                                BlockType nN = _world.GetBlock(hit.X,     hit.Y, hit.Z - 1);
+                                BlockType nS = _world.GetBlock(hit.X,     hit.Y, hit.Z + 1);
+                                BlockType nE = _world.GetBlock(hit.X + 1, hit.Y, hit.Z);
+                                BlockType nW = _world.GetBlock(hit.X - 1, hit.Y, hit.Z);
+                                // FluidGroup returns 1 for water (source +
+                                // flowing) and 2 for lava — gating on == 1
+                                // makes flowing water count too, matching
+                                // Alpha (cane grew next to flowing water).
+                                waterOk = BlockData.FluidGroup(nN) == 1
+                                       || BlockData.FluidGroup(nS) == 1
+                                       || BlockData.FluidGroup(nE) == 1
+                                       || BlockData.FluidGroup(nW) == 1;
+                            }
+                            if (waterOk && _world.SetBlock(ax, ay, az, BlockType.SugarCane))
+                            {
+                                if (GameMode == GameMode.Survival)
+                                    Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                                SfxBank.PlayPlace(BlockType.SugarCane);
+                                return true;
+                            }
+                        }
+                    }
+                }
+                // Tier 4 #16 — Held door item RMB places a 2-tall door.
+                // Mirrors Alpha 1.1.2_01 placement rules:
+                //   1. Click the TOP face of a solid block (hit.Ny == 1) —
+                //      side / underside clicks are rejected the same way
+                //      flower / sapling / cane placement is.
+                //   2. The cell directly above the click target AND the
+                //      cell two above must both be Air (need 2 vertical
+                //      cells for the bottom + top halves).
+                //   3. The supporting block (the one clicked) must be
+                //      solid — IsSolid is the canonical Alpha gate (the
+                //      door rests on a floor, not a torch / flower).
+                //   4. Facing = away from the player (i.e. the door's
+                //      outward normal when closed points toward where
+                //      the player stood, so they walk INTO the door
+                //      when crossing through). Hinge defaults to LEFT.
+                // Both halves are placed in one SetBlock pair; meta byte
+                // is identical for both halves and persisted via
+                // Chunk.WriteSparseMeta (filter extended for doors).
+                if (held == BlockType.WoodDoorItem || held == BlockType.IronDoorItem)
+                {
+                    if (hit.Ny == 1)
+                    {
+                        int ax = hit.X, ay = hit.Y + 1, az = hit.Z;
+                        BlockType bottomBlock = BlockData.DoorBottomBlockForItem(held);
+                        BlockType topBlock    = BlockData.DoorTopFor(bottomBlock);
+                        if (BlockData.IsSolid(target)
+                            && _world.GetBlock(ax,     ay,     az) == BlockType.Air
+                            && _world.GetBlock(ax,     ay + 1, az) == BlockType.Air)
+                        {
+                            BlockFacing facing = FacingTowardPlayer(Camera.Forward);
+                            // Pack meta with closed/left-hinge default.
+                            // Hinge could in principle be auto-picked by
+                            // the neighbouring cell adjacent to the door
+                            // (Alpha picks right-hinge when there's a
+                            // door directly to the left of the placement
+                            // cell), but that's a polish detail — left-
+                            // hinge is the safe default and the player
+                            // can always break + replace if they need
+                            // the mirror orientation. Marked as a TODO
+                            // in case we revisit hinge auto-selection.
+                            byte meta = BlockData.DoorPackMeta(facing, open: false, hingeRight: false);
+
+                            if (_world.SetBlock(ax, ay,     az, bottomBlock)
+                             && _world.SetBlock(ax, ay + 1, az, topBlock))
+                            {
+                                // Stamp the same metadata on BOTH halves
+                                // so the mesher renders them as one unit
+                                // and the interact toggle below can read
+                                // the byte from either cell.
+                                int cx = ax >> 4, cz = az >> 4;
+                                var chunk = _world.GetChunk(cx, cz);
+                                if (chunk != null)
+                                {
+                                    int lx = ax - (cx << 4);
+                                    int lz = az - (cz << 4);
+                                    chunk.SetMeta(lx, ay,     lz, meta);
+                                    chunk.SetMeta(lx, ay + 1, lz, meta);
+                                }
+                                if (GameMode == GameMode.Survival)
+                                    Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                                SfxBank.PlayPlace(bottomBlock);
+                                return true;
+                            }
+                        }
+                    }
+                }
+                // Tier 4 #14 — Held-food RMB. Bread restores 5 HP
+                // (and feeds hunger if the bar is enabled), Mushroom
+                // Stew restores 8 HP and returns the wooden bowl to
+                // the player. Both require missing health to trigger
+                // (matches Alpha — eating at full HP is a no-op).
+                if (held == BlockType.Bread)
+                {
+                    if (Player != null && Player.Health < Player.MaxHealth)
+                    {
+                        EatFood(5);
+                        if (GameMode == GameMode.Survival)
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                        return true;
+                    }
+                }
+                else if (held == BlockType.MushroomStew)
+                {
+                    if (Player != null && Player.Health < Player.MaxHealth)
+                    {
+                        EatFood(8);
+                        if (GameMode == GameMode.Survival)
+                        {
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                            // Bowl return — the empty bowl goes back
+                            // to the player on stew consumption (Alpha
+                            // behaviour, prevents bowls being a
+                            // single-use bottleneck on stew crafting).
+                            Input.Inventory.TryAdd(new ItemStack(BlockType.Bowl, 1));
+                        }
+                        return true;
+                    }
+                }
+            }
+
             switch (target)
             {
                 case BlockType.CraftingTable:
@@ -1728,9 +1997,57 @@ void main()
                     _world.GetOrCreateChestEntity(hit.X, hit.Y, hit.Z);
                     _isChestOpen = true;
                     return true;
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                    // Tier 4 #16 — Wooden door RMB toggles open/closed
+                    // on BOTH halves so they animate as one unit. We
+                    // read the meta byte from whichever half was hit,
+                    // flip the open bit, and stamp the new byte on
+                    // both cells. SetBlock is NOT called because the
+                    // block type is unchanged — but we still need a
+                    // chunk dirty + remesh, hence the explicit call to
+                    // SetMeta which marks the chunk dirty internally.
+                    // Iron doors fall through to the default branch on
+                    // purpose: they're redstone-only (Tier 8) per Alpha
+                    // and must not respond to RMB.
+                    return ToggleWoodDoor(hit.X, hit.Y, hit.Z);
                 default:
                     return false;
             }
+        }
+
+        // Tier 4 #16 — Toggle a wooden door's open bit on both halves.
+        // Called from the WoodDoorBlock(Top|Bottom) interact case.
+        // Locating the OTHER half: bottom halves have the top above,
+        // top halves have the bottom below — IsDoorBottom flips it.
+        // Both halves share the same metadata byte (set at placement
+        // and kept in sync here), so reading either is fine; we still
+        // write to both for safety in case they desynced somehow
+        // (worldgen / save round-trip / future mob break logic).
+        private bool ToggleWoodDoor(int x, int y, int z)
+        {
+            if (_world == null) return false;
+            BlockType here = _world.GetBlock(x, y, z);
+            int otherY = BlockData.IsDoorBottom(here) ? y + 1 : y - 1;
+            BlockType other = _world.GetBlock(x, otherY, z);
+            // Sanity gate — if the other half isn't the matching door
+            // half, the door was placed broken (e.g. half-buried by a
+            // worldgen edge). Toggle just this cell rather than crash;
+            // the result will look weird but it's better than no-op.
+            int cx = x >> 4, cz = z >> 4;
+            var chunk = _world.GetChunk(cx, cz);
+            if (chunk == null) return false;
+            int lx = x - (cx << 4);
+            int lz = z - (cz << 4);
+            byte meta = chunk.GetMeta(lx, y, lz);
+            byte flipped = BlockData.DoorWithOpen(meta, !BlockData.DoorIsOpen(meta));
+            chunk.SetMeta(lx, y, lz, flipped);
+            if (BlockData.IsDoor(other))
+                chunk.SetMeta(lx, otherY, lz, flipped);
+            // Door open/close shares the place sound — Alpha's audio
+            // bank ties them together (the wood-knock thunk).
+            SfxBank.PlayPlace(here);
+            return true;
         }
 
         public bool TryPlace(BlockType t)
@@ -2007,6 +2324,55 @@ void main()
             }
         }
 
+        // Tier 4 #26 — Cascade-break for sugar cane stacks. When a
+        // SugarCane block is broken (or its supporting block is broken),
+        // every cane block stacked above must also break. Walks
+        // upwards from `wy + 1` while the cell is SugarCane; each cell
+        // is removed and (in survival) drops a SugarCaneItem at its
+        // own coordinates so the player can pick up every harvested
+        // segment.
+        //
+        // Distinct from ScanTorchFallAround because cane breaks
+        // recursively up a column rather than scanning one shell of
+        // neighbours: a 3-tall stack with the bottom broken should
+        // drop 3 items, all at their respective heights, not just one
+        // item at the bottom. Called from the same break paths after
+        // the bottom-most cell is set to Air.
+        private void ScanSugarCaneFallAbove(int wx, int wy, int wz)
+        {
+            int y = wy + 1;
+            while (true)
+            {
+                var t = _world.GetBlock(wx, y, wz);
+                if (t != BlockType.SugarCane) return;
+                _world.SetBlock(wx, y, wz, BlockType.Air);
+                if (GameMode == GameMode.Survival)
+                {
+                    SpawnBreakDrop(wx, y, wz, BlockType.SugarCane, BlockType.Air);
+                }
+                y++;
+            }
+        }
+
+        // Tier 4 #16 — Clear the OTHER half of a door pair when one
+        // half is broken, silently (no drop, no SFX, no particles —
+        // the parent break path covers those for the cell that
+        // actually got clicked). Bottom halves have their partner one
+        // cell up; top halves one cell down. If the partner cell
+        // doesn't contain the matching door half (e.g. desync from a
+        // mid-place world reload, or a future agent breaking just the
+        // top), this is a no-op. Called BEFORE the parent's SetBlock-
+        // to-Air so a future tick doesn't see a half-door floating.
+        private void ClearDoorPartnerHalf(int wx, int wy, int wz, BlockType broken)
+        {
+            int otherY = BlockData.IsDoorBottom(broken) ? wy + 1 : wy - 1;
+            BlockType other = _world.GetBlock(wx, otherY, wz);
+            if (BlockData.IsDoor(other))
+            {
+                _world.SetBlock(wx, otherY, wz, BlockType.Air);
+            }
+        }
+
         // Spawn a dropped-item entity for a block broken in survival. A
         // small upward + slightly-randomised lateral kick is added so the
         // cube hops out of the just-broken cell rather than spawning
@@ -2015,7 +2381,7 @@ void main()
         // Creative breaks (TryBreak) intentionally don't call this — the
         // creative loop is "block-replace mode" and would otherwise litter
         // the world with drops the player didn't want.
-        private void SpawnBreakDrop(int bx, int by, int bz, BlockType type, BlockType tool)
+        private void SpawnBreakDrop(int bx, int by, int bz, BlockType type, BlockType tool, byte meta = 0)
         {
             if (type == BlockType.Air) return;
             // Skip items we can't yet pick up cleanly: fluid sources just
@@ -2027,6 +2393,53 @@ void main()
             // shovel breaks but yields nothing. Ores require a pickaxe
             // of the right material tier (CanHarvest matches Alpha rules).
             if (!ToolData.CanHarvest(tool, type)) return;
+
+            // Tier 4 #26 — Sugar cane drop. The in-world block (id 94)
+            // breaks into one harvested SugarCaneItem (id 95) — the
+            // player can replant the item with RMB on a water-adjacent
+            // soil cell. ToolData.CanHarvest returns true for any tool
+            // (cane is bare-hand harvestable, hardness 0), so the
+            // CanHarvest gate above already passed.
+            if (type == BlockType.SugarCane)
+            {
+                SpawnSingleDrop(bx, by, bz, new ItemStack(BlockType.SugarCaneItem, 1));
+                return;
+            }
+            // Tier 4 #14 — Wheat custom drops. Stage-7 (fully grown)
+            // wheat yields 1 wheat item plus 0..3 bonus seeds; earlier
+            // stages drop a single seed (the player gets back what
+            // they planted, no progress for cutting too early). Skips
+            // the default DropFor path entirely because the drops are
+            // multi-output and depend on metadata.
+            if (type == BlockType.Wheat)
+            {
+                int stage = meta & 0x0F;
+                if (stage > 7) stage = 7;
+                if (stage >= 7)
+                {
+                    SpawnSingleDrop(bx, by, bz, new ItemStack(BlockType.WheatItem, 1));
+                    int bonus = _dropRng.Next(4); // 0..3 inclusive
+                    if (bonus > 0)
+                        SpawnSingleDrop(bx, by, bz, new ItemStack(BlockType.WheatSeeds, bonus));
+                }
+                else
+                {
+                    SpawnSingleDrop(bx, by, bz, new ItemStack(BlockType.WheatSeeds, 1));
+                }
+                return;
+            }
+            // Tier 4 #14 — Bare-hand grass break has a 1-in-8 chance to
+            // drop a seed (matches Alpha's tall-grass-seeds bonus, but
+            // applied to the grass block since this build doesn't ship
+            // separate tall grass). Runs BEFORE the default DropFor so
+            // the seed is added on top of whatever Grass normally drops.
+            if (type == BlockType.Grass && tool == BlockType.Air)
+            {
+                if (_dropRng.Next(8) == 0)
+                    SpawnSingleDrop(bx, by, bz, new ItemStack(BlockType.WheatSeeds, 1));
+                // Fall through — Grass still drops Dirt via the normal
+                // path (DropFor maps Grass → Dirt for bare-hand breaks).
+            }
 
             // Stone → cobblestone, CoalOre → Coal item, DiamondOre →
             // Diamond gem (handled in DropFor). Two blocks have
@@ -2078,6 +2491,27 @@ void main()
                 };
                 _drops.Add(d);
             }
+        }
+
+        // Tier 4 #14 — One-stack drop emitter, used by the wheat
+        // custom-drops path so it doesn't have to inline the same
+        // DroppedItem boilerplate twice. Same shape as
+        // SpawnBreakDropStack but kept separate so the wheat call
+        // sites read clearly.
+        private void SpawnSingleDrop(int bx, int by, int bz, ItemStack stack)
+        {
+            if (stack.IsEmpty) return;
+            float jx = ((float)_dropRng.NextDouble() - 0.5f) * 2f;
+            float jz = ((float)_dropRng.NextDouble() - 0.5f) * 2f;
+            var d = new DroppedItem
+            {
+                Position = new Vector3(bx + 0.5f, by + 0.5f, bz + 0.5f),
+                Velocity = new Vector3(jx, 3.5f, jz),
+                Stack = stack,
+                AgeSec = 0f,
+                PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+            };
+            _drops.Add(d);
         }
 
         // Spawn a pre-formed stack as a dropped item (used for furnace
@@ -2451,6 +2885,11 @@ void main()
             // without this, surface cells always read at sky=15 and
             // hostile (light ≤ 7) spawns never trigger anywhere.
             _world.TickMobSpawns(dt, Player.Position, SkyDarknessSubtract);
+            // Tier 4 #14 — Wheat random-tick growth. Same gate as the
+            // mob spawn driver (renderer owns the cadence so it pauses
+            // when the host modals open). World internally rate-limits
+            // to one pass per CropTickInterval so per-frame is cheap.
+            _world.TickRandomCrops(dt);
         }
 
         // IPlayerDamageSink: HostileMob calls this to inflict melee

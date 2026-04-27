@@ -365,6 +365,25 @@ namespace VStudioCraft.Game
         private float _spawnTimer;
         private readonly Random _spawnRng = new Random();
 
+        // Tier 4 #14 — Wheat random-tick state. Crop growth is much
+        // slower than mob spawn ticks (real-world minutes per stage,
+        // not seconds), so we keep a separate timer + RNG. Each tick
+        // walks a small set of loaded chunks, samples a few cells per
+        // chunk, and promotes Wheat-on-Farmland by one stage if the
+        // sky+block light at that cell is at least 9 (Alpha rule).
+        // Light gate matches the canon — wheat in a torchlit indoor
+        // farm grows; wheat in a dark cave doesn't.
+        private float _cropTimer;
+        private readonly Random _cropRng = new Random(0xCB07);
+        public const float CropTickInterval = 5.0f;
+        // Per-tick: 4 chunks, 6 cells each = 24 sample chances. With
+        // ~1/12 promotion probability per sampled wheat cell, a single
+        // wheat block walks through stages 0..7 in ~6 minutes of real
+        // time on average — slow enough to feel like farming, fast
+        // enough to not need an AFK loop to see results.
+        private const int CropChunksPerTick = 4;
+        private const int CropCellsPerChunk = 6;
+
         public void TickMobSpawns(float dt, OpenTK.Vector3 playerPos, int skySubtract)
         {
             _spawnTimer -= dt;
@@ -531,6 +550,111 @@ namespace VStudioCraft.Game
                 if (p.X >= xMin && p.X < xMax && p.Z >= zMin && p.Z < zMax) n++;
             }
             return n;
+        }
+
+        // Tier 4 #14 — Wheat growth random tick. Walks a small set of
+        // loaded chunks per call, samples random cells, and promotes
+        // any Wheat cell that's standing on Farmland and seeing
+        // sky+block light ≥ 9. Stage promotion is metadata + 1 (clamped
+        // at 7); the chunk is marked dirty so the mesher rebuilds with
+        // the new stage's tile. Light-gating matches Alpha — torch-lit
+        // indoor farms work; dark caves don't.
+        public void TickRandomCrops(float dt)
+        {
+            _cropTimer -= dt;
+            if (_cropTimer > 0f) return;
+            _cropTimer = CropTickInterval;
+
+            // Snapshot chunk keys so we don't enumerate a concurrent
+            // dictionary that worker jobs are still inserting into.
+            var keys = new List<(int x, int z)>(_chunks.Count);
+            foreach (var k in _chunks.Keys) keys.Add(k);
+            if (keys.Count == 0) return;
+
+            int chunksToSample = Math.Min(CropChunksPerTick, keys.Count);
+            for (int c = 0; c < chunksToSample; c++)
+            {
+                var key = keys[_cropRng.Next(keys.Count)];
+                if (!_chunks.TryGetValue(key, out var chunk)) continue;
+
+                for (int s = 0; s < CropCellsPerChunk; s++)
+                {
+                    int lx = _cropRng.Next(Chunk.SizeX);
+                    int lz = _cropRng.Next(Chunk.SizeZ);
+                    int ly = _cropRng.Next(Chunk.SizeY);
+                    int idx = Chunk.Index(lx, ly, lz);
+
+                    // Tier 4 #26 — Sugar cane vertical growth. Branches
+                    // out before the wheat path because cane has its own
+                    // gating (no farmland, no light) and a different
+                    // outcome (place a new SugarCane block in the cell
+                    // above, instead of incrementing a metadata stage in
+                    // the cell itself). Alpha rule: when the cell above
+                    // is air AND the cane stack is shorter than 3, roll
+                    // a 1/3 chance to grow another cane on top.
+                    if (chunk.RawBlocks[idx] == (byte)BlockType.SugarCane)
+                    {
+                        if (ly + 1 >= Chunk.SizeY) continue;
+                        int aboveIdx = Chunk.Index(lx, ly + 1, lz);
+                        if (chunk.RawBlocks[aboveIdx] != (byte)BlockType.Air) continue;
+                        // Count cane below so we cap at a 3-tall stack.
+                        // If THIS cell already has 2 canes beneath it,
+                        // it's the third cane and growth would push the
+                        // stack to 4. Walk down counting cane until air
+                        // or a non-cane is hit.
+                        int caneBelow = 0;
+                        for (int dy = ly - 1; dy >= 0; dy--)
+                        {
+                            int bidx = Chunk.Index(lx, dy, lz);
+                            if (chunk.RawBlocks[bidx] != (byte)BlockType.SugarCane) break;
+                            caneBelow++;
+                        }
+                        if (caneBelow >= 2) continue; // already at max height
+                        // 1/3 probability gate. Same probability ladder
+                        // as the wheat 1/12 above, just looser because
+                        // cane only has 3 stages of vertical growth
+                        // versus wheat's 8 stages of metadata growth.
+                        if (_cropRng.Next(3) != 0) continue;
+                        chunk.RawBlocks[aboveIdx] = (byte)BlockType.SugarCane;
+                        chunk.IsModified = true;
+                        _dirty.Add(key);
+                        continue;
+                    }
+
+                    if (chunk.RawBlocks[idx] != (byte)BlockType.Wheat) continue;
+
+                    // Light gate. Block-light overrides darkness in
+                    // torch-lit indoor farms; sky-light is the natural
+                    // outdoor source. Either ≥ 9 lets the crop grow.
+                    byte lightPacked = chunk.RawLight[idx];
+                    int sky = (lightPacked >> 4) & 0xF;
+                    int blk = lightPacked & 0xF;
+                    if (sky < 9 && blk < 9) continue;
+
+                    // Farmland support — wheat falls/dies if the cell
+                    // below isn't farmland. We don't kill it here, but
+                    // we do require it for growth. (Cleanup of orphan
+                    // wheat is left to a future tier — it costs nothing
+                    // to leave it standing in the meantime; the player
+                    // can break it manually.)
+                    if (ly == 0) continue;
+                    int belowIdx = Chunk.Index(lx, ly - 1, lz);
+                    if (chunk.RawBlocks[belowIdx] != (byte)BlockType.Farmland) continue;
+
+                    // Promote stage. Probability gate keeps the average
+                    // stage-promotion interval comfortably above one
+                    // tick — see CropChunksPerTick comment for the
+                    // resulting end-to-end growth time.
+                    if (_cropRng.Next(12) != 0) continue;
+
+                    byte meta = chunk.RawMeta[idx];
+                    int stage = meta & 0x0F;
+                    if (stage >= 7) continue;
+                    chunk.RawMeta[idx] = (byte)((meta & 0xF0) | (stage + 1));
+                    chunk.IsModified = true;
+                    _dirty.Add(key);
+                }
+            }
         }
 
         // Despawn far mobs. Alpha 1.1.2 instant-despawns mobs > 128 blocks

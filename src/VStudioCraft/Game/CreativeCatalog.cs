@@ -68,6 +68,20 @@ namespace VStudioCraft.Game
                 case BlockType.TorchWest:
                 case BlockType.TorchSouth:
                 case BlockType.TorchNorth:
+                // Tier 4 #16 — Door BLOCK halves are runtime-only — the
+                // player's catalog pick / hotbar slot must be the ITEM
+                // form (WoodDoorItem / IronDoorItem). RMB-placing the
+                // item spawns the matching pair of block halves with
+                // metadata (handled in GameRenderer.TryInteract). The
+                // catalog already includes the WoodDoorItem and
+                // IronDoorItem ids via the default branch below; here
+                // we just exclude the four block halves so they don't
+                // show up alongside (which would produce broken half-
+                // door entries the player couldn't place properly).
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
                     return false;
                 default:
                     return true;

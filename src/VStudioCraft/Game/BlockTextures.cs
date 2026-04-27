@@ -55,7 +55,46 @@ namespace VStudioCraft.Game
         // the existing item / tail-block indices and break v7 saves.
         public const int FirstTailItemLayer = FirstTailBlockLayer + TailBlockLayerCount; // 76
         public const int TailItemLayerCount = 9;
-        public const int LayerCount = FirstTailItemLayer + TailItemLayerCount;          // 85
+        // Tier 4 #14 — Hoe tail-tool slice. Five hoes (wood/stone/iron/
+        // diamond/gold) appended past the original tool range so we can
+        // ship farming without renumbering swords/shovels/pickaxes/axes
+        // (which would invalidate v7 saves and every recipe table coord).
+        // Layout mirrors the canonical Alpha 1.1.2 hoes row in
+        // alpha_tools.png — material order wood→gold left-to-right at
+        // row index 8, immediately past the axes at row 7.
+        public const int FirstTailTool2Layer = FirstTailItemLayer + TailItemLayerCount; // 85
+        public const int TailTool2LayerCount = 5;
+        // Tier 4 #14 — Farming tile pack appended past the hoe slice.
+        // 1 farmland top + 8 wheat growth stages + 4 farming items
+        // (seeds, harvested wheat, bread, mushroom stew). Wheat uses 8
+        // stages so the metadata low-4-bits map directly to tile index
+        // via GetWheatTileForStage; the mesher's cross-sprite path then
+        // picks the right sub-tile per chunk cell.
+        public const int FirstTailFarmLayer = FirstTailTool2Layer + TailTool2LayerCount; // 90
+        public const int TailFarmLayerCount = 13;
+        // Tier 4 #26 — Sugar cane pack appended past the farming slice.
+        // 1 cross-sprite block tile (TileSugarCane) + 3 item tiles
+        // (TileSugarCaneItem, TilePaper, TileBook). Block tile is the
+        // green-stalk layer the mesher picks via Block.GetTileIndex; the
+        // three item tiles are flat icons. Appended past the farm slice
+        // so existing v8 saves stay byte-stable — no atlas index changes
+        // for any pre-existing tile.
+        public const int FirstTailCaneLayer = FirstTailFarmLayer + TailFarmLayerCount;  // 103
+        public const int TailCaneLayerCount = 4;
+        // Tier 4 #16 — Door tile pack appended past the cane slice. 4
+        // block-half tiles (wood top/bottom + iron top/bottom) — the
+        // mesher samples these for both faces of the thin slab — plus
+        // 2 inventory-icon tiles for the WoodDoorItem / IronDoorItem
+        // forms. Block-half tiles are full 16×16 art with the visible
+        // rectangle aligned to the relevant edge of the cell (top half
+        // is flush-top, bottom half is flush-bottom); item icons are
+        // tall-rectangle silhouettes sized to read as a complete door.
+        // Append-only past the cane slice so all existing v8 saves
+        // stay byte-stable — no atlas index changes for any pre-
+        // existing tile.
+        public const int FirstTailDoorLayer = FirstTailCaneLayer + TailCaneLayerCount; // 107
+        public const int TailDoorLayerCount = 6;
+        public const int LayerCount = FirstTailDoorLayer + TailDoorLayerCount;          // 113
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -68,6 +107,56 @@ namespace VStudioCraft.Game
         public const int TileLeather        = 82;
         public const int TileFeather        = 83;
         public const int TileEgg            = 84;
+        // Tier 4 #14 — Hoe tile indices (tail tool slice).
+        public const int TileWoodHoe        = 85;
+        public const int TileStoneHoe       = 86;
+        public const int TileIronHoe        = 87;
+        public const int TileDiamondHoe     = 88;
+        public const int TileGoldHoe        = 89;
+        // Tier 4 #14 — Farming tile indices. FarmlandTop is the only
+        // distinct farmland face — sides/bottom reuse TileDirt via the
+        // multi-face routing in Block.GetTileIndex. Wheat uses 8 stages
+        // 0..7; stage 0 is freshly planted sprouts, stage 7 is
+        // fully-grown ripe wheat ready to harvest.
+        public const int TileFarmlandTop   = 90;
+        public const int TileWheat0        = 91;
+        public const int TileWheat1        = 92;
+        public const int TileWheat2        = 93;
+        public const int TileWheat3        = 94;
+        public const int TileWheat4        = 95;
+        public const int TileWheat5        = 96;
+        public const int TileWheat6        = 97;
+        public const int TileWheat7        = 98;
+        public const int TileWheatSeeds    = 99;
+        public const int TileWheatItem     = 100;
+        public const int TileBread         = 101;
+        public const int TileMushroomStew  = 102;
+        // Tier 4 #26 — Sugar cane block + paper + book tiles. SugarCane
+        // is the in-world cross-sprite tile (green stalk with darker
+        // segment bands). SugarCaneItem is the harvested-cane item
+        // sprite. Paper is an off-white sheet. Book is a brown leather
+        // cover with paper edges. All four are procedural; the verified
+        // alpha terrain.png coords for sugar cane (col 9 row 4) and the
+        // alpha_tools.png coords for paper/book are wired with sentinels
+        // for now — bumping them to real coords later is a one-line edit
+        // per row in AlphaTileCoords.
+        public const int TileSugarCane     = 103;
+        public const int TileSugarCaneItem = 104;
+        public const int TilePaper         = 105;
+        public const int TileBook          = 106;
+        // Tier 4 #16 — Door tiles. Block halves use half-height art
+        // pinned to the relevant edge of the 16×16 tile so the slab
+        // mesher can sample the full square and the texture self-aligns
+        // to the visible 8-pixel slab strip. Wood + Iron variants use
+        // matching silhouettes (cross-brace, hinge band, knob/handle)
+        // with material-appropriate palettes — wood is plank-brown with
+        // dark seams, iron is grey steel with dark hinge bolts.
+        public const int TileWoodDoorTop    = 107;
+        public const int TileWoodDoorBottom = 108;
+        public const int TileIronDoorTop    = 109;
+        public const int TileIronDoorBottom = 110;
+        public const int TileWoodDoorItem   = 111;
+        public const int TileIronDoorItem   = 112;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -260,6 +349,25 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileChestSide, GenerateChestSide);
             UploadLayer(layerPixels, TileChestFront, GenerateChestFront);
 
+            // Tier 4 #14 — Farming tail-block layers (FarmlandTop +
+            // 8 wheat growth stages). Always procedural in the no-PNG
+            // atlas; the alpha-textures atlas calls the same path
+            // and then overlays the verified terrain.png coords on top.
+            GenerateProceduralFarmingLayers(layerPixels);
+
+            // Tier 4 #26 — Sugar cane in-world block tile. The 3 cane
+            // ITEM tiles were already painted by the GenerateProcedural
+            // ItemLayers call above (which is bounded by LayerCount
+            // and so picks them up automatically once they're past the
+            // farm slice).
+            GenerateProceduralCaneLayers(layerPixels);
+
+            // Tier 4 #16 — Door tile pack (4 block halves + 2 item
+            // icons). Always procedural for now (sentinel coords in
+            // AlphaTileCoords); the alpha-textures atlas calls the
+            // same path so the icons stay readable in either mode.
+            GenerateProceduralDoorLayers(layerPixels);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -298,16 +406,85 @@ namespace VStudioCraft.Game
         // Same idempotent contract as UploadToolLayersFromAlphaTools — a
         // missing tools PNG just leaves the previously-painted procedural
         // pixels in place, so the atlas degrades gracefully instead of
-        // turning porkchop icons into magenta error tiles.
+        // turning porkchop icons into magenta error tiles. Bounds the
+        // loop with FirstTailTool2Layer so the hoe range (which has its
+        // own slice helper) doesn't get interpreted as items.
         private static void UploadTailItemLayersFromAlphaTools(byte[] layerPixels)
         {
             if (!TryDecodeEmbeddedTools(out byte[] toolBgra, out int toolW, out int toolH))
                 return;
-            for (int layer = FirstTailItemLayer; layer < LayerCount; layer++)
+            for (int layer = FirstTailItemLayer; layer < FirstTailTool2Layer; layer++)
             {
                 var (col, row) = AlphaTileCoords[layer];
                 if (col < 0 || row < 0) continue; // sentinel — keep the procedural fill
                 CopyTile(toolBgra, toolW, toolH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
+        }
+
+        // Tier 4 #14 — Slice the 5 hoe tiles (tail-tool 2 range) out of
+        // alpha_tools.png. Same idempotent contract as the original
+        // tool slicer; a missing tools PNG leaves the procedural hoe
+        // pixels in place. Sentinel-aware so we can ship a hoe without
+        // a verified Alpha coord and still have it render correctly.
+        private static void UploadTailTool2LayersFromAlphaTools(byte[] layerPixels)
+        {
+            if (!TryDecodeEmbeddedTools(out byte[] toolBgra, out int toolW, out int toolH))
+                return;
+            for (int layer = FirstTailTool2Layer; layer < FirstTailFarmLayer; layer++)
+            {
+                var (col, row) = AlphaTileCoords[layer];
+                if (col < 0 || row < 0) continue;
+                CopyTile(toolBgra, toolW, toolH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
+        }
+
+        // Tier 4 #14 — Slice FarmlandTop + 8 wheat stages out of the
+        // already-decoded terrain.png buffer. Farming items in the same
+        // tail range have sentinel coords and stay procedural; only
+        // the block-face tiles are overlaid here. Caller passes the
+        // decoded terrain bgra so we don't re-decode. Bounded at
+        // FirstTailCaneLayer (Tier 4 #26) so the cane slice doesn't get
+        // pulled out of terrain.png by accident — it has its own
+        // dedicated slicer.
+        private static void UploadFarmingBlockLayersFromTerrain(byte[] bgra, int srcW, int srcH, byte[] layerPixels)
+        {
+            for (int layer = FirstTailFarmLayer; layer < FirstTailCaneLayer; layer++)
+            {
+                var (col, row) = AlphaTileCoords[layer];
+                if (col < 0 || row < 0) continue; // farming items — keep procedural fill
+                CopyTile(bgra, srcW, srcH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
+        }
+
+        // Tier 4 #26 — Slice the SugarCane block tile out of terrain.png.
+        // The three item tiles (SugarCaneItem / Paper / Book) live in
+        // alpha_tools.png and use a separate slicer below; sentinel
+        // entries in AlphaTileCoords skip them here. Caller passes the
+        // decoded terrain bgra so we don't re-decode. Same idempotent
+        // contract as UploadFarmingBlockLayersFromTerrain — a sentinel
+        // coord just leaves the procedural pixels in place.
+        private static void UploadCaneBlockLayersFromTerrain(byte[] bgra, int srcW, int srcH, byte[] layerPixels)
+        {
+            for (int layer = FirstTailCaneLayer; layer < LayerCount; layer++)
+            {
+                var (col, row) = AlphaTileCoords[layer];
+                if (col < 0 || row < 0) continue;
+                CopyTile(bgra, srcW, srcH, col, row, layerPixels);
                 GL.TexSubImage3D(
                     TextureTarget.Texture2DArray, 0,
                     0, 0, layer,
@@ -339,6 +516,7 @@ namespace VStudioCraft.Game
                     case 5: kind = ToolKind.Shovel;  break;
                     case 6: kind = ToolKind.Pickaxe; break;
                     case 7: kind = ToolKind.Axe;     break;
+                    case 8: kind = ToolKind.Hoe;     break; // Tier 4 #14 hoes row.
                     default: kind = ToolKind.Sword;  break; // unreachable for tool rows
                 }
                 ToolMaterial mat;
@@ -454,7 +632,34 @@ namespace VStudioCraft.Game
                 case ToolKind.Shovel:  DrawShovelHead(pixels, baseC, hiC, loC, rng);  break;
                 case ToolKind.Pickaxe: DrawPickaxeHead(pixels, baseC, hiC, loC, rng); break;
                 case ToolKind.Axe:     DrawAxeHead(pixels, baseC, hiC, loC, rng);     break;
+                case ToolKind.Hoe:     DrawHoeHead(pixels, baseC, hiC, loC, rng);     break;
             }
+        }
+
+        // Hoe head: short flat blade extending RIGHT-WARDS off the top of
+        // the handle, perpendicular to the diagonal grip — the classic
+        // L-shape that distinguishes a hoe from an axe (which has a
+        // taller blade in the same direction). 3 pixels wide × 2 pixels
+        // tall, anchored above the upper-right end of the handle at
+        // x=11..13, y=3..4. Inner pixels are bright/base-shaded for
+        // chunk; outer rim is dark for the silhouette read.
+        private static void DrawHoeHead(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hiC,
+            (byte r, byte g, byte b) loC,
+            Random rng)
+        {
+            // Top edge — three dark pixels forming the upper rim.
+            SetPixel(pixels, 11, 3, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 12, 3, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 13, 3, loC.r, loC.g, loC.b);
+            // Body — bright interior.
+            SetPixel(pixels, 11, 4, hiC.r, hiC.g, hiC.b);
+            SetPixel(pixels, 12, 4, baseC.r, baseC.g, baseC.b);
+            SetPixel(pixels, 13, 4, baseC.r, baseC.g, baseC.b);
+            // Bottom edge — single dark pixel rounding the right end.
+            SetPixel(pixels, 13, 5, loC.r, loC.g, loC.b);
+            SetPixel(pixels, 14, 4, loC.r, loC.g, loC.b);
         }
 
         // Sword head: long pointed blade running along the same diagonal
@@ -602,6 +807,619 @@ namespace VStudioCraft.Game
             UploadItem(layerPixels, TileLeather, GenerateLeatherItem);
             UploadItem(layerPixels, TileFeather, GenerateFeatherItem);
             UploadItem(layerPixels, TileEgg,     GenerateEggItem);
+            // Tier 4 #14 — farming items (seeds, wheat, bread, stew).
+            // Same UploadItem path; tile indices live past the tail-tool
+            // hoe slice. Procedural icons are always painted; the alpha
+            // PNG path overlays them only if the verified Notch coords
+            // are wired in AlphaTileCoords (currently sentinels — see
+            // the (-1,-1) entries in that table).
+            UploadItem(layerPixels, TileWheatSeeds,   GenerateWheatSeedsItem);
+            UploadItem(layerPixels, TileWheatItem,    GenerateWheatItem);
+            UploadItem(layerPixels, TileBread,        GenerateBreadItem);
+            UploadItem(layerPixels, TileMushroomStew, GenerateMushroomStewItem);
+            // Tier 4 #26 — Sugar cane drop, Paper, Book. The cane drop
+            // shares the diagonal-stalk silhouette of the wheat-bundle
+            // icon; paper is an off-white sheet; book is a brown
+            // leather cover with paper edges. All three procedural —
+            // alpha_tools.png coords haven't been wired (sentinel-only
+            // in AlphaTileCoords) so the procedural pixels are the
+            // canonical visuals for this V1.
+            UploadItem(layerPixels, TileSugarCaneItem, GenerateSugarCaneItemIcon);
+            UploadItem(layerPixels, TilePaper,         GeneratePaperItem);
+            UploadItem(layerPixels, TileBook,          GenerateBookItem);
+        }
+
+        // Tier 4 #14 — Walk the farming-block layer range (FarmlandTop +
+        // 8 wheat stages) and synthesise a 16×16 sprite per layer.
+        // FarmlandTop is a tilled-dirt top face with horizontal furrows;
+        // each wheat stage is a cross-sprite-friendly sketch of grain
+        // shoots that grow taller and shift from green to gold as the
+        // stage advances. The mesher's EmitCrossSprite path samples the
+        // per-stage layer via Block.GetWheatTileForStage so each Wheat
+        // block in a chunk shows its own growth state.
+        private static void GenerateProceduralFarmingLayers(byte[] layerPixels)
+        {
+            UploadLayer(layerPixels, TileFarmlandTop, GenerateFarmlandTop);
+            UploadLayer(layerPixels, TileWheat0, GenerateWheatStage0);
+            UploadLayer(layerPixels, TileWheat1, GenerateWheatStage1);
+            UploadLayer(layerPixels, TileWheat2, GenerateWheatStage2);
+            UploadLayer(layerPixels, TileWheat3, GenerateWheatStage3);
+            UploadLayer(layerPixels, TileWheat4, GenerateWheatStage4);
+            UploadLayer(layerPixels, TileWheat5, GenerateWheatStage5);
+            UploadLayer(layerPixels, TileWheat6, GenerateWheatStage6);
+            UploadLayer(layerPixels, TileWheat7, GenerateWheatStage7);
+        }
+
+        // Tier 4 #26 — Procedural sugar cane block tile + the three
+        // cane-related item icons. The block face uses UploadLayer
+        // (no transparent clear — fully opaque cross-sprite). The three
+        // items use UploadItem so the helper clears each tile to
+        // transparent first (item icons need an alpha background so
+        // they read as floating sprites in the hotbar). Called from
+        // both atlas builders: CreateAtlas paints these as the canonical
+        // look, CreateAtlasFromAlphaTerrain paints them as a guaranteed-
+        // correct base before UploadCaneBlockLayersFromTerrain attempts
+        // to overlay the verified terrain.png coord. Painting the item
+        // sprites here (instead of relying on GenerateProceduralItemLayers,
+        // which the alpha-textures path doesn't call) keeps the icons
+        // visible in alpha-textures mode — without this, paper/book/
+        // sugar-cane-item slots would stay transparent because their
+        // AlphaTileCoords entries are sentinels.
+        private static void GenerateProceduralCaneLayers(byte[] layerPixels)
+        {
+            UploadLayer(layerPixels, TileSugarCane, GenerateSugarCane);
+            UploadItem(layerPixels, TileSugarCaneItem, GenerateSugarCaneItemIcon);
+            UploadItem(layerPixels, TilePaper,         GeneratePaperItem);
+            UploadItem(layerPixels, TileBook,          GenerateBookItem);
+        }
+
+        // Farmland top — tilled dirt. Same brown palette as TileDirt but
+        // overlaid with three horizontal furrow lines (lighter ridges +
+        // darker valleys) to read as plowed soil. Sides/bottom of the
+        // farmland block reuse TileDirt via Block.GetTileIndex's
+        // multi-face routing, so we only need the top face here.
+        private static void GenerateFarmlandTop(byte[] pixels)
+        {
+            var rng = new Random(0xFA70);
+            (byte r, byte g, byte b) dirt   = (134, 96, 67);
+            (byte r, byte g, byte b) dirtHi = (164, 122, 88);
+            (byte r, byte g, byte b) dirtLo = (98, 70, 48);
+            // Base dirt fill — jittered for the noisy-soil look the
+            // procedural Dirt tile already uses.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetJittered(pixels, x, y, dirt.r, dirt.g, dirt.b, 14, rng);
+            // Three horizontal furrow bands. Each band is a 1-px ridge
+            // (highlight) above a 1-px valley (shadow), giving a subtle
+            // plowed-row pattern at hotbar scale.
+            int[] ridgeRows = { 3, 8, 13 };
+            foreach (int rr in ridgeRows)
+            {
+                for (int x = 0; x < TileSize; x++)
+                {
+                    SetPixel(pixels, x, rr, dirtHi.r, dirtHi.g, dirtHi.b);
+                    if (rr + 1 < TileSize)
+                        SetPixel(pixels, x, rr + 1, dirtLo.r, dirtLo.g, dirtLo.b);
+                }
+            }
+        }
+
+        // Wheat sprite drawer. Renders `count` vertical stalks across
+        // the tile, each `height` pixels tall, palette-shifted from
+        // green (young) to gold (ripe) per the `golden` flag. Stalks
+        // are evenly spaced; their tops carry seed-cluster pixels for
+        // the mid-late stages so they read as developing grain heads.
+        private static void DrawWheatSprite(byte[] pixels, int height, bool golden, int seed)
+        {
+            var rng = new Random(seed);
+            (byte r, byte g, byte b) stalk;
+            (byte r, byte g, byte b) seedTop;
+            (byte r, byte g, byte b) leaf;
+            if (golden)
+            {
+                stalk   = (210, 180, 75);
+                seedTop = (245, 225, 110);
+                leaf    = (180, 145, 50);
+            }
+            else
+            {
+                stalk   = (105, 165, 70);
+                seedTop = (175, 215, 95);
+                leaf    = (75, 130, 50);
+            }
+            // Five stalks at regular x positions for a "field clump" read.
+            int[] xs = { 2, 5, 8, 11, 14 };
+            int baseY = 14; // stalk base sits one row above the bottom.
+            int top = Math.Max(2, baseY - height);
+            foreach (int x in xs)
+            {
+                for (int y = baseY; y >= top; y--)
+                    SetPixel(pixels, x, y, stalk.r, stalk.g, stalk.b);
+                // Seed cluster on top of each stalk for stages tall enough.
+                if (height >= 5)
+                {
+                    SetPixel(pixels, x, top - 1, seedTop.r, seedTop.g, seedTop.b);
+                    if (x - 1 >= 0) SetPixel(pixels, x - 1, top, leaf.r, leaf.g, leaf.b);
+                    if (x + 1 < TileSize) SetPixel(pixels, x + 1, top, leaf.r, leaf.g, leaf.b);
+                }
+                // Leaf flicks for taller stages.
+                if (height >= 7)
+                {
+                    int midY = (baseY + top) / 2;
+                    if (rng.Next(2) == 0 && x - 1 >= 0)
+                        SetPixel(pixels, x - 1, midY, leaf.r, leaf.g, leaf.b);
+                    if (rng.Next(2) == 0 && x + 1 < TileSize)
+                        SetPixel(pixels, x + 1, midY, leaf.r, leaf.g, leaf.b);
+                }
+            }
+        }
+
+        // Wheat stages 0..7 — each calls DrawWheatSprite with a height
+        // that grows linearly per stage and a palette that flips from
+        // green to gold around stage 5 so the player sees the visible
+        // ripening cue right before harvest. Stage 7 is the harvest-
+        // ready golden field.
+        private static void GenerateWheatStage0(byte[] p) { DrawWheatSprite(p, 2,  false, 0xA0); }
+        private static void GenerateWheatStage1(byte[] p) { DrawWheatSprite(p, 3,  false, 0xA1); }
+        private static void GenerateWheatStage2(byte[] p) { DrawWheatSprite(p, 5,  false, 0xA2); }
+        private static void GenerateWheatStage3(byte[] p) { DrawWheatSprite(p, 6,  false, 0xA3); }
+        private static void GenerateWheatStage4(byte[] p) { DrawWheatSprite(p, 8,  false, 0xA4); }
+        private static void GenerateWheatStage5(byte[] p) { DrawWheatSprite(p, 9,  true,  0xA5); }
+        private static void GenerateWheatStage6(byte[] p) { DrawWheatSprite(p, 10, true,  0xA6); }
+        private static void GenerateWheatStage7(byte[] p) { DrawWheatSprite(p, 11, true,  0xA7); }
+
+        // Tier 4 #26 — Sugar cane cross-sprite. Tall green stalks
+        // running the full height of the tile, banded every ~3 pixels
+        // with a darker segment notch (matches Alpha 1.1.2's distinctive
+        // bamboo-jointed silhouette so it reads as cane and not just
+        // tall grass). Fully fills vertically because the block is
+        // single-tile and stacks of 2/3 tile vertically into a column.
+        private static void GenerateSugarCane(byte[] pixels)
+        {
+            (byte r, byte g, byte b) stalk    = (160, 200, 110);
+            (byte r, byte g, byte b) stalkHi  = (200, 235, 145);
+            (byte r, byte g, byte b) stalkLo  = (115, 155, 75);
+            (byte r, byte g, byte b) joint    = (90, 130, 60);
+            // Three stalks across — left, center, right. Each is 1 px
+            // wide with a highlight track and a shadow track for the
+            // chunky 3D feel; segment notches every 4 px paint joint
+            // pixels straight across the tile.
+            int[] xs = { 4, 8, 12 };
+            foreach (int x in xs)
+            {
+                for (int y = 0; y < TileSize; y++)
+                {
+                    SetPixel(pixels, x, y, stalk.r, stalk.g, stalk.b);
+                    if (x - 1 >= 0)
+                        SetPixel(pixels, x - 1, y, stalkHi.r, stalkHi.g, stalkHi.b);
+                    if (x + 1 < TileSize)
+                        SetPixel(pixels, x + 1, y, stalkLo.r, stalkLo.g, stalkLo.b);
+                }
+                // Joint bands at fixed y rows so all three stalks share
+                // segment positions — reads as one connected cane plant.
+                int[] joints = { 2, 6, 10, 14 };
+                foreach (int yj in joints)
+                {
+                    SetPixel(pixels, x, yj, joint.r, joint.g, joint.b);
+                    if (x - 1 >= 0) SetPixel(pixels, x - 1, yj, joint.r, joint.g, joint.b);
+                    if (x + 1 < TileSize) SetPixel(pixels, x + 1, yj, joint.r, joint.g, joint.b);
+                }
+            }
+        }
+
+        // Tier 4 #26 — Sugar cane item icon. Single vertical stalk
+        // centred in the tile with the same banded green look as the
+        // in-world block, scaled down to icon size and given a slight
+        // diagonal tilt so it reads as a held item rather than a
+        // wallpaper-tiled fragment of the block sprite.
+        private static void GenerateSugarCaneItemIcon(byte[] pixels)
+        {
+            (byte r, byte g, byte b) stalk    = (160, 200, 110);
+            (byte r, byte g, byte b) stalkHi  = (200, 235, 145);
+            (byte r, byte g, byte b) stalkLo  = (115, 155, 75);
+            (byte r, byte g, byte b) joint    = (90, 130, 60);
+            // Diagonal stalk from (5,12) up to (10,3) — same tilt as
+            // the stick / wheat-bundle icons so the held-item silhouette
+            // matches.
+            int[] xs = { 5, 6, 7, 8, 9, 10 };
+            int[] ys = { 12, 11, 9, 7, 5, 3 };
+            for (int i = 0; i < xs.Length; i++)
+            {
+                int x = xs[i], y = ys[i];
+                SetPixel(pixels, x, y, stalk.r, stalk.g, stalk.b);
+                if (x - 1 >= 0) SetPixel(pixels, x - 1, y, stalkHi.r, stalkHi.g, stalkHi.b);
+                if (x + 1 < TileSize) SetPixel(pixels, x + 1, y, stalkLo.r, stalkLo.g, stalkLo.b);
+                // Fill the gap-y between this stalk pixel and the next
+                // so the diagonal reads as continuous.
+                if (i + 1 < xs.Length)
+                {
+                    int yMid = (y + ys[i + 1]) / 2;
+                    SetPixel(pixels, x, yMid, stalk.r, stalk.g, stalk.b);
+                }
+            }
+            // Two joint dots at the midpoints — visual cue for the
+            // segmented-cane look at hotbar size.
+            SetPixel(pixels, 7, 8, joint.r, joint.g, joint.b);
+            SetPixel(pixels, 9, 4, joint.r, joint.g, joint.b);
+        }
+
+        // Tier 4 #26 — Paper sheet icon. Off-white slightly-skewed
+        // rectangle with a folded corner, sitting roughly in the tile
+        // centre. Reads as "paper" rather than "wool" because of the
+        // hard sharp edges + the folded-corner crease.
+        private static void GeneratePaperItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) sheet   = (235, 235, 220);
+            (byte r, byte g, byte b) sheetHi = (252, 252, 245);
+            (byte r, byte g, byte b) sheetLo = (180, 180, 160);
+            // Body — 8 wide × 10 tall, centred a little above midline.
+            for (int y = 3; y <= 12; y++)
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, y, sheet.r, sheet.g, sheet.b);
+            // Bright top edge.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 3, sheetHi.r, sheetHi.g, sheetHi.b);
+            // Dark bottom + right edges for the silhouette.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 12, sheetLo.r, sheetLo.g, sheetLo.b);
+            for (int y = 3; y <= 12; y++)
+                SetPixel(pixels, 11, y, sheetLo.r, sheetLo.g, sheetLo.b);
+            // Folded corner — cut the upper-right tip with a triangle
+            // of darker pixels so the sheet reads as tilted paper, not
+            // a flat rectangle.
+            SetPixel(pixels, 11, 3, sheetLo.r, sheetLo.g, sheetLo.b);
+            SetPixel(pixels, 10, 3, sheetLo.r, sheetLo.g, sheetLo.b);
+            SetPixel(pixels, 11, 4, sheetLo.r, sheetLo.g, sheetLo.b);
+        }
+
+        // Tier 4 #26 — Book icon. Brown leather cover with a paper
+        // edge stripe along the right (the "pages" of a closed book)
+        // and a thin gold-coloured spine band on the left. Same general
+        // silhouette as paper but with the leather palette + spine
+        // detail so the two icons are distinguishable at hotbar size.
+        private static void GenerateBookItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) cover   = (140, 80, 50);
+            (byte r, byte g, byte b) coverHi = (180, 110, 70);
+            (byte r, byte g, byte b) coverLo = (90, 50, 30);
+            (byte r, byte g, byte b) pages   = (235, 225, 195);
+            (byte r, byte g, byte b) pageEdge = (180, 170, 140);
+            (byte r, byte g, byte b) spine   = (200, 165, 60);
+            // Body — leather cover, 7 wide × 10 tall.
+            for (int y = 3; y <= 12; y++)
+            for (int x = 4; x <= 10; x++)
+                SetPixel(pixels, x, y, cover.r, cover.g, cover.b);
+            // Bright top edge.
+            for (int x = 4; x <= 10; x++)
+                SetPixel(pixels, x, 3, coverHi.r, coverHi.g, coverHi.b);
+            // Dark bottom edge.
+            for (int x = 4; x <= 10; x++)
+                SetPixel(pixels, x, 12, coverLo.r, coverLo.g, coverLo.b);
+            // Spine — single column of gold pixels at x=4.
+            for (int y = 4; y <= 11; y++)
+                SetPixel(pixels, 4, y, spine.r, spine.g, spine.b);
+            // Page edge — strip of cream-coloured paper protruding past
+            // the right edge of the leather to show the closed pages.
+            for (int y = 4; y <= 11; y++)
+                SetPixel(pixels, 11, y, pages.r, pages.g, pages.b);
+            // Page-edge top/bottom shadowed pixels.
+            SetPixel(pixels, 11, 3, pageEdge.r, pageEdge.g, pageEdge.b);
+            SetPixel(pixels, 11, 12, pageEdge.r, pageEdge.g, pageEdge.b);
+        }
+
+        // Tier 4 #16 — Door procedural pack. The two block-half tiles
+        // (top + bottom) draw a 12-pixel-wide rectangle pinned to the
+        // appropriate edge of the 16×16 cell so the slab mesher can
+        // sample the FULL tile and the visible art aligns naturally
+        // to the visible 8-pixel strip. The two side gutters (4 px
+        // wide on the right, 0 on the left for hinge orientation) get
+        // transparent pixels — the slab quad's UVs cover [0..1] in
+        // both axes, so the 4-px gutter ensures the player sees a
+        // door-shaped silhouette without bleed onto neighbouring
+        // cells. Material is parameterised via a palette pair so
+        // wood and iron can share the silhouette code.
+        private static void DrawDoorBlockHalf(byte[] pixels, bool topHalf,
+            (byte r, byte g, byte b) body,
+            (byte r, byte g, byte b) hi,
+            (byte r, byte g, byte b) lo,
+            (byte r, byte g, byte b) band)
+        {
+            // Door body — 12 columns wide (x=2..13), full 16 rows tall
+            // for the half-tile. Sides outside [2..13] stay
+            // transparent so the slab silhouette reads as "door, not
+            // full block".
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 2; x <= 13; x++)
+                SetPixel(pixels, x, y, body.r, body.g, body.b);
+            // Vertical highlight on the leftmost interior column +
+            // shadow on the rightmost. Gives the slab the chunky-3D
+            // shading the rest of the atlas tiles use (planks, log,
+            // bookshelf side).
+            for (int y = 0; y < TileSize; y++)
+            {
+                SetPixel(pixels, 2, y, hi.r, hi.g, hi.b);
+                SetPixel(pixels, 13, y, lo.r, lo.g, lo.b);
+            }
+            // Horizontal cross-brace bands. The TOP half gets a band
+            // at y=2 (the top of the door's upper panel) + y=13 (just
+            // above the seam between the two halves); the BOTTOM half
+            // gets one at y=2 (just below the seam) + y=13 (kick-plate
+            // base above the floor). Same colour band on both halves
+            // so a stacked door reads as a continuous frame.
+            int bandTop = topHalf ? 2 : 2;
+            int bandBot = topHalf ? 13 : 13;
+            for (int x = 2; x <= 13; x++)
+            {
+                SetPixel(pixels, x, bandTop, band.r, band.g, band.b);
+                SetPixel(pixels, x, bandBot, band.r, band.g, band.b);
+            }
+            // Hinge bolts on the LEFT side at the band rows — two dark
+            // dots inside the band, suggesting the metal pin that
+            // holds the door to the frame. Same on both halves.
+            SetPixel(pixels, 3, bandTop, lo.r, lo.g, lo.b);
+            SetPixel(pixels, 3, bandBot, lo.r, lo.g, lo.b);
+            if (topHalf)
+            {
+                // Top half — small inset window centred horizontally
+                // at y=5..7 (cross-grille of darker pixels) so the
+                // upper door panel reads as "door with peek-window"
+                // even at hotbar zoom.
+                for (int y = 5; y <= 7; y++)
+                for (int x = 6; x <= 9; x++)
+                    SetPixel(pixels, x, y, lo.r, lo.g, lo.b);
+                // Window highlight pip.
+                SetPixel(pixels, 7, 5, hi.r, hi.g, hi.b);
+            }
+            else
+            {
+                // Bottom half — round handle/knob on the RIGHT side
+                // (the side opposite the hinge) at vertical centre.
+                // Two-tone shading: bright pip for the highlight, dark
+                // pixel below for the shadow that anchors the knob.
+                SetPixel(pixels, 11, 7, hi.r, hi.g, hi.b);
+                SetPixel(pixels, 11, 8, lo.r, lo.g, lo.b);
+                SetPixel(pixels, 12, 7, body.r, body.g, body.b);
+            }
+        }
+
+        private static void GenerateWoodDoorTop(byte[] pixels)
+        {
+            // Plank palette — same general hue family as TilePlanks
+            // (warm orange-brown) so a wood door visually matches a
+            // plank wall it's set into. Slightly darker overall than
+            // the planks tile because the door has a recessed
+            // panel/window detail that looks busier next to flat plank.
+            DrawDoorBlockHalf(pixels, topHalf: true,
+                body: (155, 110, 60),
+                hi:   (190, 145, 90),
+                lo:   (105, 70, 35),
+                band: (130, 90, 45));
+        }
+
+        private static void GenerateWoodDoorBottom(byte[] pixels)
+        {
+            DrawDoorBlockHalf(pixels, topHalf: false,
+                body: (155, 110, 60),
+                hi:   (190, 145, 90),
+                lo:   (105, 70, 35),
+                band: (130, 90, 45));
+        }
+
+        private static void GenerateIronDoorTop(byte[] pixels)
+        {
+            // Iron palette — cool grey with a hint of blue tint. Same
+            // general silhouette as the wood door so the player reads
+            // both as "door"; the colour difference is the only thing
+            // that needs to communicate "iron" at hotbar size.
+            DrawDoorBlockHalf(pixels, topHalf: true,
+                body: (180, 180, 195),
+                hi:   (215, 215, 225),
+                lo:   (115, 115, 130),
+                band: (90, 90, 105));
+        }
+
+        private static void GenerateIronDoorBottom(byte[] pixels)
+        {
+            DrawDoorBlockHalf(pixels, topHalf: false,
+                body: (180, 180, 195),
+                hi:   (215, 215, 225),
+                lo:   (115, 115, 130),
+                band: (90, 90, 105));
+        }
+
+        // Door inventory icon — full-height door silhouette (top half
+        // + bottom half stacked) drawn into a single 16×16 tile, just
+        // squeezed vertically. Reads as "complete door" in the hotbar
+        // so the player can tell wood from iron without placing it
+        // first. Same body/highlight/shadow/band palette as the in-
+        // world block halves so the icon and placed door visually
+        // match.
+        private static void DrawDoorItemIcon(byte[] pixels,
+            (byte r, byte g, byte b) body,
+            (byte r, byte g, byte b) hi,
+            (byte r, byte g, byte b) lo,
+            (byte r, byte g, byte b) band)
+        {
+            // Body — narrower than the block half (8 columns wide,
+            // x=4..11) and full 16 rows tall so the icon reads as a
+            // tall thin door silhouette rather than a square block.
+            for (int y = 1; y <= 14; y++)
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, y, body.r, body.g, body.b);
+            // Highlight + shadow vertical bars.
+            for (int y = 1; y <= 14; y++)
+            {
+                SetPixel(pixels, 4, y, hi.r, hi.g, hi.b);
+                SetPixel(pixels, 11, y, lo.r, lo.g, lo.b);
+            }
+            // Top + bottom + middle bands (the middle band marks the
+            // half-block seam — same visual cue Alpha 1.1.2's door
+            // icons use).
+            for (int x = 4; x <= 11; x++)
+            {
+                SetPixel(pixels, x, 1, band.r, band.g, band.b);
+                SetPixel(pixels, x, 14, band.r, band.g, band.b);
+                SetPixel(pixels, x, 7, band.r, band.g, band.b);
+            }
+            // Window in the upper half (at y=3..5) + handle pip in
+            // the lower half (at y=10..11). Mirrors the in-world
+            // block half art so the icon is recognisable as the
+            // same item.
+            for (int y = 3; y <= 5; y++)
+            for (int x = 7; x <= 9; x++)
+                SetPixel(pixels, x, y, lo.r, lo.g, lo.b);
+            SetPixel(pixels, 8, 3, hi.r, hi.g, hi.b);
+            // Handle on the right at vertical-centre of the lower
+            // half (y=10).
+            SetPixel(pixels, 9, 10, hi.r, hi.g, hi.b);
+            SetPixel(pixels, 9, 11, lo.r, lo.g, lo.b);
+        }
+
+        private static void GenerateWoodDoorItemIcon(byte[] pixels)
+        {
+            DrawDoorItemIcon(pixels,
+                body: (155, 110, 60),
+                hi:   (190, 145, 90),
+                lo:   (105, 70, 35),
+                band: (130, 90, 45));
+        }
+
+        private static void GenerateIronDoorItemIcon(byte[] pixels)
+        {
+            DrawDoorItemIcon(pixels,
+                body: (180, 180, 195),
+                hi:   (215, 215, 225),
+                lo:   (115, 115, 130),
+                band: (90, 90, 105));
+        }
+
+        // Tier 4 #16 — Procedural door layer painter. Called from both
+        // the procedural-only atlas (CreateAtlas) and the alpha-textures
+        // atlas (CreateAtlasFromAlphaTerrain) so doors render
+        // identically in either mode. All 6 layers (4 block halves + 2
+        // item icons) ship procedural for now; the AlphaTileCoords
+        // sentinels mean the slice helpers won't overlay them.
+        private static void GenerateProceduralDoorLayers(byte[] layerPixels)
+        {
+            UploadLayer(layerPixels, TileWoodDoorTop,    GenerateWoodDoorTop);
+            UploadLayer(layerPixels, TileWoodDoorBottom, GenerateWoodDoorBottom);
+            UploadLayer(layerPixels, TileIronDoorTop,    GenerateIronDoorTop);
+            UploadLayer(layerPixels, TileIronDoorBottom, GenerateIronDoorBottom);
+            UploadItem (layerPixels, TileWoodDoorItem,   GenerateWoodDoorItemIcon);
+            UploadItem (layerPixels, TileIronDoorItem,   GenerateIronDoorItemIcon);
+        }
+
+        // Wheat seeds item — small green/brown cluster of grain pellets
+        // centred in the tile. Reads as a handful of seeds at hotbar
+        // scale: a 4×3 dotted oval with two-tone shading.
+        private static void GenerateWheatSeedsItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) hull = (140, 110, 55);
+            (byte r, byte g, byte b) hullHi = (190, 160, 80);
+            (byte r, byte g, byte b) hullLo = (95, 70, 35);
+            // Pellet positions — six small dots forming a loose pile.
+            int[] sx = { 5, 7, 9, 6, 8, 10 };
+            int[] sy = { 8, 7, 8, 10, 10, 9 };
+            for (int i = 0; i < sx.Length; i++)
+            {
+                SetPixel(pixels, sx[i], sy[i], hull.r, hull.g, hull.b);
+                SetPixel(pixels, sx[i], sy[i] - 1, hullHi.r, hullHi.g, hullHi.b);
+                if (sy[i] + 1 < TileSize)
+                    SetPixel(pixels, sx[i], sy[i] + 1, hullLo.r, hullLo.g, hullLo.b);
+            }
+        }
+
+        // Wheat item — bundled stack of golden stalks, the harvested
+        // form. Vertical bar with seed-cluster cap and a bright
+        // highlight stripe so it reads as a wheat-bundle icon.
+        private static void GenerateWheatItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) stalk   = (210, 180, 75);
+            (byte r, byte g, byte b) stalkHi = (245, 225, 110);
+            (byte r, byte g, byte b) leaf    = (180, 145, 50);
+            // Three vertical stalks, taller than the field sprite.
+            int[] xs = { 6, 8, 10 };
+            foreach (int x in xs)
+            {
+                for (int y = 4; y <= 12; y++)
+                    SetPixel(pixels, x, y, stalk.r, stalk.g, stalk.b);
+                // Seed cap at top.
+                SetPixel(pixels, x, 3, stalkHi.r, stalkHi.g, stalkHi.b);
+                if (x - 1 >= 0) SetPixel(pixels, x - 1, 4, leaf.r, leaf.g, leaf.b);
+                if (x + 1 < TileSize) SetPixel(pixels, x + 1, 4, leaf.r, leaf.g, leaf.b);
+            }
+            // Tie-band across the middle for the "bundle" read.
+            for (int x = 5; x <= 11; x++)
+                SetPixel(pixels, x, 9, leaf.r, leaf.g, leaf.b);
+        }
+
+        // Bread loaf — rounded golden-brown rectangle with crust shading.
+        // Same general silhouette as the cooked porkchop but smaller
+        // and more uniformly coloured so it reads as "loaf" not "meat".
+        private static void GenerateBreadItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) crust   = (185, 130, 70);
+            (byte r, byte g, byte b) crustHi = (220, 165, 95);
+            (byte r, byte g, byte b) crustLo = (130, 85, 40);
+            (byte r, byte g, byte b) crumb   = (235, 195, 130);
+            for (int y = 5; y <= 10; y++)
+            for (int x = 3; x <= 12; x++)
+            {
+                bool edge = (x == 3 || x == 12 || y == 5 || y == 10);
+                if (edge) SetPixel(pixels, x, y, crustLo.r, crustLo.g, crustLo.b);
+                else      SetPixel(pixels, x, y, crust.r,   crust.g,   crust.b);
+            }
+            // Bright crust top.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 6, crustHi.r, crustHi.g, crustHi.b);
+            // Crumb highlight stripe through the middle.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 8, crumb.r, crumb.g, crumb.b);
+        }
+
+        // Mushroom stew — wooden bowl with a brown stew level and tiny
+        // mushroom cap garnish. Reuses the bowl silhouette from
+        // GenerateBowlItem (rim + curved sides) but fills the interior
+        // with a stewed-mushroom palette instead of the empty hollow.
+        private static void GenerateMushroomStewItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) wood   = (158, 113, 60);
+            (byte r, byte g, byte b) woodHi = (190, 145, 85);
+            (byte r, byte g, byte b) woodLo = (110, 75, 35);
+            (byte r, byte g, byte b) stew   = (135, 90, 55);
+            (byte r, byte g, byte b) stewHi = (175, 130, 90);
+            (byte r, byte g, byte b) capRed = (200, 60, 55);
+            (byte r, byte g, byte b) capWht = (235, 225, 200);
+            // Rim — top of the bowl, two pixels tall, full width.
+            for (int x = 3; x <= 12; x++)
+            {
+                SetPixel(pixels, x, 7, woodHi.r, woodHi.g, woodHi.b);
+                SetPixel(pixels, x, 8, wood.r,   wood.g,   wood.b);
+            }
+            // Stew interior — replaces the hollow inset with a brown stew level.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 8, stew.r, stew.g, stew.b);
+            // Stew highlight ripple.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 7, stewHi.r, stewHi.g, stewHi.b);
+            // Mushroom cap garnish — a tiny red dot with white spot
+            // sitting on the stew surface, upper-left of centre.
+            SetPixel(pixels, 6, 7, capRed.r, capRed.g, capRed.b);
+            SetPixel(pixels, 7, 7, capWht.r, capWht.g, capWht.b);
+            // Curved sides — sloped inward as we go down.
+            int[] leftEdge  = { 4, 5, 6 };
+            int[] rightEdge = { 11, 10, 9 };
+            int[] yRows     = { 9, 10, 11 };
+            for (int i = 0; i < yRows.Length; i++)
+            {
+                int y = yRows[i];
+                int xL = leftEdge[i];
+                int xR = rightEdge[i];
+                SetPixel(pixels, xL, y, woodLo.r, woodLo.g, woodLo.b);
+                SetPixel(pixels, xR, y, woodLo.r, woodLo.g, woodLo.b);
+                for (int x = xL + 1; x < xR; x++)
+                    SetPixel(pixels, x, y, wood.r, wood.g, wood.b);
+            }
         }
 
         // Local helper mirroring UploadLayer (which is private elsewhere
@@ -1309,6 +2127,64 @@ namespace VStudioCraft.Game
             /* TileLeather           */ (-1, -1),
             /* TileFeather           */ (-1, -1),
             /* TileEgg               */ (-1, -1),
+            // Tier 4 #14 — Hoes. Canonical Alpha 1.1.2 alpha_tools.png
+            // packs hoes in the row immediately past axes (row 7), so
+            // wood..gold sit at (0..4, 8). Material order matches the
+            // existing tool slice — wood/stone/iron/diamond/gold left
+            // to right.
+            /* TileWoodHoe           */ (0, 8),
+            /* TileStoneHoe          */ (1, 8),
+            /* TileIronHoe           */ (2, 8),
+            /* TileDiamondHoe        */ (3, 8),
+            /* TileGoldHoe           */ (4, 8),
+            // Tier 4 #14 — Farming tiles. FarmlandTop is the tilled-dirt
+            // top face in terrain.png at (7,5) in canonical Alpha — a
+            // brown row of furrows. Wheat stages 0..7 occupy a single
+            // row at (8..15, 5) — eight cross-sprite sub-tiles ranging
+            // from green sprout (col 8) to ripe golden grain (col 15).
+            // The four farming items (seeds, wheat, bread, stew) live
+            // in alpha_tools.png — exact coords haven't been verified
+            // against the embedded sheet so we use the (-1,-1) sentinel
+            // and rely on procedural icons. Bumping these to real
+            // coords later is one-line edits per row.
+            /* TileFarmlandTop       */ (7, 5),
+            /* TileWheat0            */ (8, 5),
+            /* TileWheat1            */ (9, 5),
+            /* TileWheat2            */ (10, 5),
+            /* TileWheat3            */ (11, 5),
+            /* TileWheat4            */ (12, 5),
+            /* TileWheat5            */ (13, 5),
+            /* TileWheat6            */ (14, 5),
+            /* TileWheat7            */ (15, 5),
+            /* TileWheatSeeds        */ (-1, -1),
+            /* TileWheatItem         */ (-1, -1),
+            /* TileBread             */ (-1, -1),
+            /* TileMushroomStew      */ (-1, -1),
+            // Tier 4 #26 — Sugar cane block + paper/book items. The
+            // canonical Alpha 1.1.2 sugar cane terrain.png coord is
+            // (9, 4) — a green-stalk cross-sprite tile in the same row
+            // as the cactus + clay tiles. Paper and Book live in
+            // alpha_tools.png; the verified coords haven't been
+            // confirmed against the embedded sheet so we use the
+            // (-1,-1) sentinel and rely on procedural icons. Bumping
+            // these to real coords later is one-line edits per row.
+            /* TileSugarCane         */ (9, 4),
+            /* TileSugarCaneItem     */ (-1, -1),
+            /* TilePaper             */ (-1, -1),
+            /* TileBook              */ (-1, -1),
+            // Tier 4 #16 — Door tiles. All six (4 block halves + 2
+            // item icons) ship as procedural for now; canonical Alpha
+            // coords haven't been verified against the embedded
+            // terrain.png / alpha_tools.png and we'd rather have a
+            // guaranteed-correct procedural door than slice the wrong
+            // tile. Bumping these to real coords later is per-row
+            // one-line edits.
+            /* TileWoodDoorTop       */ (-1, -1),
+            /* TileWoodDoorBottom    */ (-1, -1),
+            /* TileIronDoorTop       */ (-1, -1),
+            /* TileIronDoorBottom    */ (-1, -1),
+            /* TileWoodDoorItem      */ (-1, -1),
+            /* TileIronDoorItem      */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -1401,6 +2277,46 @@ namespace VStudioCraft.Game
             // procedural path painted these slots; they'll just stay
             // procedural in the otherwise-Alpha atlas).
             UploadTailItemLayersFromAlphaTools(layerPixels);
+
+            // Tier 4 #14 — Procedural farming layers always paint first
+            // (FarmlandTop + 8 wheat stages + 4 farming items) so the
+            // atlas has guaranteed-correct sprites even if the alpha
+            // PNG slice fails or is missing the verified coords.
+            GenerateProceduralFarmingLayers(layerPixels);
+            // Then overlay the tilled-dirt + wheat stages from
+            // terrain.png (canonical Alpha coords are wired in
+            // AlphaTileCoords). Farming items (seeds/wheat/bread/stew)
+            // stay procedural — their AlphaTileCoords entries are
+            // sentinels because we haven't verified the alpha_tools.png
+            // food-row coords for them yet.
+            UploadFarmingBlockLayersFromTerrain(bgra, srcW, srcH, layerPixels);
+            // Hoes from alpha_tools.png — same idempotent slicer as
+            // UploadToolLayersFromAlphaTools but scoped to the tail-tool
+            // 2 range (85..89). A missing tools PNG just leaves the
+            // procedural hoe pixels in place.
+            UploadTailTool2LayersFromAlphaTools(layerPixels);
+
+            // Tier 4 #26 — Sugar cane block layer + paper/book item
+            // sprites. Procedural paints first so the atlas has
+            // guaranteed-correct sprites even if the alpha PNG slice
+            // misses or has sentinel coords. Then UploadCane... attempts
+            // to overlay the in-world cane stalk from terrain.png at
+            // (col 9, row 4); paper/book have sentinel coords so they
+            // stay procedural in the alpha atlas (matching how the
+            // farming items stay procedural — we haven't verified the
+            // alpha_tools.png coords for them yet).
+            GenerateProceduralCaneLayers(layerPixels);
+            UploadCaneBlockLayersFromTerrain(bgra, srcW, srcH, layerPixels);
+
+            // Tier 4 #16 — Door tiles. All 6 layers (4 block halves +
+            // 2 inventory icons) ship procedural for now; their
+            // AlphaTileCoords entries are sentinels so there's no
+            // overlay step to call. Painting here in the alpha-atlas
+            // path mirrors the cane / farming-item handling — without
+            // this call the door tile slots would be transparent in
+            // alpha-textures mode while the procedural-only atlas
+            // (CreateAtlas) would render them correctly.
+            GenerateProceduralDoorLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);

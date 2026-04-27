@@ -16,7 +16,15 @@ namespace VStudioCraft.Game
         // v7 = chest tile entities (count + per-entity (x,y,z, facing,
         //      27 ItemStacks)). Appended after the furnace block so a v6
         //      reader stops cleanly at the EOF.
-        private const byte CurrentVersion = 7;
+        // v8 = Tier 4 #14 wheat metadata. Sparse per-chunk record block
+        //      appended at the end (count + (index:int, meta:byte) pairs
+        //      per chunk, in the same chunk order as the v2+ block writes
+        //      above). Pre-v8 saves load with all wheat at meta=0 (stage
+        //      0 sprout) — the random tick will re-grow them, costing a
+        //      few real-world minutes per field but no data loss. The
+        //      record sits past the chest block so a v7 reader stops
+        //      cleanly at EOF without seeing the new section.
+        private const byte CurrentVersion = 8;
 
         public struct Header
         {
@@ -102,6 +110,22 @@ namespace VStudioCraft.Game
                     w.Write((byte)kv.Value.Facing);
                     for (int i = 0; i < ChestTileEntity.SlotCount; i++)
                         WriteStack(w, kv.Value.Slots[i]);
+                }
+
+                // v8: Tier 4 #14 wheat metadata. Per-chunk sparse record
+                // (count + (idx:int, meta:byte) pairs) keyed by (cx, cz)
+                // so the loader can match the record to its chunk
+                // regardless of the dictionary iteration order at
+                // load time. Worlds with no wheat at all see this whole
+                // block compress to essentially nothing — empty records
+                // cost just 4 bytes per chunk.
+                int chunkMetaCount = world.PersistentChunkCount;
+                w.Write(chunkMetaCount);
+                foreach (var chunk in world.AllChunksForPersistence())
+                {
+                    w.Write(chunk.ChunkX);
+                    w.Write(chunk.ChunkZ);
+                    chunk.WriteSparseMeta(w);
                 }
             }
             if (File.Exists(path)) File.Delete(path);
@@ -227,6 +251,39 @@ namespace VStudioCraft.Game
                         ce.Facing = (BlockFacing)r.ReadByte();
                         for (int s = 0; s < ChestTileEntity.SlotCount; s++)
                             ce.Slots[s] = ReadStack(r);
+                    }
+                }
+
+                // v8: Tier 4 #14 wheat metadata. Sparse record per chunk
+                // keyed by (cx, cz). Pre-v8 saves had no wheat (the
+                // block didn't exist), so legacy worlds skip this block
+                // and load with all _meta bytes at zero — wheat planted
+                // in a freshly-loaded post-v7-but-pre-v8 world doesn't
+                // exist either, so there's nothing to lose. Records for
+                // chunks not currently present are read past silently.
+                if (version >= 8)
+                {
+                    int chunkMetaCount = r.ReadInt32();
+                    for (int i = 0; i < chunkMetaCount; i++)
+                    {
+                        int cx = r.ReadInt32();
+                        int cz = r.ReadInt32();
+                        var chunk = world.GetChunk(cx, cz);
+                        if (chunk != null)
+                        {
+                            chunk.ReadSparseMeta(r);
+                        }
+                        else
+                        {
+                            // Drain the record so the stream stays aligned
+                            // even if the chunk it's keyed to wasn't
+                            // present (shouldn't happen — Save iterates
+                            // the same set we just loaded — but defensive
+                            // because corrupt saves cost more than a
+                            // ten-line read loop).
+                            int dropCount = r.ReadInt32();
+                            for (int j = 0; j < dropCount; j++) { r.ReadInt32(); r.ReadByte(); }
+                        }
                     }
                 }
 

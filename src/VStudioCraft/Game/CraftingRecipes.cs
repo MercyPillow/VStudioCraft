@@ -79,6 +79,22 @@ namespace VStudioCraft.Game
             list.Add(new ShapelessRecipe(
                 new[] { BlockType.WoodLog },
                 new ItemStack(BlockType.Planks, 4)));
+            // Tier 4 #14 — Mushroom Stew. Bowl + brown mushroom + red
+            // mushroom in any positions → 1 mushroom stew. The bowl
+            // is ALSO returned to the player when the stew is eaten
+            // (handled in the food-eat path), so the recipe consumes
+            // the bowl as input and the eat path mints a fresh one.
+            list.Add(new ShapelessRecipe(
+                new[] { BlockType.Bowl, BlockType.BrownMushroom, BlockType.RedMushroom },
+                new ItemStack(BlockType.MushroomStew, 1)));
+            // Tier 4 #26 — Book. Three paper in any positions → 1 book.
+            // Alpha treats this as shapeless (the player can drop the
+            // three paper sheets anywhere in the grid). Output is a
+            // single book — the leather-bound combination of those
+            // pages. Used downstream for Bookshelf (3 books per shelf).
+            list.Add(new ShapelessRecipe(
+                new[] { BlockType.Paper, BlockType.Paper, BlockType.Paper },
+                new ItemStack(BlockType.Book, 1)));
             return list;
         }
 
@@ -121,6 +137,20 @@ namespace VStudioCraft.Game
 
         // Pickaxe: 3-wide material row over 2 sticks down the middle.
         private static BlockType[,] Pickaxe(BlockType mat) => Tool3Wide(mat);
+
+        // Tier 4 #14 — Hoe: same 2-row L-shape as the axe but mirrored
+        // so the materials sit in the top row across cols 0..1, and the
+        // sticks run down the right column. Alpha pattern is "MM. /
+        // .S. / .S." — two materials top-left, sticks down the centre
+        // column. Two materials (not three) is what distinguishes a
+        // hoe from an axe.
+        private static BlockType[,] Hoe(BlockType mat)
+            => new BlockType[,]
+            {
+                { mat,           mat },
+                { BlockType.Air, BlockType.Stick },
+                { BlockType.Air, BlockType.Stick },
+            };
 
         private static List<ShapedRecipe> BuildShaped()
         {
@@ -191,13 +221,13 @@ namespace VStudioCraft.Game
             // iron = IronIngot, diamond = Diamond, gold = GoldIngot)
             // × 4 kinds (pickaxe / shovel / axe / sword). Material
             // → output mapping:
-            (BlockType mat, BlockType pick, BlockType shovel, BlockType axe, BlockType sword)[] mats =
+            (BlockType mat, BlockType pick, BlockType shovel, BlockType axe, BlockType sword, BlockType hoe)[] mats =
             {
-                (BlockType.Planks,      BlockType.WoodPickaxe,    BlockType.WoodShovel,    BlockType.WoodAxe,    BlockType.WoodSword),
-                (BlockType.Cobblestone, BlockType.StonePickaxe,   BlockType.StoneShovel,   BlockType.StoneAxe,   BlockType.StoneSword),
-                (BlockType.IronIngot,   BlockType.IronPickaxe,    BlockType.IronShovel,    BlockType.IronAxe,    BlockType.IronSword),
-                (BlockType.Diamond,     BlockType.DiamondPickaxe, BlockType.DiamondShovel, BlockType.DiamondAxe, BlockType.DiamondSword),
-                (BlockType.GoldIngot,   BlockType.GoldPickaxe,    BlockType.GoldShovel,    BlockType.GoldAxe,    BlockType.GoldSword),
+                (BlockType.Planks,      BlockType.WoodPickaxe,    BlockType.WoodShovel,    BlockType.WoodAxe,    BlockType.WoodSword,    BlockType.WoodHoe),
+                (BlockType.Cobblestone, BlockType.StonePickaxe,   BlockType.StoneShovel,   BlockType.StoneAxe,   BlockType.StoneSword,   BlockType.StoneHoe),
+                (BlockType.IronIngot,   BlockType.IronPickaxe,    BlockType.IronShovel,    BlockType.IronAxe,    BlockType.IronSword,    BlockType.IronHoe),
+                (BlockType.Diamond,     BlockType.DiamondPickaxe, BlockType.DiamondShovel, BlockType.DiamondAxe, BlockType.DiamondSword, BlockType.DiamondHoe),
+                (BlockType.GoldIngot,   BlockType.GoldPickaxe,    BlockType.GoldShovel,    BlockType.GoldAxe,    BlockType.GoldSword,    BlockType.GoldHoe),
             };
             foreach (var m in mats)
             {
@@ -205,7 +235,80 @@ namespace VStudioCraft.Game
                 list.Add(new ShapedRecipe(Shovel2Tall(m.mat), new ItemStack(m.shovel, 1)));
                 list.Add(new ShapedRecipe(Axe(m.mat),         new ItemStack(m.axe,    1)));
                 list.Add(new ShapedRecipe(Sword2Tall(m.mat),  new ItemStack(m.sword,  1)));
+                // Tier 4 #14 — hoes follow the same per-material loop.
+                list.Add(new ShapedRecipe(Hoe(m.mat),         new ItemStack(m.hoe,    1)));
             }
+
+            // Tier 4 #14 — Bread. Three wheat in a horizontal row → 1
+            // bread. Alpha pattern is "WWW" (any horizontal 3-wide
+            // strip in the grid). Output is one loaf; restoration tier
+            // is wired in the food-eat path (5 HP/hunger per loaf).
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.WheatItem, BlockType.WheatItem, BlockType.WheatItem },
+                },
+                new ItemStack(BlockType.Bread, 1)));
+
+            // Tier 4 #26 — Paper. Three sugar cane (the harvested
+            // SugarCaneItem, not the in-world block) in a horizontal
+            // row → 3 paper. Alpha pattern is "CCC" with a yield of 3
+            // (one paper per cane). Same shape as bread but distinct
+            // ingredient so the matcher has no ambiguity — recipes are
+            // disambiguated by ItemStack.Type.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.SugarCaneItem, BlockType.SugarCaneItem, BlockType.SugarCaneItem },
+                },
+                new ItemStack(BlockType.Paper, 3)));
+
+            // Tier 4 #26 — Bookshelf. Three planks across the top, three
+            // books across the middle, three planks across the bottom
+            // → 1 bookshelf block. Alpha pattern is "PPP / BBB / PPP".
+            // Bookshelf already exists as an in-world block (id 47);
+            // this just wires the recipe so players can craft it
+            // instead of relying on the creative catalog.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                    { BlockType.Book,   BlockType.Book,   BlockType.Book },
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                },
+                new ItemStack(BlockType.Bookshelf, 1)));
+
+            // Tier 4 #16 — Wooden Door. 6 planks in a 3×2 column-pair —
+            // Alpha pattern is "PP. / PP. / PP." (two columns of three
+            // planks each, sat against the LEFT edge of the grid).
+            // Output: 1 wooden door item. The matcher anchors the
+            // pattern to (rOff,cOff) so the recipe is technically
+            // ambiguous with right-edge placement; that's intentional
+            // and matches Alpha — the player can also drop the planks
+            // into cols 1-2 and still get the door. Hinge defaults
+            // are picked at place-time, not at craft-time.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Planks },
+                    { BlockType.Planks, BlockType.Planks },
+                    { BlockType.Planks, BlockType.Planks },
+                },
+                new ItemStack(BlockType.WoodDoorItem, 1)));
+
+            // Tier 4 #16 — Iron Door. Same 3×2 pattern as the wooden
+            // door but ingots instead of planks → 1 iron door item.
+            // Iron doors don't open by RMB (redstone-only, gated for
+            // Tier 8); the recipe still mints a fully-functional placed
+            // block — players just need a redstone trigger to open it.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.IronIngot, BlockType.IronIngot },
+                    { BlockType.IronIngot, BlockType.IronIngot },
+                    { BlockType.IronIngot, BlockType.IronIngot },
+                },
+                new ItemStack(BlockType.IronDoorItem, 1)));
 
             // Torches need coal + stick — but Torch as an item drops
             // when we have a coal-on-stick recipe (Alpha used charcoal

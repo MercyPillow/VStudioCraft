@@ -165,6 +165,102 @@ namespace VStudioCraft.Game
         Leather = 80, // Alpha 334
         Feather = 81, // Alpha 288
         Egg     = 82, // Alpha 344
+
+        // Tier 4 #14 — Hoes (5 materials). Appended past Egg=82 instead
+        // of being slotted into the canonical [WoodSword..GoldAxe] tool
+        // slice because that slice was frozen at id 57 long before hoes
+        // landed; renumbering would shift Stick=58 and every subsequent
+        // item / block, breaking every existing v7 save. The trade-off
+        // is that the contiguous "tool slice" the original IsTool /
+        // GetKind / GetMaterial helpers range-checked is now two ranges
+        // ([WoodSword..GoldAxe] + [WoodHoe..GoldHoe]) — the helpers below
+        // OR the second range in. Material order matches the rest of the
+        // tool ladder (wood, stone, iron, diamond, gold), Alpha numeric
+        // ids 290..294. Hoes function ONLY as a Farmland-tilling RMB
+        // tool — they don't speed-mine any block and don't gate any
+        // drop, just transform Grass / Dirt → Farmland under
+        // GameRenderer.TryInteract.
+        WoodHoe    = 83, // Alpha 290
+        StoneHoe   = 84, // Alpha 291
+        IronHoe    = 85, // Alpha 292
+        DiamondHoe = 86, // Alpha 293
+        GoldHoe    = 87, // Alpha 294
+
+        // Tier 4 #14 — Farming blocks. Farmland is what hoes till grass
+        // and dirt into; only Farmland accepts WheatSeeds. Wheat is the
+        // crop block itself — cross-sprite (like flowers) with 8 growth
+        // stages 0..7 stored in chunk metadata low-4-bits and ticked
+        // probabilistically by the world tick (light ≥ 9 + RNG advance
+        // a stage; ~30–60s real time to reach stage 7). Append-only
+        // past the hoe slice so all existing saves stay valid.
+        Farmland = 88,
+        Wheat    = 89,
+
+        // Tier 4 #14 — Items. WheatSeeds drops from breaking Wheat at
+        // any stage and (rarely) from breaking a Grass block bare-
+        // handed; it's the seed the player plants on Farmland to start
+        // a new crop. Wheat (the item) drops from breaking a stage-7
+        // Wheat block. Bread is the 3-wheat-in-a-row craft. MushroomStew
+        // is shapeless { Bowl, BrownMushroom, RedMushroom } and is the
+        // first food that returns its container item (Bowl) to the
+        // inventory on consume. Alpha numeric ids: 295/296/297/282.
+        // Same id-space trick as the rest of the items.
+        WheatSeeds   = 90, // Alpha 295
+        WheatItem    = 91, // Alpha 296
+        Bread        = 92, // Alpha 297
+        MushroomStew = 93, // Alpha 282
+
+        // Tier 4 #26 — Sugar cane block + paper/book items. Sugar cane is
+        // a cross-sprite multi-block-tall plant that grows next to water
+        // (Alpha behaviour). The water-adjacency rule is applied at
+        // PLACEMENT time only — once a cane is placed, the random tick
+        // grows it upward without re-checking water (matches Alpha 1.1.2
+        // exactly: real Alpha had no per-tick moisture/water gate for
+        // cane growth, only a "needs water within 1 cell of the bottom
+        // block at placement" rule). Cap height is 3, same as canon.
+        // SugarCaneItem is the harvested-cane item the player gets back
+        // when the in-world block breaks; Paper + Book are the crafting
+        // outputs (3 cane → 3 paper, 3 paper → 1 book). Append-only past
+        // the Tier 4 #14 farming items so existing v8 saves keep loading.
+        SugarCane     = 94,
+        SugarCaneItem = 95, // Alpha 338
+        Paper         = 96, // Alpha 339
+        Book          = 97, // Alpha 340
+
+        // Tier 4 #16 — Wooden + Iron doors. Two block ids per material
+        // (top + bottom half) is the simplest correct geometry for a
+        // 2-tall block: Alpha used a metadata bit for top/bottom, but
+        // dedicating separate enum slots keeps the render/collision
+        // switch tables straight without a per-cell metadata read for
+        // half-id resolution. The four block ids share a SINGLE
+        // metadata byte that encodes mutable state across both halves:
+        //   bit 0 (mask 0x01): open flag (0=closed, 1=open)
+        //   bits 1..2 (mask 0x06, >>1): facing — direction the closed
+        //                               door's OUTWARD normal points
+        //                               (0=North, 1=East, 2=South, 3=West)
+        //   bit 3 (mask 0x08): hinge side (0=left, 1=right)
+        // Both halves of a door must keep their open/facing/hinge bits
+        // synchronised — TryInteract toggles open on both. The block
+        // ids themselves are not orientation-specific, unlike the
+        // wall-torch family — encoding facing in the BlockType would
+        // explode the enum (4 facings × 2 open/closed × 2 halves = 16
+        // ids per material), so we use Chunk._meta + WriteSparseMeta
+        // persistence (the same path Wheat uses for stage). Append-
+        // only past Book=97 so existing v8 saves keep loading without
+        // an id remap.
+        WoodDoorBlockBottom = 98,
+        WoodDoorBlockTop    = 99,
+        IronDoorBlockBottom = 100,
+        IronDoorBlockTop    = 101,
+        // Tier 4 #16 — Door ITEMS. The player crafts / picks up the
+        // item form; placement spawns the two block halves. Match
+        // Alpha numeric ids 324 (wooden) and 330 (iron). Same
+        // BlockType id-space trick the rest of the items use; IsItem
+        // range below is extended to cover [WoodDoorItem..IronDoorItem]
+        // so renderers / placement / mesher take the flat-sprite
+        // branch.
+        WoodDoorItem = 102, // Alpha 324
+        IronDoorItem = 103, // Alpha 330
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -194,6 +290,31 @@ namespace VStudioCraft.Game
         public const BlockType Leather        = BlockType.Leather;
         public const BlockType Feather        = BlockType.Feather;
         public const BlockType Egg            = BlockType.Egg;
+        // Tier 4 #14 — farming items. WheatSeeds plants on Farmland;
+        // WheatItem is the harvested grain (the BlockType is named
+        // WheatItem to distinguish it from the in-world Wheat block);
+        // Bread + MushroomStew are the food outputs. MushroomStew is
+        // the first item with container-return semantics (consuming
+        // restores the Bowl) — the renderer's eat path special-cases it.
+        public const BlockType WheatSeeds   = BlockType.WheatSeeds;
+        public const BlockType WheatItem    = BlockType.WheatItem;
+        public const BlockType Bread        = BlockType.Bread;
+        public const BlockType MushroomStew = BlockType.MushroomStew;
+        // Tier 4 #26 — Sugar cane harvested item + Paper + Book.
+        // SugarCaneItem is the drop from breaking an in-world SugarCane
+        // block; Paper crafts from 3 cane in a row, Book from 3 paper
+        // shapeless. All three live in the BlockType id space the same
+        // way every other item does (IsItem branches the mesher /
+        // placement / collision paths).
+        public const BlockType SugarCaneItem = BlockType.SugarCaneItem;
+        public const BlockType Paper         = BlockType.Paper;
+        public const BlockType Book          = BlockType.Book;
+        // Tier 4 #16 — Door items. Wood + Iron only (matches Alpha
+        // 1.1.2_01 — diamond/gold doors weren't a thing). Placement
+        // spawns two block halves per door; this item is what the
+        // player crafts, picks up, and what drops on break.
+        public const BlockType WoodDoorItem = BlockType.WoodDoorItem;
+        public const BlockType IronDoorItem = BlockType.IronDoorItem;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -221,6 +342,25 @@ namespace VStudioCraft.Game
                 case BlockType.Leather:        return 334;
                 case BlockType.Feather:        return 288;
                 case BlockType.Egg:            return 344;
+                // Tier 4 #14 — hoes + farming items.
+                case BlockType.WoodHoe:        return 290;
+                case BlockType.StoneHoe:       return 291;
+                case BlockType.IronHoe:        return 292;
+                case BlockType.DiamondHoe:     return 293;
+                case BlockType.GoldHoe:        return 294;
+                case BlockType.WheatSeeds:     return 295;
+                case BlockType.WheatItem:      return 296;
+                case BlockType.Bread:          return 297;
+                case BlockType.MushroomStew:   return 282;
+                // Tier 4 #26 — Sugar cane drop + paper + book.
+                case BlockType.SugarCaneItem:  return 338;
+                case BlockType.Paper:          return 339;
+                case BlockType.Book:           return 340;
+                // Tier 4 #16 — door items. Alpha numeric ids 324
+                // (wooden) and 330 (iron); kept here for save-format
+                // and future multiplayer-protocol parity work.
+                case BlockType.WoodDoorItem:   return 324;
+                case BlockType.IronDoorItem:   return 330;
                 default:                       return -1;
             }
         }
@@ -252,6 +392,24 @@ namespace VStudioCraft.Game
                 case BlockType.Leather:        return "Leather";
                 case BlockType.Feather:        return "Feather";
                 case BlockType.Egg:            return "Egg";
+                case BlockType.WoodHoe:        return "Wooden Hoe";
+                case BlockType.StoneHoe:       return "Stone Hoe";
+                case BlockType.IronHoe:        return "Iron Hoe";
+                case BlockType.DiamondHoe:     return "Diamond Hoe";
+                case BlockType.GoldHoe:        return "Gold Hoe";
+                case BlockType.WheatSeeds:     return "Seeds";
+                case BlockType.WheatItem:      return "Wheat";
+                case BlockType.Bread:          return "Bread";
+                case BlockType.MushroomStew:   return "Mushroom Stew";
+                case BlockType.SugarCaneItem:  return "Sugar Cane";
+                case BlockType.Paper:          return "Paper";
+                case BlockType.Book:           return "Book";
+                // Tier 4 #16 — Door item names. Wood/Iron only —
+                // matches the Alpha 1.1.2_01 craft set; the player
+                // never sees the per-half block ids in any UI, so
+                // names are only needed for the item form.
+                case BlockType.WoodDoorItem:   return "Wooden Door";
+                case BlockType.IronDoorItem:   return "Iron Door";
                 default:                       return t.ToString();
             }
         }
@@ -286,6 +444,17 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
+                // Tier 4 #14 — Wheat is a cross-sprite crop (not a
+                // cube), the player walks straight through it the same
+                // way they walk through flowers. Farmland IS a full
+                // cube and falls through to the default solid branch.
+                case BlockType.Wheat:
+                // Tier 4 #26 — Sugar cane is a cross-sprite plant the
+                // player walks through, same shape as wheat / flowers.
+                // The block is non-solid even though it can stack
+                // vertically (each cell of the stack is independently
+                // walk-through).
+                case BlockType.SugarCane:
                     return false;
                 default:
                     return true;
@@ -338,12 +507,17 @@ namespace VStudioCraft.Game
         }
 
         // True if this BlockType id refers to a tool item rather than a
-        // placeable block. Cheap range check — tool ids occupy the
-        // contiguous slice [WoodSword..GoldAxe]. Used by mesher,
-        // placement, rendering and inventory paths to take the tool
-        // branch without touching the per-block switch tables.
+        // placeable block. The tool ids originally occupied a single
+        // contiguous slice [WoodSword..GoldAxe], but Tier 4 #14 added
+        // hoes after Egg (couldn't be slotted in [38..57] without
+        // shifting Stick=58 and breaking every existing v7 save), so
+        // this helper now ORs the hoe range [WoodHoe..GoldHoe] in. Cheap
+        // pair of range checks — used by mesher, placement, rendering
+        // and inventory paths to take the tool branch without touching
+        // the per-block switch tables.
         public static bool IsTool(BlockType t)
-            => (byte)t >= (byte)BlockType.WoodSword && (byte)t <= (byte)BlockType.GoldAxe;
+            => ((byte)t >= (byte)BlockType.WoodSword && (byte)t <= (byte)BlockType.GoldAxe)
+            || ((byte)t >= (byte)BlockType.WoodHoe   && (byte)t <= (byte)BlockType.GoldHoe);
 
         // True if this BlockType id refers to a non-placeable, non-tool
         // inventory item (Stick, Coal, ingots, gem, Flint, ClayBall /
@@ -357,7 +531,27 @@ namespace VStudioCraft.Game
         // extend the second slice, no edit needed here.
         public static bool IsItem(BlockType t)
             => ((byte)t >= (byte)BlockType.Stick       && (byte)t <= (byte)BlockType.Bowl)
-            || ((byte)t >= (byte)BlockType.RawPorkchop && (byte)t <= (byte)BlockType.Egg);
+            || ((byte)t >= (byte)BlockType.RawPorkchop && (byte)t <= (byte)BlockType.Egg)
+            // Tier 4 #14 — farming items (WheatSeeds, WheatItem, Bread,
+            // MushroomStew) live past the hoe slice. Append-only past
+            // this range automatically extends IsItem — bumped in
+            // Tier 4 #26 to include SugarCaneItem / Paper / Book.
+            // Note that SugarCane (the in-world block at id 94) sits
+            // BETWEEN MushroomStew and SugarCaneItem; the slice gap
+            // skips it because it's a placeable block, not an item,
+            // and falls through to the explicit per-block IsCubeShape
+            // / IsSolid / IsOpaque branches below.
+            || ((byte)t >= (byte)BlockType.SugarCaneItem && (byte)t <= (byte)BlockType.Book)
+            || ((byte)t >= (byte)BlockType.WheatSeeds  && (byte)t <= (byte)BlockType.MushroomStew)
+            // Tier 4 #16 — Door items. Block halves (98..101) sit
+            // BETWEEN Book and the door items, but they're placeable
+            // in-world blocks (raycast-targetable, mesher-rendered)
+            // — so the slice intentionally JUMPS over them and only
+            // covers the two item ids (102..103). Adding the ranges
+            // separately keeps the per-id branches in IsSolid /
+            // IsCubeShape / IsOpaque from being short-circuited by
+            // the item early-out.
+            || ((byte)t >= (byte)BlockType.WoodDoorItem && (byte)t <= (byte)BlockType.IronDoorItem);
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -396,6 +590,26 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
+                // Wheat — cross-sprite, not cube. Mesher takes the
+                // EmitModels branch (same path as flowers) and reads
+                // the per-cell metadata low-4-bits to pick the
+                // TileWheat0..TileWheat7 stage tile.
+                case BlockType.Wheat:
+                // Tier 4 #26 — Sugar cane is also a cross-sprite plant.
+                // Mesher routes it through EmitCrossSprite via the
+                // standard non-cube path (same as flowers/wheat).
+                case BlockType.SugarCane:
+                    return false;
+                // Tier 4 #16 — Door halves are a thin slab (3/16-deep
+                // quad against the wall face), not a full 1×1×1 cube.
+                // Marking them non-cube keeps the cube sweep from
+                // emitting bogus full-cube faces around them and
+                // routes them through the EmitModels branch in
+                // ChunkMesher (same dispatch path as wall torches).
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
                     return false;
                 default:
                     return true;
@@ -436,6 +650,27 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
+                // Wheat — cross-sprite, doesn't fill the cell, so it's
+                // non-opaque the same way flowers and mushrooms are.
+                case BlockType.Wheat:
+                // Tier 4 #26 — Sugar cane same shape as wheat: the
+                // cross-sprite doesn't fill the cell, so adjacent
+                // block faces must still emit (otherwise the block
+                // beneath the cane loses its top face and the cell
+                // walls disappear).
+                case BlockType.SugarCane:
+                    return false;
+                // Tier 4 #16 — Doors are thin slabs and don't fill the
+                // cell; the four neighbouring cube faces (and the
+                // top/bottom of the cell) must still emit, so the
+                // door is non-opaque the same way wall torches and
+                // cross-sprites are. Without this the block ABOVE the
+                // door's top half loses its bottom face when culled
+                // against the door cell.
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
                     return false;
                 default:
                     return true;
@@ -506,6 +741,25 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
+                // Wheat is light-transparent for the same reason as the
+                // other cross-sprite blocks: the cell isn't fully filled.
+                case BlockType.Wheat:
+                // Tier 4 #26 — Sugar cane: cross-sprite, light passes
+                // straight through. Without this a 3-tall cane stack
+                // would cast a dark shadow column underneath it like a
+                // solid cube does.
+                case BlockType.SugarCane:
+                // Tier 4 #16 — Door halves don't fill the cell; light
+                // must propagate through them (otherwise a closed
+                // door would cast a dark column the height of the
+                // doorway, leaving the room behind it unlit). This
+                // matches Alpha — wooden doors never blocked light;
+                // light flowed through the cell as if it were air
+                // for the sky/block flood-fill purposes.
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
                     return true;
                 default:
                     return false;
@@ -568,6 +822,12 @@ namespace VStudioCraft.Game
                 case BlockType.IronBlock:
                 case BlockType.DiamondBlock:
                 case BlockType.GoldBlock:
+                // Tier 4 #16 — Iron door hardness 5.0 (matches Alpha
+                // 1.1.2_01 — same as iron block, reflecting the
+                // material). Like the wood door, both halves share
+                // the value; the break path cascades.
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
                     return 5f;
                 case BlockType.IronOre:
                 case BlockType.DiamondOre:
@@ -587,6 +847,14 @@ namespace VStudioCraft.Game
                 case BlockType.Bookshelf:
                 case BlockType.CraftingTable:
                 case BlockType.Chest:
+                // Tier 4 #16 — Wooden door hardness 2.0 (matches Alpha
+                // 1.1.2_01 — same as planks, since the door IS a
+                // plank construct). Both halves share the value;
+                // breaking either half cascades to the other in the
+                // GameRenderer break path so the timer just needs to
+                // be the per-half value.
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
                     return 2f;
                 case BlockType.Dirt:
                 case BlockType.Grass:
@@ -594,6 +862,13 @@ namespace VStudioCraft.Game
                 case BlockType.Gravel:
                 case BlockType.Clay:
                     return 0.5f;
+                // Farmland sits between dirt (0.5) and stone — Alpha
+                // gave tilled soil a slightly higher break time than
+                // dirt, presumably because the block is "compacted" by
+                // the hoe pass. 0.6 keeps it as a quick break either
+                // way (a single shovel swing).
+                case BlockType.Farmland:
+                    return 0.6f;
                 case BlockType.Wool:
                     return 0.8f;
                 case BlockType.Glass:
@@ -608,6 +883,17 @@ namespace VStudioCraft.Game
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
+                // Wheat at any growth stage breaks instantly (Alpha
+                // hardness 0). Drops are a custom branch in
+                // SpawnBreakDrop — stage-7 drops 1 wheat + 0..3 seeds,
+                // earlier stages drop a single seed.
+                case BlockType.Wheat:
+                // Tier 4 #26 — Sugar cane breaks instantly bare-handed
+                // (Alpha hardness 0). Drop is one SugarCaneItem per
+                // cell broken; if the BOTTOM cell of a 2/3-tall stack
+                // is broken, the cells above cascade-break (same
+                // unsupported-block pattern as torches).
+                case BlockType.SugarCane:
                     return 0f;
                 // Air/fluids aren't raycast-targetable so callers shouldn't
                 // hit this; return 0 anyway as a defensive default.
@@ -780,8 +1066,83 @@ namespace VStudioCraft.Game
                 case BlockType.Leather:        return BlockTextures.TileLeather;
                 case BlockType.Feather:        return BlockTextures.TileFeather;
                 case BlockType.Egg:            return BlockTextures.TileEgg;
+                // Tier 4 #14 — hoe icons. Material order matches the
+                // rest of the tool ladder.
+                case BlockType.WoodHoe:        return BlockTextures.TileWoodHoe;
+                case BlockType.StoneHoe:       return BlockTextures.TileStoneHoe;
+                case BlockType.IronHoe:        return BlockTextures.TileIronHoe;
+                case BlockType.DiamondHoe:     return BlockTextures.TileDiamondHoe;
+                case BlockType.GoldHoe:        return BlockTextures.TileGoldHoe;
+                // Farmland: top face shows the dry-tilled-soil tile,
+                // sides + bottom share the dirt tile (Alpha: only the
+                // top of farmland looks different — the sides are the
+                // same texture as plain dirt).
+                case BlockType.Farmland:
+                    if (faceKind == 0) return BlockTextures.TileFarmlandTop;
+                    return BlockTextures.TileDirt;
+                // Wheat — default to the stage-0 tile here. The
+                // mesher uses GetWheatTileForStage to pick the actual
+                // tile per growth stage by reading per-cell metadata.
+                // Anything that calls into the un-oriented lookup
+                // (e.g. inventory icon for the in-world block) gets
+                // stage 0 (sprouts) which is the safest "wheat" read.
+                case BlockType.Wheat:          return BlockTextures.TileWheat0;
+                // Farming items.
+                case BlockType.WheatSeeds:     return BlockTextures.TileWheatSeeds;
+                case BlockType.WheatItem:      return BlockTextures.TileWheatItem;
+                case BlockType.Bread:          return BlockTextures.TileBread;
+                case BlockType.MushroomStew:   return BlockTextures.TileMushroomStew;
+                // Tier 4 #26 — Sugar cane block + paper/book items.
+                // The block is cross-sprite so all face kinds map to
+                // the same green-stalk tile; the mesher's EmitCrossSprite
+                // path renders both diagonal planes from this layer.
+                case BlockType.SugarCane:      return BlockTextures.TileSugarCane;
+                case BlockType.SugarCaneItem:  return BlockTextures.TileSugarCaneItem;
+                case BlockType.Paper:          return BlockTextures.TilePaper;
+                case BlockType.Book:           return BlockTextures.TileBook;
+                // Tier 4 #16 — Door block tiles. Each half has its own
+                // tile (top half shows the cross-brace + window, bottom
+                // shows the kick-plate + hinge band). The mesher's
+                // EmitDoorSlab path uses these for both faces of the
+                // slab quad — the texture itself is two-sided so the
+                // hinge is on the correct visual side regardless of
+                // which face the player views from. Item icons get
+                // their own dedicated tiles (TileWoodDoorItem /
+                // TileIronDoorItem) — Alpha 1.1.2 used full-height
+                // door icons in the inventory, not the half-block art.
+                case BlockType.WoodDoorBlockBottom: return BlockTextures.TileWoodDoorBottom;
+                case BlockType.WoodDoorBlockTop:    return BlockTextures.TileWoodDoorTop;
+                case BlockType.IronDoorBlockBottom: return BlockTextures.TileIronDoorBottom;
+                case BlockType.IronDoorBlockTop:    return BlockTextures.TileIronDoorTop;
+                case BlockType.WoodDoorItem:        return BlockTextures.TileWoodDoorItem;
+                case BlockType.IronDoorItem:        return BlockTextures.TileIronDoorItem;
                 default:
                     return BlockTextures.TileStone;
+            }
+        }
+
+        // Tier 4 #14 — Wheat tile per growth stage. Maps the per-cell
+        // metadata low-4-bits (clamped to 0..7) to the corresponding
+        // TileWheat0..TileWheat7 layer index. Called from the mesher's
+        // EmitModels branch so each Wheat block in a chunk picks its
+        // own tile — adjacent fully-grown wheat (stage 7) renders with
+        // ripe golden tops while a freshly planted neighbour stays as
+        // green sprouts.
+        public static int GetWheatTileForStage(byte meta)
+        {
+            int stage = meta & 0x0F;
+            if (stage < 0) stage = 0;
+            if (stage > 7) stage = 7;
+            switch (stage)
+            {
+                case 0: return BlockTextures.TileWheat0;
+                case 1: return BlockTextures.TileWheat1;
+                case 2: return BlockTextures.TileWheat2;
+                case 3: return BlockTextures.TileWheat3;
+                case 4: return BlockTextures.TileWheat4;
+                case 5: return BlockTextures.TileWheat5;
+                case 6: return BlockTextures.TileWheat6;
+                default: return BlockTextures.TileWheat7;
             }
         }
 
@@ -854,15 +1215,154 @@ namespace VStudioCraft.Game
             if (axis == 1) return dir > 0 ? 0 : 1;
             return 2;
         }
+
+        // Tier 4 #16 — Door predicate helpers. The break path, mesher,
+        // and interact path all need to ask "is this any door half?"
+        // / "is this a top half / bottom half?" without listing all
+        // four block ids in switch-cases at every site. Centralised
+        // here so adding a new door material in the future (e.g.
+        // gold / diamond if the project ever extends past Alpha
+        // parity) only needs an edit here.
+        public static bool IsDoor(BlockType t)
+            => t == BlockType.WoodDoorBlockBottom
+            || t == BlockType.WoodDoorBlockTop
+            || t == BlockType.IronDoorBlockBottom
+            || t == BlockType.IronDoorBlockTop;
+
+        public static bool IsDoorBottom(BlockType t)
+            => t == BlockType.WoodDoorBlockBottom
+            || t == BlockType.IronDoorBlockBottom;
+
+        public static bool IsDoorTop(BlockType t)
+            => t == BlockType.WoodDoorBlockTop
+            || t == BlockType.IronDoorBlockTop;
+
+        // Given a door BlockType (any half), return the BOTTOM half
+        // for the same material. Used by the break/interact paths
+        // when the player hits the top half — they need to find the
+        // matching bottom cell to remove or toggle. Returns Air for
+        // non-door inputs as a defensive default.
+        public static BlockType DoorBottomFor(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                    return BlockType.WoodDoorBlockBottom;
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
+                    return BlockType.IronDoorBlockBottom;
+                default:
+                    return BlockType.Air;
+            }
+        }
+
+        // Inverse: given any door half, return the TOP half for the
+        // same material. Same use-cases as DoorBottomFor.
+        public static BlockType DoorTopFor(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                    return BlockType.WoodDoorBlockTop;
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
+                    return BlockType.IronDoorBlockTop;
+                default:
+                    return BlockType.Air;
+            }
+        }
+
+        // Translate a door block (any half/material) to the ITEM that
+        // drops when broken. Both wood halves drop a single
+        // WoodDoorItem (the player gets the door back as one piece —
+        // Alpha behaviour); both iron halves drop IronDoorItem. The
+        // GameRenderer break path calls DoorBottomFor first to remove
+        // both halves, then this helper for the single drop.
+        public static BlockType DoorDropItem(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                    return BlockType.WoodDoorItem;
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
+                    return BlockType.IronDoorItem;
+                default:
+                    return BlockType.Air;
+            }
+        }
+
+        // Translate a held door ITEM to the BOTTOM block half it
+        // should spawn on placement. The TOP half is always
+        // DoorTopFor of the bottom — only one branch needed.
+        public static BlockType DoorBottomBlockForItem(BlockType item)
+        {
+            if (item == BlockType.WoodDoorItem) return BlockType.WoodDoorBlockBottom;
+            if (item == BlockType.IronDoorItem) return BlockType.IronDoorBlockBottom;
+            return BlockType.Air;
+        }
+
+        // Door metadata byte format (per spec):
+        //   bit 0      (mask 0x01): open flag (0=closed, 1=open)
+        //   bits 1..2  (mask 0x06, >>1): facing (0=N, 1=E, 2=S, 3=W)
+        //   bit 3      (mask 0x08): hinge side (0=left, 1=right)
+        // The metadata is stored in Chunk._meta and persisted via
+        // WriteSparseMeta (filtered to door block ids alongside
+        // Wheat). Both halves of a door MUST keep their bytes in
+        // sync — the interact / placement code writes both cells
+        // with the same byte. Helpers below pack and unpack the
+        // bits so the renderer / interact / placement paths don't
+        // touch the bit layout directly.
+        public const byte DoorMetaOpenBit  = 0x01;
+        public const byte DoorMetaHingeBit = 0x08;
+
+        public static bool DoorIsOpen(byte meta)  => (meta & DoorMetaOpenBit)  != 0;
+        public static bool DoorHingeRight(byte meta) => (meta & DoorMetaHingeBit) != 0;
+
+        public static BlockFacing DoorFacing(byte meta)
+        {
+            int f = (meta >> 1) & 0x03;
+            switch (f)
+            {
+                case 0: return BlockFacing.North;
+                case 1: return BlockFacing.East;
+                case 2: return BlockFacing.South;
+                default: return BlockFacing.West;
+            }
+        }
+
+        public static byte DoorPackMeta(BlockFacing facing, bool open, bool hingeRight)
+        {
+            int f;
+            switch (facing)
+            {
+                case BlockFacing.East:  f = 1; break;
+                case BlockFacing.South: f = 2; break;
+                case BlockFacing.West:  f = 3; break;
+                default:                f = 0; break; // North
+            }
+            byte b = (byte)((f & 0x03) << 1);
+            if (open) b |= DoorMetaOpenBit;
+            if (hingeRight) b |= DoorMetaHingeBit;
+            return b;
+        }
+
+        public static byte DoorWithOpen(byte meta, bool open)
+            => (byte)(open ? (meta | DoorMetaOpenBit) : (meta & ~DoorMetaOpenBit));
     }
 
     // Tool kind drives which block family the tool is "effective" against
     // (faster break + drop eligibility for ores). None means "this stack
     // isn't a tool" — the helpers below return defensive defaults so a
     // bare-hand swing on stone still drops nothing without crashing the
-    // break path. Hoes are intentionally absent: there's no farming yet
-    // and the items.png hoe row is left unmapped.
-    internal enum ToolKind { None, Sword, Shovel, Pickaxe, Axe }
+    // break path. Hoe joined the kind set in Tier 4 #14; it doesn't
+    // speed-mine any block and isn't a RequiredKind for anything — it
+    // only acts as the "till on RMB" interactor (see
+    // GameRenderer.TryInteract).
+    internal enum ToolKind { None, Sword, Shovel, Pickaxe, Axe, Hoe }
 
     // Tier ladder for harvest eligibility. Wood and Gold sit at the same
     // tier (Alpha quirk: gold mines fast but as poorly as wood); Stone is
@@ -891,6 +1391,11 @@ namespace VStudioCraft.Game
         public static ToolKind GetKind(BlockType t)
         {
             if (!BlockData.IsTool(t)) return ToolKind.None;
+            // Hoes were appended past the original [WoodSword..GoldAxe]
+            // tool slice so the chunked-into-5 arithmetic doesn't reach
+            // them — branch on the hoe range first.
+            if ((byte)t >= (byte)BlockType.WoodHoe && (byte)t <= (byte)BlockType.GoldHoe)
+                return ToolKind.Hoe;
             int chunk = ((byte)t - (byte)BlockType.WoodSword) / 5;
             switch (chunk)
             {
@@ -905,6 +1410,21 @@ namespace VStudioCraft.Game
         public static ToolMaterial GetMaterial(BlockType t)
         {
             if (!BlockData.IsTool(t)) return ToolMaterial.None;
+            // Hoe slice — same wood/stone/iron/diamond/gold ordering as
+            // the rest of the tool ladder; we just rebase to WoodHoe.
+            if ((byte)t >= (byte)BlockType.WoodHoe && (byte)t <= (byte)BlockType.GoldHoe)
+            {
+                int hidx = (byte)t - (byte)BlockType.WoodHoe;
+                switch (hidx)
+                {
+                    case 0: return ToolMaterial.Wood;
+                    case 1: return ToolMaterial.Stone;
+                    case 2: return ToolMaterial.Iron;
+                    case 3: return ToolMaterial.Diamond;
+                    case 4: return ToolMaterial.Gold;
+                }
+                return ToolMaterial.None;
+            }
             int idx = ((byte)t - (byte)BlockType.WoodSword) % 5;
             switch (idx)
             {
@@ -1097,6 +1617,20 @@ namespace VStudioCraft.Game
                 case BlockType.TorchSouth:
                 case BlockType.TorchNorth:
                     return BlockType.Torch;
+                // Tier 4 #16 — Doors drop the item form, not the block
+                // half. The break path collapses both halves into a
+                // single item drop (see ScanDoorCascadeOnBreak in
+                // GameRenderer), but DropFor still needs to map each
+                // half to its item so the survival drop pipeline
+                // routes correctly when the cascade scan finds only
+                // ONE half left (e.g. the other was already air-broken
+                // by some other agent — falls back to a single drop).
+                case BlockType.WoodDoorBlockBottom:
+                case BlockType.WoodDoorBlockTop:
+                    return BlockType.WoodDoorItem;
+                case BlockType.IronDoorBlockBottom:
+                case BlockType.IronDoorBlockTop:
+                    return BlockType.IronDoorItem;
                 default: return block;
             }
         }

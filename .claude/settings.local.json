@@ -151,7 +151,21 @@
       "PowerShell(Set-Location 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone'; $output = dotnet msbuild /t:CoreCompile /p:Configuration=Debug /v:minimal 2>&1; $exit = $LASTEXITCODE; \"EXIT=$exit\"; $output | Select-String -Pattern 'error|Error\\\\\\(s\\\\\\)' | Select-Object -First 30)",
       "PowerShell(Set-Location 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone'; $output = dotnet build /p:Configuration=Debug /v:minimal 2>&1; \"EXIT=$LASTEXITCODE\"; \"--- CS errors \\(real compile errors\\): ---\"; $output | Select-String -Pattern 'error CS' | Select-Object -First 20; \"--- MSB errors \\(build infra\\): ---\"; $output | Select-String -Pattern 'error MSB' | Select-Object -First 5)",
       "PowerShell(Set-Location 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone'; $output = dotnet build /p:Configuration=Debug /v:minimal 2>&1; \"EXIT=$LASTEXITCODE\"; \"--- CS errors: ---\"; $output | Select-String -Pattern 'error CS' | Select-Object -First 25; \"--- MSB errors: ---\"; $output | Select-String -Pattern 'error MSB' | Select-Object -First 5)",
-      "PowerShell(Set-Location 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone'; $output = dotnet build /p:Configuration=Debug /v:minimal 2>&1; \"EXIT=$LASTEXITCODE\"; \"--- CS errors: ---\"; $output | Select-String -Pattern 'error CS' | Select-Object -First 10)"
+      "PowerShell(Set-Location 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone'; $output = dotnet build /p:Configuration=Debug /v:minimal 2>&1; \"EXIT=$LASTEXITCODE\"; \"--- CS errors: ---\"; $output | Select-String -Pattern 'error CS' | Select-Object -First 10)",
+      "PowerShell($files = @\\(\"BlockTextures.cs\",\"CraftingRecipes.cs\",\"CreativeCatalog.cs\",\"GameRenderer.cs\",\"World.cs\",\"Chunk.cs\",\"ChunkMesher.cs\",\"Player.cs\",\"WorldSaveFormat.cs\"\\); foreach \\($f in $files\\) { $p = \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\$f\"; $c = \\(Get-Content $p\\).Count; Write-Output \"$c $f\" })",
+      "PowerShell(dotnet build \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj\" -nologo -v q 2>&1)",
+      "PowerShell($files = @\\(\"C:/Users/danla/source/repos/VStudioCraft/src/VStudioCraft/Game/BlockTextures.cs\", \"C:/Users/danla/source/repos/VStudioCraft/src/VStudioCraft/Game/ChunkMesher.cs\", \"C:/Users/danla/source/repos/VStudioCraft/src/VStudioCraft/Game/GameRenderer.cs\", \"C:/Users/danla/source/repos/VStudioCraft/src/VStudioCraft/Game/Chunk.cs\", \"C:/Users/danla/source/repos/VStudioCraft/src/VStudioCraft/Game/WorldSaveFormat.cs\", \"C:/Users/danla/source/repos/VStudioCraft/src/VStudioCraft/Game/CraftingRecipes.cs\", \"C:/Users/danla/source/repos/VStudioCraft/src/VStudioCraft/Game/CreativeCatalog.cs\"\\); foreach \\($f in $files\\) { $count = \\(Get-Content $f\\).Count; \"$count $f\" })",
+      "PowerShell(\\(Get-Content 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\Block.cs'\\).Length)",
+      "PowerShell(dotnet build C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj 2>&1)",
+      "PowerShell(dotnet build C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\VStudioCraft.csproj /t:CoreCompile 2>&1)",
+      "PowerShell(git -C C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft log --oneline -5)",
+      "PowerShell(git -C C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft log --oneline -1 master)",
+      "PowerShell(git -C C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft status)",
+      "PowerShell(git -C C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft branch --show-current)",
+      "PowerShell(git -C C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft diff --stat)",
+      "PowerShell(\\(Get-Content 'C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\BlockTextures.cs'\\).Length)",
+      "PowerShell(git -C C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft diff --stat HEAD -- src/VStudioCraft/Game/BlockTextures.cs)",
+      "PowerShell(dotnet build src/VStudioCraft/VStudioCraft.csproj 2>&1)"
     ]
   }
 }

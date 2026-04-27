@@ -350,6 +350,16 @@ namespace VStudioCraft.Game
                 if (BlockData.IsCubeShape(t)) continue;
 
                 int layer = BlockData.GetTileIndex(t, 2);
+                // Tier 4 #14 — Wheat picks its tile per-cell based on
+                // the metadata growth stage in the low 4 bits, so each
+                // wheat block in a chunk shows its own ripening state.
+                // Other cross-sprite blocks (flowers, mushrooms,
+                // saplings) keep the static layer above.
+                if (t == BlockType.Wheat)
+                {
+                    byte meta = chunk.RawMeta[Chunk.Index(x, y, z)];
+                    layer = BlockData.GetWheatTileForStage(meta);
+                }
                 int lightPacked = LightAt(chunk, x, y, z);
                 if (BlockData.IsWallTorch(t))
                 {
@@ -358,6 +368,18 @@ namespace VStudioCraft.Game
                     // wall and the tip leans out into the cell. Same atlas
                     // tile as a floor torch; geometry differs only.
                     EmitWallTorchSprite(x + baseX, y, z + baseZ, t, layer, lightPacked);
+                }
+                else if (BlockData.IsDoor(t))
+                {
+                    // Tier 4 #16 — Door slab. Read the per-cell metadata
+                    // for facing + open + hinge state, then render a
+                    // 3/16-deep quad pinned to the appropriate wall of
+                    // the cell. The mesher is the only place that
+                    // needs to interpret the open-flag for geometry —
+                    // the placement / interact paths set the byte and
+                    // re-mesh the chunk; nothing else inspects it.
+                    byte meta = chunk.RawMeta[Chunk.Index(x, y, z)];
+                    EmitDoorSlab(x + baseX, y, z + baseZ, t, meta, layer, lightPacked);
                 }
                 else
                 {
@@ -461,6 +483,147 @@ namespace VStudioCraft.Game
                 tx - dpx, ty - dpy, tz - dpz,  1f, 1f,
                 tx + dpx, ty + dpy, tz + dpz,  0f, 1f,
                 nx, ny, nz, layer, lightPacked);
+        }
+
+        // Tier 4 #16 — Door slab geometry. A door is a thin (3/16-deep)
+        // axis-aligned box pinned to one wall of the cell, with the
+        // wall picked by (facing, open) state from the metadata byte:
+        //
+        //   closed: the slab sits flush with the wall whose outward
+        //           normal matches the door's facing — i.e. a North-
+        //           facing door's slab is at z=0..3/16. The player
+        //           crosses the threshold IN the facing direction.
+        //
+        //   open:   the door rotates 90° about the hinge edge, so the
+        //           slab moves to a perpendicular wall. With hinge=left
+        //           it rotates one way, hinge=right rotates the other.
+        //           The hinge edge stays fixed; the free edge swings
+        //           through the cell into the perpendicular wall.
+        //
+        // We render the slab as a true 6-face box (4 broad sides +
+        // 2 thin edges) so the player can see the slab thickness when
+        // viewed from oblique angles. All six faces sample the same
+        // door tile (top half / bottom half is already encoded in the
+        // BlockType); mismatched UVs on the thin sides aren't an
+        // issue because they're 3/16 of a pixel of contiguous wood/
+        // iron palette anyway.
+        //
+        // Normals point outward from the slab volume so the lighting
+        // path picks the correct cell-light value per face. Each quad
+        // is emitted ONCE — back-face culling + the meshed slab being
+        // a closed box means the player only ever sees the outward
+        // faces.
+        private void EmitDoorSlab(float wx, float wy, float wz, BlockType type, byte meta, int layer, int lightPacked)
+        {
+            const float thick = 3f / 16f;
+            BlockFacing f = BlockData.DoorFacing(meta);
+            bool open = BlockData.DoorIsOpen(meta);
+            bool hingeRight = BlockData.DoorHingeRight(meta);
+
+            // Resolve which of the 4 walls the slab actually pins to.
+            // When the door is OPEN, swing the wall pin 90° about the
+            // hinge — direction of swing depends on hinge side.
+            BlockFacing slabWall = f;
+            if (open)
+            {
+                if (hingeRight)
+                {
+                    // Right-hinge swings counter-clockwise viewed from
+                    // above (e.g. North-facing door swings to East).
+                    switch (f)
+                    {
+                        case BlockFacing.North: slabWall = BlockFacing.East;  break;
+                        case BlockFacing.East:  slabWall = BlockFacing.South; break;
+                        case BlockFacing.South: slabWall = BlockFacing.West;  break;
+                        default:                slabWall = BlockFacing.North; break; // West
+                    }
+                }
+                else
+                {
+                    // Left-hinge swings clockwise viewed from above.
+                    switch (f)
+                    {
+                        case BlockFacing.North: slabWall = BlockFacing.West;  break;
+                        case BlockFacing.East:  slabWall = BlockFacing.North; break;
+                        case BlockFacing.South: slabWall = BlockFacing.East;  break;
+                        default:                slabWall = BlockFacing.South; break; // West
+                    }
+                }
+            }
+
+            // Build the slab AABB inside the cell. The slab fills the
+            // full Y of the cell (top half + bottom half each render
+            // their own slab over their own cell's Y range — stacked
+            // they form the full 2-tall door silhouette).
+            float x0, x1, z0, z1;
+            switch (slabWall)
+            {
+                case BlockFacing.North:
+                    x0 = wx + 0f;     x1 = wx + 1f;
+                    z0 = wz + 0f;     z1 = wz + thick;
+                    break;
+                case BlockFacing.South:
+                    x0 = wx + 0f;     x1 = wx + 1f;
+                    z0 = wz + (1f - thick); z1 = wz + 1f;
+                    break;
+                case BlockFacing.East:
+                    x0 = wx + (1f - thick); x1 = wx + 1f;
+                    z0 = wz + 0f;     z1 = wz + 1f;
+                    break;
+                default: // West
+                    x0 = wx + 0f;     x1 = wx + thick;
+                    z0 = wz + 0f;     z1 = wz + 1f;
+                    break;
+            }
+            float y0 = wy + 0f;
+            float y1 = wy + 1f;
+
+            // Six box faces. UVs sample the full tile [0..1] on the two
+            // broad faces; the four thin edges sample a 3/16-wide UV
+            // strip from the same tile so they pick up an in-palette
+            // colour without obvious texture distortion.
+            // -X face
+            EmitCrossQuad(
+                x0, y0, z1, 0f, 0f,
+                x0, y0, z0, 1f, 0f,
+                x0, y1, z0, 1f, 1f,
+                x0, y1, z1, 0f, 1f,
+                -1f, 0f, 0f, layer, lightPacked);
+            // +X face
+            EmitCrossQuad(
+                x1, y0, z0, 0f, 0f,
+                x1, y0, z1, 1f, 0f,
+                x1, y1, z1, 1f, 1f,
+                x1, y1, z0, 0f, 1f,
+                +1f, 0f, 0f, layer, lightPacked);
+            // -Z face
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x1, y0, z0, 1f, 0f,
+                x1, y1, z0, 1f, 1f,
+                x0, y1, z0, 0f, 1f,
+                0f, 0f, -1f, layer, lightPacked);
+            // +Z face
+            EmitCrossQuad(
+                x1, y0, z1, 0f, 0f,
+                x0, y0, z1, 1f, 0f,
+                x0, y1, z1, 1f, 1f,
+                x1, y1, z1, 0f, 1f,
+                0f, 0f, +1f, layer, lightPacked);
+            // +Y face (top edge of slab)
+            EmitCrossQuad(
+                x0, y1, z1, 0f, 0f,
+                x1, y1, z1, 1f, 0f,
+                x1, y1, z0, 1f, 1f,
+                x0, y1, z0, 0f, 1f,
+                0f, +1f, 0f, layer, lightPacked);
+            // -Y face (bottom edge of slab)
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x1, y0, z0, 1f, 0f,
+                x1, y0, z1, 1f, 1f,
+                x0, y0, z1, 0f, 1f,
+                0f, -1f, 0f, layer, lightPacked);
         }
 
         private void EmitCrossSprite(float wx, float wy, float wz, int layer, int lightPacked)

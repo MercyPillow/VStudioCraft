@@ -65,6 +65,26 @@ namespace VStudioCraft.Game
             _blocks[Index(x, y, z)] = (byte)t;
         }
 
+        // Tier 4 #14 — Wheat growth uses the per-cell metadata byte to
+        // hold the growth stage in the low 4 bits (clamped 0..7). The
+        // mesher reads this through Block.GetWheatTileForStage so each
+        // wheat block in a chunk picks its own per-stage tile, and the
+        // random-tick promotes meta+1 once enough light is present.
+        // The accessor is bounds-checked to mirror Get/Set; out-of-range
+        // reads return 0 (a freshly-planted sprout if the caller is the
+        // mesher, harmless if it's the tick).
+        public byte GetMeta(int x, int y, int z)
+        {
+            if ((uint)x >= SizeX || (uint)y >= SizeY || (uint)z >= SizeZ) return 0;
+            return _meta[Index(x, y, z)];
+        }
+
+        public void SetMeta(int x, int y, int z, byte value)
+        {
+            if ((uint)x >= SizeX || (uint)y >= SizeY || (uint)z >= SizeZ) return;
+            _meta[Index(x, y, z)] = value;
+        }
+
         public byte GetSkyLight(int x, int y, int z)
         {
             if ((uint)x >= SizeX || (uint)y >= SizeY || (uint)z >= SizeZ) return 15;
@@ -119,6 +139,62 @@ namespace VStudioCraft.Game
                 byte b = _blocks[i];
                 if (!Enum.IsDefined(typeof(BlockType), b))
                     _blocks[i] = (byte)BlockType.Air;
+            }
+        }
+
+        // Tier 4 #14 (v8) — Sparse wheat-metadata persistence. The full
+        // 32 KB _meta buffer is 99.9% zero in any non-fluid-tick world,
+        // so writing every byte would balloon save sizes. Instead we
+        // walk the block array, find Wheat cells, and emit just
+        // (index:int, meta:byte) pairs for those cells. Fluid metadata
+        // is still re-derived from a fresh tick on load (its low-4-bits
+        // spread reach reaches steady state within a few ticks), so the
+        // save format only needs to round-trip cells whose meta is
+        // genuinely state and not derived. Today that's wheat plus the
+        // four door halves (Tier 4 #16) — both halves carry an identical
+        // facing/open/hinge byte that drives the mesher and the toggle
+        // path, and losing it would render every saved door closed-and-
+        // facing-north on reload. The wire format is unchanged: pairs of
+        // (index:int, meta:byte). The reader (ReadSparseMeta) doesn't
+        // care WHICH block produced the meta — it just stamps the byte
+        // back into the slot — so no version bump is needed.
+        public void WriteSparseMeta(BinaryWriter w)
+        {
+            int count = 0;
+            for (int i = 0; i < _blocks.Length; i++)
+                if (IsSparseMetaCell(_blocks[i])) count++;
+            w.Write(count);
+            for (int i = 0; i < _blocks.Length; i++)
+                if (IsSparseMetaCell(_blocks[i]))
+                {
+                    w.Write(i);
+                    w.Write(_meta[i]);
+                }
+        }
+
+        // Predicate for the sparse-meta filter — kept as a tiny helper
+        // so the read/write loops stay readable AND so adding a new
+        // metadata-bearing block (saplings, cake bites, …) is a one-
+        // line change. Pure id check; we don't peek at the meta byte
+        // because a zero meta is a valid persisted value (e.g. wheat
+        // stage 0, door facing-north-closed-left-hinge).
+        private static bool IsSparseMetaCell(byte id)
+        {
+            BlockType t = (BlockType)id;
+            if (t == BlockType.Wheat) return true;
+            if (BlockData.IsDoor(t)) return true;
+            return false;
+        }
+
+        public void ReadSparseMeta(BinaryReader r)
+        {
+            int count = r.ReadInt32();
+            for (int i = 0; i < count; i++)
+            {
+                int idx = r.ReadInt32();
+                byte m = r.ReadByte();
+                if ((uint)idx < (uint)_meta.Length)
+                    _meta[idx] = m;
             }
         }
     }
