@@ -44,6 +44,17 @@ namespace VStudioCraft.Game
         private static string _initFailureReason; // null when init succeeded
         private static string _preloadDiagnostic;  // last preload attempt summary
 
+        // Tier 4 #25 — Dedicated music source. Allocated alongside the
+        // SFX pool but kept separate so a music track can be started /
+        // stopped independently of the one-shot SFX traffic. The pool's
+        // round-robin eviction would otherwise cut a song mid-playback
+        // the moment the player walks across grass and racks up 16
+        // footstep one-shots; isolating music to its own source dodges
+        // that. Music gain is multiplied by MusicGain * MasterGain at
+        // PlayMusic time so the options menu's two sliders both apply.
+        private static int _musicSource;
+        private static bool _musicSourceCreated;
+
         public static bool IsAvailable => _initTried && !_muted;
         public static string InitFailureReason => _initFailureReason;
         public static string PreloadDiagnostic  => _preloadDiagnostic;
@@ -94,6 +105,15 @@ namespace VStudioCraft.Game
                     AL.Source(_sources[i], ALSourceb.SourceRelative, true);
                     AL.Source(_sources[i], ALSource3f.Position, 0f, 0f, 0f);
                 }
+                // Tier 4 #25 — Dedicated music source. One AL source
+                // separate from the SFX pool so PlayMusic / StopMusic
+                // don't compete with the round-robin one-shot eviction.
+                _musicSource = AL.GenSource();
+                AL.Source(_musicSource, ALSourcef.Gain, 1f);
+                AL.Source(_musicSource, ALSourcef.Pitch, 1f);
+                AL.Source(_musicSource, ALSourceb.SourceRelative, true);
+                AL.Source(_musicSource, ALSource3f.Position, 0f, 0f, 0f);
+                _musicSourceCreated = true;
                 _muted = false;
                 _initFailureReason = null;
                 System.Diagnostics.Debug.WriteLine("[VStudioCraft.AudioEngine] init OK; preload: " + (_preloadDiagnostic ?? "(none)"));
@@ -239,6 +259,66 @@ namespace VStudioCraft.Game
             }
         }
 
+        // Tier 4 #25 — Start streaming a music buffer on the dedicated
+        // music source. Stops any music currently playing first so the
+        // caller doesn't have to bracket the call with StopMusic — a
+        // jukebox eject-then-insert sequence simply calls PlayMusic
+        // again with the new buffer.
+        //
+        // buffer==0 is treated as "no audio asset for this disc" (see
+        // class doc) and is a soft no-op rather than an error. The
+        // jukebox interact path will still flip the entity's Disc field
+        // and consume the disc from the player's hand — only the audio
+        // is silent. This is intentional: V1 ships disc data flow +
+        // structured PlayMusic API + null-safe stub buffers, and real
+        // disc audio (PCM-uploaded WAV / OGG) is a roadmap-deferred
+        // polish item until disc-asset wrangling is in scope.
+        public static void PlayMusic(int buffer, float gain = 1f)
+        {
+            if (_muted || !_musicSourceCreated || buffer == 0) return;
+            if (gain < 0f) gain = 0f;
+            try
+            {
+                AL.SourceStop(_musicSource);
+                AL.Source(_musicSource, ALSourcei.Buffer, buffer);
+                AL.Source(_musicSource, ALSourcef.Gain, gain * _musicGain * _masterGain);
+                AL.Source(_musicSource, ALSourcef.Pitch, 1f);
+                AL.SourcePlay(_musicSource);
+            }
+            catch
+            {
+                // Source state can drift if the AL context is lost. Don't
+                // crash the render thread over it — same defensive
+                // pattern as PlayOneShot.
+            }
+        }
+
+        // Tier 4 #25 — Stop the music source. Idempotent (a Stop on an
+        // already-stopped source is a no-op in OpenAL). Called from the
+        // jukebox eject path and on world unload.
+        public static void StopMusic()
+        {
+            if (_muted || !_musicSourceCreated) return;
+            try { AL.SourceStop(_musicSource); } catch { }
+        }
+
+        // Tier 4 #25 — True while the music source has a buffer that's
+        // actively playing. Useful for the renderer / future UI to
+        // know whether a "now playing" indicator should show.
+        public static bool IsMusicPlaying
+        {
+            get
+            {
+                if (_muted || !_musicSourceCreated) return false;
+                try
+                {
+                    AL.GetSource(_musicSource, ALGetSourcei.SourceState, out int state);
+                    return state == (int)ALSourceState.Playing;
+                }
+                catch { return false; }
+            }
+        }
+
         // Find a source not currently playing. Falls back to evicting the
         // oldest (round-robin via _evictCursor) when the whole pool is
         // busy — caller's sound becomes the freshest one and the displaced
@@ -278,6 +358,16 @@ namespace VStudioCraft.Game
                         try { AL.DeleteSource(_sources[i]); } catch { }
                         _sources[i] = 0;
                     }
+                }
+                // Tier 4 #25 — Tear down the music source alongside the
+                // SFX pool. Same defensive try/catch wrapping — a lost
+                // AL context shouldn't take down the renderer.
+                if (_musicSourceCreated)
+                {
+                    try { AL.SourceStop(_musicSource); } catch { }
+                    try { AL.DeleteSource(_musicSource); } catch { }
+                    _musicSource = 0;
+                    _musicSourceCreated = false;
                 }
                 _context?.Dispose();
             }

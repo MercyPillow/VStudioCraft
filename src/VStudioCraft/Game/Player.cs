@@ -341,10 +341,53 @@ namespace VStudioCraft.Game
         public float SwingTimer { get; set; }
         public const float SwingDurationSeconds = 0.30f;
 
+        // Tier 4 #19 — Equipped armor inventory. The renderer sets
+        // this once at world load so TakeDamage can consult the
+        // equipped pieces without a per-call argument plumbing.
+        // Nullable: a Player constructed before Inventory is wired
+        // (e.g. in unit tests, or a mid-construction state) takes
+        // raw damage with no reduction — the same behaviour the
+        // pre-armor build had.
+        public Inventory EquipmentInventory;
+
+        // Take damage with the Alpha 1.1.2_01 armor reduction formula
+        // applied if the player has equipped pieces. The formula is:
+        //     reduced = max(1, originalDamage * (1 - sumReduction/25))
+        // capped at 80 % reduction. With a full diamond set
+        // (sum=20), 1 - 20/25 = 0.20, so the player still takes 20 %
+        // of incoming damage (rounded up to at least 1 HP per hit
+        // — full immunity wasn't a thing in Alpha and isn't here
+        // either; bypassing the floor would let a full-armor player
+        // ignore lava, suffocation and void damage entirely).
+        //
+        // Durability decrement is a TODO — the armor ladder follows
+        // the same "decrement deferred" pattern the tool ladder
+        // shipped with. A future pass will tick durability per hit
+        // and break a piece when it hits 0.
         public void TakeDamage(int amount)
         {
             if (amount <= 0 || Health <= 0) return;
-            Health -= amount;
+            int effective = amount;
+            if (EquipmentInventory != null)
+            {
+                int reduction = EquipmentInventory.GetTotalArmorReduction();
+                // Cap at 20 (the max a full diamond set provides) so
+                // the formula stays bounded even if a future
+                // enchanting / set-bonus path ever lifts individual
+                // values above their Alpha defaults.
+                if (reduction > 20) reduction = 20;
+                if (reduction > 0)
+                {
+                    // Floor at 20 % of incoming damage, rounded up to
+                    // at least 1. (1 - 20/25) = 0.20 = the 80 % cap
+                    // the spec mandates.
+                    double scale = 1.0 - reduction / 25.0;
+                    if (scale < 0.20) scale = 0.20;
+                    effective = (int)System.Math.Ceiling(amount * scale);
+                    if (effective < 1) effective = 1;
+                }
+            }
+            Health -= effective;
             if (Health < 0) Health = 0;
             // Flash even if the damage didn't kill — the red wash gives
             // the player feedback that something hurt them. Refresh on

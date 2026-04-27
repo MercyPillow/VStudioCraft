@@ -36,7 +36,47 @@ namespace VStudioCraft.Game
         public override void SpawnDeathDrops(IDropSink drops)
         {
             // Alpha 1.1.2_01 zombies dropped nothing on death (rotten
-            // flesh was Beta 1.8). Empty by design.
+            // flesh was Beta 1.8). The only legitimate drop in this
+            // era is the rare chainmail piece — Alpha zombies/skeletons
+            // were the only source of chain armor since it had no
+            // crafting recipe. Roll independently per-piece at 0.5%.
+            TryDropChainmail(drops);
+        }
+
+        private void TryDropChainmail(IDropSink drops)
+        {
+            // 0.5% chance per piece, rolled independently for each of
+            // the four chainmail slots — matches Alpha "rare drop"
+            // rarity for chain armor. Player can in principle get
+            // multiple pieces in one kill (very unlikely but possible),
+            // mirroring Alpha behaviour.
+            BlockType[] pieces =
+            {
+                BlockType.ChainmailHelmet,
+                BlockType.ChainmailChestplate,
+                BlockType.ChainmailLeggings,
+                BlockType.ChainmailBoots,
+            };
+            for (int i = 0; i < pieces.Length; i++)
+            {
+                if (_rng.Next(200) == 0) // 1/200 = 0.5%
+                {
+                    drops.SpawnDrop(
+                        Position + new Vector3(0, 0.5f, 0),
+                        pieces[i], 1,
+                        RandomScatterVelocity());
+                }
+            }
+        }
+
+        private Vector3 RandomScatterVelocity()
+        {
+            float angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            float speed = 1.5f + (float)_rng.NextDouble() * 1.0f;
+            return new Vector3(
+                (float)Math.Cos(angle) * speed,
+                3.0f + (float)_rng.NextDouble() * 1.5f,
+                (float)Math.Sin(angle) * speed);
         }
     }
 
@@ -88,6 +128,32 @@ namespace VStudioCraft.Game
                     Position + new Vector3(0, 0.5f, 0),
                     BlockType.Bow, 1,
                     RandomScatterVelocity());
+            }
+
+            // Skeletons share the chainmail rare-drop niche with
+            // zombies — same 0.5% per-piece roll. Chain armor has no
+            // craft recipe, so this is the only way the player gets it.
+            TryDropChainmail(drops);
+        }
+
+        private void TryDropChainmail(IDropSink drops)
+        {
+            BlockType[] pieces =
+            {
+                BlockType.ChainmailHelmet,
+                BlockType.ChainmailChestplate,
+                BlockType.ChainmailLeggings,
+                BlockType.ChainmailBoots,
+            };
+            for (int i = 0; i < pieces.Length; i++)
+            {
+                if (_rng.Next(200) == 0) // 1/200 = 0.5%
+                {
+                    drops.SpawnDrop(
+                        Position + new Vector3(0, 0.5f, 0),
+                        pieces[i], 1,
+                        RandomScatterVelocity());
+                }
             }
         }
 

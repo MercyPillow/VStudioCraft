@@ -34,6 +34,14 @@ namespace VStudioCraft.Game
         // furnace dict in WorldSaveFormat.
         private readonly Dictionary<(int x, int y, int z), ChestTileEntity> _chestEntities
             = new Dictionary<(int x, int y, int z), ChestTileEntity>();
+        // Jukebox tile entities — same lifetime model as furnaces /
+        // chests. Created when a disc is first inserted (a freshly
+        // placed empty jukebox doesn't allocate one until interact);
+        // removed when the block breaks. Persisted alongside the
+        // furnace + chest dicts in WorldSaveFormat (Tier 4 #25 bumps
+        // the save version to v11 with a new trailing block).
+        private readonly Dictionary<(int x, int y, int z), JukeboxTileEntity> _jukeboxEntities
+            = new Dictionary<(int x, int y, int z), JukeboxTileEntity>();
 
         // Live passive-mob list. Pig was the first entity added in Tier 3
         // #9; Tier 3 #12 generalised the list to PassiveMob so Cow, Sheep
@@ -59,6 +67,16 @@ namespace VStudioCraft.Game
         // pigs, we don't currently persist these across save/load.
         private readonly List<HostileMob> _hostiles = new List<HostileMob>();
         public List<HostileMob> Hostiles => _hostiles;
+
+        // Tier 4 #24 — Painting entities. Same flat-list shape as
+        // Passives/Hostiles — small per-world count (paintings never
+        // tick or move, so the list only grows on player placement
+        // and shrinks on player break). Persisted via WorldSaveFormat
+        // v10. Spawn list is exposed read/write so GameRenderer can
+        // append on RMB-place and remove on LMB-pick; the renderer
+        // also iterates it each frame to draw.
+        private readonly List<Painting> _paintings = new List<Painting>();
+        public List<Painting> Paintings => _paintings;
 
         private readonly Noise _noise;
 
@@ -982,5 +1000,54 @@ namespace VStudioCraft.Game
         // Iterate all (coord, entity) pairs — used by save/load.
         public IEnumerable<KeyValuePair<(int x, int y, int z), ChestTileEntity>> ChestEntities
             => _chestEntities;
+
+        // ---- Jukebox tile entities ----
+
+        // Get-or-create a JukeboxTileEntity at (wx, wy, wz). Caller has
+        // already verified the block at the position is a Jukebox; the
+        // method just hands back (or installs) the persistent slot.
+        // Used by the insert path when the player slots a disc into
+        // a previously-untouched jukebox.
+        public JukeboxTileEntity GetOrCreateJukeboxEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (!_jukeboxEntities.TryGetValue(key, out var je))
+            {
+                je = new JukeboxTileEntity();
+                _jukeboxEntities[key] = je;
+            }
+            return je;
+        }
+
+        // Look up a JukeboxTileEntity without creating one. Returns null
+        // if no entity exists for the coordinate (e.g. a freshly-placed
+        // jukebox with no disc inserted yet doesn't allocate one until
+        // interact). Callers that just want to know "is there a disc
+        // loaded here?" can null-check this.
+        public JukeboxTileEntity TryGetJukeboxEntity(int wx, int wy, int wz)
+        {
+            _jukeboxEntities.TryGetValue((wx, wy, wz), out var je);
+            return je;
+        }
+
+        // Remove the entity at the coordinate and return it (or null).
+        // Used when the jukebox block is broken so the caller can drop
+        // the inserted disc as a DroppedItem (eject-on-break — Alpha
+        // behaviour: breaking a jukebox with a disc loaded ejects the
+        // disc, doesn't destroy it).
+        public JukeboxTileEntity RemoveJukeboxEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (_jukeboxEntities.TryGetValue(key, out var je))
+            {
+                _jukeboxEntities.Remove(key);
+                return je;
+            }
+            return null;
+        }
+
+        // Iterate all (coord, entity) pairs — used by save/load (v11+).
+        public IEnumerable<KeyValuePair<(int x, int y, int z), JukeboxTileEntity>> JukeboxEntities
+            => _jukeboxEntities;
     }
 }

@@ -62,8 +62,21 @@ namespace VStudioCraft.Game
         // ---- non-pixel layout constants (no scaling) --------------------
         public const int MainSlotCount = Cols * MainRows;        // 36
         public const int HotbarSlotCount = Cols;                 // 9
-        public const int TotalSlots = MainSlotCount + HotbarSlotCount; // 45
+        // Tier 4 #19 — Four armor slots (Helmet/Chestplate/Leggings/
+        // Boots), painted as a vertical column LEFT of the main grid.
+        // Slot indices match Inventory.ArmorStart..ArmorStart+3 so a
+        // hit-test or render rect translates directly via Slots[i].
+        public const int ArmorSlotCount = 4;
+        public const int TotalSlots = MainSlotCount + HotbarSlotCount + ArmorSlotCount; // 49
         public const int CatalogRows = MainRows;                 // catalog covers main-grid region
+
+        // Tier 4 #19 — Horizontal gap between the armor column and the
+        // main grid. Matches the visual rhythm of the rest of the
+        // panel (one slot's worth of breathing room is too tight; half
+        // a slot leaves the column hugging the grid in a way that
+        // reads as broken). Scales with the rest of the panel via
+        // UiScale.
+        private const int ArmorGapBase = 12;
 
         public const string Title = "INVENTORY";
 
@@ -80,6 +93,14 @@ namespace VStudioCraft.Game
         public static int TitleGap(int viewW, int viewH)      => UiScale.S(TitleGapBase, viewW, viewH);
         public static int SearchBarHeight(int viewW, int viewH) => UiScale.S(SearchBarHeightBase, viewW, viewH);
         public static int SearchBarGap(int viewW, int viewH)  => UiScale.S(SearchBarGapBase, viewW, viewH);
+        public static int ArmorGap(int viewW, int viewH)      => UiScale.S(ArmorGapBase, viewW, viewH);
+        // Tier 4 #19 — Total horizontal extent of the armor column
+        // including its gap to the main grid (one slot wide + the
+        // gap). Returned as a single helper so the panel-width and
+        // grid-origin computations reference one expression instead
+        // of recomposing the same arithmetic at each site.
+        public static int ArmorColumnWidthPx(int viewW, int viewH)
+            => SlotPx(viewW, viewH) + ArmorGap(viewW, viewH);
 
         // Title glyph multiplier — the bitmap font ships at 8 px per cell;
         // base scale 2 keeps it readable, growing with the viewport so a
@@ -100,8 +121,14 @@ namespace VStudioCraft.Game
         private static int GridHeightPx(int viewW, int viewH)
             => SlotPx(viewW, viewH) * MainRows + HotbarGap(viewW, viewH) + SlotPx(viewW, viewH);
 
+        // Tier 4 #19 — Panel width grows by one armor column + its gap
+        // so the four equipment slots fit on the LEFT of the main grid
+        // without overlapping the panel chrome. Same widening applies
+        // to creative mode (the catalog grid still anchors at the same
+        // column-1 X via gridX0 below) so the search-bar and catalog
+        // hit-rects continue to line up at the right edge.
         public static int PanelWidth(int viewW, int viewH)
-            => GridWidthPx(viewW, viewH) + PanelPadX(viewW, viewH) * 2;
+            => GridWidthPx(viewW, viewH) + ArmorColumnWidthPx(viewW, viewH) + PanelPadX(viewW, viewH) * 2;
         public static int PanelHeight(int viewW, int viewH)
             => PanelHeight(viewW, viewH, /*creative*/false);
 
@@ -189,7 +216,12 @@ namespace VStudioCraft.Game
             int padX = PanelPadX(screenW, screenH);
             int padY = PanelPadY(screenW, screenH);
             int gap  = HotbarGap(screenW, screenH);
-            int gridX0 = px + padX;
+            // Tier 4 #19 — Armor column lives at the panel's left edge
+            // (just inside the pad); the main grid's column-0 X is
+            // pushed RIGHT by the armor-column width + its gap so the
+            // two grids don't collide.
+            int armorX = px + padX;
+            int gridX0 = armorX + ArmorColumnWidthPx(screenW, screenH);
             int gridY0 = py + padY + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
 
             int col = slotIndex % Cols;
@@ -199,18 +231,37 @@ namespace VStudioCraft.Game
                 x = gridX0 + col * slot;
                 y = gridY0 + row * slot;
             }
-            else
+            else if (slotIndex < MainSlotCount + HotbarSlotCount)
             {
                 x = gridX0 + col * slot;
                 int hotbarY = gridY0 + MainRows * slot + gap;
                 if (creative) hotbarY += SearchBarHeight(screenW, screenH) + SearchBarGap(screenW, screenH);
                 y = hotbarY;
             }
+            else
+            {
+                // Tier 4 #19 — Armor slot. Index 0..3 maps to the
+                // four-tall column at the panel's left edge, top-down
+                // in the canonical Helmet→Chestplate→Leggings→Boots
+                // order (matches the per-slot index returned by
+                // BlockData.GetArmorSlot). Vertically aligned with
+                // the main grid's first four rows so the column reads
+                // as a "doll" silhouette flanking the grid.
+                int armorIndex = slotIndex - MainSlotCount - HotbarSlotCount;
+                x = armorX;
+                y = gridY0 + armorIndex * slot;
+            }
             w = slot;
             h = slot;
         }
 
-        public static bool IsHotbarSlot(int slotIndex) => slotIndex >= MainSlotCount;
+        // Tier 4 #19 — Hotbar slot range is now [MainSlotCount,
+        // MainSlotCount+HotbarSlotCount); armor slots past that are NOT
+        // hotbar slots so callers (numeric-key bindings, label
+        // overlays, drop-on-quit logic) don't accidentally treat an
+        // armor piece as a quickbar item.
+        public static bool IsHotbarSlot(int slotIndex)
+            => slotIndex >= MainSlotCount && slotIndex < MainSlotCount + HotbarSlotCount;
         public static int HotbarColumn(int slotIndex) => slotIndex - MainSlotCount;
 
         // Return the slot index under (mx, my), or -1 if none.
@@ -234,7 +285,11 @@ namespace VStudioCraft.Game
             out int x, out int y, out int w, out int h)
         {
             GetPanelRect(screenW, screenH, /*creative*/true, out int px, out int py, out _, out _);
-            x = px + PanelPadX(screenW, screenH);
+            // Tier 4 #19 — Search bar anchors to the right of the
+            // armor column (same X as gridX0 in GetSlotRect) so the
+            // bar lines up with the catalog beneath it instead of
+            // overflowing into the new armor area.
+            x = px + PanelPadX(screenW, screenH) + ArmorColumnWidthPx(screenW, screenH);
             y = py + PanelPadY(screenW, screenH) + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
             w = GridWidthPx(screenW, screenH);
             h = SearchBarHeight(screenW, screenH);
@@ -250,7 +305,10 @@ namespace VStudioCraft.Game
             GetPanelRect(screenW, screenH, /*creative*/true, out int px, out int py, out _, out _);
             int gridY0 = py + PanelPadY(screenW, screenH) + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
             int catalogTop = gridY0 + SearchBarHeight(screenW, screenH) + SearchBarGap(screenW, screenH);
-            x = px + PanelPadX(screenW, screenH);
+            // Tier 4 #19 — Catalog grid sits to the right of the armor
+            // column so it doesn't overlap the helmet/chest/leg/boot
+            // slots.
+            x = px + PanelPadX(screenW, screenH) + ArmorColumnWidthPx(screenW, screenH);
             y = catalogTop;
             w = GridWidthPx(screenW, screenH);
             h = CatalogRows * SlotPx(screenW, screenH);
@@ -282,7 +340,12 @@ namespace VStudioCraft.Game
 
         public static int HitTestHotbar(int screenW, int screenH, int mx, int my, bool creative)
         {
-            for (int i = MainSlotCount; i < TotalSlots; i++)
+            // Tier 4 #19 — Iterate only the hotbar range; armor slots
+            // sit past the hotbar in the slot index space but aren't
+            // a quickbar target. Limiting the range to MainSlotCount
+            // .. MainSlotCount+HotbarSlotCount keeps creative-mode
+            // hotbar drops from accidentally filling the helmet slot.
+            for (int i = MainSlotCount; i < MainSlotCount + HotbarSlotCount; i++)
             {
                 GetSlotRect(i, screenW, screenH, creative, out int sx, out int sy, out int sw, out int sh);
                 if (mx >= sx && mx < sx + sw && my >= sy && my < sy + sh) return i;

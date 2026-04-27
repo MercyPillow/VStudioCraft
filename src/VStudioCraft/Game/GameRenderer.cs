@@ -283,6 +283,11 @@ void main()
         private OverlayMesh _wireCubeMesh;
         private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
         private TexturedCubeMesh _breakCubeMesh;
+        // Tier 4 #24 — Pos+UV unit quad in the XY plane (z=0), used by
+        // RenderPaintings as a single per-painting drawcall. Built once
+        // and re-used for every painting; the per-painting MVP places
+        // / orients / scales it onto the wall surface.
+        private TexturedCubeMesh _paintingQuadMesh;
         private int _atlasTexture;
         private int _heartTexture;
         private int _drumstickTexture;
@@ -378,7 +383,23 @@ void main()
         // Inventory / HotbarIndex from this every frame to paint the bar.
         // Set once by the host after construction and never reassigned, so
         // no synchronisation is required for the reference itself.
-        public InputState Input { get; set; }
+        private InputState _input;
+        public InputState Input
+        {
+            get => _input;
+            set
+            {
+                _input = value;
+                // Tier 4 #19 — Wire the player's armor-reduction lookup
+                // through the InputState's Inventory once the host
+                // has set it. Player.TakeDamage consults
+                // EquipmentInventory.GetTotalArmorReduction(); a null
+                // Inventory means "no reduction" (matches the
+                // pre-armor build's behaviour for any code path that
+                // creates a Player before the host wires Input).
+                if (Player != null) Player.EquipmentInventory = value?.Inventory;
+            }
+        }
 
         // True while the game is paused (Esc / pause menu open). The render
         // loop skips world updates (day cycle, fluid ticks, player movement,
@@ -469,6 +490,28 @@ void main()
             set => _isChestOpen = value;
         }
         private (int x, int y, int z) _chestPos;
+
+        // Tier 4 #25 — Music disc audio buffers. Null-by-default in V1
+        // because real disc audio is asset-deferred — Alpha 1.1.2_01
+        // shipped two short OGG tracks ("13" and "cat"); we don't
+        // currently have those files in a redistributable form, and
+        // shipping a procedural placeholder that pretends to be the
+        // canonical track would mislead the player. So the buffers stay
+        // 0 and AudioEngine.PlayMusic(0) is a soft no-op (see its
+        // implementation comment) — the disc still inserts / ejects /
+        // persists, and the API is structured the same way real audio
+        // would consume it; only the actual sound is silent.
+        //
+        // Wiring real audio later is one assignment per buffer here
+        // plus a CreateBuffer call from a PCM/OGG decoder; nothing
+        // else in the data flow has to change.
+        // CS0649 suppressed: these are intentionally never assigned in V1 —
+        // see the comment block above. They stay 0 so PlayMusic(0) no-ops;
+        // a future audio-asset PR will assign them at startup.
+#pragma warning disable CS0649
+        private int _disc13Buffer;
+        private int _discCatBuffer;
+#pragma warning restore CS0649
 
         // Per-world setting: show the hunger drumstick row + drive
         // hunger-based slow regen. Off by default (the user explicitly
@@ -712,6 +755,7 @@ void main()
             _wireCubeMesh = BuildWireCubeMesh();
             _unitQuadMesh = BuildUnitQuadMesh();
             _breakCubeMesh = BuildBreakCubeMesh();
+            _paintingQuadMesh = BuildPaintingQuadMesh();
             // Atlas source picked from the persisted user setting. The
             // procedural atlas is the default; opt-in via the Options menu
             // swaps to the embedded Alpha terrain.png slice. Both sources
@@ -848,6 +892,31 @@ void main()
                 // +Z face (front, normal +Z). Viewed from +Z, +X right, +Y up.
                 a, a, b, 0, 0,   b, a, b, 1, 0,   b, b, b, 1, 1,
                 a, a, b, 0, 0,   b, b, b, 1, 1,   a, b, b, 0, 1,
+            };
+            var m = new TexturedCubeMesh();
+            m.Upload(v);
+            return m;
+        }
+
+        // Tier 4 #24 — Unit quad in the XY plane (z=0, x in [0,1],
+        // y in [0,1]) with UVs (0,1)..(1,0) so V increases downward in
+        // texture space. The crack/painting shader samples vec3(vUV,
+        // uLayer); flipping V here means the texture isn't drawn upside
+        // down in the world (atlas data has origin top-left). Two
+        // triangles, six vertices, pos+uv interleaved (5 floats each).
+        // The per-painting MVP rotates this quad onto the wall plane.
+        private static TexturedCubeMesh BuildPaintingQuadMesh()
+        {
+            float[] v =
+            {
+                // bl, br, tr
+                0f, 0f, 0f,   0f, 1f,
+                1f, 0f, 0f,   1f, 1f,
+                1f, 1f, 0f,   1f, 0f,
+                // bl, tr, tl
+                0f, 0f, 0f,   0f, 1f,
+                1f, 1f, 0f,   1f, 0f,
+                0f, 1f, 0f,   0f, 0f,
             };
             var m = new TexturedCubeMesh();
             m.Upload(v);
@@ -1556,6 +1625,20 @@ void main()
                 float bdz = (hit.Z + 0.5f) - Camera.Position.Z;
                 blockDist = (float)System.Math.Sqrt(bdx * bdx + bdy * bdy + bdz * bdz);
             }
+            // Tier 4 #24 — Painting LMB-break. Treat paintings as a
+            // pickable layer between mobs and blocks: a painting
+            // STRICTLY closer than the block hit wins the click. The
+            // ray-vs-rect test in PickPainting returns parametric `t`
+            // along the camera ray, which is comparable to the
+            // camera-to-block-centre distance computed above.
+            int pIdx = PickPainting(out float pT);
+            if (pIdx >= 0 && pT < blockDist)
+            {
+                // Drop a Painting item in survival; creative breaks
+                // delete it silently like creative block breaks do.
+                RemovePaintingAt(pIdx, GameMode == GameMode.Survival);
+                return true;
+            }
             if (TryHitMob(blockDist)) return false;
             if (!blockHit) return false;
             // Bedrock (and any future hardness<0 block) is unbreakable in
@@ -1593,6 +1676,17 @@ void main()
                 {
                     _isChestOpen = false;
                 }
+            }
+            else if (t == BlockType.Jukebox)
+            {
+                // Tier 4 #25 — Jukebox creative-break. Discard the entity
+                // (creative breaks don't drop) and stop the music if a
+                // disc was loaded. Unlike the survival break path below
+                // we don't eject the disc as a DroppedItem — creative
+                // breaks never spawn drops, same as a creative-broken
+                // chest doesn't spill its inventory.
+                var je = _world.RemoveJukeboxEntity(hit.X, hit.Y, hit.Z);
+                if (je != null && !je.IsEmpty) AudioEngine.StopMusic();
             }
             // Tier 4 #16 — Door cascade. Breaking either half of a
             // door must clear the OTHER half too (a half-door is
@@ -1742,6 +1836,7 @@ void main()
                 // want to close the screen if it was open.
                 FurnaceTileEntity spilled = null;
                 ChestTileEntity spilledChest = null;
+                JukeboxTileEntity spilledJukebox = null;
                 if (brokenType == BlockType.Furnace || brokenType == BlockType.LitFurnace)
                 {
                     spilled = _world.RemoveFurnaceEntity(bx, by, bz);
@@ -1762,6 +1857,19 @@ void main()
                     {
                         _isChestOpen = false;
                     }
+                }
+                else if (brokenType == BlockType.Jukebox)
+                {
+                    // Tier 4 #25 — Jukebox break in survival: pop the
+                    // entity so we can drop the loaded disc (if any) as
+                    // a separate DroppedItem alongside the Jukebox block
+                    // drop itself, AND stop the music. Dropping the disc
+                    // (rather than just deleting it on break) matches
+                    // the Alpha behaviour and the same eject-rather-than-
+                    // destroy rule the RMB eject path follows.
+                    spilledJukebox = _world.RemoveJukeboxEntity(bx, by, bz);
+                    if (spilledJukebox != null && !spilledJukebox.IsEmpty)
+                        AudioEngine.StopMusic();
                 }
                 // Tier 4 #16 — Door cascade (survival path). See the
                 // creative-break comment — same rationale: clear the
@@ -1800,6 +1908,16 @@ void main()
                     {
                         SpawnBreakDropStack(bx, by, bz, stack);
                     }
+                }
+                if (spilledJukebox != null && !spilledJukebox.IsEmpty)
+                {
+                    // Tier 4 #25 — Eject the loaded disc on break. Same
+                    // top-of-cell spawn as the RMB eject path so the
+                    // disc visually pops out the top, not down inside
+                    // the broken cell. Block-itself drop comes from the
+                    // SpawnBreakDrop call above (Jukebox is a normal
+                    // block — DropFor returns Jukebox by default).
+                    SpawnEjectedDisc(bx, by, bz, spilledJukebox.Disc);
                 }
                 // Tool durability tick: every successful break consumes 1
                 // point; when the tool runs out it's removed from the
@@ -1965,6 +2083,42 @@ void main()
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
                 return false;
             var target = _world.GetBlock(hit.X, hit.Y, hit.Z);
+
+            // Tier 4 #24 — Painting placement. RMB on a wall with a
+            // Painting held mounts a Painting entity onto the air-side
+            // cell adjacent to the hit. The hit's face normal (Nx, Ny,
+            // Nz) points OUT of the wall toward the player; the
+            // air-side cell is hit + that normal, and the wall the
+            // painting hangs on IS the hit cell. Wall normals must be
+            // horizontal (Ny == 0) — Alpha doesn't let you mount a
+            // painting on a floor or ceiling. V1 always places a 1×1
+            // painting (Variant=0); the auto-size-to-largest-rectangle
+            // feature is a deferred polish (TODO). Placement runs AFTER
+            // the raycast so we have a valid hit but BEFORE any tile-
+            // entity / placement branching below — paintings don't
+            // interact with workbench / chest / furnace RMBs.
+            if (Input != null)
+            {
+                var heldStack = Input.Inventory.GetHotbar(Input.HotbarIndex);
+                BlockType held = heldStack.IsEmpty ? BlockType.Air : heldStack.Type;
+                if (held == BlockType.Painting)
+                {
+                    if (TryPlacePainting(hit))
+                    {
+                        if (GameMode == GameMode.Survival)
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                        SfxBank.PlayPlace(BlockType.Wool);
+                        return true;
+                    }
+                    // Invalid placement (no horizontal wall, air-side
+                    // cell occupied, etc.) — fall through. The standard
+                    // placement code paths below will no-op on a
+                    // Painting held stack (it's not a placeable block
+                    // type in the cube sense), so consuming the RMB by
+                    // returning here would just block the player from
+                    // trying again at a different angle.
+                }
+            }
 
             // Tier 4 #14 — Held-tool overrides come BEFORE the
             // tile-entity switch so a hoe RMB on a workbench tills
@@ -2363,6 +2517,82 @@ void main()
                     _world.GetOrCreateChestEntity(hit.X, hit.Y, hit.Z);
                     _isChestOpen = true;
                     return true;
+                case BlockType.Jukebox:
+                {
+                    // Tier 4 #25 — Jukebox interaction. Three cases on
+                    // RMB, in priority order:
+                    //   1. Empty jukebox + held disc → INSERT. Stamps the
+                    //      held disc type onto the JukeboxTileEntity (get-
+                    //      or-create) and starts streaming the matching
+                    //      music buffer on the dedicated music source.
+                    //      Decrements the held stack in survival.
+                    //   2. Loaded jukebox (any held item or empty hand) →
+                    //      EJECT. Drops the inserted disc as a DroppedItem
+                    //      at the jukebox's top face, clears the entity,
+                    //      stops the music. We drop as a DroppedItem
+                    //      rather than just deleting the disc so the
+                    //      player can pick it back up — Alpha behaviour
+                    //      preserves discs on eject; permanently
+                    //      destroying one would feel punishing for what
+                    //      is effectively a "stop the music" toggle.
+                    //   3. Empty jukebox + non-disc held → no-op. Falls
+                    //      through to a return-true so the placement
+                    //      code doesn't try to plant the held block.
+                    //
+                    // Real disc audio is asset-deferred (see _disc13Buffer
+                    // / _discCatBuffer comment). PlayMusic(0) is a soft
+                    // no-op for the missing-buffer case, so the data flow
+                    // (insert / eject / persist) is fully exercised even
+                    // without sound. The dedicated music source in
+                    // AudioEngine is intentionally separate from the SFX
+                    // pool so footstep / break one-shots don't evict the
+                    // currently-playing track.
+                    var heldStack = Input != null
+                        ? Input.Inventory.GetHotbar(Input.HotbarIndex)
+                        : ItemStack.Empty;
+                    BlockType held = heldStack.IsEmpty ? BlockType.Air : heldStack.Type;
+                    var je = _world.TryGetJukeboxEntity(hit.X, hit.Y, hit.Z);
+                    bool loaded = je != null && !je.IsEmpty;
+                    if (!loaded && (held == BlockType.Disc13 || held == BlockType.DiscCat))
+                    {
+                        // Insert. Allocate the entity if this is a fresh
+                        // jukebox the player hasn't touched yet, then
+                        // stamp the disc type. Decrement the hotbar in
+                        // survival (creative keeps the disc — same rule
+                        // as every other consumable in creative mode).
+                        je = _world.GetOrCreateJukeboxEntity(hit.X, hit.Y, hit.Z);
+                        je.Disc = held;
+                        if (GameMode == GameMode.Survival && Input != null)
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                        int buf = (held == BlockType.Disc13) ? _disc13Buffer : _discCatBuffer;
+                        AudioEngine.PlayMusic(buf);
+                        SfxBank.PlayPlace(BlockType.Wool); // close-fit thunk
+                        return true;
+                    }
+                    if (loaded)
+                    {
+                        // Eject. Drop the loaded disc at the jukebox's
+                        // top face (one cell up — same spawn convention
+                        // as block-break drops, kicked upward so the
+                        // disc hops out instead of resting inside the
+                        // cell). Stop music, clear the entity. Removing
+                        // the entry rather than just blanking Disc keeps
+                        // the save table tight (an empty jukebox doesn't
+                        // need to persist).
+                        BlockType ejected = je.Disc;
+                        _world.RemoveJukeboxEntity(hit.X, hit.Y, hit.Z);
+                        AudioEngine.StopMusic();
+                        SpawnEjectedDisc(hit.X, hit.Y, hit.Z, ejected);
+                        SfxBank.PlayBreak(BlockType.Wool); // close-fit click
+                        return true;
+                    }
+                    // Empty jukebox + non-disc held: swallow the click so
+                    // we don't fall through to the placement path. The
+                    // player wouldn't expect their pickaxe / cobblestone
+                    // / whatever to mount onto the jukebox face just
+                    // because the jukebox happened to be slotless.
+                    return true;
+                }
                 case BlockType.WoodDoorBlockBottom:
                 case BlockType.WoodDoorBlockTop:
                     // Tier 4 #16 — Wooden door RMB toggles open/closed
@@ -2543,6 +2773,255 @@ void main()
             if (ax > az)
                 return forward.X > 0 ? BlockFacing.West : BlockFacing.East;
             return forward.Z > 0 ? BlockFacing.North : BlockFacing.South;
+        }
+
+        // Tier 4 #24 — Painting placement. Mounts a 1×1 Painting onto
+        // the wall block the player is aiming at. Returns true on
+        // success (caller decrements + plays SFX); false if the hit
+        // isn't a valid wall mount (face normal not horizontal, air-
+        // side cell already occupied, hit cell not solid). V1 always
+        // produces a 1×1 painting with Variant chosen at random in
+        // 0..4 — auto-sizing to the largest available rectangle is a
+        // deferred polish feature; the data model already carries
+        // Width/Height for when it lands.
+        //
+        // The painting anchor point (Painting.X/Y/Z) is the WALL cell
+        // (the cell behind the painting), not the air cell on the
+        // player's side. Facing is the wall normal — i.e. the side of
+        // the wall the painting is on. Variant is the art-tile index
+        // (0..4 for TilePainting1x1..4x3); for V1 we always store
+        // size = (1, 1) regardless of variant so RenderPaintings draws
+        // a 1×1 rectangle on the wall plane.
+        private readonly System.Random _paintingRng = new System.Random(0xCAFE);
+        private bool TryPlacePainting(Raycast.Hit hit)
+        {
+            if (_world == null) return false;
+            // Wall-mount face must be horizontal — Alpha doesn't
+            // place paintings on floors or ceilings.
+            if (hit.Ny != 0) return false;
+            if (hit.Nx == 0 && hit.Nz == 0) return false;
+            // Wall block must be solid (paintings need a backing
+            // surface — they don't hang on glass / torches / leaves).
+            if (!BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))) return false;
+            // Air-side cell — where the painting visibly sits — must
+            // be Air. Two paintings on the same cell would Z-fight
+            // and render incoherently, so reject if there's already
+            // a painting whose anchor matches.
+            int ax = hit.X + hit.Nx;
+            int ay = hit.Y + hit.Ny;
+            int az = hit.Z + hit.Nz;
+            if (_world.GetBlock(ax, ay, az) != BlockType.Air) return false;
+            // Reject if there's already a painting on this exact
+            // wall cell + face. Multi-rect overlap detection is the
+            // polish path — at 1×1 V1 a single per-anchor key is
+            // enough.
+            BlockFacing facing = FacingFromNormal(hit.Nx, hit.Nz);
+            var existing = _world.Paintings;
+            for (int i = 0; i < existing.Count; i++)
+            {
+                var p = existing[i];
+                if (p.X == hit.X && p.Y == hit.Y && p.Z == hit.Z && p.Facing == facing)
+                    return false;
+            }
+            int variant = _paintingRng.Next(5);
+            _world.Paintings.Add(new Painting
+            {
+                X = hit.X,
+                Y = hit.Y,
+                Z = hit.Z,
+                Facing = facing,
+                // V1: always 1×1 regardless of variant. Auto-size
+                // to the largest available rectangle is a TODO; the
+                // size fields stay in the data model so the polish
+                // path doesn't need a save-format bump.
+                Width  = 1,
+                Height = 1,
+                Variant = variant,
+            });
+            return true;
+        }
+
+        // Map a horizontal-face normal (Nx, Nz with Ny == 0) to the
+        // matching BlockFacing. The normal points OUT of the wall
+        // toward the player, which is the same convention BlockFacing
+        // uses for wall-torch / furnace / chest fronts — so a wall
+        // whose surface faces +X reads as BlockFacing.East.
+        private static BlockFacing FacingFromNormal(int nx, int nz)
+        {
+            if (nx > 0) return BlockFacing.East;
+            if (nx < 0) return BlockFacing.West;
+            if (nz > 0) return BlockFacing.South;
+            return BlockFacing.North;
+        }
+
+        // Tier 4 #24 — Ray-vs-painting pick. Returns the index of the
+        // closest painting whose front rectangle the camera ray
+        // crosses within `maxDist` blocks, or -1 on no hit. The
+        // distance returned in `outDist` is the parametric `t` along
+        // the ray (Camera.Position + t*Camera.Forward). Used by both
+        // LMB-break (TryBreak: a painting closer than the block hit
+        // wins the click and is removed instead) and RMB-empty-hand
+        // (TryInteract fallback: a painting hit removes it).
+        //
+        // Each painting is a flat axis-aligned rectangle on one of
+        // the four wall faces; the rect is the same one
+        // RenderPaintings draws (sans inset). Treating the painting
+        // as a plane + 2D rectangle is exact — no tolerance needed.
+        private int PickPainting(out float outDist)
+        {
+            outDist = float.MaxValue;
+            if (_world == null) return -1;
+            var paintings = _world.Paintings;
+            if (paintings.Count == 0) return -1;
+
+            Vector3 origin = Camera.Position;
+            Vector3 dir = Camera.Forward;
+            float bestT = float.MaxValue;
+            int bestIdx = -1;
+
+            for (int i = 0; i < paintings.Count; i++)
+            {
+                var p = paintings[i];
+                float t;
+                if (!IntersectPaintingRay(p, origin, dir, out t)) continue;
+                if (t < 0f || t > ReachDistance) continue;
+                if (t < bestT)
+                {
+                    bestT = t;
+                    bestIdx = i;
+                }
+            }
+
+            outDist = bestT;
+            return bestIdx;
+        }
+
+        // Compute the ray vs painting-rectangle intersection. The
+        // painting rect lives on one of four axis-aligned wall planes;
+        // we plane-intersect first (cheap), then bounds-check the hit
+        // point against the rect's lateral + vertical extents.
+        private static bool IntersectPaintingRay(Painting p, Vector3 origin, Vector3 dir, out float t)
+        {
+            t = 0f;
+            float w = p.Width, h = p.Height;
+            float planeCoord;
+            float dirComp, originComp;
+            switch (p.Facing)
+            {
+                case BlockFacing.North:
+                    // Plane z = p.Z. Lateral axis = X, vertical = Y.
+                    // Air-side: z < p.Z.
+                    planeCoord = p.Z;
+                    dirComp = dir.Z; originComp = origin.Z;
+                    break;
+                case BlockFacing.South:
+                    planeCoord = p.Z + 1f;
+                    dirComp = dir.Z; originComp = origin.Z;
+                    break;
+                case BlockFacing.West:
+                    planeCoord = p.X;
+                    dirComp = dir.X; originComp = origin.X;
+                    break;
+                default: // East
+                    planeCoord = p.X + 1f;
+                    dirComp = dir.X; originComp = origin.X;
+                    break;
+            }
+            // Parallel ray — never hits. Tiny epsilon to avoid
+            // div-by-near-zero artefacts; a ray nearly parallel to
+            // the wall almost certainly passes through it geometrically.
+            if (System.Math.Abs(dirComp) < 1e-6f) return false;
+            float tt = (planeCoord - originComp) / dirComp;
+            if (tt < 0f) return false;
+            // Bounds-check the hit point. Lateral axis depends on facing.
+            float hx = origin.X + dir.X * tt;
+            float hy = origin.Y + dir.Y * tt;
+            float hz = origin.Z + dir.Z * tt;
+            float lateralLo, lateralHi, lateralHit;
+            switch (p.Facing)
+            {
+                case BlockFacing.North:
+                    // Lateral X, growing from p.X to p.X + w (RenderPaintings
+                    // for North uses translation x = p.X + w combined with
+                    // the 180° Y rotation, so the rect spans [p.X, p.X+w]).
+                    lateralLo = p.X; lateralHi = p.X + w; lateralHit = hx;
+                    break;
+                case BlockFacing.South:
+                    lateralLo = p.X; lateralHi = p.X + w; lateralHit = hx;
+                    break;
+                case BlockFacing.West:
+                    lateralLo = p.Z; lateralHi = p.Z + w; lateralHit = hz;
+                    break;
+                default: // East
+                    lateralLo = p.Z; lateralHi = p.Z + w; lateralHit = hz;
+                    break;
+            }
+            if (lateralHit < lateralLo || lateralHit > lateralHi) return false;
+            if (hy < p.Y || hy > p.Y + h) return false;
+            t = tt;
+            return true;
+        }
+
+        // Tier 4 #24 — Drop a Painting item at the painting's centre
+        // and remove it from the world list. Spawned via the same
+        // _drops lifecycle as a survival break drop (1-tick pickup
+        // cooldown, tiny upward kick) so it pickups feel natural.
+        private void RemovePaintingAt(int index, bool dropItem)
+        {
+            if (_world == null) return;
+            var paintings = _world.Paintings;
+            if (index < 0 || index >= paintings.Count) return;
+            var p = paintings[index];
+            paintings.RemoveAt(index);
+            if (!dropItem) return;
+            // Centre of the painting in world space — depends on facing
+            // (lateral axis differs). Same math as the rendering
+            // anchors, just at the rectangle midpoint.
+            Vector3 centre;
+            float w = p.Width, h = p.Height;
+            switch (p.Facing)
+            {
+                case BlockFacing.North:
+                    centre = new Vector3(p.X + w * 0.5f, p.Y + h * 0.5f, p.Z - 0.05f);
+                    break;
+                case BlockFacing.South:
+                    centre = new Vector3(p.X + w * 0.5f, p.Y + h * 0.5f, p.Z + 1f + 0.05f);
+                    break;
+                case BlockFacing.West:
+                    centre = new Vector3(p.X - 0.05f, p.Y + h * 0.5f, p.Z + w * 0.5f);
+                    break;
+                default: // East
+                    centre = new Vector3(p.X + 1f + 0.05f, p.Y + h * 0.5f, p.Z + w * 0.5f);
+                    break;
+            }
+            var d = new DroppedItem
+            {
+                Position = centre,
+                Velocity = new Vector3(0f, 0.15f, 0f),
+                Stack = new ItemStack(BlockType.Painting, 1),
+                AgeSec = 0f,
+                PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+            };
+            _drops.Add(d);
+            // Same "wood-y thunk" SFX as wool-place; no dedicated
+            // painting-break sample exists yet.
+            SfxBank.PlayBreak(BlockType.Wool);
+        }
+
+        // Tier 4 #24 — Atlas tile for a painting variant. V1 maps
+        // 0..4 to the per-variant art tiles; future variants would
+        // extend this switch.
+        private static int PaintingArtTile(int variant)
+        {
+            switch (variant)
+            {
+                case 0: return BlockTextures.TilePainting1x1;
+                case 1: return BlockTextures.TilePainting1x2;
+                case 2: return BlockTextures.TilePainting2x1;
+                case 3: return BlockTextures.TilePainting2x2;
+                case 4: return BlockTextures.TilePainting4x3;
+                default: return BlockTextures.TilePainting1x1;
+            }
         }
 
         // After a cell becomes non-solid (typically Air via a break), check
@@ -2907,6 +3386,30 @@ void main()
                 Position = new Vector3(bx + 0.5f, by + 0.5f, bz + 0.5f),
                 Velocity = new Vector3(jx, 3.5f, jz),
                 Stack = stack,
+                AgeSec = 0f,
+                PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+            };
+            _drops.Add(d);
+        }
+
+        // Tier 4 #25 — Spawn an ejected music disc as a DroppedItem at
+        // the jukebox's top face. Given the world-cell coords of the
+        // jukebox itself, the disc lands one cell up (so the disc
+        // visibly hops out the top, not back inside the jukebox cube).
+        // Same upward kick + lateral jitter as SpawnBreakDropStack so
+        // the eject reads like the disc is being physically launched
+        // out, not just teleported. Used by both the RMB-eject path and
+        // the break-jukebox path; both want identical drop behaviour.
+        private void SpawnEjectedDisc(int bx, int by, int bz, BlockType disc)
+        {
+            if (disc != BlockType.Disc13 && disc != BlockType.DiscCat) return;
+            float jx = ((float)_dropRng.NextDouble() - 0.5f) * 2f;
+            float jz = ((float)_dropRng.NextDouble() - 0.5f) * 2f;
+            var d = new DroppedItem
+            {
+                Position = new Vector3(bx + 0.5f, by + 1.1f, bz + 0.5f),
+                Velocity = new Vector3(jx, 3.5f, jz),
+                Stack = new ItemStack(disc, 1),
                 AgeSec = 0f,
                 PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
             };
@@ -5403,6 +5906,13 @@ void main()
                 RenderSubmergedOverlay(width, height, cameraInLava);
             }
 
+            // Tier 4 #24 — Paintings. Drawn after the chunk passes
+            // (so wall depth is already in the buffer; the painting
+            // plane sits just in front of the wall surface) and BEFORE
+            // drops/projectiles so a tossed item flying past a painting
+            // occludes correctly. Paintings are world-fixed surfaces;
+            // their depth values participate normally in entity layering.
+            RenderPaintings(width, height);
             RenderDrops(width, height);
             // Tier 4 #17 — In-flight bow arrows. Drawn right after drops
             // so they layer the same as a tossed item entity (occluded
@@ -5696,6 +6206,118 @@ void main()
             // with the underlying chunk face. Cull is left on — back faces of
             // the inflated cube would just sit behind the front faces anyway.
             _breakCubeMesh.Draw();
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Tier 4 #24 — Draw every painting as a single textured quad
+        // sitting flush against its anchor wall. Uses the crack-overlay
+        // shader (pos+uv -> sampler2DArray) with the main block atlas
+        // bound — paintings live as TilePainting* layers in that atlas
+        // alongside terrain tiles. Drawn AFTER the chunk passes so the
+        // wall's depth value is already written; the painting plane is
+        // pushed off the wall by ~0.05 blocks so it doesn't z-fight.
+        // Alpha-discard in the shader lets corner pixels of non-square
+        // variants stay transparent (V1 V1 always uses 1×1 art so alpha
+        // is solid; the discard branch is harmless when every texel is
+        // opaque).
+        private void RenderPaintings(int width, int height)
+        {
+            if (_world == null) return;
+            var paintings = _world.Paintings;
+            if (paintings.Count == 0) return;
+
+            _crackShader.Use();
+            _crackShader.SetInt("uCrack", 0);
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+            // Painting alpha is currently solid for every variant, but
+            // the procedural art may grow transparent borders later;
+            // disable cull so a painting viewed from "behind" (i.e.
+            // through the wall in spectator-style flight) still shows
+            // its art. Matches Alpha 1.1.2 where paintings are visible
+            // from both sides.
+            GL.Disable(EnableCap.CullFace);
+
+            for (int i = 0; i < paintings.Count; i++)
+            {
+                var p = paintings[i];
+                int layer = PaintingArtTile(p.Variant);
+                _crackShader.SetFloat("uLayer", layer);
+
+                // Build a model matrix that takes the [0,1]² unit quad
+                // (XY plane, z=0) and places it on the wall surface.
+                // The wall cell is (p.X, p.Y, p.Z); the painting hangs
+                // on the FACE of that cell pointed to by p.Facing, on
+                // the air-side. Inset by `inset` from the wall plane so
+                // the quad sits just in front of the wall texture and
+                // doesn't z-fight.
+                const float inset = 0.05f;
+                float w = p.Width;
+                float h = p.Height;
+
+                // Each facing rotates / translates differently. Width
+                // along the wall's lateral axis, height along Y. The
+                // painting's anchor cell (p.X, p.Y, p.Z) is the WALL
+                // cell; the quad sits on the air-side face of that
+                // cell. p.Facing is the wall normal (the side of the
+                // wall the painting is on).
+                Matrix4 model;
+                switch (p.Facing)
+                {
+                    case BlockFacing.North:
+                        // Wall normal -Z; air side is at z = p.Z (the
+                        // -Z face of the wall cell). Quad faces -Z, so
+                        // its +Z (back) is into the wall. Rotate the
+                        // unit quad 180° around Y so its front faces
+                        // -Z, then place at (p.X+w, p.Y, p.Z - inset).
+                        model = Matrix4.CreateScale(w, h, 1f)
+                              * Matrix4.CreateRotationY((float)System.Math.PI)
+                              * Matrix4.CreateTranslation(p.X + w, p.Y, p.Z - inset);
+                        break;
+                    case BlockFacing.South:
+                        // Wall normal +Z; air side at z = p.Z + 1.
+                        // Unit quad already faces -Z (its front is at
+                        // z=0, normal points -Z because the verts wind
+                        // CCW from outside -Z). To make it face +Z we
+                        // need the back of the quad pointing toward
+                        // the wall — easiest: leave orientation alone
+                        // and place at z = p.Z + 1 + inset. Cull is
+                        // off so the back-face artefact doesn't matter.
+                        model = Matrix4.CreateScale(w, h, 1f)
+                              * Matrix4.CreateTranslation(p.X, p.Y, p.Z + 1f + inset);
+                        break;
+                    case BlockFacing.West:
+                        // Wall normal -X; air side at x = p.X.
+                        // Rotate so the quad's right-edge points -Z
+                        // (i.e. the quad faces -X). Rotate +90° around Y
+                        // takes +X axis to +Z; we need it the other way.
+                        // -90° around Y rotates +X → -Z, so the quad's
+                        // X axis becomes -Z. Then translate to
+                        // (p.X - inset, p.Y, p.Z).
+                        model = Matrix4.CreateScale(w, h, 1f)
+                              * Matrix4.CreateRotationY(-(float)System.Math.PI / 2f)
+                              * Matrix4.CreateTranslation(p.X - inset, p.Y, p.Z);
+                        break;
+                    default: // East
+                        // Wall normal +X; air side at x = p.X + 1.
+                        // Rotate +90° around Y maps +X axis to -Z, but
+                        // we want the quad's front to face +X.
+                        // Combining +90° rotation with a translation
+                        // to (p.X + 1 + inset, p.Y, p.Z + w) places
+                        // the rotated quad correctly.
+                        model = Matrix4.CreateScale(w, h, 1f)
+                              * Matrix4.CreateRotationY((float)System.Math.PI / 2f)
+                              * Matrix4.CreateTranslation(p.X + 1f + inset, p.Y, p.Z + w);
+                        break;
+                }
+
+                var mvp = model * _frameVp;
+                _crackShader.SetMatrix4("uMVP", mvp);
+                _paintingQuadMesh.Draw();
+            }
+
+            GL.Enable(EnableCap.CullFace);
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
@@ -8818,6 +9440,7 @@ void main()
             _wireCubeMesh?.Dispose();
             _unitQuadMesh?.Dispose();
             _breakCubeMesh?.Dispose();
+            _paintingQuadMesh?.Dispose();
             _shader?.Dispose();
             _overlayShader?.Dispose();
             _spriteShader?.Dispose();

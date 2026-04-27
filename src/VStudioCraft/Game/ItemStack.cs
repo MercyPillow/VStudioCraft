@@ -96,6 +96,13 @@ namespace VStudioCraft.Game
             // they couldn't share a slot even if stacking were
             // permitted; the cap is the explicit Alpha rule).
             if (type == BlockType.FishingRod) return 1;
+            // Tier 4 #25 — Music discs are unstackable in Alpha
+            // 1.1.2_01 (each disc has a distinct numeric id and
+            // they would never have stacked even if Notch had
+            // allowed it; the cap is the explicit Alpha rule). One
+            // disc per slot; a hoarder pays for it in inventory
+            // real estate.
+            if (type == BlockType.Disc13 || type == BlockType.DiscCat) return 1;
             return MaxCount;
         }
 

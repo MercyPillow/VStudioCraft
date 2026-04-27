@@ -2,12 +2,16 @@ using System;
 
 namespace VStudioCraft.Game
 {
-    // 45-slot player inventory + 1 cursor. Slot indexing matches the
+    // 49-slot player inventory + 1 cursor. Slot indexing matches the
     // InventoryScreen panel layout exactly so a slot rect from
     // InventoryScreen.GetSlotRect maps directly to Slots[i] without
     // a translation table:
     //   0..35  — main grid (4×9, top-down row-major)
     //   36..44 — hotbar row
+    //   45..48 — armor slots (Helmet, Chestplate, Leggings, Boots) —
+    //            Tier 4 #19. Appended past the hotbar so existing
+    //            hotbar / main-grid slot indices stay byte-stable for
+    //            in-flight ItemStack[] iterations.
     //
     // Constants here MUST stay in lock-step with InventoryScreen.MainRows /
     // Cols / TotalSlots — the renderer indexes Slots[] using slot rectangles
@@ -23,8 +27,15 @@ namespace VStudioCraft.Game
     {
         public const int MainCount = 36;   // 4 rows × 9 cols
         public const int HotbarCount = 9;
-        public const int TotalSlots = MainCount + HotbarCount;  // 45
+        // Tier 4 #19 — Four armor slots (Helmet, Chestplate, Leggings,
+        // Boots in that order). Live past the hotbar in the same flat
+        // Slots[] array so a single iteration covers everything in the
+        // inventory; the InventoryScreen + drag-drop logic gate on
+        // BlockData.GetArmorSlot to enforce the per-slot type.
+        public const int ArmorCount = 4;
         public const int HotbarStart = MainCount;
+        public const int ArmorStart = MainCount + HotbarCount;          // 45
+        public const int TotalSlots = MainCount + HotbarCount + ArmorCount; // 49
 
         public readonly ItemStack[] Slots = new ItemStack[TotalSlots];
         public ItemStack Cursor;
@@ -132,6 +143,21 @@ namespace VStudioCraft.Game
                 return;
             }
 
+            // Tier 4 #19 — Armor slot type gate. The four armor slots
+            // at [ArmorStart..ArmorStart+ArmorCount) only accept the
+            // matching armor piece (helmet → slot 0, chest → 1,
+            // leg → 2, boot → 3). A click that would deposit a non-
+            // matching item is a no-op so the player can't equip a
+            // pickaxe in the chestplate slot. Picking up an existing
+            // piece (cursor empty path above) always works — the gate
+            // only restricts deposits.
+            if (slotIndex >= ArmorStart)
+            {
+                int wantSlot = slotIndex - ArmorStart;
+                int gotSlot  = BlockData.GetArmorSlot(cursor.Type);
+                if (gotSlot != wantSlot) return;
+            }
+
             if (slot.IsEmpty)
             {
                 slot = cursor;
@@ -180,6 +206,16 @@ namespace VStudioCraft.Game
                 return;
             }
 
+            // Tier 4 #19 — Same armor-slot type gate as
+            // HandleLeftClickSlot. RMB-deposit of a wrong-type item
+            // is a no-op so the gate is symmetric across LMB/RMB.
+            if (slotIndex >= ArmorStart)
+            {
+                int wantSlot = slotIndex - ArmorStart;
+                int gotSlot  = BlockData.GetArmorSlot(cursor.Type);
+                if (gotSlot != wantSlot) return;
+            }
+
             if (slot.IsEmpty)
             {
                 // Drop one item from cursor — preserve durability so a
@@ -223,8 +259,23 @@ namespace VStudioCraft.Game
             ref var src = ref Slots[slotIndex];
             if (src.IsEmpty) return;
 
+            // Tier 4 #19 — Shift-clicking an armor slot moves the piece
+            // back into the main grid (or the hotbar if the main grid
+            // is full). Same hotbar→main / main→hotbar inversion the
+            // pre-armor code did, plus the armor→main case so the
+            // player can quick-strip equipped armor without
+            // drag-and-drop.
             int destStart, destEnd;
-            if (slotIndex >= HotbarStart)
+            if (slotIndex >= ArmorStart)
+            {
+                // Armor → main grid (top-left scan). If main is full
+                // we fall through to the hotbar by scanning a wider
+                // range — kept as a single sweep so the existing
+                // pass-1 / pass-2 merge logic below covers both.
+                destStart = 0;
+                destEnd   = MainCount + HotbarCount;
+            }
+            else if (slotIndex >= HotbarStart)
             {
                 // Hotbar → main grid (top-left scan)
                 destStart = 0;
@@ -262,6 +313,53 @@ namespace VStudioCraft.Game
             // Out of room in the destination range — leave the source slot
             // untouched (no half-moves: if the player wanted a partial they
             // can left-click).
+        }
+
+        // Tier 4 #19 — Read the armor stack at slot 0..3 (Helmet,
+        // Chestplate, Leggings, Boots). Returns Empty if the slot is
+        // unequipped or the index is out of range. Used by
+        // GetTotalArmorReduction (and any future render-armor-on-
+        // player path) to inspect the equipped pieces without
+        // hard-coding the ArmorStart offset at every call site.
+        public ItemStack GetArmor(int slot)
+        {
+            if (slot < 0 || slot >= ArmorCount) return ItemStack.Empty;
+            return Slots[ArmorStart + slot];
+        }
+
+        // Tier 4 #19 — Direct write to an armor slot. Bypasses the
+        // type-gate check (callers are responsible for passing a
+        // matching piece) and is only intended for save-load and
+        // creative-mode-give paths; ordinary inventory shuffling
+        // routes through HandleLeftClickSlot which enforces the
+        // gate.
+        public void SetArmor(int slot, ItemStack stack)
+        {
+            if (slot < 0 || slot >= ArmorCount) return;
+            Slots[ArmorStart + slot] = stack;
+        }
+
+        // Tier 4 #19 — Sum of per-piece flat damage reduction across
+        // all four armor slots (Helmet+Chest+Leg+Boot). Empty slots
+        // contribute 0 (BlockData.GetArmorReduction is safe to call
+        // for any BlockType, returning 0 for non-armor ids — but
+        // Slots[..] for an empty stack holds Air which the switch
+        // also returns 0 for, so the sum stays clean either way).
+        // Called once per Player.TakeDamage to compute the effective
+        // damage; capped at 20 (the max a full diamond set provides)
+        // by the consumer to keep the formula bounded even if some
+        // future enchanting / set-bonus path lifts individual values
+        // above their Alpha defaults.
+        public int GetTotalArmorReduction()
+        {
+            int sum = 0;
+            for (int i = 0; i < ArmorCount; i++)
+            {
+                var s = Slots[ArmorStart + i];
+                if (s.IsEmpty) continue;
+                sum += BlockData.GetArmorReduction(s.Type);
+            }
+            return sum;
         }
     }
 }

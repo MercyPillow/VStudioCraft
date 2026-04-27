@@ -502,13 +502,9 @@ order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
 	
-### Tier 4 — Alpha 1.1.2 item catalogue (the remaining items)
+### Tier 4 — Alpha 1.1.2 item catalogue (the remaining items) — **COMPLETE**
 
-The audited Alpha items the codebase doesn't yet have, ordered so each entry can ship on its own now that the `ItemType` layer (Items → Have) and Tier 3's mobs are in place. Most are 100–500 LoC each.
-
-19. **Armor — leather / iron / gold / diamond × 4 slots + chainmail mob-drop only + damage reduction + 4 armor slots in inventory** — 16 craftable pieces (IDs 298–301, 306–317) + 4 chainmail (IDs 302–305) that only drop from zombies/skeletons in vanilla Alpha. Armor slots extend `Inventory.TotalSlots` from 45 to 49; the inventory screen panel grows to render them in a left-side column. Damage reduction follows Alpha's flat-percentage formula (each piece reduces incoming damage by a fixed amount).
-24. **Painting (321)** — RMB on a wall places a painting entity; auto-sizes to the largest available rectangle (1×1 / 2×1 / 4×3 etc.). Sprite atlas of ~25 small paintings rendered as flat quads inside the wall plane.
-25. **Music Discs ("13" / "cat", IDs 2256/2257) + Jukebox block** — Pair of one-track items playable in a Jukebox block (RMB inserts the disc, plays once, ejects). Reuses the shipped audio backend (one streaming AL source, dedicated channel for music). Note: the Jukebox block itself was added in Alpha 1.0.14 alongside the discs, so it's an Alpha 1.1.2 block we don't currently have — gets added with this item.
+All audited Alpha items now exist in code: the full Tier 4 lineup (paintings, jukeboxes + discs, doors, beds, wheat/farming, signs, ladders, ice, snow, pumpkin / jack-o'-lantern, cake, mushroom soup, raw / cooked beef + porkchop + chicken, leather, feathers, eggs, gold ingot + nugget, redstone dust, lapis, diamond, emerald, bow + arrow, fishing rod, flint + steel, painting + sign + door items, and finally **#19 — armor** (leather / iron / gold / diamond × 4 slots, chainmail mob-drop only, 4 inventory armor slots, Alpha damage-reduction formula)) shipped. Tier 4 graduates next-cycle work to Tier 5 (controls/UX parity) and beyond.
 
 ### Tier 5 — Controls + UX parity (small, every-session improvements)
 

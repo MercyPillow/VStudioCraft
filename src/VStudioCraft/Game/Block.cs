@@ -345,6 +345,79 @@ namespace VStudioCraft.Game
         // damage values would distinguish two rods anyway). Append-only
         // past Saddle=113 so existing v8/v9 saves stay byte-stable.
         FishingRod  = 114, // Alpha 346
+
+        // Tier 4 #24 — Painting (Alpha 321). Held item; RMB on a wall
+        // mounts a Painting entity onto the air-side cell adjacent to
+        // the targeted block. The painting is a flat textured rectangle
+        // in the wall plane (not a block — it occupies no cell, the
+        // player walks through it the same way they do a torch). V1
+        // ships 5 painting variants (1×1, 1×2, 2×1, 2×2, 4×3) chosen at
+        // random on placement; auto-sizing to the largest available
+        // rectangle is a polish TODO. Paintings persist via World's
+        // Paintings list (see WorldSaveFormat v10). Append-only past
+        // FishingRod=114 so existing v8/v9 saves stay byte-stable.
+        Painting    = 115, // Alpha 321
+
+        // Tier 4 #25 — Jukebox (Alpha 1.0.14, id 84). Solid cube block.
+        // Stores an inserted Music Disc (Disc13 / DiscCat) via a
+        // JukeboxTileEntity keyed by world coord — same tile-entity
+        // pattern Furnace and Chest use. RMB with a disc in hand inserts
+        // the disc + starts streaming the matching music track; RMB
+        // again with no disc held ejects the disc as a DroppedItem and
+        // stops the music. Append-only past Painting=115 so existing
+        // v8/v9/v10 saves stay byte-stable.
+        Jukebox     = 116, // Alpha 84
+
+        // Tier 4 #25 — Music Discs. Two variants ship in Alpha 1.1.2_01:
+        // "13" (eerie static) at id 2256 and "cat" (mellow synth) at id
+        // 2257. Disc13 / DiscCat are the held items the player slots
+        // into a Jukebox. Stack-cap 1 (matches Alpha — each disc has a
+        // distinct numeric id, they never stacked even before durability
+        // metadata distinguished them). No Alpha recipe — discs are
+        // dungeon-loot only; ship as creative-only entries until dungeons
+        // arrive in Tier 6 #32. Append-only past Jukebox=116.
+        Disc13      = 117, // Alpha 2256
+        DiscCat     = 118, // Alpha 2257
+
+        // Tier 4 #19 — Armor. 20 pieces in 5 materials × 4 slots
+        // (Helmet/Chestplate/Leggings/Boots). Held items, not placeable
+        // blocks; equipped via the four armor slots appended to the
+        // inventory at indices 45..48 (see Inventory.ArmorStart). Each
+        // piece reduces incoming damage by a flat point value (see
+        // BlockData.GetArmorReduction); the per-tier sums match Alpha
+        // 1.1.2_01: leather=7, chain=12, iron=15, diamond=20, gold=11.
+        //
+        // Chainmail (Alpha 302..305) is mob-drop-ONLY — no recipe, no
+        // creative-catalog gap. Zombie / Skeleton roll a 0.5 % chance
+        // per piece on death (see HostileMobs SpawnDeathDrops). The
+        // Alpha numeric ids are baked into ItemType.AlphaId for future
+        // multiplayer-protocol parity.
+        //
+        // The block-id slice is contiguous and ordered material-major,
+        // slot-minor (Helmet, Chestplate, Leggings, Boots) so
+        // GetArmorSlot can compute the slot from `((byte)t -
+        // LeatherHelmet) % 4` without a switch. Append-only past
+        // DiscCat=118 keeps existing v8..v11 saves byte-stable.
+        LeatherHelmet      = 119, // Alpha 298
+        LeatherChestplate  = 120, // Alpha 299
+        LeatherLeggings    = 121, // Alpha 300
+        LeatherBoots       = 122, // Alpha 301
+        ChainmailHelmet    = 123, // Alpha 302 (mob-drop only)
+        ChainmailChestplate= 124, // Alpha 303 (mob-drop only)
+        ChainmailLeggings  = 125, // Alpha 304 (mob-drop only)
+        ChainmailBoots     = 126, // Alpha 305 (mob-drop only)
+        IronHelmet         = 127, // Alpha 306
+        IronChestplate     = 128, // Alpha 307
+        IronLeggings       = 129, // Alpha 308
+        IronBoots          = 130, // Alpha 309
+        DiamondHelmet      = 131, // Alpha 310
+        DiamondChestplate  = 132, // Alpha 311
+        DiamondLeggings    = 133, // Alpha 312
+        DiamondBoots       = 134, // Alpha 313
+        GoldHelmet         = 135, // Alpha 314
+        GoldChestplate     = 136, // Alpha 315
+        GoldLeggings       = 137, // Alpha 316
+        GoldBoots          = 138, // Alpha 317
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -434,6 +507,47 @@ namespace VStudioCraft.Game
         // (no world block, no tile-entity, no save data — all
         // ephemeral state on the player).
         public const BlockType FishingRod    = BlockType.FishingRod;
+        // Tier 4 #24 — Painting. Held item; RMB-on-wall installs a
+        // Painting entity (see Game/Painting.cs). The placement /
+        // break / persist plumbing lives in GameRenderer and World;
+        // ItemType just exposes the constant + Alpha-id + display
+        // name the way every other item does. Recipe is the canonical
+        // 8-stick frame around 1 wool (CraftingRecipes).
+        public const BlockType Painting      = BlockType.Painting;
+        // Tier 4 #25 — Music discs (Alpha 2256 / 2257). The Jukebox
+        // BLOCK isn't aliased here (it's a placeable block, not an
+        // item form — IsItem stays false for it); the two disc IDs
+        // ARE held items so they get aliases the same way every other
+        // ItemType entry does.
+        public const BlockType Disc13        = BlockType.Disc13;
+        public const BlockType DiscCat       = BlockType.DiscCat;
+        // Tier 4 #19 — Armor. 20 pieces (5 materials × 4 slots). Aliased
+        // here the same way every other ItemType entry is so the
+        // ItemType.* surface stays a complete catalogue of held-item
+        // ids. Chainmail is included even though it has no recipe —
+        // the alias is what mob-drop spawns + creative-catalog gating
+        // reference, and there's no functional difference between an
+        // alias for a craftable item vs a drop-only one.
+        public const BlockType LeatherHelmet       = BlockType.LeatherHelmet;
+        public const BlockType LeatherChestplate   = BlockType.LeatherChestplate;
+        public const BlockType LeatherLeggings     = BlockType.LeatherLeggings;
+        public const BlockType LeatherBoots        = BlockType.LeatherBoots;
+        public const BlockType ChainmailHelmet     = BlockType.ChainmailHelmet;
+        public const BlockType ChainmailChestplate = BlockType.ChainmailChestplate;
+        public const BlockType ChainmailLeggings   = BlockType.ChainmailLeggings;
+        public const BlockType ChainmailBoots      = BlockType.ChainmailBoots;
+        public const BlockType IronHelmet          = BlockType.IronHelmet;
+        public const BlockType IronChestplate      = BlockType.IronChestplate;
+        public const BlockType IronLeggings        = BlockType.IronLeggings;
+        public const BlockType IronBoots           = BlockType.IronBoots;
+        public const BlockType DiamondHelmet       = BlockType.DiamondHelmet;
+        public const BlockType DiamondChestplate   = BlockType.DiamondChestplate;
+        public const BlockType DiamondLeggings     = BlockType.DiamondLeggings;
+        public const BlockType DiamondBoots        = BlockType.DiamondBoots;
+        public const BlockType GoldHelmet          = BlockType.GoldHelmet;
+        public const BlockType GoldChestplate      = BlockType.GoldChestplate;
+        public const BlockType GoldLeggings        = BlockType.GoldLeggings;
+        public const BlockType GoldBoots           = BlockType.GoldBoots;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -503,6 +617,42 @@ namespace VStudioCraft.Game
                 case BlockType.Saddle:         return 329;
                 // Tier 4 #23 — Fishing Rod. Alpha numeric id 346.
                 case BlockType.FishingRod:     return 346;
+                // Tier 4 #24 — Painting. Alpha numeric id 321.
+                case BlockType.Painting:       return 321;
+                // Tier 4 #25 — Music discs. Alpha numeric ids 2256
+                // ("13") and 2257 ("cat"). These are the only ids in
+                // the four-digit space we currently track; future
+                // Alpha discs (released post-1.1.2) would extend this
+                // list. The Jukebox BLOCK has Alpha id 84, but it's
+                // not in the IsItem range so AlphaId() is never
+                // called for it.
+                case BlockType.Disc13:         return 2256;
+                case BlockType.DiscCat:        return 2257;
+                // Tier 4 #19 — Armor. Alpha numeric ids 298..317
+                // contiguous in the canonical order leather → chain →
+                // iron → diamond → gold (helmet/chest/leg/boot inside
+                // each material). Kept here for save-format / future
+                // multiplayer-protocol parity.
+                case BlockType.LeatherHelmet:       return 298;
+                case BlockType.LeatherChestplate:   return 299;
+                case BlockType.LeatherLeggings:     return 300;
+                case BlockType.LeatherBoots:        return 301;
+                case BlockType.ChainmailHelmet:     return 302;
+                case BlockType.ChainmailChestplate: return 303;
+                case BlockType.ChainmailLeggings:   return 304;
+                case BlockType.ChainmailBoots:      return 305;
+                case BlockType.IronHelmet:          return 306;
+                case BlockType.IronChestplate:      return 307;
+                case BlockType.IronLeggings:        return 308;
+                case BlockType.IronBoots:           return 309;
+                case BlockType.DiamondHelmet:       return 310;
+                case BlockType.DiamondChestplate:   return 311;
+                case BlockType.DiamondLeggings:     return 312;
+                case BlockType.DiamondBoots:        return 313;
+                case BlockType.GoldHelmet:          return 314;
+                case BlockType.GoldChestplate:      return 315;
+                case BlockType.GoldLeggings:        return 316;
+                case BlockType.GoldBoots:           return 317;
                 default:                       return -1;
             }
         }
@@ -566,6 +716,38 @@ namespace VStudioCraft.Game
                 case BlockType.Compass:        return "Compass";
                 case BlockType.Saddle:         return "Saddle";
                 case BlockType.FishingRod:     return "Fishing Rod";
+                case BlockType.Painting:       return "Painting";
+                // Tier 4 #25 — Music disc display names. Alpha
+                // 1.1.2_01 inventory tooltips use the form
+                // "Music Disc - <track>" (with the title-cased track
+                // name). Match that here so tooltips and the
+                // creative catalog read canonically.
+                case BlockType.Disc13:         return "Music Disc - 13";
+                case BlockType.DiscCat:        return "Music Disc - cat";
+                // Tier 4 #19 — Armor display names. Alpha 1.1.2_01
+                // tooltips use "<Material> <Slot>" with both halves
+                // capitalised and a single space (e.g. "Iron Chestplate"
+                // — never "Iron-Chestplate" or "IronChestplate").
+                case BlockType.LeatherHelmet:       return "Leather Cap";
+                case BlockType.LeatherChestplate:   return "Leather Tunic";
+                case BlockType.LeatherLeggings:     return "Leather Pants";
+                case BlockType.LeatherBoots:        return "Leather Boots";
+                case BlockType.ChainmailHelmet:     return "Chain Helmet";
+                case BlockType.ChainmailChestplate: return "Chain Chestplate";
+                case BlockType.ChainmailLeggings:   return "Chain Leggings";
+                case BlockType.ChainmailBoots:      return "Chain Boots";
+                case BlockType.IronHelmet:          return "Iron Helmet";
+                case BlockType.IronChestplate:      return "Iron Chestplate";
+                case BlockType.IronLeggings:        return "Iron Leggings";
+                case BlockType.IronBoots:           return "Iron Boots";
+                case BlockType.DiamondHelmet:       return "Diamond Helmet";
+                case BlockType.DiamondChestplate:   return "Diamond Chestplate";
+                case BlockType.DiamondLeggings:     return "Diamond Leggings";
+                case BlockType.DiamondBoots:        return "Diamond Boots";
+                case BlockType.GoldHelmet:          return "Gold Helmet";
+                case BlockType.GoldChestplate:      return "Gold Chestplate";
+                case BlockType.GoldLeggings:        return "Gold Leggings";
+                case BlockType.GoldBoots:           return "Gold Boots";
                 default:                       return t.ToString();
             }
         }
@@ -675,6 +857,76 @@ namespace VStudioCraft.Game
             => ((byte)t >= (byte)BlockType.WoodSword && (byte)t <= (byte)BlockType.GoldAxe)
             || ((byte)t >= (byte)BlockType.WoodHoe   && (byte)t <= (byte)BlockType.GoldHoe);
 
+        // Tier 4 #19 — True if this BlockType id refers to one of the 20
+        // armor pieces (LeatherHelmet=119 .. GoldBoots=138). The slice
+        // is intentionally contiguous and ordered material-major,
+        // slot-minor so the slot index can be derived without a switch
+        // (see GetArmorSlot below). Used by InventoryScreen to gate
+        // drag-drop into the four armor slots — only matching armor
+        // pieces may be deposited, attempts to drop a stick into the
+        // helmet slot are rejected with a no-op swap.
+        public static bool IsArmor(BlockType t)
+            => (byte)t >= (byte)BlockType.LeatherHelmet
+            && (byte)t <= (byte)BlockType.GoldBoots;
+
+        // Tier 4 #19 — Slot index for an armor piece: 0=Helmet,
+        // 1=Chestplate, 2=Leggings, 3=Boots. Returns -1 for non-armor
+        // ids. The 20-id slice is laid out in the canonical Alpha order
+        // (helmet/chest/leg/boot inside each material) so the slot is
+        // simply `(id - LeatherHelmet) % 4`. The InventoryScreen uses
+        // this to enforce the per-slot type gate when the player
+        // drag-drops a piece — pieces fall straight into the matching
+        // slot and bounce off the other three.
+        public static int GetArmorSlot(BlockType t)
+        {
+            if (!IsArmor(t)) return -1;
+            return ((byte)t - (byte)BlockType.LeatherHelmet) % 4;
+        }
+
+        // Tier 4 #19 — Per-piece flat damage reduction (in HP points)
+        // for the Alpha 1.1.2_01 armor formula. The damage formula
+        // applied at the Player.TakeDamage call site is:
+        //     effective = max(1, originalDamage * (1 - sumReduction/25))
+        // capped at 80 % reduction (i.e. a fully-armored player still
+        // takes at least 20 % of incoming damage, rounded up to 1).
+        // The per-tier sums match the canonical Alpha values:
+        //     leather   = 1+3+2+1 = 7
+        //     chainmail = 2+5+4+1 = 12
+        //     iron      = 2+6+5+2 = 15
+        //     diamond   = 3+8+6+3 = 20
+        //     gold      = 2+5+3+1 = 11
+        // Diamond reaches the 20-point cap; chain/iron/leather/gold
+        // sit below it. Returns 0 for non-armor ids so the
+        // GetTotalArmorReduction summer can skip the IsArmor gate at
+        // its call sites.
+        public static int GetArmorReduction(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.LeatherHelmet:       return 1;
+                case BlockType.LeatherChestplate:   return 3;
+                case BlockType.LeatherLeggings:     return 2;
+                case BlockType.LeatherBoots:        return 1;
+                case BlockType.ChainmailHelmet:     return 2;
+                case BlockType.ChainmailChestplate: return 5;
+                case BlockType.ChainmailLeggings:   return 4;
+                case BlockType.ChainmailBoots:      return 1;
+                case BlockType.IronHelmet:          return 2;
+                case BlockType.IronChestplate:      return 6;
+                case BlockType.IronLeggings:        return 5;
+                case BlockType.IronBoots:           return 2;
+                case BlockType.DiamondHelmet:       return 3;
+                case BlockType.DiamondChestplate:   return 8;
+                case BlockType.DiamondLeggings:     return 6;
+                case BlockType.DiamondBoots:        return 3;
+                case BlockType.GoldHelmet:          return 2;
+                case BlockType.GoldChestplate:      return 5;
+                case BlockType.GoldLeggings:        return 3;
+                case BlockType.GoldBoots:           return 1;
+                default:                            return 0;
+            }
+        }
+
         // True if this BlockType id refers to a non-placeable, non-tool
         // inventory item (Stick, Coal, ingots, gem, Flint, ClayBall /
         // Brick, Bowl, RawPorkchop..Egg). The original ingredient
@@ -726,7 +978,23 @@ namespace VStudioCraft.Game
             // bound bumps to Saddle=113.
             // Tier 4 #23 — Fishing Rod appended past Saddle. Slice
             // upper bound bumps to FishingRod=114.
-            || ((byte)t >= (byte)BlockType.FlintAndSteel && (byte)t <= (byte)BlockType.FishingRod);
+            // Tier 4 #24 — Painting appended past FishingRod. Slice
+            // upper bound bumps to Painting=115.
+            // Tier 4 #25 — Jukebox=116 sits between Painting (last item)
+            // and Disc13/DiscCat (first new items). The Jukebox is a
+            // PLACEABLE BLOCK, not an item, so the slice splits in two:
+            // [FlintAndSteel..Painting] keeps the original items, and
+            // [Disc13..DiscCat] adds the two music-disc item ids past
+            // the Jukebox block. Append-only past DiscCat=118 keeps
+            // existing v8/v9/v10 saves byte-stable.
+            || ((byte)t >= (byte)BlockType.FlintAndSteel && (byte)t <= (byte)BlockType.Painting)
+            // Tier 4 #19 — Armor pieces (LeatherHelmet..GoldBoots)
+            // appended past the discs. Slice upper bound bumps to
+            // GoldBoots=138; all 20 ids are held items (placement /
+            // collision branches treat them as non-cube items the same
+            // way every other item id behaves) and fold cleanly into
+            // this contiguous range.
+            || ((byte)t >= (byte)BlockType.Disc13       && (byte)t <= (byte)BlockType.GoldBoots);
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -1030,6 +1298,13 @@ namespace VStudioCraft.Game
                 // be the per-half value.
                 case BlockType.WoodDoorBlockBottom:
                 case BlockType.WoodDoorBlockTop:
+                // Tier 4 #25 — Jukebox hardness 2.0 (matches Alpha
+                // 1.1.2_01 — same value as planks/bookshelf, since the
+                // jukebox is a plank-and-disc construct rather than
+                // stone). Bare-handed mining still works; an axe
+                // would speed it up but tool/material gating isn't
+                // wired yet.
+                case BlockType.Jukebox:
                     return 2f;
                 case BlockType.Dirt:
                 case BlockType.Grass:
@@ -1330,6 +1605,52 @@ namespace VStudioCraft.Game
                 // tip; sentinel atlas coord keeps the slicer out of
                 // this layer in alpha-textures mode.
                 case BlockType.FishingRod:          return BlockTextures.TileFishingRod;
+                // Tier 4 #24 — Painting inventory icon. Procedural —
+                // a small framed picture sprite (brown wood frame +
+                // splash of colour inside). The on-wall art tiles
+                // (TilePainting1x1..4x3) are separate atlas slots and
+                // are sampled by GameRenderer.RenderPaintings, not by
+                // this hotbar/inventory path.
+                case BlockType.Painting:            return BlockTextures.TilePaintingItem;
+                // Tier 4 #25 — Jukebox face tiles. Top tile shows the
+                // disc-slot circle inset in a plank surface; sides are
+                // a darker plank-with-darker-grain panel; bottom is
+                // plain planks (matches the Furnace / Chest convention
+                // — bottom faces don't get unique art).
+                case BlockType.Jukebox:
+                    if (faceKind == 0) return BlockTextures.TileJukeboxTop;
+                    if (faceKind == 1) return BlockTextures.TileJukeboxBottom;
+                    return BlockTextures.TileJukeboxSide;
+                // Tier 4 #25 — Disc icons. Both are flat-sprite items;
+                // hotbar / inventory / dropped-item paths sample these
+                // through the standard non-block GetTileIndex branch.
+                case BlockType.Disc13:              return BlockTextures.TileDisc13;
+                case BlockType.DiscCat:             return BlockTextures.TileDiscCat;
+                // Tier 4 #19 — Armor icons. Each piece gets its own
+                // procedural sprite (per-material colour × per-slot
+                // shape). Sentinel atlas coords keep the alpha-textures
+                // slicer from overlaying garbage where the canonical
+                // armor sheets aren't yet wired.
+                case BlockType.LeatherHelmet:       return BlockTextures.TileLeatherHelmet;
+                case BlockType.LeatherChestplate:   return BlockTextures.TileLeatherChestplate;
+                case BlockType.LeatherLeggings:     return BlockTextures.TileLeatherLeggings;
+                case BlockType.LeatherBoots:        return BlockTextures.TileLeatherBoots;
+                case BlockType.ChainmailHelmet:     return BlockTextures.TileChainmailHelmet;
+                case BlockType.ChainmailChestplate: return BlockTextures.TileChainmailChestplate;
+                case BlockType.ChainmailLeggings:   return BlockTextures.TileChainmailLeggings;
+                case BlockType.ChainmailBoots:      return BlockTextures.TileChainmailBoots;
+                case BlockType.IronHelmet:          return BlockTextures.TileIronHelmet;
+                case BlockType.IronChestplate:      return BlockTextures.TileIronChestplate;
+                case BlockType.IronLeggings:        return BlockTextures.TileIronLeggings;
+                case BlockType.IronBoots:           return BlockTextures.TileIronBoots;
+                case BlockType.DiamondHelmet:       return BlockTextures.TileDiamondHelmet;
+                case BlockType.DiamondChestplate:   return BlockTextures.TileDiamondChestplate;
+                case BlockType.DiamondLeggings:     return BlockTextures.TileDiamondLeggings;
+                case BlockType.DiamondBoots:        return BlockTextures.TileDiamondBoots;
+                case BlockType.GoldHelmet:          return BlockTextures.TileGoldHelmet;
+                case BlockType.GoldChestplate:      return BlockTextures.TileGoldChestplate;
+                case BlockType.GoldLeggings:        return BlockTextures.TileGoldLeggings;
+                case BlockType.GoldBoots:           return BlockTextures.TileGoldBoots;
                 default:
                     return BlockTextures.TileStone;
             }

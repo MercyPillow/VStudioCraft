@@ -144,7 +144,50 @@ namespace VStudioCraft.Game
         // preceding atlas index is unchanged).
         public const int FirstTailFishingRodLayer = FirstTailSaddleLayer + TailSaddleLayerCount; // 123
         public const int TailFishingRodLayerCount = 1;
-        public const int LayerCount = FirstTailFishingRodLayer + TailFishingRodLayerCount;       // 124
+        // Tier 4 #24 — Painting pack. 5 "art" tiles for the 5 painting
+        // size variants (1×1, 1×2, 2×1, 2×2, 4×3) plus 1 inventory icon
+        // for the held item. The variant-art tiles are sampled by
+        // GameRenderer.RenderPaintings on the wall plane; the icon tile
+        // is sampled by the standard hotbar/inventory paths via
+        // Block.GetTileIndex. All 6 ship procedural — there's no
+        // verified alpha_tools.png coord for the painting sprite OR for
+        // the per-variant art (Alpha 1.1.2_01 packs ~26 painting
+        // variants of various sizes into kz.png; we ship 5 representative
+        // variants here, each procedurally painted as a recognisable
+        // pattern). Append-only past the fishing-rod pack so existing
+        // v8/v9 saves stay byte-stable. Note that painting art tiles are
+        // 16×16 same as every other atlas slot — for sizes other than
+        // 1×1 the renderer STRETCHES the tile across the full painting
+        // rectangle. Quality is poor at 4×3 but functionally correct;
+        // a per-variant native-resolution atlas would require relaxing
+        // the fixed-tile-size atlas assumption (TODO).
+        public const int FirstTailPaintingLayer = FirstTailFishingRodLayer + TailFishingRodLayerCount; // 124
+        public const int TailPaintingLayerCount = 6;
+        // Tier 4 #25 — Jukebox + Music Disc pack. 3 block-face tiles for
+        // the Jukebox (top with disc-slot circle, side with dark plank
+        // grain, bottom plain planks) plus 2 item-icon tiles for the
+        // two music discs ("13" with a white "13" label, "cat" with a
+        // cyan label so the two read distinctly in the hotbar). All
+        // five ship procedural — Alpha 1.1.2 packs the jukebox tiles
+        // in terrain.png at canonical coords (jukebox top at (10,4),
+        // side at (11,4)) and the disc sprites in alpha_tools.png, but
+        // we haven't verified those coords against the embedded sheets
+        // here so the slicer stays out via sentinel coords and the
+        // procedural generators paint the final tiles in both atlas
+        // modes. Append-only past the painting pack so existing
+        // v8/v9/v10 saves stay byte-stable.
+        public const int FirstTailJukeboxLayer = FirstTailPaintingLayer + TailPaintingLayerCount; // 130
+        public const int TailJukeboxLayerCount = 5;
+        // Tier 4 #19 — Armor inventory icon pack. 20 procedural item
+        // tiles (5 materials × 4 slots), appended past the jukebox pack
+        // so existing v8..v11 atlas slicing stays stable. Per-material
+        // colour story: Leather=brown, Chainmail=silver/grey, Iron=
+        // light grey, Diamond=cyan/white, Gold=yellow. Per-slot shape:
+        // helmet=hooded square, chestplate=tall body+sleeves
+        // rectangle, leggings=H-shape, boots=two small squares.
+        public const int FirstTailArmorLayer = FirstTailJukeboxLayer + TailJukeboxLayerCount; // 135
+        public const int TailArmorLayerCount = 20;
+        public const int LayerCount = FirstTailArmorLayer + TailArmorLayerCount;              // 155
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -256,6 +299,64 @@ namespace VStudioCraft.Game
         // entity itself (the Bobber) is rendered as a small white
         // cuboid in the world, not from an atlas tile.
         public const int TileFishingRod     = 123;
+        // Tier 4 #24 — Painting art + icon tiles (Alpha 321). Five
+        // art variants get one tile each (sizes baked into the
+        // variant — placement / world-rect computation reads the
+        // size from Painting.Width / Painting.Height); the icon
+        // tile is the inventory thumbnail. Each variant gets a
+        // visually-distinct procedural pattern (squiggle / gradient /
+        // dots / cross / stripes) so the player can tell the five
+        // variants apart at a glance even though the rectangles are
+        // stretched-not-tiled at sizes > 1×1.
+        public const int TilePainting1x1    = 124;
+        public const int TilePainting1x2    = 125;
+        public const int TilePainting2x1    = 126;
+        public const int TilePainting2x2    = 127;
+        public const int TilePainting4x3    = 128;
+        public const int TilePaintingItem   = 129;
+        // Tier 4 #25 — Jukebox + music disc tile indices. Jukebox top
+        // shows a disc-slot inset circle on a plank base; side is a
+        // darker plank panel with vertical seams; bottom reuses the
+        // plank tile (we still allocate a dedicated layer rather than
+        // routing to TilePlanks at GetTileIndex time, so a future
+        // cosmetic tweak doesn't have to retrofit a multi-face
+        // routing branch — costs 1 atlas tile, gains future
+        // flexibility). Disc sprites: small black circular disc body
+        // with a centred coloured label (white "13" for Disc13, cyan
+        // line for DiscCat — Alpha distinguishes the two by colour
+        // alone since the labels are too small to read at 16×16).
+        public const int TileJukeboxTop     = 130;
+        public const int TileJukeboxSide    = 131;
+        public const int TileJukeboxBottom  = 132;
+        public const int TileDisc13         = 133;
+        public const int TileDiscCat        = 134;
+        // Tier 4 #19 — Armor inventory icons. 20 layers (5 materials ×
+        // 4 slots). All ship procedural — material-coloured silhouettes
+        // shaped per slot (helmet=hooded square, chest=tall rectangle,
+        // leggings=H-shape, boots=two small squares). Sentinel atlas
+        // coords keep the slicer out of these layers in alpha-textures
+        // mode. Append-only past TileDiscCat=134 keeps the existing
+        // atlas slot indices stable.
+        public const int TileLeatherHelmet       = 135;
+        public const int TileLeatherChestplate   = 136;
+        public const int TileLeatherLeggings     = 137;
+        public const int TileLeatherBoots        = 138;
+        public const int TileChainmailHelmet     = 139;
+        public const int TileChainmailChestplate = 140;
+        public const int TileChainmailLeggings   = 141;
+        public const int TileChainmailBoots      = 142;
+        public const int TileIronHelmet          = 143;
+        public const int TileIronChestplate      = 144;
+        public const int TileIronLeggings        = 145;
+        public const int TileIronBoots           = 146;
+        public const int TileDiamondHelmet       = 147;
+        public const int TileDiamondChestplate   = 148;
+        public const int TileDiamondLeggings     = 149;
+        public const int TileDiamondBoots        = 150;
+        public const int TileGoldHelmet          = 151;
+        public const int TileGoldChestplate      = 152;
+        public const int TileGoldLeggings        = 153;
+        public const int TileGoldBoots           = 154;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -494,6 +595,27 @@ namespace VStudioCraft.Game
             // Tier 4 #23 — Fishing Rod sprite. Procedural-only, same
             // sentinel-coord story as the saddle pack.
             GenerateProceduralFishingRodLayers(layerPixels);
+
+            // Tier 4 #24 — Painting art + icon. Five distinct
+            // procedural patterns + one framed-picture inventory
+            // icon. Procedural-only — Alpha's painting sheet
+            // (kz.png) isn't bundled here.
+            GenerateProceduralPaintingLayers(layerPixels);
+
+            // Tier 4 #25 — Jukebox face tiles + music disc icons.
+            // Procedural-always — same sentinel-coord story as the
+            // painting pack. Five tiles total: 3 jukebox faces + 2
+            // disc sprites.
+            GenerateProceduralJukeboxLayers(layerPixels);
+
+            // Tier 4 #19 — Armor inventory icons. 20 procedural sprites
+            // covering all 5 materials × 4 slots. Procedural-always —
+            // Alpha's per-piece icons live in a separate sheet
+            // (gui/items.png) we don't currently embed, and the per-
+            // material colour story is well-defined enough that the
+            // generated silhouettes read at-a-glance even without the
+            // canonical art.
+            GenerateProceduralArmorLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -1592,6 +1714,389 @@ namespace VStudioCraft.Game
         private static void GenerateProceduralFishingRodLayers(byte[] layerPixels)
         {
             UploadItem(layerPixels, TileFishingRod, GenerateFishingRodItem);
+        }
+
+        // Tier 4 #24 — Painting art + icon painter. Five 16×16 art
+        // tiles each with a distinct procedural pattern (squiggle,
+        // gradient, dots, cross, stripes) so the player can tell
+        // the variants apart at a glance even when the renderer
+        // stretches a single 16×16 tile across a 4×3-block wall
+        // rectangle. Plus one inventory-icon tile (small framed
+        // picture: brown wood frame around a colour splash). All
+        // six ship procedural; their AlphaTileCoords entries are
+        // sentinels so neither alpha-textures mode overlays them.
+        private static void GenerateProceduralPaintingLayers(byte[] layerPixels)
+        {
+            UploadItem(layerPixels, TilePainting1x1, GeneratePainting1x1);
+            UploadItem(layerPixels, TilePainting1x2, GeneratePainting1x2);
+            UploadItem(layerPixels, TilePainting2x1, GeneratePainting2x1);
+            UploadItem(layerPixels, TilePainting2x2, GeneratePainting2x2);
+            UploadItem(layerPixels, TilePainting4x3, GeneratePainting4x3);
+            UploadItem(layerPixels, TilePaintingItem, GeneratePaintingItem);
+        }
+
+        // Helper: paint a single-pixel-wide brown wooden frame
+        // around the [0..TileSize-1] tile so each painting variant
+        // shares the same frame look the Alpha sprites use. The
+        // inset content (squiggle / gradient / etc.) sits in the
+        // 14×14 inner area.
+        private static void PaintWoodFrame(byte[] pixels)
+        {
+            (byte r, byte g, byte b) frame   = (95, 60, 30);
+            (byte r, byte g, byte b) frameHi = (135, 90, 50);
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 0, frameHi.r, frameHi.g, frameHi.b);
+                SetPixel(pixels, x, TileSize - 1, frame.r, frame.g, frame.b);
+            }
+            for (int y = 0; y < TileSize; y++)
+            {
+                SetPixel(pixels, 0, y, frame.r, frame.g, frame.b);
+                SetPixel(pixels, TileSize - 1, y, frameHi.r, frameHi.g, frameHi.b);
+            }
+        }
+
+        // Variant 0 — squiggle. A red zig-zag walking from
+        // bottom-left to upper-right across the inner area; reads
+        // as a "wavy line" painting at 1×1 and a stretched
+        // wave at larger sizes.
+        private static void GeneratePainting1x1(byte[] pixels)
+        {
+            // Off-white canvas background.
+            (byte r, byte g, byte b) bg = (235, 225, 200);
+            for (int y = 1; y < TileSize - 1; y++)
+            for (int x = 1; x < TileSize - 1; x++)
+                SetPixel(pixels, x, y, bg.r, bg.g, bg.b);
+            PaintWoodFrame(pixels);
+            // Squiggle — sin-ish path approximated by integer ys.
+            (byte r, byte g, byte b) line = (180, 50, 50);
+            int[] ys = { 8, 6, 5, 4, 5, 7, 9, 11, 12, 11, 9, 7, 5, 6 };
+            for (int i = 0; i < ys.Length; i++)
+            {
+                int x = 1 + i;
+                int y = ys[i];
+                if (x >= 1 && x < TileSize - 1 && y >= 1 && y < TileSize - 1)
+                    SetPixel(pixels, x, y, line.r, line.g, line.b);
+            }
+        }
+
+        // Variant 1 — vertical gradient. Four-band sky-to-ground
+        // (blue → green) reads as a landscape painting and
+        // stretches sensibly to a 1×2 (tall) rectangle.
+        private static void GeneratePainting1x2(byte[] pixels)
+        {
+            (byte r, byte g, byte b) sky    = (110, 165, 230);
+            (byte r, byte g, byte b) horizn = (190, 200, 180);
+            (byte r, byte g, byte b) field  = (105, 165, 75);
+            (byte r, byte g, byte b) earth  = (70, 105, 45);
+            for (int y = 1; y < TileSize - 1; y++)
+            {
+                (byte r, byte g, byte b) c;
+                if      (y < 5)  c = sky;
+                else if (y < 8)  c = horizn;
+                else if (y < 12) c = field;
+                else             c = earth;
+                for (int x = 1; x < TileSize - 1; x++)
+                    SetPixel(pixels, x, y, c.r, c.g, c.b);
+            }
+            PaintWoodFrame(pixels);
+        }
+
+        // Variant 2 — dots / stars. Off-black background with a
+        // scatter of bright pips; reads as a starfield, stretches
+        // as a "panoramic night sky" at 2×1.
+        private static void GeneratePainting2x1(byte[] pixels)
+        {
+            (byte r, byte g, byte b) bg   = (25, 30, 55);
+            (byte r, byte g, byte b) pip  = (240, 235, 180);
+            (byte r, byte g, byte b) pip2 = (180, 200, 240);
+            for (int y = 1; y < TileSize - 1; y++)
+            for (int x = 1; x < TileSize - 1; x++)
+                SetPixel(pixels, x, y, bg.r, bg.g, bg.b);
+            // Hand-placed pips so the pattern reads at 1×1
+            // crops; each pip is a single pixel except for two
+            // 2-pixel "bright stars".
+            int[][] pips = {
+                new[]{ 3, 3 }, new[]{ 6, 5 }, new[]{ 10, 4 }, new[]{ 13, 6 },
+                new[]{ 4, 9 }, new[]{ 8, 11 }, new[]{ 12, 12 }, new[]{ 5, 13 },
+                new[]{ 11, 8 }, new[]{ 14, 10 },
+            };
+            foreach (var p in pips)
+                SetPixel(pixels, p[0], p[1], pip.r, pip.g, pip.b);
+            // Two bigger highlights.
+            SetPixel(pixels, 7, 4, pip2.r, pip2.g, pip2.b);
+            SetPixel(pixels, 7, 5, pip2.r, pip2.g, pip2.b);
+            SetPixel(pixels, 9, 9, pip2.r, pip2.g, pip2.b);
+            SetPixel(pixels, 10, 9, pip2.r, pip2.g, pip2.b);
+            PaintWoodFrame(pixels);
+        }
+
+        // Variant 3 — diagonal cross. Two crossed bars on a
+        // light canvas. Reads as a "shield" / heraldic pattern;
+        // stretches symmetrically at 2×2.
+        private static void GeneratePainting2x2(byte[] pixels)
+        {
+            (byte r, byte g, byte b) bg   = (220, 215, 195);
+            (byte r, byte g, byte b) bar1 = (185, 65, 65);
+            (byte r, byte g, byte b) bar2 = (60, 95, 165);
+            for (int y = 1; y < TileSize - 1; y++)
+            for (int x = 1; x < TileSize - 1; x++)
+                SetPixel(pixels, x, y, bg.r, bg.g, bg.b);
+            // Diagonal `\` bar (red).
+            for (int s = 1; s < TileSize - 1; s++)
+            {
+                int x = s;
+                int y = s;
+                if (x >= 1 && x < TileSize - 1 && y >= 1 && y < TileSize - 1)
+                    SetPixel(pixels, x, y, bar1.r, bar1.g, bar1.b);
+            }
+            // Diagonal `/` bar (blue).
+            for (int s = 1; s < TileSize - 1; s++)
+            {
+                int x = s;
+                int y = (TileSize - 1) - s;
+                if (x >= 1 && x < TileSize - 1 && y >= 1 && y < TileSize - 1)
+                    SetPixel(pixels, x, y, bar2.r, bar2.g, bar2.b);
+            }
+            PaintWoodFrame(pixels);
+        }
+
+        // Variant 4 — vertical stripes. Five colour bands the
+        // width of the inner area; reads as an abstract striped
+        // painting and stretches reasonably at 4×3 (the largest
+        // variant, where stretching is most visible). Bands sit
+        // at columns 1..14 (3px each) inside the frame.
+        private static void GeneratePainting4x3(byte[] pixels)
+        {
+            (byte r, byte g, byte b)[] bands = {
+                (200, 70, 70),
+                (210, 175, 80),
+                (110, 175, 95),
+                (75, 130, 195),
+                (165, 105, 200),
+            };
+            // Background (in case the bands don't tile perfectly).
+            (byte r, byte g, byte b) bg = (60, 55, 50);
+            for (int y = 1; y < TileSize - 1; y++)
+            for (int x = 1; x < TileSize - 1; x++)
+                SetPixel(pixels, x, y, bg.r, bg.g, bg.b);
+            for (int x = 1; x < TileSize - 1; x++)
+            {
+                int idx = (x - 1) * bands.Length / (TileSize - 2);
+                if (idx < 0) idx = 0;
+                if (idx >= bands.Length) idx = bands.Length - 1;
+                var c = bands[idx];
+                for (int y = 1; y < TileSize - 1; y++)
+                    SetPixel(pixels, x, y, c.r, c.g, c.b);
+            }
+            PaintWoodFrame(pixels);
+        }
+
+        // Inventory-icon variant — small framed picture sprite.
+        // Brown wooden frame around a 12×8 inner canvas with a
+        // simple "horizon + sun" motif so the icon reads as
+        // "painting" at a glance in the hotbar / inventory.
+        // Smaller sprite (centred) than the art tiles so the
+        // wood frame visually dominates — it's the held item
+        // version, not the art on the wall.
+        private static void GeneratePaintingItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) frame   = (90, 55, 28);
+            (byte r, byte g, byte b) frameHi = (135, 90, 50);
+            (byte r, byte g, byte b) sky     = (115, 170, 230);
+            (byte r, byte g, byte b) ground  = (110, 165, 80);
+            (byte r, byte g, byte b) sun     = (235, 215, 90);
+            // Outer frame: cols 2..13, rows 3..12 (a 12×10 picture).
+            int x0 = 2, x1 = 13, y0 = 3, y1 = 12;
+            // Frame fill — top + bottom rows + side cols.
+            for (int x = x0; x <= x1; x++)
+            {
+                SetPixel(pixels, x, y0, frameHi.r, frameHi.g, frameHi.b);
+                SetPixel(pixels, x, y1, frame.r, frame.g, frame.b);
+            }
+            for (int y = y0; y <= y1; y++)
+            {
+                SetPixel(pixels, x0, y, frame.r, frame.g, frame.b);
+                SetPixel(pixels, x1, y, frameHi.r, frameHi.g, frameHi.b);
+            }
+            // Inner canvas (sky + ground) 10×8 at cols 3..12, rows 4..11.
+            for (int y = y0 + 1; y < y1; y++)
+            for (int x = x0 + 1; x < x1; x++)
+            {
+                bool isSky = y < (y0 + 1 + (y1 - y0 - 1) / 2);
+                var c = isSky ? sky : ground;
+                SetPixel(pixels, x, y, c.r, c.g, c.b);
+            }
+            // Sun pip.
+            SetPixel(pixels, x1 - 2, y0 + 2, sun.r, sun.g, sun.b);
+            SetPixel(pixels, x1 - 1, y0 + 2, sun.r, sun.g, sun.b);
+            SetPixel(pixels, x1 - 2, y0 + 3, sun.r, sun.g, sun.b);
+        }
+
+        // Tier 4 #25 — Jukebox + music disc procedural pack. 3 jukebox
+        // face tiles + 2 disc-icon tiles. All five paint in both atlas
+        // modes — the canonical Alpha terrain.png coords for the
+        // jukebox haven't been verified against the embedded sheet,
+        // and Alpha doesn't pack disc icons in either bundled PNG, so
+        // procedural is the guaranteed-correct path.
+        private static void GenerateProceduralJukeboxLayers(byte[] layerPixels)
+        {
+            UploadLayer(layerPixels, TileJukeboxTop,    GenerateJukeboxTop);
+            UploadLayer(layerPixels, TileJukeboxSide,   GenerateJukeboxSide);
+            UploadLayer(layerPixels, TileJukeboxBottom, GenerateJukeboxBottom);
+            UploadItem(layerPixels,  TileDisc13,        GenerateDisc13Item);
+            UploadItem(layerPixels,  TileDiscCat,       GenerateDiscCatItem);
+        }
+
+        // Jukebox top — plank base with a centred dark circle (the disc
+        // slot) so the player can tell at a glance which face accepts
+        // an inserted disc. The circle is filled black/dark-brown to
+        // suggest a recess; a single highlight pixel at the centre
+        // hints that the slot is the focal point.
+        private static void GenerateJukeboxTop(byte[] pixels)
+        {
+            // Same plank base as GeneratePlanks but with a slightly
+            // darker tone so the lid reads as polished cabinet wood
+            // rather than bare planks (matches the chest-top palette
+            // shift — same trick).
+            var rng = new Random(0x57B0);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)100 : (byte)138;
+                byte g = groove ? (byte)68  : (byte)98;
+                byte b = groove ? (byte)36  : (byte)56;
+                SetJittered(pixels, x, y, r, g, b, 6, rng);
+            }
+            // Disc-slot circle: a 6-pixel-radius dark recess centred
+            // on the tile. We rasterise it as the set of pixels whose
+            // squared distance to (cx,cy)=(7.5,7.5) is < r^2. Using
+            // 7.5 instead of 7 keeps the circle visually centred on
+            // an even-pixel grid (TileSize=16 has no exact centre).
+            float cx = 7.5f, cy = 7.5f;
+            float rIn  = 4.2f * 4.2f;
+            float rRim = 5.2f * 5.2f;
+            (byte r, byte g, byte b) recess  = (30, 22, 14);
+            (byte r, byte g, byte b) rim     = (60, 42, 24);
+            (byte r, byte g, byte b) labelHi = (180, 165, 130);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                float dx = x - cx, dy = y - cy;
+                float d2 = dx*dx + dy*dy;
+                if (d2 < rIn)       SetPixel(pixels, x, y, recess.r, recess.g, recess.b);
+                else if (d2 < rRim) SetPixel(pixels, x, y, rim.r, rim.g, rim.b);
+            }
+            // Tiny centre highlight — a single off-white pixel at
+            // the spindle so the slot reads as "disc goes here, not
+            // just a hole".
+            SetPixel(pixels, 7, 7, labelHi.r, labelHi.g, labelHi.b);
+            SetPixel(pixels, 8, 7, labelHi.r, labelHi.g, labelHi.b);
+        }
+
+        // Jukebox side — darker plank panel with vertical seams so the
+        // four lateral faces read as a polished cabinet rather than
+        // generic planks. Distinguishes the jukebox from a chest at a
+        // glance (chests have horizontal iron bands; the jukebox has
+        // vertical wood seams).
+        private static void GenerateJukeboxSide(byte[] pixels)
+        {
+            var rng = new Random(0x57B1);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                // Vertical seams every 4 pixels (instead of horizontal
+                // grooves) so the side reads as upright plank slats.
+                bool seam = (x % 4 == 0);
+                byte r = seam ? (byte)82  : (byte)115;
+                byte g = seam ? (byte)56  : (byte)82;
+                byte b = seam ? (byte)28  : (byte)44;
+                SetJittered(pixels, x, y, r, g, b, 5, rng);
+            }
+            // A subtle horizontal trim at the top edge so the cabinet
+            // has visible joinery — a single line of slightly lighter
+            // wood to suggest a moulding strip.
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 1, 145, 105, 60);
+            }
+        }
+
+        // Jukebox bottom — plain planks. Matches the chest convention
+        // where the bottom face is uneventful (the player rarely sees
+        // it). Allocating its own atlas tile (rather than routing to
+        // TilePlanks) gives future cosmetic tweaks somewhere to land
+        // without retrofitting a multi-face routing branch.
+        private static void GenerateJukeboxBottom(byte[] pixels)
+        {
+            var rng = new Random(0x57B2);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)123 : (byte)160;
+                byte g = groove ? (byte)91  : (byte)124;
+                byte b = groove ? (byte)52  : (byte)74;
+                SetJittered(pixels, x, y, r, g, b, 7, rng);
+            }
+        }
+
+        // Music disc "13" — black vinyl disc with a white "13" centred
+        // label. The label colour is the only thing that distinguishes
+        // the two discs at hotbar size (16×16 won't render readable
+        // text), so the colour choice matters: white reads as the
+        // canonical "13" disc art (Alpha shows it with a small white
+        // square label).
+        private static void GenerateDisc13Item(byte[] pixels)
+        {
+            PaintDiscBody(pixels, label: (235, 235, 235));
+            // Two-pixel "13" hint — a left vertical line + right two
+            // dots. Doesn't actually spell the digits at this size,
+            // but the silhouette differs enough from the cat label
+            // to be distinct.
+            SetPixel(pixels, 7, 7, 235, 235, 235);
+            SetPixel(pixels, 7, 8, 235, 235, 235);
+            SetPixel(pixels, 9, 7, 235, 235, 235);
+            SetPixel(pixels, 9, 8, 235, 235, 235);
+        }
+
+        // Music disc "cat" — black vinyl disc with a cyan label. Same
+        // shape painter as Disc13; only the label colour differs so
+        // the two discs are visually distinct in the hotbar.
+        private static void GenerateDiscCatItem(byte[] pixels)
+        {
+            PaintDiscBody(pixels, label: (90, 200, 210));
+            // A small horizontal "ear" hint on the cat label — two
+            // pixel dots left + right of centre. Doesn't render as
+            // a recognisable cat, just differentiates from the "13"
+            // dot pattern.
+            SetPixel(pixels, 6, 6, 90, 200, 210);
+            SetPixel(pixels, 10, 6, 90, 200, 210);
+        }
+
+        // Helper: paint a circular black-vinyl disc body with a
+        // smaller centred coloured label. Shared between the Disc13
+        // and DiscCat painters so the silhouette is identical and the
+        // only difference is the label colour. Disc fills 5..6 pixel
+        // radius circle; label fills the inner 2-pixel radius.
+        private static void PaintDiscBody(byte[] pixels, (byte r, byte g, byte b) label)
+        {
+            (byte r, byte g, byte b) vinyl     = (15, 15, 18);
+            (byte r, byte g, byte b) vinylRim  = (40, 40, 45);
+            float cx = 7.5f, cy = 7.5f;
+            float rOuter = 6.0f * 6.0f;
+            float rRim   = 5.0f * 5.0f;
+            float rLabel = 2.5f * 2.5f;
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                float dx = x - cx, dy = y - cy;
+                float d2 = dx*dx + dy*dy;
+                if (d2 < rLabel)       SetPixel(pixels, x, y, label.r, label.g, label.b);
+                else if (d2 < rRim)    SetPixel(pixels, x, y, vinyl.r, vinyl.g, vinyl.b);
+                else if (d2 < rOuter)  SetPixel(pixels, x, y, vinylRim.r, vinylRim.g, vinylRim.b);
+            }
         }
 
         // Tier 4 #23 — Fishing Rod sprite. 16×16 pixel painter:
@@ -2827,6 +3332,58 @@ namespace VStudioCraft.Game
             // the diagonal rod + line + hook silhouette in both
             // atlas modes.
             /* TileFishingRod        */ (-1, -1),
+            // Tier 4 #24 — Painting art + icon. Procedural-only —
+            // Alpha 1.1.2_01 packs the 26 painting variants into a
+            // dedicated kz.png sheet (NOT in alpha_tools.png), and
+            // the embedded resource bundle here doesn't ship that
+            // sheet. Sentinels keep the slicer out of these layers
+            // in alpha-textures mode; the procedural generators paint
+            // the 5 art tiles + 1 icon tile in both atlas modes.
+            /* TilePainting1x1       */ (-1, -1),
+            /* TilePainting1x2       */ (-1, -1),
+            /* TilePainting2x1       */ (-1, -1),
+            /* TilePainting2x2       */ (-1, -1),
+            /* TilePainting4x3       */ (-1, -1),
+            /* TilePaintingItem      */ (-1, -1),
+            // Tier 4 #25 — Jukebox face tiles + music disc icons.
+            // Procedural-only — Alpha 1.1.2 terrain.png coords for the
+            // jukebox (top at (10,4), side at (11,4)) haven't been
+            // verified against the embedded sheet, and the disc icons
+            // would live in alpha_tools.png (also unverified). Sentinels
+            // keep the slicer out of all five layers in alpha-textures
+            // mode; the procedural generators paint them in both atlas
+            // modes.
+            /* TileJukeboxTop        */ (-1, -1),
+            /* TileJukeboxSide       */ (-1, -1),
+            /* TileJukeboxBottom     */ (-1, -1),
+            /* TileDisc13            */ (-1, -1),
+            /* TileDiscCat           */ (-1, -1),
+            // Tier 4 #19 — Armor inventory icons. 20 layers (5 materials
+            // × 4 slots). Procedural-only — Alpha's per-piece icons
+            // live in gui/items.png which we don't currently embed.
+            // Sentinels across the board keep the slicer out of these
+            // layers in alpha-textures mode; the procedural generators
+            // paint them in both atlas modes.
+            /* TileLeatherHelmet       */ (-1, -1),
+            /* TileLeatherChestplate   */ (-1, -1),
+            /* TileLeatherLeggings     */ (-1, -1),
+            /* TileLeatherBoots        */ (-1, -1),
+            /* TileChainmailHelmet     */ (-1, -1),
+            /* TileChainmailChestplate */ (-1, -1),
+            /* TileChainmailLeggings   */ (-1, -1),
+            /* TileChainmailBoots      */ (-1, -1),
+            /* TileIronHelmet          */ (-1, -1),
+            /* TileIronChestplate      */ (-1, -1),
+            /* TileIronLeggings        */ (-1, -1),
+            /* TileIronBoots           */ (-1, -1),
+            /* TileDiamondHelmet       */ (-1, -1),
+            /* TileDiamondChestplate   */ (-1, -1),
+            /* TileDiamondLeggings     */ (-1, -1),
+            /* TileDiamondBoots        */ (-1, -1),
+            /* TileGoldHelmet          */ (-1, -1),
+            /* TileGoldChestplate      */ (-1, -1),
+            /* TileGoldLeggings        */ (-1, -1),
+            /* TileGoldBoots           */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -2990,6 +3547,27 @@ namespace VStudioCraft.Game
             // Tier 4 #23 — Fishing Rod sprite. Procedural-always —
             // same sentinel-coord story as the saddle pack.
             GenerateProceduralFishingRodLayers(layerPixels);
+
+            // Tier 4 #24 — Painting art + icon. Procedural-always —
+            // same sentinel-coord story as the fishing-rod pack.
+            GenerateProceduralPaintingLayers(layerPixels);
+
+            // Tier 4 #25 — Jukebox + disc pack. Procedural-always —
+            // same sentinel-coord story as the painting pack. The
+            // alpha-textures atlas mode also paints these procedurally
+            // because we haven't verified the canonical Alpha 1.1.2
+            // terrain.png coords for the jukebox tiles against the
+            // embedded sheet.
+            GenerateProceduralJukeboxLayers(layerPixels);
+
+            // Tier 4 #19 — Armor inventory icons. 20 procedural sprites
+            // covering all 5 materials × 4 slots. Procedural-always —
+            // Alpha's per-piece icons live in a separate sheet
+            // (gui/items.png) we don't currently embed, and the per-
+            // material colour story is well-defined enough that the
+            // generated silhouettes read at-a-glance even without the
+            // canonical art.
+            GenerateProceduralArmorLayers(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -4730,6 +5308,201 @@ namespace VStudioCraft.Game
             SetPixel(pixels, 9, 7, 240, 240, 232, 255);
             SetPixel(pixels, 8, 6, 240, 240, 232, 255);
             SetPixel(pixels, 7, 8, 240, 240, 232, 255);
+        }
+
+        // Tier 4 #19 — Armor inventory icon pack. 20 procedural item
+        // tiles painted as material-coloured silhouettes shaped per
+        // slot. Per-material palette (base, highlight, shadow):
+        //   Leather   = brown ramps
+        //   Chainmail = silver-grey ramps
+        //   Iron      = light-grey ramps with a subtle blue tint
+        //   Diamond   = cyan-white ramps
+        //   Gold      = saturated yellow ramps
+        // Per-slot silhouette functions paint a generic shape that the
+        // material palette overlays on. The five materials reuse the
+        // same four shape functions with different palettes — same
+        // trick the tool ladder uses for sword/pickaxe/axe/shovel.
+        private static void GenerateProceduralArmorLayers(byte[] layerPixels)
+        {
+            // Leather — warm brown.
+            var leather   = ((byte)138, (byte)92,  (byte)50);
+            var leatherHi = ((byte)175, (byte)125, (byte)75);
+            var leatherLo = ((byte)92,  (byte)56,  (byte)28);
+            UploadItem(layerPixels, TileLeatherHelmet,
+                p => PaintArmorHelmet(p, leather, leatherHi, leatherLo));
+            UploadItem(layerPixels, TileLeatherChestplate,
+                p => PaintArmorChestplate(p, leather, leatherHi, leatherLo));
+            UploadItem(layerPixels, TileLeatherLeggings,
+                p => PaintArmorLeggings(p, leather, leatherHi, leatherLo));
+            UploadItem(layerPixels, TileLeatherBoots,
+                p => PaintArmorBoots(p, leather, leatherHi, leatherLo));
+            // Chainmail — neutral silver grey, slightly cooler than iron
+            // so the two read as distinct in the inventory.
+            var chain   = ((byte)140, (byte)140, (byte)148);
+            var chainHi = ((byte)190, (byte)190, (byte)200);
+            var chainLo = ((byte)90,  (byte)90,  (byte)100);
+            UploadItem(layerPixels, TileChainmailHelmet,
+                p => PaintArmorHelmet(p, chain, chainHi, chainLo));
+            UploadItem(layerPixels, TileChainmailChestplate,
+                p => PaintArmorChestplate(p, chain, chainHi, chainLo));
+            UploadItem(layerPixels, TileChainmailLeggings,
+                p => PaintArmorLeggings(p, chain, chainHi, chainLo));
+            UploadItem(layerPixels, TileChainmailBoots,
+                p => PaintArmorBoots(p, chain, chainHi, chainLo));
+            // Iron — slightly warmer / lighter than chain.
+            var iron   = ((byte)180, (byte)180, (byte)180);
+            var ironHi = ((byte)225, (byte)225, (byte)225);
+            var ironLo = ((byte)120, (byte)120, (byte)120);
+            UploadItem(layerPixels, TileIronHelmet,
+                p => PaintArmorHelmet(p, iron, ironHi, ironLo));
+            UploadItem(layerPixels, TileIronChestplate,
+                p => PaintArmorChestplate(p, iron, ironHi, ironLo));
+            UploadItem(layerPixels, TileIronLeggings,
+                p => PaintArmorLeggings(p, iron, ironHi, ironLo));
+            UploadItem(layerPixels, TileIronBoots,
+                p => PaintArmorBoots(p, iron, ironHi, ironLo));
+            // Diamond — pale cyan-white. Brighter than iron at the
+            // highlights so the gem-tier reads as premium.
+            var diamond   = ((byte)110, (byte)225, (byte)215);
+            var diamondHi = ((byte)200, (byte)250, (byte)245);
+            var diamondLo = ((byte)60,  (byte)160, (byte)155);
+            UploadItem(layerPixels, TileDiamondHelmet,
+                p => PaintArmorHelmet(p, diamond, diamondHi, diamondLo));
+            UploadItem(layerPixels, TileDiamondChestplate,
+                p => PaintArmorChestplate(p, diamond, diamondHi, diamondLo));
+            UploadItem(layerPixels, TileDiamondLeggings,
+                p => PaintArmorLeggings(p, diamond, diamondHi, diamondLo));
+            UploadItem(layerPixels, TileDiamondBoots,
+                p => PaintArmorBoots(p, diamond, diamondHi, diamondLo));
+            // Gold — saturated yellow with warmer highlights.
+            var gold   = ((byte)230, (byte)200, (byte)55);
+            var goldHi = ((byte)252, (byte)238, (byte)130);
+            var goldLo = ((byte)165, (byte)130, (byte)25);
+            UploadItem(layerPixels, TileGoldHelmet,
+                p => PaintArmorHelmet(p, gold, goldHi, goldLo));
+            UploadItem(layerPixels, TileGoldChestplate,
+                p => PaintArmorChestplate(p, gold, goldHi, goldLo));
+            UploadItem(layerPixels, TileGoldLeggings,
+                p => PaintArmorLeggings(p, gold, goldHi, goldLo));
+            UploadItem(layerPixels, TileGoldBoots,
+                p => PaintArmorBoots(p, gold, goldHi, goldLo));
+        }
+
+        // Helmet silhouette — a hooded square spanning the top half of
+        // the tile. Top edge is rounded by trimming the upper corners
+        // so the helmet reads as a curved cap rather than a square
+        // block. A small dark visor strip in the lower third gives
+        // it readable face-protection geometry.
+        private static void PaintArmorHelmet(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hi,
+            (byte r, byte g, byte b) lo)
+        {
+            for (int y = 3; y <= 10; y++)
+            for (int x = 4; x <= 11; x++)
+            {
+                // Trim the upper-left and upper-right corner pixels so
+                // the crown reads as rounded.
+                if (y == 3 && (x == 4 || x == 11)) continue;
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+            }
+            // Highlight band along the top of the crown.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 4, hi.r, hi.g, hi.b);
+            // Shadow band along the bottom rim.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 10, lo.r, lo.g, lo.b);
+            // Visor strip — darker band across the eye line so the
+            // helmet has readable face-aperture geometry.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 8, lo.r, lo.g, lo.b);
+        }
+
+        // Chestplate silhouette — tall body rectangle (4 wide × 8
+        // tall) with two narrow shoulder/sleeve columns flanking it.
+        // The neckline is dropped one pixel at the top centre so the
+        // shape reads as a sleeveless tunic rather than a solid block.
+        private static void PaintArmorChestplate(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hi,
+            (byte r, byte g, byte b) lo)
+        {
+            // Body fill — 6 wide × 8 tall, centred.
+            for (int y = 4; y <= 12; y++)
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+            // Sleeve columns flanking the body.
+            for (int y = 5; y <= 9; y++)
+            {
+                SetPixel(pixels, 4,  y, baseC.r, baseC.g, baseC.b);
+                SetPixel(pixels, 11, y, baseC.r, baseC.g, baseC.b);
+            }
+            // Neckline notch — clear the top centre two pixels so the
+            // shoulders read as separate from a hood.
+            SetPixel(pixels, 7, 4, 0, 0, 0, 0);
+            SetPixel(pixels, 8, 4, 0, 0, 0, 0);
+            // Highlight band along the shoulder line.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 5, hi.r, hi.g, hi.b);
+            // Shadow band along the bottom hem.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 12, lo.r, lo.g, lo.b);
+        }
+
+        // Leggings silhouette — H-shape: two narrow vertical bars (the
+        // legs) joined by a small belt strip at the top.
+        private static void PaintArmorLeggings(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hi,
+            (byte r, byte g, byte b) lo)
+        {
+            // Belt strip — 6 wide × 2 tall at the top.
+            for (int y = 4; y <= 5; y++)
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+            // Left leg bar.
+            for (int y = 6; y <= 12; y++)
+            for (int x = 5; x <= 7; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+            // Right leg bar.
+            for (int y = 6; y <= 12; y++)
+            for (int x = 8; x <= 10; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+            // Highlight along the belt top.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 4, hi.r, hi.g, hi.b);
+            // Shadow at the leg cuffs.
+            for (int x = 5; x <= 7; x++)
+                SetPixel(pixels, x, 12, lo.r, lo.g, lo.b);
+            for (int x = 8; x <= 10; x++)
+                SetPixel(pixels, x, 12, lo.r, lo.g, lo.b);
+        }
+
+        // Boots silhouette — two small squares side by side, each
+        // shaped like a boot (taller than wide, slight forward toe).
+        private static void PaintArmorBoots(byte[] pixels,
+            (byte r, byte g, byte b) baseC,
+            (byte r, byte g, byte b) hi,
+            (byte r, byte g, byte b) lo)
+        {
+            // Left boot — col 4..7, row 8..12.
+            for (int y = 8; y <= 12; y++)
+            for (int x = 4; x <= 7; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+            // Right boot — col 8..11, row 8..12.
+            for (int y = 8; y <= 12; y++)
+            for (int x = 8; x <= 11; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+            // Highlight bands along the top of each boot.
+            for (int x = 4; x <= 7; x++)
+                SetPixel(pixels, x, 8, hi.r, hi.g, hi.b);
+            for (int x = 8; x <= 11; x++)
+                SetPixel(pixels, x, 8, hi.r, hi.g, hi.b);
+            // Shadow soles at the bottom of each boot.
+            for (int x = 4; x <= 7; x++)
+                SetPixel(pixels, x, 12, lo.r, lo.g, lo.b);
+            for (int x = 8; x <= 11; x++)
+                SetPixel(pixels, x, 12, lo.r, lo.g, lo.b);
         }
 
     }

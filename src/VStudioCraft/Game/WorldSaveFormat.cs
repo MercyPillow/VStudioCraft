@@ -35,7 +35,30 @@ namespace VStudioCraft.Game
         //      — without a recorded spawn the closest stand-in is "where
         //      the player was when they saved", which matches what the
         //      renderer was already doing on load before this version).
-        private const byte CurrentVersion = 9;
+        // v10 = Tier 4 #24 painting entities. Trailing block appended
+        //       after the v9 spawn vector: int paintingCount, then per
+        //       painting (int X, int Y, int Z, byte Facing, byte Width,
+        //       byte Height, byte Variant). Pre-v10 saves had no
+        //       paintings (the entity didn't exist), so legacy worlds
+        //       load with Paintings = []. Stops cleanly at EOF for v9
+        //       readers since the new block sits past the spawn-vector
+        //       tail.
+        // v11 = Tier 4 #25 jukebox tile entities. Trailing block
+        //       appended after the v10 painting block: int jukeboxCount,
+        //       then per jukebox (int X, int Y, int Z, byte Disc).
+        //       Disc is the BlockType id of the inserted music disc
+        //       (Disc13 / DiscCat) or BlockType.Air for a freshly-
+        //       allocated entity that doesn't have a disc loaded
+        //       (shouldn't happen in practice — empty entities are
+        //       removed via RemoveJukeboxEntity, so the saved set is
+        //       always loaded jukeboxes — but we serialise the byte
+        //       defensively in case a future code path leaves an
+        //       empty entity in the dict). Pre-v11 saves had no
+        //       jukeboxes (the block didn't exist), so legacy worlds
+        //       load with an empty entity table — same legacy-empty
+        //       pattern as every preceding tile-entity block. Stops
+        //       cleanly at EOF for v10 readers.
+        private const byte CurrentVersion = 11;
 
         public struct Header
         {
@@ -158,6 +181,42 @@ namespace VStudioCraft.Game
                 w.Write(header.SpawnPos.X);
                 w.Write(header.SpawnPos.Y);
                 w.Write(header.SpawnPos.Z);
+
+                // v10: Tier 4 #24 — Painting entities. Append-only past
+                // the v9 spawn vector so a v9 reader stops cleanly at
+                // EOF. Empty Paintings list serialises as just an int 0
+                // — costs 4 bytes per save, no paintings ever placed.
+                var paintings = world.Paintings;
+                w.Write(paintings.Count);
+                for (int i = 0; i < paintings.Count; i++)
+                {
+                    var p = paintings[i];
+                    w.Write(p.X);
+                    w.Write(p.Y);
+                    w.Write(p.Z);
+                    w.Write((byte)p.Facing);
+                    w.Write((byte)p.Width);
+                    w.Write((byte)p.Height);
+                    w.Write((byte)p.Variant);
+                }
+
+                // v11: Tier 4 #25 — Jukebox tile entities. Append-only
+                // past the v10 painting block so a v10 reader stops
+                // cleanly at EOF after consuming the paintings. Empty
+                // jukebox table serialises as a bare int 0 (4 bytes).
+                // We count by iterating because JukeboxEntities is an
+                // IEnumerable surface for encapsulation, matching the
+                // furnace/chest counting pattern above.
+                int jeCount = 0;
+                foreach (var _ in world.JukeboxEntities) jeCount++;
+                w.Write(jeCount);
+                foreach (var kv in world.JukeboxEntities)
+                {
+                    w.Write(kv.Key.x);
+                    w.Write(kv.Key.y);
+                    w.Write(kv.Key.z);
+                    w.Write((byte)kv.Value.Disc);
+                }
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
@@ -336,6 +395,49 @@ namespace VStudioCraft.Game
                 else
                 {
                     header.SpawnPos = header.CameraPos;
+                }
+
+                // v10: Tier 4 #24 — Painting entities. Pre-v10 saves
+                // had no paintings (the entity didn't exist), so
+                // legacy worlds skip this block and World's
+                // Paintings list stays at its default empty state.
+                if (version >= 10)
+                {
+                    int paintingCount = r.ReadInt32();
+                    for (int i = 0; i < paintingCount; i++)
+                    {
+                        var p = new Painting
+                        {
+                            X = r.ReadInt32(),
+                            Y = r.ReadInt32(),
+                            Z = r.ReadInt32(),
+                            Facing = (BlockFacing)r.ReadByte(),
+                            Width  = r.ReadByte(),
+                            Height = r.ReadByte(),
+                            Variant = r.ReadByte(),
+                        };
+                        world.Paintings.Add(p);
+                    }
+                }
+
+                // v11: Tier 4 #25 — Jukebox tile entities. Pre-v11
+                // saves had no jukeboxes (the block didn't exist), so
+                // legacy worlds skip this block and World's jukebox
+                // dictionary stays empty. The block layer in restored
+                // chunks won't reference Jukebox/Disc ids in those
+                // saves either — the BlockType range simply wasn't
+                // populated before this version.
+                if (version >= 11)
+                {
+                    int jeCount = r.ReadInt32();
+                    for (int i = 0; i < jeCount; i++)
+                    {
+                        int wx = r.ReadInt32();
+                        int wy = r.ReadInt32();
+                        int wz = r.ReadInt32();
+                        var je = world.GetOrCreateJukeboxEntity(wx, wy, wz);
+                        je.Disc = (BlockType)r.ReadByte();
+                    }
                 }
 
                 return (header, world);

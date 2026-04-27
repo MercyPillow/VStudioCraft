@@ -152,6 +152,54 @@ namespace VStudioCraft.Game
                 { BlockType.Air, BlockType.Stick },
             };
 
+        // Tier 4 #19 — Armor pattern helpers. Four shapes shared across
+        // every craftable material (leather/iron/diamond/gold —
+        // chainmail has no recipe, see HostileMobs for the mob-drop
+        // path). Patterns are stored row-major with the same
+        // "Alpha cells, top-down" orientation the other tool helpers
+        // use; a cell of BlockType.Air means "must be empty in the
+        // input grid for this recipe to match". The matcher accepts
+        // any tight bounding box that fits inside the 3×3 input
+        // (Alpha behaviour: the player can place the materials
+        // anywhere in the grid as long as the relative layout is
+        // preserved).
+        //
+        // Helmet — top-row + flanks ("MMM / M.M"). Two-row pattern:
+        // the third row is all empty so the matcher's tight-box
+        // logic doesn't require a leading empty row.
+        private static BlockType[,] ArmorHelmet(BlockType mat)
+            => new BlockType[,]
+            {
+                { mat, mat,           mat },
+                { mat, BlockType.Air, mat },
+            };
+        // Chestplate — top flanks + full bottom two rows ("M.M / MMM
+        // / MMM"). Three-row 3-col pattern.
+        private static BlockType[,] ArmorChestplate(BlockType mat)
+            => new BlockType[,]
+            {
+                { mat, BlockType.Air, mat },
+                { mat, mat,           mat },
+                { mat, mat,           mat },
+            };
+        // Leggings — full top + leg columns ("MMM / M.M / M.M").
+        // Three-row 3-col pattern.
+        private static BlockType[,] ArmorLeggings(BlockType mat)
+            => new BlockType[,]
+            {
+                { mat, mat,           mat },
+                { mat, BlockType.Air, mat },
+                { mat, BlockType.Air, mat },
+            };
+        // Boots — two flank columns over two rows ("M.M / M.M").
+        // Two-row 3-col pattern.
+        private static BlockType[,] ArmorBoots(BlockType mat)
+            => new BlockType[,]
+            {
+                { mat, BlockType.Air, mat },
+                { mat, BlockType.Air, mat },
+            };
+
         private static List<ShapedRecipe> BuildShaped()
         {
             var list = new List<ShapedRecipe>();
@@ -404,6 +452,71 @@ namespace VStudioCraft.Game
                     { BlockType.Stick, BlockType.Air,   BlockType.String },
                 },
                 new ItemStack(BlockType.FishingRod, 1)));
+
+            // Tier 4 #24 — Painting. Alpha pattern is 8 sticks
+            // around a single wool block in the centre — a wooden
+            // frame stretched over a fabric canvas:
+            //   S S S
+            //   S W S
+            //   S S S
+            // Output: 1 painting item. Held item RMB on a wall
+            // installs the Painting entity (variant chosen at
+            // random; see GameRenderer.TryInteract).
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Stick, BlockType.Stick, BlockType.Stick },
+                    { BlockType.Stick, BlockType.Wool,  BlockType.Stick },
+                    { BlockType.Stick, BlockType.Stick, BlockType.Stick },
+                },
+                new ItemStack(BlockType.Painting, 1)));
+
+            // Tier 4 #25 — Jukebox (Alpha id 84). Pattern is 8 planks
+            // around 1 diamond — a wooden cabinet with a precious-gem
+            // turntable spindle in the middle:
+            //   P P P
+            //   P D P
+            //   P P P
+            // Output: 1 jukebox block. Music discs themselves are
+            // dungeon-loot only in Alpha 1.1.2_01 (no recipe), so the
+            // discs don't appear here — they ship as creative-only
+            // items until dungeon generation lands in Tier 6 #32.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Planks,  BlockType.Planks },
+                    { BlockType.Planks, BlockType.Diamond, BlockType.Planks },
+                    { BlockType.Planks, BlockType.Planks,  BlockType.Planks },
+                },
+                new ItemStack(BlockType.Jukebox, 1)));
+
+            // Tier 4 #19 — Armor recipes. 16 total (4 craftable
+            // materials × 4 slots — chainmail has NO recipe and is
+            // mob-drop only). Alpha 1.1.2_01 patterns:
+            //
+            //   Helmet:     Chestplate:   Leggings:    Boots:
+            //   M M M       M . M         M M M        M . M
+            //   M . M       M M M         M . M        M . M
+            //   . . .       M M M         M . M        . . .
+            //
+            // M = material (Leather BlockType, IronIngot, Diamond,
+            // GoldIngot). The four shape helpers below build the
+            // BlockType[,] in pattern-row-major order; the per-
+            // material loop drops the actual recipes into the table.
+            (BlockType mat, BlockType helm, BlockType chest, BlockType leg, BlockType boot)[] armorMats =
+            {
+                (BlockType.Leather,   BlockType.LeatherHelmet, BlockType.LeatherChestplate, BlockType.LeatherLeggings, BlockType.LeatherBoots),
+                (BlockType.IronIngot, BlockType.IronHelmet,    BlockType.IronChestplate,    BlockType.IronLeggings,    BlockType.IronBoots),
+                (BlockType.Diamond,   BlockType.DiamondHelmet, BlockType.DiamondChestplate, BlockType.DiamondLeggings, BlockType.DiamondBoots),
+                (BlockType.GoldIngot, BlockType.GoldHelmet,    BlockType.GoldChestplate,    BlockType.GoldLeggings,    BlockType.GoldBoots),
+            };
+            foreach (var a in armorMats)
+            {
+                list.Add(new ShapedRecipe(ArmorHelmet(a.mat),     new ItemStack(a.helm,  1)));
+                list.Add(new ShapedRecipe(ArmorChestplate(a.mat), new ItemStack(a.chest, 1)));
+                list.Add(new ShapedRecipe(ArmorLeggings(a.mat),   new ItemStack(a.leg,   1)));
+                list.Add(new ShapedRecipe(ArmorBoots(a.mat),      new ItemStack(a.boot,  1)));
+            }
 
             // Tier 4 #22 — Compass recipe is DEFERRED to Tier 8 #42 (the
             // tier that ships Redstone Dust). Alpha's pattern is four
