@@ -49,7 +49,16 @@ namespace VStudioCraft.Game
         // slice (which assumes everything past it sources from
         // terrain.png) stays untouched.
         public const int TailBlockLayerCount = 9;
-        public const int LayerCount = FirstTailBlockLayer + TailBlockLayerCount; // 76
+        // Tail item layers — appended past the tail blocks. Items added
+        // after the original 9-item slice (Tier 3 #9 onward: porkchops
+        // raw + cooked) live here so we don't have to renumber the
+        // existing item / tail-block indices and break v7 saves.
+        public const int FirstTailItemLayer = FirstTailBlockLayer + TailBlockLayerCount; // 76
+        public const int TailItemLayerCount = 2;
+        public const int LayerCount = FirstTailItemLayer + TailItemLayerCount;          // 78
+        // Porkchop tile indices.
+        public const int TileRawPorkchop    = 76;
+        public const int TileCookedPorkchop = 77;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -266,6 +275,29 @@ namespace VStudioCraft.Game
             for (int layer = BlockLayerCount; layer < FirstTailBlockLayer; layer++)
             {
                 var (col, row) = AlphaTileCoords[layer];
+                CopyTile(toolBgra, toolW, toolH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
+        }
+
+        // Slice each tail-item tile (porkchops and any future appended
+        // food/ingredient items) out of alpha_tools.png and upload it.
+        // Same idempotent contract as UploadToolLayersFromAlphaTools — a
+        // missing tools PNG just leaves the previously-painted procedural
+        // pixels in place, so the atlas degrades gracefully instead of
+        // turning porkchop icons into magenta error tiles.
+        private static void UploadTailItemLayersFromAlphaTools(byte[] layerPixels)
+        {
+            if (!TryDecodeEmbeddedTools(out byte[] toolBgra, out int toolW, out int toolH))
+                return;
+            for (int layer = FirstTailItemLayer; layer < LayerCount; layer++)
+            {
+                var (col, row) = AlphaTileCoords[layer];
+                if (col < 0 || row < 0) continue; // sentinel — keep the procedural fill
                 CopyTile(toolBgra, toolW, toolH, col, row, layerPixels);
                 GL.TexSubImage3D(
                     TextureTarget.Texture2DArray, 0,
@@ -540,6 +572,11 @@ namespace VStudioCraft.Game
             UploadItem(layerPixels, TileClayBall,  GenerateClayBallItem);
             UploadItem(layerPixels, TileClayBrick, GenerateClayBrickItem);
             UploadItem(layerPixels, TileBowl,      GenerateBowlItem);
+            // Tail-item porkchops (Tier 3 #9 — pig drop + furnace
+            // smelt result). Same UploadItem path; layer indices live
+            // past the tail-block range.
+            UploadItem(layerPixels, TileRawPorkchop,    GenerateRawPorkchopItem);
+            UploadItem(layerPixels, TileCookedPorkchop, GenerateCookedPorkchopItem);
         }
 
         // Local helper mirroring UploadLayer (which is private elsewhere
@@ -823,6 +860,59 @@ namespace VStudioCraft.Game
             SetPixel(pixels, 8, 11, woodHi.r, woodHi.g, woodHi.b);
         }
 
+        // Raw porkchop — pink slab of meat with a darker inset and a
+        // light-cream marbling streak. Sits in a 12×7 area centred on
+        // the tile so it reads as a chunky cut at hotbar scale.
+        private static void GenerateRawPorkchopItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) skin    = (235, 145, 145);
+            (byte r, byte g, byte b) skinHi  = (250, 175, 175);
+            (byte r, byte g, byte b) skinLo  = (180, 95, 105);
+            (byte r, byte g, byte b) marbling = (245, 220, 200);
+            for (int y = 5; y <= 11; y++)
+            for (int x = 2; x <= 13; x++)
+            {
+                bool edge = (x == 2 || x == 13 || y == 5 || y == 11);
+                if (edge) SetPixel(pixels, x, y, skinLo.r, skinLo.g, skinLo.b);
+                else      SetPixel(pixels, x, y, skin.r,   skin.g,   skin.b);
+            }
+            // Highlight bar across the upper inside.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 6, skinHi.r, skinHi.g, skinHi.b);
+            // Marbling streak — one bright cream line across the middle.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 8, marbling.r, marbling.g, marbling.b);
+        }
+
+        // Cooked porkchop — the same silhouette, but darker / browner
+        // (cooked exterior) with a tan interior so the cooked vs. raw
+        // contrast reads even at small scale. Crisper edge ring.
+        private static void GenerateCookedPorkchopItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) crust   = (130, 78, 38);
+            (byte r, byte g, byte b) crustHi = (170, 105, 55);
+            (byte r, byte g, byte b) crustLo = (78, 42, 18);
+            (byte r, byte g, byte b) inside  = (200, 140, 90);
+            (byte r, byte g, byte b) insideHi = (225, 175, 125);
+            for (int y = 5; y <= 11; y++)
+            for (int x = 2; x <= 13; x++)
+            {
+                bool edge = (x == 2 || x == 13 || y == 5 || y == 11);
+                if (edge) SetPixel(pixels, x, y, crustLo.r, crustLo.g, crustLo.b);
+                else      SetPixel(pixels, x, y, crust.r,   crust.g,   crust.b);
+            }
+            // Tan interior fill.
+            for (int y = 7; y <= 9; y++)
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, y, inside.r, inside.g, inside.b);
+            // Lighter highlight across the top of the interior.
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, 7, insideHi.r, insideHi.g, insideHi.b);
+            // Crisp top ridge.
+            for (int x = 4; x <= 11; x++)
+                SetPixel(pixels, x, 6, crustHi.r, crustHi.g, crustHi.b);
+        }
+
         // Tile coordinates in Alpha 1.1.2_01's terrain.png. Format is
         // (col, row), each cell 16×16 pixels in a 16×16 grid (256×256
         // total). The embedded PNG is sliced once at atlas-build time
@@ -956,6 +1046,13 @@ namespace VStudioCraft.Game
             /* TileChestTop          */ (9, 1),
             /* TileChestSide         */ (10, 1),
             /* TileChestFront        */ (11, 1),
+            // Tail items (Tier 3 #9 — pig drops). Both porkchop tiles
+            // are sourced from alpha_tools.png at the canonical Notch
+            // coords for the food row: raw at (7,5) and cooked at (8,5).
+            // Procedural mode synthesises substitutes; see
+            // GenerateRawPorkchopItem / GenerateCookedPorkchopItem.
+            /* TileRawPorkchop       */ (7, 5),
+            /* TileCookedPorkchop    */ (8, 5),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -1025,7 +1122,7 @@ namespace VStudioCraft.Game
             // built from the same stone-wall + iron-banding palette as
             // the side, so the four lateral faces and the cap read as
             // one continuous block.
-            for (int layer = FirstTailBlockLayer; layer < LayerCount; layer++)
+            for (int layer = FirstTailBlockLayer; layer < FirstTailItemLayer; layer++)
             {
                 if (layer == TileFurnaceTop) continue;
                 var (col, row) = AlphaTileCoords[layer];
@@ -1040,6 +1137,14 @@ namespace VStudioCraft.Game
             // the same UploadLayer path as the procedural atlas — the
             // Texture2DArray is still bound to `tex` at this point.
             UploadLayer(layerPixels, TileFurnaceTop, GenerateFurnaceTop);
+
+            // Tail-item layers (76+, Tier 3 #9 porkchops). Sourced from
+            // alpha_tools.png — Notch packs the food row into the same
+            // sheet as tools/items at canonical (col, row) coordinates.
+            // Falls back silently if the embedded PNG is missing (the
+            // procedural path painted these slots; they'll just stay
+            // procedural in the otherwise-Alpha atlas).
+            UploadTailItemLayersFromAlphaTools(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);

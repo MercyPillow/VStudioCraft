@@ -134,6 +134,14 @@ namespace VStudioCraft.Game
         TorchWest  = 71, // mounted on east wall, points west  (-X)
         TorchSouth = 72, // mounted on north wall, points south (+Z)
         TorchNorth = 73, // mounted on south wall, points north (-Z)
+
+        // Tier 3 #9 — Pig drops. Both live in the BlockType id-space the
+        // same way tools and ingredient items do (see ItemType wrapper
+        // below): they're flagged via BlockData.IsItem so placement /
+        // mesher / collision treat them as non-block items. Append-only
+        // past TorchNorth so v7 saves continue to load.
+        RawPorkchop    = 74, // Alpha 319
+        CookedPorkchop = 75, // Alpha 320
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -154,6 +162,8 @@ namespace VStudioCraft.Game
         public const BlockType ClayBall  = BlockType.ClayBall;
         public const BlockType ClayBrick = BlockType.ClayBrick;
         public const BlockType Bowl      = BlockType.Bowl;
+        public const BlockType RawPorkchop    = BlockType.RawPorkchop;
+        public const BlockType CookedPorkchop = BlockType.CookedPorkchop;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -171,8 +181,10 @@ namespace VStudioCraft.Game
                 case BlockType.Flint:     return 318;
                 case BlockType.ClayBall:  return 337;
                 case BlockType.ClayBrick: return 336;
-                case BlockType.Bowl:      return 281;
-                default:                  return -1;
+                case BlockType.Bowl:           return 281;
+                case BlockType.RawPorkchop:    return 319;
+                case BlockType.CookedPorkchop: return 320;
+                default:                       return -1;
             }
         }
 
@@ -193,8 +205,10 @@ namespace VStudioCraft.Game
                 case BlockType.Flint:     return "Flint";
                 case BlockType.ClayBall:  return "Clay Ball";
                 case BlockType.ClayBrick: return "Clay Brick";
-                case BlockType.Bowl:      return "Bowl";
-                default:                  return t.ToString();
+                case BlockType.Bowl:           return "Bowl";
+                case BlockType.RawPorkchop:    return "Raw Porkchop";
+                case BlockType.CookedPorkchop: return "Cooked Porkchop";
+                default:                       return t.ToString();
             }
         }
     }
@@ -289,12 +303,13 @@ namespace VStudioCraft.Game
 
         // True if this BlockType id refers to a non-placeable, non-tool
         // inventory item (Stick, Coal, ingots, gem, Flint, ClayBall /
-        // Brick, Bowl). Same range-check pattern as IsTool — items
-        // occupy the contiguous slice [Stick..Bowl]. Renderers,
-        // placement, mesher, and inventory branches use this to take
-        // the "flat sprite, no world cell" path identically to tools.
+        // Brick, Bowl, RawPorkchop, CookedPorkchop). The original
+        // ingredient slice [Stick..Bowl] is contiguous, but Tier 3 #9
+        // appended porkchops past the wall-torch ids (70..73) — so the
+        // range check is now two slices instead of one.
         public static bool IsItem(BlockType t)
-            => (byte)t >= (byte)BlockType.Stick && (byte)t <= (byte)BlockType.Bowl;
+            => ((byte)t >= (byte)BlockType.Stick       && (byte)t <= (byte)BlockType.Bowl)
+            || ((byte)t >= (byte)BlockType.RawPorkchop && (byte)t <= (byte)BlockType.CookedPorkchop);
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -708,6 +723,8 @@ namespace VStudioCraft.Game
                 case BlockType.ClayBall:       return BlockTextures.TileClayBall;
                 case BlockType.ClayBrick:      return BlockTextures.TileClayBrick;
                 case BlockType.Bowl:           return BlockTextures.TileBowl;
+                case BlockType.RawPorkchop:    return BlockTextures.TileRawPorkchop;
+                case BlockType.CookedPorkchop: return BlockTextures.TileCookedPorkchop;
                 default:
                     return BlockTextures.TileStone;
             }

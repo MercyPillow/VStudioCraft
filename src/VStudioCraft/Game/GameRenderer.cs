@@ -1245,7 +1245,15 @@ void main()
                 int dx = r.Chunk.ChunkX - pcx, dz = r.Chunk.ChunkZ - pcz;
                 if (dx * dx + dz * dz <= unloadR2)
                 {
-                    _world.InstallGeneratedChunk(r.Chunk);
+                    bool freshlyInstalled = _world.InstallGeneratedChunk(r.Chunk);
+                    // Only spawn pigs in genuinely fresh terrain — a
+                    // chunk re-installed from the modified cache (player
+                    // edits survived an unload) skips because pigs were
+                    // already considered for it the first time around.
+                    if (freshlyInstalled && !r.Chunk.IsModified)
+                    {
+                        _world.SpawnPigsInChunk(r.Chunk);
+                    }
                 }
                 installed++;
             }
@@ -1315,7 +1323,27 @@ void main()
             // of whether anything was hit. Click-and-hold cycles get a
             // continuous swing via the LMB-held branch in UpdatePlayer.
             Player.TriggerSwing();
-            if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit)) return false;
+
+            // Mob hit-test happens BEFORE the block raycast: a pig
+            // standing between the player and a block is the click
+            // target instead of the block behind it. The hit-test is a
+            // simple ray-vs-AABB sweep over the live pig list (small
+            // count, no spatial index needed yet). If a pig is hit
+            // strictly closer than any block along the same ray, we
+            // route the click into TryHitMob and skip the break.
+            float blockDist = float.MaxValue;
+            bool blockHit = Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit);
+            if (blockHit)
+            {
+                // Distance from camera to centre of broken-block cell —
+                // good enough to compare against pig-hit distances.
+                float bdx = (hit.X + 0.5f) - Camera.Position.X;
+                float bdy = (hit.Y + 0.5f) - Camera.Position.Y;
+                float bdz = (hit.Z + 0.5f) - Camera.Position.Z;
+                blockDist = (float)System.Math.Sqrt(bdx * bdx + bdy * bdy + bdz * bdz);
+            }
+            if (TryHitMob(blockDist)) return false;
+            if (!blockHit) return false;
             // Bedrock (and any future hardness<0 block) is unbreakable in
             // both modes — the click is silently ignored. Creative still
             // breaks everything else instantly; survival lets the click
@@ -2089,6 +2117,185 @@ void main()
                         d.Stack = leftover;
                     }
                 }
+            }
+        }
+
+        // Click-attack on the closest mob along the camera ray within
+        // ReachDistance. Returns true if a pig was struck (caller should
+        // then skip the block break). The damage value follows Alpha
+        // 1.1.2_01's tool-vs-mob table: sword > axe > pickaxe/shovel >
+        // bare hand, with a per-material multiplier. On lethal hits the
+        // pig drops 1–3 RawPorkchops at its feet (Alpha pig drop range)
+        // and is flagged dead — TickPigs will reap it next tick.
+        private bool TryHitMob(float blockDist)
+        {
+            if (_world == null) return false;
+            var pigs = _world.Pigs;
+            if (pigs.Count == 0) return false;
+
+            // Find the closest live pig the camera ray pierces.
+            float bestT = float.MaxValue;
+            Pig bestPig = null;
+            var origin = Camera.Position;
+            var dir = Camera.Forward;
+            for (int i = 0; i < pigs.Count; i++)
+            {
+                var pig = pigs[i];
+                if (pig.IsDead) continue;
+                pig.GetAabb(out var min, out var max);
+                if (!RayAabbIntersect(origin, dir, min, max, ReachDistance, out float t)) continue;
+                if (t < bestT)
+                {
+                    bestT = t;
+                    bestPig = pig;
+                }
+            }
+            if (bestPig == null) return false;
+            // Skip if a block is closer along the same ray — wall in
+            // front of the pig blocks the hit (matches Alpha behaviour).
+            if (bestT >= blockDist) return false;
+
+            // Compute damage from held item.
+            int dmg = MeleeDamageForHeldItem();
+            bestPig.TakeDamage(dmg);
+            // Tool durability ticks one use on every connecting hit
+            // (Alpha rule). Gold/wood swords break fast under this.
+            DamageHeldTool(1);
+            // SFX: piggyback the place sound of the broken-block path
+            // for now (no dedicated mob-hurt cue yet — Tier 3 follow-up).
+            // Fall-through: just play the generic step on cloth as a
+            // placeholder thwack so the hit reads.
+            SfxBank.PlayPlace(BlockType.Wool);
+
+            if (bestPig.IsDead)
+            {
+                SpawnPigDeathDrops(bestPig);
+            }
+            return true;
+        }
+
+        // Ray vs. axis-aligned bounding box (slab method). Returns the
+        // entry distance `t` along the ray (in the same units as `dir`'s
+        // magnitude — `dir` is normalised). Out-of-range hits past
+        // `tMax` are treated as misses. Used by the mob-click hit-test.
+        private static bool RayAabbIntersect(Vector3 origin, Vector3 dir,
+            Vector3 min, Vector3 max, float tMax, out float t)
+        {
+            float tmin = 0f, tmaxLocal = tMax;
+            for (int axis = 0; axis < 3; axis++)
+            {
+                float o = axis == 0 ? origin.X : (axis == 1 ? origin.Y : origin.Z);
+                float d = axis == 0 ? dir.X    : (axis == 1 ? dir.Y    : dir.Z);
+                float lo = axis == 0 ? min.X   : (axis == 1 ? min.Y   : min.Z);
+                float hi = axis == 0 ? max.X   : (axis == 1 ? max.Y   : max.Z);
+                if (System.Math.Abs(d) < 1e-8f)
+                {
+                    if (o < lo || o > hi) { t = 0f; return false; }
+                    continue;
+                }
+                float invD = 1f / d;
+                float t0 = (lo - o) * invD;
+                float t1 = (hi - o) * invD;
+                if (t0 > t1) { var tmp = t0; t0 = t1; t1 = tmp; }
+                if (t0 > tmin) tmin = t0;
+                if (t1 < tmaxLocal) tmaxLocal = t1;
+                if (tmin > tmaxLocal) { t = 0f; return false; }
+            }
+            t = tmin;
+            return tmin >= 0f && tmin <= tMax;
+        }
+
+        // Damage value for the player's currently-held hotbar stack, used
+        // by the mob-attack path. Alpha 1.1.2 melee table:
+        //   bare-hand 1
+        //   sword:   wood 5  / stone 6 / iron 7 / gold 5 / diamond 8
+        //   axe:     wood 3  / stone 4 / iron 5 / gold 3 / diamond 6
+        //   pickaxe: wood 2  / stone 3 / iron 4 / gold 2 / diamond 5
+        //   shovel:  wood 1  / stone 2 / iron 3 / gold 1 / diamond 4
+        // Non-tool items (a torch, a stack of dirt) deal 1 damage like
+        // the bare hand — Alpha treated everything that wasn't a tool as
+        // a 1-damage swat.
+        private int MeleeDamageForHeldItem()
+        {
+            if (Input == null) return 1;
+            var stack = Input.Inventory.GetHotbar(Input.HotbarIndex);
+            if (stack.IsEmpty) return 1;
+            if (!BlockData.IsTool(stack.Type)) return 1;
+            var kind = ToolData.GetKind(stack.Type);
+            var mat  = ToolData.GetMaterial(stack.Type);
+
+            int swordTable;
+            switch (mat)
+            {
+                case ToolMaterial.Wood:    swordTable = 5; break;
+                case ToolMaterial.Stone:   swordTable = 6; break;
+                case ToolMaterial.Iron:    swordTable = 7; break;
+                case ToolMaterial.Gold:    swordTable = 5; break;
+                case ToolMaterial.Diamond: swordTable = 8; break;
+                default:                   swordTable = 1; break;
+            }
+            // Each rung below sword drops 2 damage (sword 5/6/7/5/8 →
+            // axe 3/4/5/3/6 → pickaxe 2/3/4/2/5 → shovel 1/2/3/1/4 →
+            // bare 1). The clamp keeps gold/wood shovel from going to 0.
+            int rung;
+            switch (kind)
+            {
+                case ToolKind.Sword:   rung = 0; break;
+                case ToolKind.Axe:     rung = 2; break;
+                case ToolKind.Pickaxe: rung = 3; break;
+                case ToolKind.Shovel:  rung = 4; break;
+                default:               rung = 999; break;
+            }
+            int dmg = swordTable - rung;
+            return System.Math.Max(1, dmg);
+        }
+
+        // On pig death: 1–3 RawPorkchop drops scattered at the pig's
+        // feet (matches the Alpha 1.1.2 raw-porkchop drop range).
+        // Cooked porkchop drops only when the pig was on fire at death,
+        // which we don't simulate yet — so death always drops raw.
+        private void SpawnPigDeathDrops(Pig pig)
+        {
+            int count = 1 + (System.Math.Abs(pig.GetHashCode()) % 3); // 1..3
+            for (int i = 0; i < count; i++)
+            {
+                var d = new DroppedItem
+                {
+                    Position = new Vector3(pig.Position.X,
+                                           pig.Position.Y + 0.4f,
+                                           pig.Position.Z),
+                    Velocity = new Vector3(
+                        ((float)_dropRng.NextDouble() - 0.5f) * 2f,
+                        2.5f + (float)_dropRng.NextDouble() * 1f,
+                        ((float)_dropRng.NextDouble() - 0.5f) * 2f),
+                    Stack = new ItemStack(BlockType.RawPorkchop, 1),
+                    AgeSec = 0f,
+                    PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+                };
+                _drops.Add(d);
+            }
+        }
+
+        // Per-tick mob update. Walks the world's pig list (Tier 3 #9
+        // Entities & mobs); each pig drives its own wander AI + physics
+        // through the shared Entity walker. Dead pigs are removed at the
+        // end of the sweep — they linger one tick after IsDead so the
+        // kill drop spawn (in TryHitMob) sees the pig before it goes
+        // away. Mob ticks freeze under a true pause but continue while
+        // an inventory-style modal is open, mirroring TickDrops.
+        public void TickPigs(float dt)
+        {
+            if (_world == null) return;
+            var pigs = _world.Pigs;
+            for (int i = pigs.Count - 1; i >= 0; i--)
+            {
+                var pig = pigs[i];
+                if (pig.IsDead)
+                {
+                    pigs.RemoveAt(i);
+                    continue;
+                }
+                pig.Update(dt, _world);
             }
         }
 
@@ -3222,6 +3429,11 @@ void main()
             }
 
             RenderDrops(width, height);
+            // Mob bodies (Tier 3 #9 — Pig). Layered after drops so a
+            // pig walking past a drop occludes it correctly via depth
+            // testing, and before particles so a break-burst at the
+            // pig's feet draws on top.
+            RenderPigs(width, height);
             // Cosmetic particles (block-break puffs, splashes, torch
             // smoke, lava bubbles). Drawn after drops so they layer
             // visually on top of any drop they overlap. Comes before
@@ -3535,6 +3747,103 @@ void main()
             }
 
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Pig body renderer. Each pig is a small cluster of solid-coloured
+        // cuboids: body, head, snout, plus four legs. We re-use the world's
+        // 1×1×1 cube mesh (`_breakCubeMesh`, already centred at [0,1]^3) and
+        // the flat-colour overlay shader — the overlay shader only reads
+        // `aPos`, so the cube mesh's UV stream is harmlessly ignored.
+        //
+        // Yaw rotates the whole rig around the pig's vertical axis so the
+        // wander AI's heading is visually obvious; HurtTimer flashes the
+        // tint toward red for the brief hurt window. No skeletal animation
+        // — the pig stays in a stiff "T-pose" (matches Alpha's first-pass
+        // mob look closely enough; we'll layer leg-swing onto the leg
+        // cuboids in a follow-up if it bugs anyone).
+        private void RenderPigs(int width, int height)
+        {
+            if (_world == null) return;
+            var pigs = _world.Pigs;
+            if (pigs == null || pigs.Count == 0) return;
+
+            var view = Camera.GetView();
+            var proj = Camera.GetProjection(width, height);
+            var vp = view * proj;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            // Pose constants. Pig is HalfWidth=0.45 × Height=0.9, so the
+            // AABB is a 0.9 cube centred above feet — these cuboids fill
+            // it loosely (slight overhang for the head/snout reads as
+            // "snout sticking forward" vs. "snout flush with body").
+            // Local +Z is the pig's forward direction; Yaw rotates about
+            // the world Y axis to align with the heading.
+            var bodySize  = new Vector3(0.6f, 0.45f, 0.9f);
+            var bodyOff   = new Vector3(0f, 0.40f, 0f);
+
+            var headSize  = new Vector3(0.50f, 0.50f, 0.50f);
+            var headOff   = new Vector3(0f, 0.50f, 0.55f);
+
+            var snoutSize = new Vector3(0.30f, 0.25f, 0.18f);
+            var snoutOff  = new Vector3(0f, 0.45f, 0.85f);
+
+            var legSize   = new Vector3(0.20f, 0.40f, 0.20f);
+            var legZ      = 0.30f;     // front legs +z, back legs -z
+            var legX      = 0.20f;
+            var legYTop   = 0.40f;     // legs span 0..0.40 in local Y
+
+            for (int i = 0; i < pigs.Count; i++)
+            {
+                var pig = pigs[i];
+                if (pig.IsDead) continue;
+
+                // Pink, lerped to red while the hurt timer is active so the
+                // pig flashes when struck. HurtFlashSeconds is 0.30s; alpha
+                // starts at 1 and fades to 0 over that window.
+                float hurt = pig.HurtTimer > 0f
+                    ? pig.HurtTimer / Pig.HurtFlashSeconds
+                    : 0f;
+                var basePink = new Vector3(0.96f, 0.55f, 0.65f);
+                var hurtRed  = new Vector3(1.00f, 0.30f, 0.30f);
+                var bodyColor  = Vector3.Lerp(basePink, hurtRed, hurt);
+                var snoutColor = Vector3.Lerp(new Vector3(0.78f, 0.42f, 0.50f),
+                                              hurtRed, hurt);
+
+                // Build the pig-local → world transform: yaw around Y,
+                // then translate to feet position. Local origin is feet
+                // (matches Position).
+                var rot   = Matrix4.CreateRotationY(pig.Yaw);
+                var trans = Matrix4.CreateTranslation(pig.Position);
+                var rigToWorld = rot * trans;
+
+                DrawPigCuboid(bodyOff,  bodySize,  rigToWorld, vp, bodyColor);
+                DrawPigCuboid(headOff,  headSize,  rigToWorld, vp, bodyColor);
+                DrawPigCuboid(snoutOff, snoutSize, rigToWorld, vp, snoutColor);
+                // Four legs at ±X × ±Z corners under the body.
+                DrawPigCuboid(new Vector3(+legX, legYTop * 0.5f, +legZ), legSize, rigToWorld, vp, bodyColor);
+                DrawPigCuboid(new Vector3(-legX, legYTop * 0.5f, +legZ), legSize, rigToWorld, vp, bodyColor);
+                DrawPigCuboid(new Vector3(+legX, legYTop * 0.5f, -legZ), legSize, rigToWorld, vp, bodyColor);
+                DrawPigCuboid(new Vector3(-legX, legYTop * 0.5f, -legZ), legSize, rigToWorld, vp, bodyColor);
+            }
+        }
+
+        // Inner helper for RenderPigs: draw one solid-coloured cuboid
+        // positioned in the pig's local rig (Y=0 = feet, +Z = forward).
+        // The 1×1×1 cube mesh is centred on origin (after a -0.5 shift),
+        // scaled to `size`, lifted to `offset`, then rigged + projected.
+        private void DrawPigCuboid(Vector3 offset, Vector3 size,
+            Matrix4 rigToWorld, Matrix4 vp, Vector3 color)
+        {
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var sizeScale   = Matrix4.CreateScale(size);
+            var localPlace  = Matrix4.CreateTranslation(offset);
+            var model = localCentre * sizeScale * localPlace * rigToWorld;
+            var mvp = model * vp;
+            _overlayShader.SetMatrix4("uMVP", mvp);
+            _overlayShader.SetVector3("uColor", color);
+            _breakCubeMesh.Draw();
         }
 
         // Draw every live particle as a tiny tumbling cube. Reuses the

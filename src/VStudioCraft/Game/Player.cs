@@ -5,11 +5,22 @@ namespace VStudioCraft.Game
 {
     // First-person walker with AABB-vs-voxel collision. Position tracks the feet
     // (AABB min Y, centre of X/Z). The camera sits at Position + (0, EyeHeight, 0).
-    internal sealed class Player
+    //
+    // The shared physics (AABB shape, sub-step integrator, MoveAxis, Collides,
+    // OnGround tracking) lives on the Entity base — Pig and any future mob
+    // reuses the same walker. Player layers swim physics, jump, fall tracking,
+    // health / hunger / air, and the cosmetic hurt + swing timers on top.
+    internal sealed class Player : Entity
     {
-        public const float HalfWidth = 0.3f;   // AABB half-extent in X and Z
-        public const float Height = 1.8f;      // AABB Y extent
-        public const float EyeHeight = 1.62f;  // camera offset above feet
+        // Player AABB shape constants — kept as public consts for the
+        // call-sites that referenced `Player.HalfWidth` / `Player.Height`
+        // before the Entity refactor. The Entity base also exposes them
+        // as instance fields (default 0.3 / 1.8) so the shared physics
+        // walker reads the same values; Player's constructor doesn't
+        // need to override them since the defaults match.
+        public new const float HalfWidth = 0.3f;   // AABB half-extent in X and Z
+        public new const float Height = 1.8f;      // AABB Y extent
+        public const float EyeHeight = 1.62f;      // camera offset above feet
 
         public const float WalkSpeed = 4.3f;
         public const float SprintSpeed = 7.0f;
@@ -33,9 +44,7 @@ namespace VStudioCraft.Game
         public const float SwimBobAmplitude = 0.05f;
         public const float SwimBobFrequency = 4f;   // radians/sec
 
-        // Small sub-step cap so fast motion (e.g. terminal-velocity fall) can't skip
-        // through a block in a single tick. 0.05 = imperceptible wall gap.
-        private const float MaxSubStep = 0.05f;
+        // (MoveAxis sub-step cap lives on Entity as MaxSubStep.)
 
         // Alpha health: 10 hearts × 2 HP = 20 HP max. Even values = full hearts,
         // odd values = N/2 full + one half-heart rendered at the right edge.
@@ -54,9 +63,7 @@ namespace VStudioCraft.Game
         // water. Once it reaches zero, drowning damage starts in survival.
         public const int MaxAir = 20;
 
-        public Vector3 Position;
-        public Vector3 Velocity;
-        public bool OnGround;
+        // (Position / Velocity / OnGround inherited from Entity.)
 
         // Survival HP. Creative mode keeps this pinned at MaxHealth.
         public int Health = MaxHealth;
@@ -279,88 +286,8 @@ namespace VStudioCraft.Game
             _fallPeakY = Position.Y;
         }
 
-        private void MoveAxis(int axis, float delta, World world)
-        {
-            if (Math.Abs(delta) < 1e-6f)
-            {
-                if (axis == 1 && delta == 0f)
-                {
-                    // Keep OnGround accurate: test a tiny probe downward.
-                    OnGround = IsStandingOnSomething(world);
-                }
-                return;
-            }
-
-            int subSteps = Math.Max(1, (int)Math.Ceiling(Math.Abs(delta) / MaxSubStep));
-            float subDelta = delta / subSteps;
-            bool hitGround = false;
-            bool moved = false;
-
-            for (int i = 0; i < subSteps; i++)
-            {
-                Vector3 next = Position;
-                SetAxis(ref next, axis, GetAxis(next, axis) + subDelta);
-
-                if (Collides(next, world))
-                {
-                    if (axis == 0) Velocity.X = 0f;
-                    else if (axis == 1)
-                    {
-                        if (subDelta < 0) hitGround = true;
-                        Velocity.Y = 0f;
-                    }
-                    else Velocity.Z = 0f;
-                    break;
-                }
-
-                Position = next;
-                moved = true;
-            }
-
-            if (axis == 1)
-            {
-                if (hitGround) OnGround = true;
-                else if (delta < 0 && moved) OnGround = false;
-            }
-        }
-
-        private bool IsStandingOnSomething(World world)
-        {
-            var probe = Position;
-            probe.Y -= 1e-3f;
-            return Collides(probe, world);
-        }
-
-        private static float GetAxis(Vector3 v, int axis) =>
-            axis == 0 ? v.X : (axis == 1 ? v.Y : v.Z);
-
-        private static void SetAxis(ref Vector3 v, int axis, float val)
-        {
-            if (axis == 0) v.X = val;
-            else if (axis == 1) v.Y = val;
-            else v.Z = val;
-        }
-
-        private static bool Collides(Vector3 pos, World world)
-        {
-            float minX = pos.X - HalfWidth, maxX = pos.X + HalfWidth;
-            float minY = pos.Y,              maxY = pos.Y + Height;
-            float minZ = pos.Z - HalfWidth, maxZ = pos.Z + HalfWidth;
-
-            int bx0 = (int)Math.Floor(minX);
-            int bx1 = (int)Math.Floor(maxX - 1e-5f);
-            int by0 = (int)Math.Floor(minY);
-            int by1 = (int)Math.Floor(maxY - 1e-5f);
-            int bz0 = (int)Math.Floor(minZ);
-            int bz1 = (int)Math.Floor(maxZ - 1e-5f);
-
-            for (int y = by0; y <= by1; y++)
-            for (int x = bx0; x <= bx1; x++)
-            for (int z = bz0; z <= bz1; z++)
-            {
-                if (BlockData.IsSolid(world.GetBlock(x, y, z))) return true;
-            }
-            return false;
-        }
+        // MoveAxis / IsStandingOnSomething / Collides / GetAxis / SetAxis
+        // live on the Entity base — Player inherits them and Pig (and any
+        // future mob) reuse the exact same walker.
     }
 }

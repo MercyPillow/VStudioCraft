@@ -140,7 +140,9 @@
       "PowerShell(dotnet build src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -nologo -v:m)",
       "PowerShell(dotnet build src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -nologo -v:m -t:Compile)",
       "PowerShell(Stop-Process -Force)",
-      "PowerShell($ErrorActionPreference='SilentlyContinue')"
+      "PowerShell($ErrorActionPreference='SilentlyContinue')",
+      "PowerShell(dotnet build src\\\\VStudioCraft\\\\VStudioCraft.csproj -c Debug -v minimal 2>&1)",
+      "PowerShell(dotnet build src\\\\VStudioCraft.Standalone\\\\VStudioCraft.Standalone.csproj -c Debug -v minimal 2>&1)"
     ]
   }
 }

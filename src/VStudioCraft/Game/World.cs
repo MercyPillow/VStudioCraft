@@ -34,6 +34,20 @@ namespace VStudioCraft.Game
         // furnace dict in WorldSaveFormat.
         private readonly Dictionary<(int x, int y, int z), ChestTileEntity> _chestEntities
             = new Dictionary<(int x, int y, int z), ChestTileEntity>();
+
+        // Live mob list. Pig is the first entity added in Tier 3 #9; the
+        // list is flat (not chunk-bucketed) because the per-tick mob count
+        // is small (caps in the hundreds even on a fully-populated world)
+        // and a flat scan is fine. Tile-entity-style per-coord storage
+        // doesn't fit since mobs move freely across cells. The renderer
+        // reads `Pigs` each frame to draw the body cuboids; combat reads
+        // it to scan for a click target before block-raycasting; spawning
+        // appends new pigs at chunk-gen time. We don't currently persist
+        // pigs across save/load (matches Alpha 1.1.2_01 behaviour for
+        // unloaded chunks — entities outside the active radius despawn).
+        private readonly List<Pig> _pigs = new List<Pig>();
+        public List<Pig> Pigs => _pigs;
+
         private readonly Noise _noise;
 
         public int Seed { get; }
@@ -55,8 +69,77 @@ namespace VStudioCraft.Game
                 TerrainGenerator.Generate(c, w._noise);
                 LightCalculator.RecomputeChunk(c);
                 w._chunks[(cx, cz)] = c;
+                // Initial spawn pass uses the same per-chunk hashed RNG
+                // as the streaming path, so pigs scattered in the initial
+                // 5×5 patch stay deterministic for a given seed.
+                w.SpawnPigsInChunk(c);
             }
             return w;
+        }
+
+        // Pig-spawn pass for a freshly generated chunk. Walks every (lx,
+        // lz) column at a low density (per-column hashed RNG, ~1-in-180
+        // grass cells = roughly one pig per 11×11 area, matching Alpha's
+        // sparse passive-mob spread), checks that the surface block is
+        // grass and the cell directly above has block-light + sky-light
+        // ≥ 9 (Alpha rule for passive spawns), then inserts a Pig at the
+        // foot of the column. The hashed RNG keys on (Seed, chunkX,
+        // chunkZ, lx, lz) so the same chunk in the same world always
+        // gets the same pig set even if it unloads + reloads.
+        public void SpawnPigsInChunk(Chunk c)
+        {
+            const int RareDenominator = 720; // ~1 chance per 720 grass cells (¼ of the original 180)
+            int chunkBaseX = c.ChunkX * Chunk.SizeX;
+            int chunkBaseZ = c.ChunkZ * Chunk.SizeZ;
+            for (int lx = 0; lx < Chunk.SizeX; lx++)
+            for (int lz = 0; lz < Chunk.SizeZ; lz++)
+            {
+                // Find the topmost solid surface column (skip air at top).
+                int surfaceY = -1;
+                for (int y = Chunk.SizeY - 1; y >= 0; y--)
+                {
+                    var b = c.Get(lx, y, lz);
+                    if (b == BlockType.Air || BlockData.IsLightTransparent(b)) continue;
+                    surfaceY = y;
+                    break;
+                }
+                if (surfaceY < 0) continue;
+                if (c.Get(lx, surfaceY, lz) != BlockType.Grass) continue;
+                // Need 2 blocks of headroom for the pig (it's 0.9 m tall;
+                // 1 air block clears the body, but we check 2 for safety
+                // in case the wander walks it into a 1-block hop).
+                if (surfaceY + 2 >= Chunk.SizeY) continue;
+                if (c.Get(lx, surfaceY + 1, lz) != BlockType.Air) continue;
+                if (c.Get(lx, surfaceY + 2, lz) != BlockType.Air) continue;
+
+                // Hashed RNG: stable per (seed, world-x, world-z). Mixing
+                // matches the per-column scheme TerrainGenerator uses for
+                // flora so spawn positions are deterministic across loads.
+                int wx = chunkBaseX + lx;
+                int wz = chunkBaseZ + lz;
+                int hash = unchecked((int)(
+                    (uint)Seed * 0x9E3779B1u
+                    ^ (uint)wx * 0x85EBCA77u
+                    ^ (uint)wz * 0xC2B2AE3Du));
+                hash = (hash ^ (hash >> 13)) * 0x5BD1E995;
+                hash ^= hash >> 15;
+                int bucket = (int)((uint)hash % (uint)RareDenominator);
+                if (bucket != 0) continue;
+
+                // Light gate: passive spawn requires the cell ABOVE the
+                // grass (where the pig stands) to be at light ≥ 9. Sky
+                // and block light combined.
+                int sky = c.GetSkyLight(lx, surfaceY + 1, lz);
+                int blk = c.GetBlockLight(lx, surfaceY + 1, lz);
+                int eff = sky > blk ? sky : blk;
+                if (eff < 9) continue;
+
+                // Spawn at the centre of the cell, feet on the grass top.
+                var spawnPos = new OpenTK.Vector3(
+                    wx + 0.5f, surfaceY + 1f, wz + 0.5f);
+                int pigSeed = hash ^ 0x55AA55AA;
+                _pigs.Add(new Pig(spawnPos, pigSeed));
+            }
         }
 
         public static World Empty(int seed) => new World(seed);

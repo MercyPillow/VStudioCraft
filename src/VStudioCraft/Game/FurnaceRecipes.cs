@@ -51,20 +51,22 @@ namespace VStudioCraft.Game
         //   Sand      → Glass
         //   Cobblestone → Stone   (Alpha lets you re-melt cobble to stone)
         //   ClayBall  → ClayBrick (the smelted brick item, NOT the brick block)
+        //   RawPorkchop → CookedPorkchop (Tier 3 #9 — pig drops + cooking)
         //
-        // (Alpha also smelts raw fish → cooked fish and raw porkchop →
-        // cooked porkchop, but we don't have food yet — Tier 2 #1.)
+        // (Alpha also smelts raw fish → cooked fish, but we don't have
+        // fishing yet.)
         public static readonly Dictionary<BlockType, ItemStack> Smelt = BuildSmelt();
 
         private static Dictionary<BlockType, ItemStack> BuildSmelt()
         {
             return new Dictionary<BlockType, ItemStack>
             {
-                { BlockType.IronOre,     new ItemStack(BlockType.IronIngot, 1) },
-                { BlockType.GoldOre,     new ItemStack(BlockType.GoldIngot, 1) },
-                { BlockType.Sand,        new ItemStack(BlockType.Glass,     1) },
-                { BlockType.Cobblestone, new ItemStack(BlockType.Stone,     1) },
-                { BlockType.ClayBall,    new ItemStack(BlockType.ClayBrick, 1) },
+                { BlockType.IronOre,     new ItemStack(BlockType.IronIngot,      1) },
+                { BlockType.GoldOre,     new ItemStack(BlockType.GoldIngot,      1) },
+                { BlockType.Sand,        new ItemStack(BlockType.Glass,          1) },
+                { BlockType.Cobblestone, new ItemStack(BlockType.Stone,          1) },
+                { BlockType.ClayBall,    new ItemStack(BlockType.ClayBrick,      1) },
+                { BlockType.RawPorkchop, new ItemStack(BlockType.CookedPorkchop, 1) },
             };
         }
 
