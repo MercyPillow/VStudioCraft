@@ -564,6 +564,23 @@ void main()
         public Camera Camera { get; } = new Camera();
         public Player Player { get; } = new Player();
         public World World => _world;
+
+        // Tier 3 #12 — F5 third-person toggle. When true, the camera is
+        // pushed back along -Forward by ThirdPersonDistance (clipped against
+        // terrain so we don't poke through walls), the Steve player rig is
+        // drawn from the outside, and the first-person held-item gizmo is
+        // suppressed. Toggled by the host on F5; default off (first-person
+        // preserves Alpha's primary view). Single-bool write is atomic on
+        // x86/x64 so the cross-thread flip from the UI thread is safe.
+        public bool ThirdPersonMode { get; set; }
+        // Distance the camera sits behind the player's eye in third-person
+        // before terrain clipping. ~3 blocks matches Alpha's F5.
+        public const float ThirdPersonDistance = 3.0f;
+        // Walk-cycle phase used by the third-person Steve rig — advances
+        // on the player's horizontal speed each frame so the arm + leg
+        // swing reads as actual stride. Frequency picked so a normal walk
+        // (~4.3 blocks/s) gives roughly two strides per second.
+        private float _walkCyclePhase;
         public float TimeOfDay
         {
             get => _timeOfDay;
@@ -821,6 +838,25 @@ void main()
             if (_world == null) return;
             Player.Update(dt, wishHorizVel, wantJump, _world);
             SyncCameraToPlayer();
+
+            // Advance the third-person walk-cycle phase by horizontal
+            // speed × frequency. Stays at zero amplitude when the
+            // player isn't moving horizontally (sin(phase) is nonzero
+            // but RenderPlayer scales by walkFrac → 0). Frequency is
+            // 2π·1.6 rad/s so a normal walk reads as ~1.6 strides/sec.
+            // Wrapped in a block scope so the local `walkSpeed` doesn't
+            // collide with the footstep loop's own `horizSpeed` below.
+            {
+                float walkSpeed = (float)Math.Sqrt(
+                    Player.Velocity.X * Player.Velocity.X +
+                    Player.Velocity.Z * Player.Velocity.Z);
+                float walkFrac = walkSpeed / Player.WalkSpeed;
+                if (walkFrac > 1f) walkFrac = 1f;
+                _walkCyclePhase += dt * walkFrac * (float)(Math.PI * 2.0 * 1.6);
+                // Wrap at 2π so float precision doesn't drift after long sessions.
+                const float TwoPi = (float)(Math.PI * 2.0);
+                if (_walkCyclePhase > TwoPi) _walkCyclePhase -= TwoPi;
+            }
 
             // Per-frame break-progress accumulation. Survival uses hold-LMB
             // gated by hardness; creative ignores progress and breaks instantly
@@ -1138,7 +1174,34 @@ void main()
             // Add the swim-bob Y offset to the eye position when submerged.
             // The offset is updated inside Player.Update and eases back to
             // zero on exit, so the camera glides rather than snaps.
-            Camera.Position = Player.Position + new Vector3(0f, Player.EyeHeight + Player.SwimBobOffset, 0f);
+            var eye = Player.Position + new Vector3(0f, Player.EyeHeight + Player.SwimBobOffset, 0f);
+            if (!ThirdPersonMode)
+            {
+                Camera.Position = eye;
+                return;
+            }
+
+            // Third-person: push the camera back along -Forward by
+            // ThirdPersonDistance, but cast a tiny step-march against
+            // solid terrain so the camera tucks against a wall instead
+            // of poking through it. Each step is 0.1 blocks; once we hit
+            // a solid cell we stop one step short.
+            var back = -Camera.Forward;
+            float dist = 0f;
+            const float Step = 0.1f;
+            const float CamPad = 0.15f;
+            while (dist + Step <= ThirdPersonDistance)
+            {
+                var probe = eye + back * (dist + Step + CamPad);
+                if (_world == null) { dist += Step; continue; }
+                int bx = (int)Math.Floor(probe.X);
+                int by = (int)Math.Floor(probe.Y);
+                int bz = (int)Math.Floor(probe.Z);
+                var bt = _world.GetBlock(bx, by, bz);
+                if (BlockData.IsSolid(bt)) break;
+                dist += Step;
+            }
+            Camera.Position = eye + back * dist;
         }
 
         private void SetWorld(World world)
@@ -3548,6 +3611,11 @@ void main()
             }
 
             RenderDrops(width, height);
+            // Tier 3 #12 third-person Steve. Drawn first in the entity
+            // layer so passives + hostiles + particles can occlude /
+            // overlay the player rig naturally; only renders when F5 is
+            // toggled, so first-person frames pay nothing for it.
+            if (ThirdPersonMode) RenderPlayer(width, height);
             // Passive mob bodies (Tier 3 #9 + #12 — Pig / Cow / Sheep /
             // Chicken). Layered after drops so a passive walking past a
             // drop occludes it correctly via depth testing, and before
@@ -3580,7 +3648,10 @@ void main()
             // Alpha hides the held tool behind the hotbar at the bottom of
             // the screen the same way. Drives the arm-swing animation off
             // Player.SwingTimer (TriggerSwing called from break + attack).
-            RenderHeldItem(width, height);
+            // Suppressed in third-person — the held item rides on the
+            // player's right hand in the rig itself, so drawing the
+            // first-person gizmo at the same time would double up.
+            if (!ThirdPersonMode) RenderHeldItem(width, height);
 
             if (GameMode == GameMode.Survival)
             {
@@ -4088,6 +4159,208 @@ void main()
             var sizeScale   = Matrix4.CreateScale(size);
             var localPlace  = Matrix4.CreateTranslation(offset);
             var model = localCentre * sizeScale * localPlace * rigToWorld;
+            var mvp = model * vp;
+            _overlayShader.SetMatrix4("uMVP", mvp);
+            _overlayShader.SetVector3("uColor", color);
+            _breakCubeMesh.Draw();
+        }
+
+        // Variant of DrawPigCuboid that swings the cuboid around an X-axis
+        // pivot at the top-centre of the box (i.e. the hip / shoulder
+        // joint for a leg / arm). Used by the third-person Steve renderer
+        // for arm + leg walk-cycle animation. Math: the cuboid is built
+        // exactly the same as DrawPigCuboid, then we conjugate the
+        // rotation around the pivot point — translate pivot → origin,
+        // rotate, translate back — before applying the rig-to-world
+        // transform. This keeps the top of the limb stitched to the
+        // shoulder/hip while the bottom swings forward and back.
+        private void DrawPivotedCuboid(Vector3 offset, Vector3 size, float swingAngleX,
+            Matrix4 rigToWorld, Matrix4 vp, Vector3 color)
+        {
+            // Default pivot = top-centre of the cuboid in rig-local space.
+            var pivot = offset + new Vector3(0f, size.Y * 0.5f, 0f);
+            DrawPivotedAtCuboid(offset, size, pivot, swingAngleX, rigToWorld, vp, color);
+        }
+
+        // Same as DrawPivotedCuboid but lets the caller specify the pivot
+        // point in rig-local space explicitly. Used for child parts that
+        // need to rotate around a JOINT shared with another limb — e.g.
+        // the boot rotates around the HIP (top of the leg cuboid), not
+        // its own top, so it follows the foot's arc instead of just
+        // spinning in place around the ankle. Same matrix recipe; only
+        // the pivot is decoupled from the cuboid extents.
+        private void DrawPivotedAtCuboid(Vector3 offset, Vector3 size, Vector3 pivot, float swingAngleX,
+            Matrix4 rigToWorld, Matrix4 vp, Vector3 color)
+        {
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var sizeScale   = Matrix4.CreateScale(size);
+            var localPlace  = Matrix4.CreateTranslation(offset);
+            var toPivot   = Matrix4.CreateTranslation(-pivot);
+            var rotate    = Matrix4.CreateRotationX(swingAngleX);
+            var fromPivot = Matrix4.CreateTranslation(pivot);
+            var model = localCentre * sizeScale * localPlace * toPivot * rotate * fromPivot * rigToWorld;
+            var mvp = model * vp;
+            _overlayShader.SetMatrix4("uMVP", mvp);
+            _overlayShader.SetVector3("uColor", color);
+            _breakCubeMesh.Draw();
+        }
+
+        // Tier 3 #12 — third-person Steve renderer. Same overall shape as
+        // RenderHostiles' humanoid pass but with a few player-specific
+        // tweaks:
+        //   - Yaw is taken from Camera.Yaw + π (camera 0 = -Z, mob rig
+        //     0 = +Z, so we flip the sign convention).
+        //   - Pitch on the head only — the body stays upright while the
+        //     head tracks the camera's vertical look angle. Reads as
+        //     "looking around" without flipping the whole rig.
+        //   - Walk-cycle: legs + arms pivot around the hip / shoulder by
+        //     a sin(phase) angle scaled by horizontal-speed fraction. The
+        //     phase advances on the global walk-cycle clock managed in
+        //     RenderLoop.
+        //   - Hurt flash: same red lerp as other mobs, off Player.HurtTimer.
+        // Skin colour scheme is canonical Steve: skin-tone for head + arms,
+        // cyan shirt, indigo pants, brown hair on top of the head. Eyes +
+        // mouth are tiny dark cuboids on the front face for character.
+        private void RenderPlayer(int width, int height)
+        {
+            var view = Camera.GetView();
+            var proj = Camera.GetProjection(width, height);
+            var vp = view * proj;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            // Hurt flash off Player.HurtTimer (refreshed by TakeDamage,
+            // decremented in Player.Update — same pattern as the mob rigs).
+            float hurt = Player.HurtTimer > 0f
+                ? Player.HurtTimer / Player.HurtFlashSeconds
+                : 0f;
+            var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
+
+            // Rig yaw: camera Yaw 0 = looking -Z, but the rig's local +Z
+            // is the front face (head sits at z = +0.02). Adding π flips
+            // the rig 180° so its front matches the camera's forward axis.
+            float rigYaw = Camera.Yaw + (float)Math.PI;
+            var rot = Matrix4.CreateRotationY(rigYaw);
+            var trans = Matrix4.CreateTranslation(Player.Position);
+            var rigToWorld = rot * trans;
+
+            // Walk-cycle scale by horizontal speed. SwingTimer adds an
+            // extra arm sway when the player has just attacked / broken,
+            // boosting the right arm's amplitude briefly so the player
+            // can see their own swing in third-person.
+            float horizSpeed = (float)Math.Sqrt(
+                Player.Velocity.X * Player.Velocity.X +
+                Player.Velocity.Z * Player.Velocity.Z);
+            float walkFrac = horizSpeed / Player.WalkSpeed;
+            if (walkFrac > 1f) walkFrac = 1f;
+            const float WalkAmplitude = 0.55f;     // radians at full stride
+            float legSwing = (float)Math.Sin(_walkCyclePhase) * WalkAmplitude * walkFrac;
+            float armSwing = -legSwing;             // arms counter-swing legs
+            // Right arm gets an extra forward-arc when the swing timer is
+            // active — peak hits at swing-start, decays to 0 at end.
+            float swingArc = 0f;
+            if (Player.SwingTimer > 0f)
+            {
+                float t = Player.SwingTimer / Player.SwingDurationSeconds;
+                if (t > 1f) t = 1f;
+                // Map t (1 → 0 over the swing) to a forward arc that
+                // peaks early and fades. -t²·π/2 gives a forward chop.
+                swingArc = -(float)Math.Sin(t * Math.PI) * 1.20f;
+            }
+
+            // Steve palette. Skin a warm tan, hair brown, shirt cyan,
+            // pants indigo, eyes near-black, mouth a brick red.
+            var skin    = Vector3.Lerp(new Vector3(0.96f, 0.80f, 0.60f), hurtRed, hurt);
+            var hair    = Vector3.Lerp(new Vector3(0.30f, 0.18f, 0.10f), hurtRed, hurt);
+            var shirt   = Vector3.Lerp(new Vector3(0.10f, 0.65f, 0.85f), hurtRed, hurt);
+            var pants   = Vector3.Lerp(new Vector3(0.25f, 0.30f, 0.65f), hurtRed, hurt);
+            var boots   = Vector3.Lerp(new Vector3(0.20f, 0.20f, 0.25f), hurtRed, hurt);
+            var eyeCol  = new Vector3(0.05f, 0.05f, 0.10f);
+            var mouthCol = new Vector3(0.55f, 0.25f, 0.20f);
+
+            // Rig dimensions (sized to fill the 1.80 m AABB exactly):
+            //   legs    0.00 .. 0.75   (hip pivot Y = 0.75)
+            //   torso   0.75 .. 1.35
+            //   arms    0.75 .. 1.35   (shoulder pivot Y = 1.35)
+            //   head    1.35 .. 1.80
+            //   hair      slab on the top 5 cm of the head (1.75 .. 1.80)
+            // Total = 1.80 m, no overflow above the AABB top.
+
+            // ---- Legs (pivoted at hip = top of leg) ----
+            // 0.20 × 0.75 × 0.20, hips at Y = 0.75.
+            var legSize = new Vector3(0.20f, 0.75f, 0.20f);
+            DrawPivotedCuboid(new Vector3(+0.12f, 0.375f, 0f), legSize, +legSwing, rigToWorld, vp, pants);
+            DrawPivotedCuboid(new Vector3(-0.12f, 0.375f, 0f), legSize, -legSwing, rigToWorld, vp, pants);
+            // Boots — small darker cap at the foot of each leg. Pivots
+            // at the HIP (Y=0.75), not the boot's own top, so they ride
+            // the arc of the leg's foot instead of spinning in place
+            // around the ankle.
+            var bootSize = new Vector3(0.21f, 0.10f, 0.21f);
+            var hipR = new Vector3(+0.12f, 0.75f, 0f);
+            var hipL = new Vector3(-0.12f, 0.75f, 0f);
+            DrawPivotedAtCuboid(new Vector3(+0.12f, 0.05f, 0f), bootSize, hipR, +legSwing, rigToWorld, vp, boots);
+            DrawPivotedAtCuboid(new Vector3(-0.12f, 0.05f, 0f), bootSize, hipL, -legSwing, rigToWorld, vp, boots);
+
+            // ---- Torso (static) ----
+            // 0.50 wide × 0.60 tall × 0.30 deep, sat between hip (0.75)
+            // and shoulder (1.35).
+            var torsoSize = new Vector3(0.50f, 0.60f, 0.30f);
+            DrawPigCuboid(new Vector3(0f, 1.05f, 0f), torsoSize, rigToWorld, vp, shirt);
+
+            // ---- Arms (pivoted at shoulder = Y 1.35) ----
+            // 0.20 × 0.60 × 0.20. Offset Y is cuboid centre, so for a
+            // 0.60-tall arm hanging from shoulder Y=1.35, centre =
+            // 1.35 - 0.30 = 1.05. DrawPivotedCuboid then lifts the
+            // pivot to offset.Y + size.Y/2 = 1.35 (the shoulder).
+            var armSize = new Vector3(0.20f, 0.60f, 0.20f);
+            // Right arm carries the swing-arc bonus; left arm just does
+            // the walk-cycle counter-swing.
+            DrawPivotedCuboid(new Vector3(+0.35f, 1.05f, 0f), armSize, +armSwing + swingArc, rigToWorld, vp, shirt);
+            DrawPivotedCuboid(new Vector3(-0.35f, 1.05f, 0f), armSize, -armSwing,            rigToWorld, vp, shirt);
+
+            // ---- Head (pitched only — body stays upright) ----
+            // 0.45 cube on top of torso, range Y 1.35..1.80. Extra X-
+            // rotation around the neck pivot reads as "Steve looking
+            // up/down" without tipping the whole body. DrawHeadCuboid
+            // uses a fixed neck pivot at (0, 1.35, 0) so the whole face
+            // package rotates as one unit.
+            float headPitch = -Camera.Pitch * 0.8f;   // dampened so the head doesn't snap fully vertical
+            var headSize = new Vector3(0.45f, 0.45f, 0.45f);
+            DrawHeadCuboid(new Vector3(0f, 1.575f, 0f), headSize, headPitch, rigToWorld, vp, skin);
+            // Hair — a thin slab embedded in the top 5 cm of the head
+            // (range 1.75..1.80) so the rig stays inside the AABB.
+            var hairSize = new Vector3(0.46f, 0.05f, 0.46f);
+            DrawHeadCuboid(new Vector3(0f, 1.775f, 0f), hairSize, headPitch, rigToWorld, vp, hair);
+            // Eyes (two small dark squares on the head front).
+            var eyeSize = new Vector3(0.08f, 0.08f, 0.04f);
+            DrawHeadCuboid(new Vector3(+0.10f, 1.63f, +0.225f), eyeSize, headPitch, rigToWorld, vp, eyeCol);
+            DrawHeadCuboid(new Vector3(-0.10f, 1.63f, +0.225f), eyeSize, headPitch, rigToWorld, vp, eyeCol);
+            // Mouth — wider but shorter strip below the eyes.
+            var mouthSize = new Vector3(0.18f, 0.04f, 0.04f);
+            DrawHeadCuboid(new Vector3(0f, 1.51f, +0.225f), mouthSize, headPitch, rigToWorld, vp, mouthCol);
+        }
+
+        // Variant that pivots the cuboid around its UNDERSIDE centre
+        // (i.e. the neck point of the head). Used by the head + hair +
+        // eyes + mouth so the whole face package pitches as one unit
+        // when the player tilts the camera.
+        private void DrawHeadCuboid(Vector3 offset, Vector3 size, float pitchAngleX,
+            Matrix4 rigToWorld, Matrix4 vp, Vector3 color)
+        {
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var sizeScale   = Matrix4.CreateScale(size);
+            var localPlace  = Matrix4.CreateTranslation(offset);
+            // The head's pitch pivot is the neck — a fixed point in rig-
+            // local space at (0, 1.50, 0), the top of the torso. Using a
+            // shared pivot for ALL face cuboids means eyes / mouth / hair
+            // rotate together with the head, instead of each rotating
+            // around its own centre and decoupling from the face.
+            var pivot     = new Vector3(0f, 1.50f, 0f);
+            var toPivot   = Matrix4.CreateTranslation(-pivot);
+            var rotate    = Matrix4.CreateRotationX(pitchAngleX);
+            var fromPivot = Matrix4.CreateTranslation(pivot);
+            var model = localCentre * sizeScale * localPlace * toPivot * rotate * fromPivot * rigToWorld;
             var mvp = model * vp;
             _overlayShader.SetMatrix4("uMVP", mvp);
             _overlayShader.SetVector3("uColor", color);

@@ -258,7 +258,6 @@ clipping at ~3.5 rows).
 - Slime mob (the fifth Alpha hostile) — splits-on-hit semantics, low-Y light-independent spawn. Slated for Tier 4 #18.
 - Spider wall-climb (Alpha spiders climb walls — vertical pathing is a bigger surface than the chase plumbing handles today)
 - Density-curve / pack spawning — Alpha clusters spawns of the same kind in a 1..4-mob "pack" near the seed cell. Our spawn pass is one mob per attempt, which gives a flatter distribution than vanilla.
-- Player skin / third-person model (player is currently invisible; F5 third-person will need a model + texture)
 - Projectiles: arrow, snowball, egg
 - Vehicles: minecart, boat
 - Painting
@@ -282,6 +281,7 @@ clipping at ~3.5 rows).
 - Respawn on death (teleport to spawn, restore full HP + air)
 - Hand-held item rendering in first-person — the currently-selected hotbar stack renders as a HUD-layer gizmo in the bottom-right corner (`RenderHeldItem`). Cube-shaped blocks use the same 3-face iso renderer as the inventory icons (`RenderBlockIcon3D`); tools, items, torches, and flora use the flat-sprite path (`DrawFlatSpriteIcon`). Empty hotbar slots render nothing. Drives the swing animation off `Player.SwingTimer`.
 - Arm-swing animation — `Player.TriggerSwing()` resets a 0.30 s decay timer; the held-item gizmo applies a sin(πt) half-pulse pose that dips the icon down + slightly inward at peak and eases it back to rest. Triggered on every block-break attempt (`TryBreak`) and continuously while LMB is held — once the timer drains the next held-frame retriggers, so chopping a long-mining block animates the whole way through.
+- Third-person Steve model + F5 toggle (Tier 3 #12) — `GameRenderer.ThirdPersonMode` flips the camera from first-person eye to a 3-block pull-back along `-Forward` (terrain-clipped via a 0.1-block step-march so the camera tucks against walls instead of poking through), and the renderer draws a Steve-coloured humanoid rig (skin-tone head/arms, cyan shirt, indigo pants, dark boots, brown hair, eye + mouth detail) at the player's feet. Walk-cycle phase advances on horizontal speed each frame; legs + arms pivot at hip / shoulder by `sin(phase) × WalkAmplitude × walkFrac`. Head pitches independently with the camera's vertical look angle (dampened to 0.8×) so Steve looks up + down without tipping the body. Right arm gets an extra forward-arc hit while `Player.SwingTimer` is active so attacks read in third-person. First-person held-item gizmo is suppressed while the toggle is on. F5 hops between modes.
 
 **Missing**
 - Damage from suffocation, lava, fire, cactus
@@ -289,7 +289,6 @@ clipping at ~3.5 rows).
 - Sneak (Shift) — prevents falling off edges
 - Ladder climb
 - On-fire state
-- Third-person camera (F5)
 - Death screen with respawn button (currently instant respawn)
 
 ## Inventory / items
@@ -434,7 +433,7 @@ clipping at ~3.5 rows).
 - Shift sneak
 - Q drop
 - T chat
-- F1 HUD toggle, F2 screenshot, F3 debug screen (currently used for mode toggle), F5 third person
+- F1 HUD toggle, F2 screenshot, F3 debug screen (currently used for mode toggle)
 - Middle-click pick-block
 - Scroll wheel hotbar
 - Configurable key bindings
@@ -503,10 +502,6 @@ order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
 	
-### Tier 3 — Mobs (the world stops feeling empty)
-
-12. **Player skin + third-person model** — Required for F5 + future multiplayer.
-
 ### Tier 4 — Alpha 1.1.2 item catalogue (the remaining items)
 
 The audited Alpha items the codebase doesn't yet have, ordered so each entry can ship on its own now that the `ItemType` layer (Items → Have) and Tier 3's mobs are in place. Most are 100–500 LoC each.
@@ -527,7 +522,7 @@ The audited Alpha items the codebase doesn't yet have, ordered so each entry can
 
 ### Tier 5 — Controls + UX parity (small, every-session improvements)
 
-27. **Q drop, middle-click pick-block, Shift sneak (edge-stop), F5 third-person** — Each ~50–100 LoC; ship together.
+27. **Middle-click pick-block, Shift sneak (edge-stop) - Ctrl** — Each ~50–100 LoC; ship together. (Q drop + F5 third-person already shipped.)
 28. **Right-click split, shift-click move, right-click drag spread** — Inventory ops Alpha shipped that we're missing.
 29. **Death screen with respawn button** — Replaces the current instant-respawn.
 30. **F3 debug screen** — XYZ, FPS, biome, light values, chunk count.
@@ -544,7 +539,6 @@ The audited Alpha items the codebase doesn't yet have, ordered so each entry can
 
 ### Tier 7 — Lighting + sky polish
 
-38. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
 39. **Cross-chunk light propagation** — Eliminates the small light seams at chunk borders next to torches.
 40. **Underwater fog colour swap** — Real deep-blue fog when the camera is submerged (we currently only tint the framebuffer).
 41. **Real moon phases (8-frame texture)** + **horizon gradient** + **rain / snow / lightning** + **biome sky tints**.
@@ -563,4 +557,7 @@ The audited Alpha items the codebase doesn't yet have, ordered so each entry can
 48. **Configurable key bindings + autosave + backup-on-load-failure**.
 49. **Minecart (328) + Storage Minecart (342) + Powered Minecart (343) + Boat (333) + rail blocks** — Vehicles. Minecart on rails, boat on water; each is a ridable entity. Powered Minecart has a furnace that burns coal to push it. Storage Minecart shows a chest GUI when ridden.
 50. **Multiplayer (TCP server + protocol + auth + interp)** — Alpha had this; it's a project on its own. ~3000+ LoC.
-51. **Animated water / lava textures** — moved to be last, original attempts edited the texture, instead of animating it. -> Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
+	
+### Tier 10 — Optional Features
+51. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
+52. **Animated water / lava textures** — moved to be last, original attempts edited the texture, instead of animating it. -> Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.

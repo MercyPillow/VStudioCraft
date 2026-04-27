@@ -707,6 +707,20 @@ namespace VStudioCraft.UI
                         Dispatcher.BeginInvoke(new Action(UpdateStatus));
                     }
                     break;
+                case Keys.F5:
+                    // Tier 3 #12 — toggle third-person view. UI-thread write,
+                    // render-thread read; bool assignment is atomic on
+                    // x86/x64. The renderer pushes the camera back along
+                    // -Forward and draws the Steve rig only while the flag
+                    // is true. SuppressKeyPress so the F5 doesn't trigger
+                    // any other host-level behaviour the WPF chrome might
+                    // bind it to.
+                    if (_renderer != null && !_renderer.IsPaused)
+                    {
+                        _renderer.ThirdPersonMode = !_renderer.ThirdPersonMode;
+                        e.SuppressKeyPress = true;
+                    }
+                    break;
                 case Keys.Q:
                     // Q drops one item; Shift+Q drops the whole stack.
                     // Two contexts:
