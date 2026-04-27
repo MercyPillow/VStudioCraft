@@ -137,7 +137,10 @@
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\danla\\\\AppData\\\\Local\\\\Microsoft\\\\VisualStudio\\\\18.0_ab3419abExp\\\\Extensions\\\\Daniel Law\\\\VStudioCraft\\\\1.0.0\" -Recurse -Force | Select-Object @{n=\"Path\";e={$_.FullName.Replace\\('C:\\\\Users\\\\danla\\\\AppData\\\\Local\\\\Microsoft\\\\VisualStudio\\\\18.0_ab3419abExp\\\\Extensions\\\\Daniel Law\\\\VStudioCraft\\\\1.0.0\\\\',''\\)}}, Length, LastWriteTime | Format-Table -AutoSize -Wrap)",
       "PowerShell($p = Get-Process -Id 12716 -ErrorAction SilentlyContinue; if \\($p\\) { Write-Output \\(\"Path: \" + $p.MainModule.FileName\\); Write-Output \\(\"Started: \" + $p.StartTime\\) })",
       "PowerShell(\\(Get-Content \"C:\\\\Users\\\\danla\\\\source\\\\repos\\\\VStudioCraft\\\\src\\\\VStudioCraft\\\\Game\\\\Block.cs\" | Measure-Object -Line\\).Lines)",
-      "PowerShell(dotnet build src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -nologo -v:m)"
+      "PowerShell(dotnet build src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -nologo -v:m)",
+      "PowerShell(dotnet build src/VStudioCraft.Standalone/VStudioCraft.Standalone.csproj -nologo -v:m -t:Compile)",
+      "PowerShell(Stop-Process -Force)",
+      "PowerShell($ErrorActionPreference='SilentlyContinue')"
     ]
   }
 }

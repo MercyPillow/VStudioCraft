@@ -3670,17 +3670,17 @@ void main()
 
         // First-person held-item gizmo: draws the currently selected
         // hotbar stack in the bottom-right of the viewport with a
-        // sine-eased swing arc when the player attacks. Cube-shaped
-        // blocks reuse the iso-3D path (same look as the hotbar slot),
-        // so a held cobblestone reads as a corner-on cube; tools /
-        // items / cross-sprite blocks fall through to the flat sprite
-        // path and render as a 2D billboard. Empty hands draw nothing
-        // for now — there's no fist sprite yet.
+        // sine-eased swing arc when the player attacks. Always draws
+        // Steve's arm (procedural skin + sleeve quads tilted toward
+        // the upper-left) so the player sees a body part even when the
+        // hotbar slot is empty. Cube-shaped held blocks reuse the iso-3D
+        // path (same look as the hotbar slot); tools / items /
+        // cross-sprite blocks fall through to the flat sprite path.
         //
         // Swing animation: a half-sine pulse over Player.SwingDurationSeconds
-        // pushes the icon down + slightly inset, then returns it to the
-        // resting pose. Intensity is calibrated so a single swing reads
-        // as a confident chop rather than a stiff lurch.
+        // rotates the arm forward through ~60° + dips the held item to
+        // match. Intensity is calibrated so a single swing reads as a
+        // confident chop rather than a stiff lurch.
         //
         // Layered before the survival HUD / hotbar in the render order so
         // the chrome sits on top — Alpha hides the held tool behind the
@@ -3689,7 +3689,6 @@ void main()
         {
             if (Input == null) return;
             var stack = Input.Inventory.GetHotbar(Input.HotbarIndex);
-            if (stack.IsEmpty) return;
 
             // Scale the gizmo with the viewport but cap so it doesn't
             // dominate small windows. UiScale.S returns the base pixel
@@ -3730,12 +3729,31 @@ void main()
 
             var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
 
-            // HUD pass: depth-test off so the gizmo sits on top of the
-            // world. Blend on for the iso cube's alpha-tested faces (no-
-            // op for opaque blocks but harmless to leave enabled).
+            // HUD pass baseline. Cull off because the HUD ortho's Y-flip
+            // reverses winding from CCW to CW, so back-face culling would
+            // discard every quad we draw here (RenderHotbar disables it
+            // for the same reason). Depth-test off so the gizmo sits on
+            // top of the world. Blend on for the iso cube's alpha-tested
+            // faces (no-op for opaque blocks but harmless to leave on).
+            GL.Disable(EnableCap.CullFace);
             GL.Disable(EnableCap.DepthTest);
             GL.Enable(EnableCap.Blend);
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+            // Arm first — sits behind the held item so a held block
+            // overlaps the wrist naturally, just like Alpha. Also covers
+            // the empty-hand case where the held-item branch is a no-op.
+            // RenderPlayerArm captures + restores CullFace internally so
+            // it returns with cull still off (we already disabled above).
+            RenderPlayerArm(width, height, swingPhase, ortho);
+
+            if (stack.IsEmpty)
+            {
+                // Empty hand — only the arm renders. The arm helper
+                // already restored its own GL state, so nothing else to
+                // do here.
+                return;
+            }
 
             if (BlockData.IsCubeShape(stack.Type))
             {
@@ -3749,6 +3767,132 @@ void main()
                 // for non-cube blocks; tools/items have dedicated tiles.
                 DrawFlatSpriteIcon(stack.Type, x0, y0, iconPx, iconPx, ortho);
             }
+        }
+
+        // Procedural player-arm sprite for the first-person HUD. Two
+        // stacked solid-colour quads — sleeve cuff (Steve's classic
+        // cyan shirt) on the elbow side, skin tone on the hand side —
+        // both rotated together so they read as a single forearm
+        // sticking in from the bottom-right corner toward upper-left.
+        //
+        // The rotation matrix is built around the arm's wrist (so the
+        // hand stays anchored near the held item while the elbow swings
+        // outside the viewport). The swingPhase param drives an extra
+        // forward-chop rotation on top of the resting tilt.
+        //
+        // No texture — Alpha's player arm in first-person is two flat
+        // colours pulled from the skin sheet, and we don't have a Steve
+        // skin loaded yet, so a procedural pair of rectangles is the
+        // honest representation rather than a placeholder.
+        private void RenderPlayerArm(int width, int height,
+            float swingPhase, Matrix4 ortho)
+        {
+            // Arm dimensions, scaled to viewport. Length-to-width 3:1
+            // matches Steve's 4×12-pixel forearm proportions.
+            int armW = UiScale.S(28, width, height);
+            int armL = UiScale.S(96, width, height);
+
+            // Resting pose: wrist anchor sits inside the bottom-right
+            // corner (slightly above the hotbar), arm extends up-and-
+            // left at ~45°. Margins picked so the cuff just clears the
+            // hotbar and the hand reaches roughly to the held-item
+            // gizmo's centre.
+            int wristX = width  - UiScale.S(40, width, height);
+            int wristY = height - UiScale.S(56, width, height);
+
+            // Resting arm angle. Math convention: the arm's local +Y axis
+            // (which extends in pre-ortho +Y direction = screen DOWN, since
+            // the HUD ortho has top=0/bottom=height) is rotated by `angle`.
+            // After OpenTK's row-vector CreateRotationZ(θ), local +Y maps
+            // to (-sin θ, cos θ). For up-and-left on screen we want
+            // (-sin θ, cos θ) ≈ (-1, -1), i.e. θ ≈ +135°. The pre-ortho Y
+            // (-) flip then renders that as upward on screen.
+            //
+            // chopAngleDeg drives a forward chop on swing — reducing the
+            // angle toward 90° brings the arm to horizontal-left at the
+            // swing peak, which reads as a chopping motion.
+            float restAngleDeg = 135f;
+            float chopAngleDeg = -45f * swingPhase;
+            float angle = MathHelper.DegreesToRadians(restAngleDeg + chopAngleDeg);
+
+            // Sleeve covers the bottom 38% of the arm length (from the
+            // wrist outward — i.e. closer to the elbow), skin covers
+            // the upper 62% reaching toward the hand. Visual order:
+            // sleeve in back, skin on top so the cuff edge reads.
+            int sleeveLen = (int)(armL * 0.38f);
+            int skinLen   = armL - sleeveLen;
+
+            var sleeveColor = new Vector3(0.36f, 0.55f, 0.74f); // Steve cyan
+            var skinColor   = new Vector3(0.96f, 0.77f, 0.61f); // peach
+            // Outline behind both layers so the arm reads against bright
+            // skies / sand without bleeding into them. Slightly inset
+            // dark border via a backdrop quad scaled +2 px each side.
+            var outlineColor = new Vector3(0.10f, 0.10f, 0.12f);
+
+            // Build the arm's local-to-screen transform once and reuse
+            // for the three layered quads (outline, sleeve, skin). The
+            // unit quad spans [0,1]×[0,1]; we want it laid along the
+            // arm's length with the wrist end at local (0,0). So scale
+            // by (width, length), rotate around the wrist origin, then
+            // translate the wrist to its screen position.
+            //
+            // Y in screen space grows downward, but our angle convention
+            // matches a math-positive (CCW from +X, +Y up) layout. The
+            // ortho matrix already flips Y, so passing the rotation as-
+            // is rotates the on-screen sprite the way we expect.
+            void DrawArmLayer(int offsetAlongArm, int layerLen,
+                int padPerSide, Vector3 color)
+            {
+                int w = armW + padPerSide * 2;
+                int l = layerLen + padPerSide * 2;
+
+                // Centre the quad's width on the arm axis: shift by
+                // -armW/2 so the unit quad's [0..1]-X straddles the
+                // arm-axis line evenly.
+                var local = Matrix4.CreateTranslation(-0.5f, 0f, 0f);
+                var scale = Matrix4.CreateScale(w, l, 1f);
+                var moveAlong = Matrix4.CreateTranslation(
+                    0f, offsetAlongArm - padPerSide, 0f);
+                var rot = Matrix4.CreateRotationZ(angle);
+                var place = Matrix4.CreateTranslation(wristX, wristY, 0f);
+
+                // Local (centred-X, +Y along arm) → scale → push out
+                // along arm → rotate around wrist → translate wrist
+                // anchor to screen pos → ortho.
+                var mvp = local * scale * moveAlong * rot * place * ortho;
+
+                _overlayShader.Use();
+                _overlayShader.SetMatrix4("uMVP", mvp);
+                _overlayShader.SetVector3("uColor", color);
+                _overlayShader.SetFloat("uAlpha", 1f);
+                _unitQuadMesh.Draw();
+            }
+
+            // CullFace must be off for HUD quads. The HUD ortho
+            // (CreateOrthographicOffCenter with top=0, bottom=height) flips
+            // Y, which inverts triangle winding from the unit quad's CCW
+            // baseline to CW from the eye. With the world pass's default
+            // FrontFace=Ccw + back-face culling, our arm quads get
+            // discarded entirely. RenderHurtOverlay / RenderSubmergedOverlay
+            // do the same dance — disable cull, draw, re-enable. We restore
+            // on exit so the next renderer (block icon, flat sprite) sees
+            // the same baseline state we did.
+            bool cullWasEnabled = GL.IsEnabled(EnableCap.CullFace);
+            GL.Disable(EnableCap.CullFace);
+
+            // Outline first — covers the full arm length, padded a few
+            // pixels each side so it shows as a 1–2 px border around
+            // both colour layers.
+            int outlinePad = System.Math.Max(2, UiScale.S(2, width, height));
+            DrawArmLayer(0, armL, outlinePad, outlineColor);
+
+            // Sleeve sits at the wrist end (offset 0).
+            DrawArmLayer(0, sleeveLen, 0, sleeveColor);
+
+            // Skin sits past the sleeve, reaching out toward the hand.
+            DrawArmLayer(sleeveLen, skinLen, 0, skinColor);
+
+            if (cullWasEnabled) GL.Enable(EnableCap.CullFace);
         }
 
         // Render a 3-face block icon (top + two sides) into a pixel
