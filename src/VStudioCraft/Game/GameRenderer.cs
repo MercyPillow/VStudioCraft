@@ -4237,10 +4237,17 @@ void main()
                 : 0f;
             var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
 
-            // Rig yaw: camera Yaw 0 = looking -Z, but the rig's local +Z
-            // is the front face (head sits at z = +0.02). Adding π flips
-            // the rig 180° so its front matches the camera's forward axis.
-            float rigYaw = Camera.Yaw + (float)Math.PI;
+            // Rig yaw: align the rig's local +Z (front face) with
+            // Camera.Forward so the camera always looks at the player's
+            // back. Camera convention is Forward = (sin Yaw, *, -cos Yaw)
+            // (Yaw=0 → -Z, +Yaw rotates toward +X). The rig's +Z rotated by
+            // Matrix4.CreateRotationY(a) lands at (sin a, *, cos a). For
+            // those to match we need sin(a)=sin(Yaw) and cos(a)=-cos(Yaw),
+            // which gives a = π - Camera.Yaw. The earlier "Camera.Yaw + π"
+            // happened to work only at Yaw=0; it spun the rig the WRONG
+            // way around the Y axis at every other heading, so the body
+            // looked frozen relative to the camera.
+            float rigYaw = (float)Math.PI - Camera.Yaw;
             var rot = Matrix4.CreateRotationY(rigYaw);
             var trans = Matrix4.CreateTranslation(Player.Position);
             var rigToWorld = rot * trans;
@@ -4352,11 +4359,12 @@ void main()
             var sizeScale   = Matrix4.CreateScale(size);
             var localPlace  = Matrix4.CreateTranslation(offset);
             // The head's pitch pivot is the neck — a fixed point in rig-
-            // local space at (0, 1.50, 0), the top of the torso. Using a
-            // shared pivot for ALL face cuboids means eyes / mouth / hair
-            // rotate together with the head, instead of each rotating
+            // local space at (0, 1.35, 0), the top of the torso (rig is
+            // 1.80m total: legs 0..0.75, torso 0.75..1.35, head 1.35..1.80).
+            // Using a shared pivot for ALL face cuboids means eyes / mouth /
+            // hair rotate together with the head, instead of each rotating
             // around its own centre and decoupling from the face.
-            var pivot     = new Vector3(0f, 1.50f, 0f);
+            var pivot     = new Vector3(0f, 1.35f, 0f);
             var toPivot   = Matrix4.CreateTranslation(-pivot);
             var rotate    = Matrix4.CreateRotationX(pitchAngleX);
             var fromPivot = Matrix4.CreateTranslation(pivot);
