@@ -422,15 +422,6 @@ order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
 	
-### Tier 2 — Visible world polish (each item improves every frame)
-
-All Tier 2 items shipped — see Blocks (wall torches + torch-fall), Rendering (particle system + first-person held-item), Player (held-item gizmo + arm-swing), and HUD (hurt overlay).
-
-4. ~~**Wall torches + torch-fall**~~ — id-space orientation (TorchEast/West/South/North at 70..73, no chunk metadata since metadata isn't persisted) + a 5-cell unsupported-torch sweep after every break. **Done.**
-5. ~~**Particle system**~~ — 256-particle pool with tumbling-cube primitives through the existing multi-face shader; covers break puffs, water splash, lava bubbles, torch smoke. **Done.**
-7. ~~**Hand-held item rendering (first-person)**~~ — bottom-right gizmo using the iso 3-face renderer for cubes and the flat-sprite path for tools/items, with sin(πt) swing animation. **Done.**
-8. ~~**Hurt overlay + arm-swing on attack**~~ — 0.45 s red wash via `Player.HurtTimer` on `TakeDamage`; arm swing via `Player.SwingTimer` triggered on every `TryBreak` and continuously while LMB is held. **Done.**
-
 ### Tier 3 — Mobs (the world stops feeling empty)
 
 9. **Entity framework + first passive mob (pig)** — AABB walker shared with `Player`, simple wandering AI (random direction every 5 s). Drops **Raw Porkchop (319)**; smelts to **Cooked Porkchop (320)** once the furnace is online.
