@@ -4,6 +4,21 @@ using System.Collections.Generic;
 
 namespace VStudioCraft.Game
 {
+    // Phase 3 — record of one server-authored cell change, queued in
+    // World._pendingBlockChanges and drained by ServerHub each tick to
+    // emit BlockChange packets. Compact value type so a tick that
+    // reshapes a cliff face doesn't churn the GC.
+    internal struct BlockChangeRecord
+    {
+        public int X, Y, Z;
+        public BlockType NewType;
+
+        public BlockChangeRecord(int x, int y, int z, BlockType t)
+        {
+            X = x; Y = y; Z = z; NewType = t;
+        }
+    }
+
     internal sealed class World
     {
         // Small starter patch so the first frame isn't empty. Streaming fills in the rest.
@@ -82,6 +97,27 @@ namespace VStudioCraft.Game
 
         public int Seed { get; }
         public Noise Noise => _noise;
+
+        // Phase 3 — server-side change journal. Every successful SetBlock
+        // (with `record:true` — the default) appends a record here; the
+        // ServerHub drains the list at the end of each tick and emits one
+        // BlockChange packet per record to each client whose tracked-chunk
+        // set contains the cell.
+        //
+        // Client-side Worlds (multiplayer replicas) call SetBlock with
+        // `record:false` when applying inbound BlockChange packets so the
+        // list never grows on a client that isn't draining it.
+        //
+        // We deliberately don't deduplicate on the way in — if the same
+        // cell flips A→B→A inside one tick, both records ship. The end-
+        // state matches anyway and dedup'd records would mask intermediate
+        // states the client mesher might want to render briefly (e.g.
+        // explosion debris). If pathological churn becomes a problem,
+        // a per-cell coalesce dictionary slots in here cleanly.
+        private readonly List<BlockChangeRecord> _pendingBlockChanges = new List<BlockChangeRecord>();
+
+        public IReadOnlyList<BlockChangeRecord> PendingBlockChanges => _pendingBlockChanges;
+        public void ClearPendingBlockChanges() => _pendingBlockChanges.Clear();
 
         private World(int seed)
         {
@@ -874,7 +910,13 @@ namespace VStudioCraft.Game
             return c.Get(lx, wy, lz);
         }
 
-        public bool SetBlock(int wx, int wy, int wz, BlockType t)
+        // Phase 3 — `record` distinguishes server-authored mutations
+        // (default true; appends to the change journal so ServerHub can
+        // broadcast) from client-authored mutations applying an inbound
+        // BlockChange (false; the change came FROM the server, no need
+        // to echo it back). Existing call-sites all keep the default,
+        // matching the prior single-arg signature.
+        public bool SetBlock(int wx, int wy, int wz, BlockType t, bool record = true)
         {
             if (wy < 0 || wy >= Chunk.SizeY) return false;
             int cx = (int)Math.Floor(wx / (float)Chunk.SizeX);
@@ -887,6 +929,10 @@ namespace VStudioCraft.Game
             if (oldT == t) return false; // no-op edit; don't dirty anything
             c.Set(lx, wy, lz, t);
             c.IsModified = true;
+            if (record)
+            {
+                _pendingBlockChanges.Add(new BlockChangeRecord(wx, wy, wz, t));
+            }
 
             // Incremental light update — touches only the cells whose sky
             // or block light value actually changes (standard remove-then-add

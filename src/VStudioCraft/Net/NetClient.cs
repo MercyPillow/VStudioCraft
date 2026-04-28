@@ -168,6 +168,33 @@ namespace VStudioCraft.Net
             }.Write(w));
         }
 
+        // Phase 3 — outbound dig intent. status=0 (start) is the only
+        // value Phase 3 emits today (creative-mode instant break). The
+        // server treats status=0 and status=2 (finish) identically for
+        // now; status=1 (cancel) lands when survival break-progress
+        // ships in Phase 5.
+        public void SendDig(byte status, int x, int y, int z, byte face)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.PlayerDigStart, w => new PlayerDigPacket
+            {
+                Status = status, X = x, Y = y, Z = z, Face = face,
+            }.Write(w));
+        }
+
+        // Phase 3 — outbound place intent. (x,y,z) is the cell the player
+        // clicked ON; the server resolves the actual placement target
+        // using the face normal. blockType is the type the client
+        // believes is in their hand (server cross-checks in Phase 6).
+        public void SendPlace(int x, int y, int z, byte face, byte blockType)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.PlayerPlace, w => new PlayerPlacePacket
+            {
+                X = x, Y = y, Z = z, Face = face, BlockType = blockType,
+            }.Write(w));
+        }
+
         public void Disconnect(string reason)
         {
             // Best-effort orderly hangup so the server logs a clean exit

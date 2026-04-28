@@ -1072,6 +1072,14 @@ void main()
                     ApplyChunkLoad(pkt.ChunkLoad);
                     break;
 
+                case VStudioCraft.Net.PacketIds.ChunkUnload:
+                    if (_world != null) _world.UnloadChunk(pkt.ChunkUnload.ChunkX, pkt.ChunkUnload.ChunkZ);
+                    break;
+
+                case VStudioCraft.Net.PacketIds.BlockChange:
+                    ApplyBlockChange(pkt.BlockChange);
+                    break;
+
                 case VStudioCraft.Net.PacketIds.Disconnect:
                     // Server-initiated hangup. Tear our side down so the
                     // next DrainNetwork sees IsNetClient false and stops
@@ -1090,6 +1098,37 @@ void main()
                     // compat ID we just don't have handling for yet.
                     break;
             }
+        }
+
+        // Apply a server-authoritative single-cell change to the local
+        // world replica. record:false so the client's World doesn't
+        // accumulate this in its own _pendingBlockChanges list (the
+        // server is the only authority that broadcasts; the client
+        // would just leak memory if it kept appending).
+        private void ApplyBlockChange(VStudioCraft.Net.BlockChangePacket pkt)
+        {
+            if (_world == null) return;
+            // World.SetBlock dirties the chunk + recomputes incremental
+            // light, so the next ProcessDirtyChunks pass remeshes the
+            // affected region. No additional client work needed.
+            _world.SetBlock(pkt.X, pkt.Y, pkt.Z, (BlockType)pkt.BlockType, record: false);
+        }
+
+        // Pack a raycast face normal into the 0..5 face index used on the
+        // wire. Indexing matches PlayerDigPacket / PlayerPlacePacket
+        // documentation — keep them in sync if either changes.
+        private static byte FaceFromNormal(int nx, int ny, int nz)
+        {
+            if (ny == -1) return 0; // bottom face exposed
+            if (ny ==  1) return 1; // top
+            if (nz == -1) return 2;
+            if (nz ==  1) return 3;
+            if (nx == -1) return 4;
+            if (nx ==  1) return 5;
+            // Degenerate (origin inside the block, normal=0,0,0) — safest
+            // fallback is +Y, matching the "click into floor → place on
+            // top" convention. The server will reject if it's wrong.
+            return 1;
         }
 
         private void ApplyChunkLoad(VStudioCraft.Net.ChunkLoadPacket pkt)
@@ -1832,12 +1871,25 @@ void main()
         public bool TryBreak()
         {
             if (_world == null) return false;
-            // Phase 2c — net-driven mode: a real implementation will land
-            // in Phase 3 as a PlayerDigStart/Stop intent packet round-trip
-            // (server simulates the break, sends BlockChange back). For
-            // now, swallow the click so the client doesn't desync the
-            // world by mutating local state behind the server's back.
-            if (_netClient != null) return false;
+            // Phase 3 — net-driven mode: emit a PlayerDigStart intent.
+            // Server validates reach, applies SetBlock, and broadcasts
+            // BlockChange back; the local replica updates only when the
+            // BlockChange arrives. We don't predict here — survival
+            // break-progress and creative instant-break both wait for
+            // the server's authoritative ACK. The arm swing animation
+            // runs immediately so the click feels responsive.
+            if (_netClient != null)
+            {
+                Player.TriggerSwing();
+                if (Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hitNet))
+                {
+                    _netClient.SendDig(
+                        status: 0, // start (Phase 3 = creative-instant)
+                        x: hitNet.X, y: hitNet.Y, z: hitNet.Z,
+                        face: FaceFromNormal(hitNet.Nx, hitNet.Ny, hitNet.Nz));
+                }
+                return false;
+            }
             // Swing the arm even if the click misses — matches Alpha 1.1.2
             // where every LMB tap animates the held tool/hand regardless
             // of whether anything was hit. Click-and-hold cycles get a
@@ -2891,10 +2943,24 @@ void main()
         public bool TryPlace(BlockType t)
         {
             if (_world == null) return false;
-            // Phase 2c — same rationale as TryBreak. Phase 3 turns this
-            // into a PlayerPlace intent packet; for now swallow it so the
-            // local replica stays in sync with the server.
-            if (_netClient != null) return false;
+            // Phase 3 — net-driven mode: emit a PlayerPlace intent. We
+            // ship the (clicked-cell, face, held-type) tuple; the server
+            // resolves the actual placement target via face normal and
+            // broadcasts BlockChange on success. Same "no client
+            // prediction" pattern as TryBreak — block visually appears
+            // only when the BlockChange arrives.
+            if (_netClient != null)
+            {
+                if (t == BlockType.Air) return false;
+                if (Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hitNet))
+                {
+                    _netClient.SendPlace(
+                        x: hitNet.X, y: hitNet.Y, z: hitNet.Z,
+                        face: FaceFromNormal(hitNet.Nx, hitNet.Ny, hitNet.Nz),
+                        blockType: (byte)t);
+                }
+                return false;
+            }
             // Tools and items can't be placed — RMB on either is a
             // no-op. Guard runs before the survival check so creative-
             // mode RMB on a tool / stick / ingot also does nothing

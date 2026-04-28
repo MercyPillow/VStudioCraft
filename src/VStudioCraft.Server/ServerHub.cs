@@ -112,25 +112,41 @@ namespace VStudioCraft.Server
         // simulation. We process inbound packets first so client-driven
         // intents (chunk requests, position updates) reach the simulation
         // in the same tick they arrive in, minimising round-trip latency.
+        //
+        // Order within the tick:
+        //   1. Promote pending sockets (handoff from accept thread)
+        //   2. Drain inbound queues per client (login, dig, place, pos)
+        //      — block edits may flip cells, accumulating BlockChange
+        //      records in World._pendingBlockChanges
+        //   3. Advance per-client streaming state (chunks, keepalive)
+        //   4. Broadcast queued BlockChange records to clients in range
+        //   5. Reap dead sessions
         public void Tick()
         {
-            // 1. Promote any newly-accepted sessions into the live list.
-            //    The accept thread parks them in _pendingNew; we move them
-            //    over here on the tick thread so all _clients mutations
-            //    stay single-threaded.
             PromotePendingClients();
 
-            // 2. Drain inbound queues and advance per-client state.
             for (int i = 0; i < _clients.Count; i++)
             {
                 var client = _clients[i];
                 if (client.Session.IsDead) continue;
                 DrainInbound(client);
+            }
+
+            for (int i = 0; i < _clients.Count; i++)
+            {
+                var client = _clients[i];
+                if (client.Session.IsDead) continue;
                 AdvanceState(client);
             }
 
-            // 3. Reap dead sessions. Iterating backwards lets us RemoveAt
-            //    without shifting the unread tail.
+            // 4. Drain world-level block changes accumulated this tick
+            //    (player dig/place + future fluid spread / sugar cane
+            //    growth) and route them to the clients whose tracked-
+            //    chunks set contains the cell. A change OUTSIDE every
+            //    client's view radius is dropped silently — the next
+            //    ChunkLoad to that area will carry the new bytes.
+            BroadcastPendingBlockChanges();
+
             for (int i = _clients.Count - 1; i >= 0; i--)
             {
                 if (_clients[i].Session.IsDead)
@@ -175,12 +191,13 @@ namespace VStudioCraft.Server
                         break;
 
                     case PacketIds.PlayerPosLook:
-                        // Phase 2 just records the latest reported pos so
-                        // the heartbeat log can show "player at (x, y, z)".
-                        // Phase 3+ feeds this into a server-side Player
-                        // entity for chunk-window streaming and physics
-                        // validation.
-                        if (client.Phase == ClientPhase.InGame)
+                        // Phase 3 — record the reported position so the
+                        // chunk-window-streaming pass in AdvanceState can
+                        // see when the player has moved into a new chunk
+                        // and ship the deltas. Phase 4 will validate the
+                        // position against last-tick + max walk speed
+                        // and snap with PlayerPosLookCorrect on outliers.
+                        if (client.Phase != ClientPhase.AwaitingLogin)
                         {
                             client.LastReportedX = pkt.PlayerPosLook.X;
                             client.LastReportedY = pkt.PlayerPosLook.Y;
@@ -189,6 +206,14 @@ namespace VStudioCraft.Server
                             client.LastReportedPitch = pkt.PlayerPosLook.Pitch;
                             client.HasReportedPos = true;
                         }
+                        break;
+
+                    case PacketIds.PlayerDigStart:
+                        HandleDig(client, pkt.PlayerDig);
+                        break;
+
+                    case PacketIds.PlayerPlace:
+                        HandlePlace(client, pkt.PlayerPlace);
                         break;
 
                     case PacketIds.Disconnect:
@@ -295,9 +320,27 @@ namespace VStudioCraft.Server
 
         private void AdvanceState(ServerClient client)
         {
-            // Send pending chunks (ChunksPerTick max) once login completes.
-            // First send transitions LoggingIn -> InGame so subsequent
-            // PlayerPosLook packets count.
+            // Phase 3 — slide the per-client chunk window when the
+            // player crosses chunk boundaries. Computes the new desired
+            // window, queues fresh chunks for streaming, and emits
+            // ChunkUnload for chunks that scrolled off the back. Runs
+            // before the per-tick send-budget so a player walking fast
+            // never has the queue empty out before recompute.
+            if (client.Phase == ClientPhase.InGame && client.HasReportedPos)
+            {
+                int curCx = (int)Math.Floor(client.LastReportedX / Chunk.SizeX);
+                int curCz = (int)Math.Floor(client.LastReportedZ / Chunk.SizeZ);
+                if (curCx != client.WindowCx || curCz != client.WindowCz)
+                {
+                    SlideChunkWindow(client, curCx, curCz);
+                    client.WindowCx = curCx;
+                    client.WindowCz = curCz;
+                }
+            }
+
+            // Send pending chunks (ChunksPerTick max). On login, this
+            // drains the spawn-window burst queued by HandleLogin; in
+            // steady state, this drains whatever SlideChunkWindow added.
             int sent = 0;
             while (sent < ChunksPerTick && client.PendingChunkSends.Count > 0)
             {
@@ -309,6 +352,11 @@ namespace VStudioCraft.Server
             if (client.Phase == ClientPhase.LoggingIn && client.PendingChunkSends.Count == 0)
             {
                 client.Phase = ClientPhase.InGame;
+                // Initialize the window cursor at the spawn so the first
+                // PlayerPosLook in the same chunk doesn't trip a useless
+                // SlideChunkWindow recompute.
+                client.WindowCx = client.SpawnX >> 4;
+                client.WindowCz = client.SpawnZ >> 4;
                 Console.WriteLine($"[server] {client.Label} fully streamed (entered InGame)");
             }
 
@@ -320,6 +368,175 @@ namespace VStudioCraft.Server
                 client.Session.Send(PacketIds.KeepAlive);
                 client.LastKeepAliveSent = DateTime.UtcNow;
             }
+        }
+
+        // Compute the new desired view-radius window around (newCx, newCz),
+        // diff against the client's current TrackedChunks set, queue fresh
+        // chunks for streaming, and emit ChunkUnload for chunks that
+        // scrolled off the back.
+        //
+        // We don't care about ordering on add (the spawn-window spiral is
+        // only relevant on first join, when the camera has nothing to
+        // render); steady-state add order has no visual effect because
+        // the meshes are already drawn for the cells we're keeping.
+        private void SlideChunkWindow(ServerClient client, int newCx, int newCz)
+        {
+            // Build the new desired set first so we can diff cleanly
+            // without N^2 scanning. Sized for the typical 13×13 = 169.
+            var desired = new HashSet<(int, int)>();
+            for (int dz = -ServerViewRadius; dz <= ServerViewRadius; dz++)
+            for (int dx = -ServerViewRadius; dx <= ServerViewRadius; dx++)
+                desired.Add((newCx + dx, newCz + dz));
+
+            // Unload anything we used to track but don't anymore. Iterate
+            // a copy because we're mutating TrackedChunks inside the loop.
+            foreach (var key in new List<(int, int)>(client.TrackedChunks))
+            {
+                if (desired.Contains(key)) continue;
+                client.TrackedChunks.Remove(key);
+                client.Session.Send(PacketIds.ChunkUnload, w => new ChunkUnloadPacket
+                {
+                    ChunkX = key.Item1,
+                    ChunkZ = key.Item2,
+                }.Write(w));
+            }
+
+            // Queue fresh chunks. Skip cells already pending (queued by
+            // login or a previous slide that hasn't drained yet) and
+            // already tracked (we already shipped these).
+            var alreadyPending = new HashSet<(int, int)>(client.PendingChunkSends);
+            foreach (var key in desired)
+            {
+                if (client.TrackedChunks.Contains(key)) continue;
+                if (alreadyPending.Contains(key)) continue;
+                client.PendingChunkSends.Enqueue(key);
+            }
+        }
+
+        // ---- intent handlers --------------------------------------------
+
+        // Apply a creative-mode instant-break dig. Phase 5 will gate the
+        // "finish" status on a server-side break-progress timer for
+        // survival mode; for Phase 3 every dig is treated as instant.
+        private void HandleDig(ServerClient client, PlayerDigPacket pkt)
+        {
+            // Accept dig/place during LoggingIn too — the player has the
+            // spawn chunk by then and can already see what they're trying
+            // to break, even if the chunk-burst tail is still streaming.
+            // Only reject before login completes (AwaitingLogin) when we
+            // don't yet have an EntityId and no inventory state.
+            if (client.Phase == ClientPhase.AwaitingLogin) return;
+
+            // Status 1 (cancel) is a no-op — we don't track per-player
+            // dig progress yet, so cancelling has nothing to undo. Status
+            // 0 (start) and 2 (finish) both currently apply the break:
+            // creative-style instant break.
+            if (pkt.Status == 1) return;
+
+            if (!IsWithinReach(client, pkt.X, pkt.Y, pkt.Z))
+            {
+                // Reject silently; client will desync visually on this
+                // cell until the next chunk re-stream. Phase 4 adds a
+                // per-cell BlockChange "snap-back" that explicitly tells
+                // the client "no, that block is still here".
+                return;
+            }
+
+            // World.SetBlock(record:true) appends to _pendingBlockChanges
+            // which the broadcast pass at the end of the tick drains.
+            _world.SetBlock(pkt.X, pkt.Y, pkt.Z, BlockType.Air, record: true);
+        }
+
+        private void HandlePlace(ServerClient client, PlayerPlacePacket pkt)
+        {
+            if (client.Phase == ClientPhase.AwaitingLogin) return;
+
+            // Translate (clicked-cell, face) -> (target-cell) — the
+            // adjacent empty cell we actually place into.
+            int tx = pkt.X, ty = pkt.Y, tz = pkt.Z;
+            switch (pkt.Face)
+            {
+                case 0: ty -= 1; break; // -Y
+                case 1: ty += 1; break; // +Y
+                case 2: tz -= 1; break; // -Z
+                case 3: tz += 1; break; // +Z
+                case 4: tx -= 1; break; // -X
+                case 5: tx += 1; break; // +X
+                default: return;        // bogus face -> reject
+            }
+
+            if (!IsWithinReach(client, tx, ty, tz)) return;
+            if (ty < 0 || ty >= Chunk.SizeY) return;
+
+            // Only place if the target cell is currently air. The client
+            // raycast already filters this, but a hostile or out-of-sync
+            // client could send a place onto a solid cell — ignore.
+            int cx = tx >> 4, cz = tz >> 4;
+            int lx = ((tx % Chunk.SizeX) + Chunk.SizeX) % Chunk.SizeX;
+            int lz = ((tz % Chunk.SizeZ) + Chunk.SizeZ) % Chunk.SizeZ;
+            var chunk = _world.GetChunk(cx, cz);
+            if (chunk == null) return;
+            if (chunk.Get(lx, ty, lz) != BlockType.Air) return;
+
+            // Trust the client-supplied block type for Phase 3 — Phase 6
+            // cross-checks against the server's authoritative inventory.
+            var t = (BlockType)pkt.BlockType;
+            // Don't accept Air-as-place (would be a no-op anyway, but
+            // explicit) or non-block items like tools / food. A simple
+            // gate: only types whose enum value is in the placeable
+            // range. The full validation table can land alongside the
+            // inventory work.
+            if (t == BlockType.Air) return;
+
+            _world.SetBlock(tx, ty, tz, t, record: true);
+        }
+
+        // Cheap server-side reach check. Real Alpha allows ~5 blocks
+        // (Minecraft.MAX_REACH_DISTANCE = 5.0). We use 6.0 as a tolerance
+        // bump so a high-ping client whose camera was slightly past 5
+        // when they clicked doesn't get rejected. Replaceable with a
+        // real raycast in Phase 5 once survival timing matters more.
+        private bool IsWithinReach(ServerClient client, int wx, int wy, int wz)
+        {
+            if (!client.HasReportedPos) return false;
+            const double maxReach = 6.0;
+            double dx = (wx + 0.5) - client.LastReportedX;
+            double dy = (wy + 0.5) - (client.LastReportedY + 1.6); // eye height
+            double dz = (wz + 0.5) - client.LastReportedZ;
+            return dx * dx + dy * dy + dz * dz <= maxReach * maxReach;
+        }
+
+        // ---- broadcast --------------------------------------------------
+
+        private void BroadcastPendingBlockChanges()
+        {
+            var changes = _world.PendingBlockChanges;
+            if (changes.Count == 0) return;
+
+            for (int i = 0; i < changes.Count; i++)
+            {
+                var rec = changes[i];
+                int rcx = rec.X >> 4;
+                int rcz = rec.Z >> 4;
+                for (int c = 0; c < _clients.Count; c++)
+                {
+                    var client = _clients[c];
+                    // LoggingIn clients can already have shipped chunks
+                    // and made edits — they need the BlockChange too.
+                    // Only AwaitingLogin (pre-handshake) is excluded.
+                    if (client.Phase == ClientPhase.AwaitingLogin) continue;
+                    if (!client.TrackedChunks.Contains((rcx, rcz))) continue;
+                    client.Session.Send(PacketIds.BlockChange, w => new BlockChangePacket
+                    {
+                        X = rec.X,
+                        Y = rec.Y,
+                        Z = rec.Z,
+                        BlockType = (byte)rec.NewType,
+                    }.Write(w));
+                }
+            }
+
+            _world.ClearPendingBlockChanges();
         }
 
         private void SendChunk(ServerClient client, int cx, int cz)
@@ -360,6 +577,11 @@ namespace VStudioCraft.Server
                     CompressedBlocks = compressed,
                 }.Write(w);
             });
+
+            // Track that this client now has the chunk so future
+            // BlockChange records inside it actually ship and so
+            // SlideChunkWindow knows to ChunkUnload it on scroll-off.
+            client.TrackedChunks.Add((cx, cz));
         }
 
         // Accept loop runs on its own thread. AcceptTcpClient blocks
@@ -420,6 +642,22 @@ namespace VStudioCraft.Server
 
         public int SpawnX, SpawnY, SpawnZ;
         public Queue<(int cx, int cz)> PendingChunkSends = new Queue<(int, int)>();
+
+        // Phase 3 — what chunks does this client currently believe it
+        // has loaded? Populated as SendChunk ships each one, drained as
+        // SlideChunkWindow ships ChunkUnload. Used by
+        // BroadcastPendingBlockChanges to filter "is this edit in their
+        // view?" and by SlideChunkWindow itself to compute the diff.
+        public HashSet<(int cx, int cz)> TrackedChunks = new HashSet<(int, int)>();
+
+        // Last chunk coords we computed a window around. Compared each
+        // tick against the player's current chunk; differing values
+        // trigger SlideChunkWindow. Initialised to a sentinel that
+        // can't match a real spawn so the first PlayerPosLook always
+        // forces a recompute (useful if the client teleports before
+        // login completes, etc).
+        public int WindowCx = int.MinValue;
+        public int WindowCz = int.MinValue;
 
         public DateTime LastKeepAliveSent = DateTime.UtcNow;
         public DateTime LastKeepAliveFromPeer = DateTime.UtcNow;

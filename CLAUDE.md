@@ -59,7 +59,7 @@ defaults to 25566 (one above Notch's 25565); username defaults to
 - [x] **Phase 2a** — Codec + 6 packets (KeepAlive, LoginRequest/Response, Disconnect, PlayerPosLook, ChunkLoad)
 - [x] **Phase 2b** — TcpListener + NetSession + login handshake + chunk burst
 - [x] **Phase 2c** — Client-side NetClient + GameRenderer net-driven mode
-- [ ] **Phase 3** — Funnel block mutations through `World.SetBlock`; dig/place/use intent packets; `BlockChange` broadcast
+- [x] **Phase 3** — Funnel block mutations through `World.SetBlock`; dig/place intent packets; `BlockChange` broadcast; per-player chunk-window slide + `ChunkUnload`
 - [ ] **Phase 4** — Entity replication (spawn/despawn/move/look) + remote-player render with 100 ms render-behind interp
 - [ ] **Phase 5** — Mob/drop/projectile replication
 - [ ] **Phase 6** — Inventory click protocol + server-side recipes + tile-entity sync
@@ -95,31 +95,44 @@ time is one-shot, join lag affects every player.
 **When to do it**: Phase 3 (touching server-side world streaming anyway)
 or as a small PR before Phase 4. Not blocking.
 
-### KI-2 — Server doesn't simulate the player yet
+### KI-2 — Server-side player physics validation still missing (Phase 4)
 
-**Symptom**: Client sends `PlayerPosLook` 20 times per second; server
-records "last reported pos" for telemetry but doesn't run physics, doesn't
-follow the player with chunk-window streaming, doesn't detect
-collisions/falls/damage.
+**Symptom (Phase 2)**: Server records last-reported position but doesn't
+follow with chunk window or validate movement.
 
-**Cause**: Phase 2 scope. `ServerClient` has `LastReportedX/Y/Z` fields
-but no actual `Player` entity in `World.Players`.
+**Phase 3 update**: chunk-window streaming now follows the reported
+position (`SlideChunkWindow` in ServerHub). The server sends `ChunkLoad`
+for new chunks and `ChunkUnload` for chunks that scrolled off the back.
 
-**Fix**: Phase 3 introduces a server-side `Player` entity per
-`ServerClient`. Position is updated from inbound `PlayerPosLook`; chunk
-window slides per-player; broadcasts to other clients (Phase 4).
+**Still missing**: actual physics validation. Server trusts the client's
+self-reported `LastReportedX/Y/Z` for reach checks (with a 6-block
+tolerance). A trivially modified client could send positions implying
+flight or noclip and the server would accept all of it.
 
-### KI-3 — TryBreak/TryPlace/TryInteract are no-ops in net-driven mode
+**Fix**: Phase 4 introduces a server-side `Player` entity per
+`ServerClient` with the same AABB-vs-block integrator the standalone
+uses (`Entity.IntegrateMotion`). Inbound `PlayerPosLook` is checked
+against last-tick + max walk speed (~5 m/s) + jump height; outliers
+get snapped back via `PlayerPosLookCorrect`.
 
-**Symptom**: Connect to a server, click any block — nothing happens.
+### KI-3 — TryInteract still a no-op in net-driven mode (Phase 5)
 
-**Cause**: Phase 2c stub. The handlers `return false` early when
-`_netClient != null` so the client doesn't desync by mutating local
-world state behind the server's back.
+**Symptom**: Connect to a server, right-click a door / crafting table /
+chest / furnace — nothing happens. Block break and block place both
+work as of Phase 3.
 
-**Fix**: Phase 3 turns each into an outbound intent packet
-(`PlayerDigStart`, `PlayerPlace`, `PlayerUseItem`); server applies the
-mutation, broadcasts `BlockChange`, client applies via inbound dispatch.
+**Cause**: TryInteract handles many distinct intents (door toggle, snowball
+throw, bucket use, fishing rod cast, chest/furnace/crafting open). Each
+needs its own server-side handler + per-block intent packet variant.
+Folded into Phase 5 (mob/projectile replication) and Phase 6 (inventory
+/ tile entity sync) where the natural pairing lives.
+
+**Fix**: Phase 5 adds `PlayerUseItem` (snowball, egg, bucket). Phase 6
+adds `OpenWindow` and the chest/furnace open path. Door toggle is a
+small extra packet variant we'll fit in alongside.
+
+(Phase 3 update — 2026-04-28 — break/place no longer no-ops; they ship
+PlayerDigStart and PlayerPlace and roundtrip a BlockChange.)
 
 ### KI-4 — No reconnect / error UX on broken socket
 

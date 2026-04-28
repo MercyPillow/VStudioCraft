@@ -133,6 +133,151 @@ namespace VStudioCraft.Net
         };
     }
 
+    // 0x32 — server→client single-block change. Sent when any cell in the
+    // world flips type. The server batches these inside a tick (one
+    // packet per dirtied cell at the end of the tick) and only sends to
+    // clients whose tracked-chunks set contains the cell's chunk —
+    // a client that hasn't been streamed (cx, cz) yet doesn't need to
+    // know about edits there. Phase 3+ uses this for player-driven dig/
+    // place; Phase 5+ also uses it for fluid spread, sugar-cane growth,
+    // and door toggle.
+    //
+    // Coordinates are absolute world coords. The cell's chunk is
+    // computed as (X >> 4, Z >> 4) on receive, mirroring World.SetBlock.
+    // Block type is a byte (matches BlockType enum width) — meta is
+    // separate from type and not yet on this packet because Phase 3
+    // doesn't carry meta-bearing edits (door state, wheat stage). When
+    // those arrive the packet will gain a 1-byte meta field; bumping
+    // ProtocolVersion at that point gates old clients out cleanly.
+    internal struct BlockChangePacket
+    {
+        public int X;
+        public int Y;
+        public int Z;
+        public byte BlockType;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(X);
+            // Y is < 128 always — could pack to byte; using int keeps
+            // the packet shape symmetrical with X/Z and trivially
+            // future-proof if vertical world size ever grows.
+            w.WriteInt(Y);
+            w.WriteInt(Z);
+            w.WriteByte(BlockType);
+        }
+
+        public static BlockChangePacket Read(PacketReader r) => new BlockChangePacket
+        {
+            X = r.ReadInt(),
+            Y = r.ReadInt(),
+            Z = r.ReadInt(),
+            BlockType = r.ReadByte(),
+        };
+    }
+
+    // 0x31 — server→client chunk drop. Sent when a player walks far
+    // enough that a previously-streamed chunk has fallen out of their
+    // view radius. The client mirrors by calling World.UnloadChunk.
+    // The server's tracked-chunks set drops the entry as it sends, so
+    // any subsequent BlockChange in that chunk won't ship.
+    internal struct ChunkUnloadPacket
+    {
+        public int ChunkX;
+        public int ChunkZ;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(ChunkX);
+            w.WriteInt(ChunkZ);
+        }
+
+        public static ChunkUnloadPacket Read(PacketReader r) => new ChunkUnloadPacket
+        {
+            ChunkX = r.ReadInt(),
+            ChunkZ = r.ReadInt(),
+        };
+    }
+
+    // 0x40 — client→server "I want to break this block".
+    //
+    // Status:
+    //   0 = start  — Phase 3+ uses this for creative-mode instant break
+    //                (server validates raycast + immediately applies SetBlock).
+    //                In survival mode (Phase 5+) the server also kicks off
+    //                the per-player break-progress timer here.
+    //   1 = cancel — player released LMB before the timer completed.
+    //   2 = finish — player held LMB long enough for the survival timer to
+    //                hit zero on the client. Server cross-checks against
+    //                its own timer and applies SetBlock if valid.
+    //
+    // Face is the block face the player was looking at when they clicked,
+    // packed as 0..5 (0=-Y, 1=+Y, 2=-Z, 3=+Z, 4=-X, 5=+X) — same indexing
+    // the client's raycast uses. Lets the server reject digs with an
+    // implausible face (player on the wrong side of the block).
+    internal struct PlayerDigPacket
+    {
+        public byte Status;    // 0=start, 1=cancel, 2=finish
+        public int X, Y, Z;
+        public byte Face;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteByte(Status);
+            w.WriteInt(X);
+            w.WriteInt(Y);
+            w.WriteInt(Z);
+            w.WriteByte(Face);
+        }
+
+        public static PlayerDigPacket Read(PacketReader r) => new PlayerDigPacket
+        {
+            Status = r.ReadByte(),
+            X = r.ReadInt(),
+            Y = r.ReadInt(),
+            Z = r.ReadInt(),
+            Face = r.ReadByte(),
+        };
+    }
+
+    // 0x42 — client→server "I want to place a block here".
+    //
+    // X/Y/Z is the cell the player CLICKED ON (the existing solid that
+    // gets the new block placed against). Face indicates which side they
+    // hit; the server places into (X+dx, Y+dy, Z+dz) where d* is the face
+    // normal. This matches Alpha's Place packet shape.
+    //
+    // BlockType is the cell-type the client believes is in their hand.
+    // Server cross-checks against the inventory it holds for this client
+    // — a desync (client's selected slot differs from server's idea)
+    // results in the place being rejected and the inventory packet that
+    // refreshes the client's slot also fires (Phase 6 for the inventory
+    // sync; Phase 3 just trusts the client value).
+    internal struct PlayerPlacePacket
+    {
+        public int X, Y, Z;
+        public byte Face;
+        public byte BlockType;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(X);
+            w.WriteInt(Y);
+            w.WriteInt(Z);
+            w.WriteByte(Face);
+            w.WriteByte(BlockType);
+        }
+
+        public static PlayerPlacePacket Read(PacketReader r) => new PlayerPlacePacket
+        {
+            X = r.ReadInt(),
+            Y = r.ReadInt(),
+            Z = r.ReadInt(),
+            Face = r.ReadByte(),
+            BlockType = r.ReadByte(),
+        };
+    }
+
     // 0x30 — server→client chunk payload. CompressedBlocks is gzipped raw
     // block bytes (the same byte[] that WorldSaveFormat.WriteChunk emits
     // before compression); the client decompresses and hands the bytes

@@ -206,6 +206,18 @@ namespace VStudioCraft.Net
                 case PacketIds.ChunkLoad:
                     return new InboundPacket { Id = id, ChunkLoad = ChunkLoadPacket.Read(_reader) };
 
+                case PacketIds.ChunkUnload:
+                    return new InboundPacket { Id = id, ChunkUnload = ChunkUnloadPacket.Read(_reader) };
+
+                case PacketIds.BlockChange:
+                    return new InboundPacket { Id = id, BlockChange = BlockChangePacket.Read(_reader) };
+
+                case PacketIds.PlayerDigStart:
+                    return new InboundPacket { Id = id, PlayerDig = PlayerDigPacket.Read(_reader) };
+
+                case PacketIds.PlayerPlace:
+                    return new InboundPacket { Id = id, PlayerPlace = PlayerPlacePacket.Read(_reader) };
+
                 default:
                     throw new InvalidDataException($"Unknown packet id 0x{id:X2}");
             }
@@ -225,5 +237,9 @@ namespace VStudioCraft.Net
         public DisconnectPacket    Disconnect;
         public PlayerPosLookPacket PlayerPosLook;
         public ChunkLoadPacket     ChunkLoad;
+        public ChunkUnloadPacket   ChunkUnload;
+        public BlockChangePacket   BlockChange;
+        public PlayerDigPacket     PlayerDig;
+        public PlayerPlacePacket   PlayerPlace;
     }
 }

@@ -153,14 +153,17 @@ namespace VStudioCraft.Server
                     }.Write(w);
                     Console.WriteLine("[selftest] sent LoginRequest");
 
-                    // Read packets until we've seen a LoginResponse and
-                    // at least one ChunkLoad — that proves the full
-                    // handshake -> stream path works.
+                    // Phase 1: login + initial chunk burst. Phase 2: send a
+                    // PlayerPosLook so the server flags us InGame, then a
+                    // PlayerPlace + PlayerDig to confirm the full intent →
+                    // broadcast → BlockChange loop end-to-end.
                     bool sawLoginResponse = false;
                     int chunksReceived = 0;
                     int totalCompressedBytes = 0;
+                    int spawnSurfaceY = -1;
+                    byte[] spawnChunkBlocks = null;
                     var deadline = DateTime.UtcNow.AddSeconds(5);
-                    while (DateTime.UtcNow < deadline && chunksReceived < 5)
+                    while (DateTime.UtcNow < deadline && chunksReceived < 25)
                     {
                         byte id = r.ReadByte();
                         switch (id)
@@ -176,23 +179,30 @@ namespace VStudioCraft.Server
                                 var cl = ChunkLoadPacket.Read(r);
                                 chunksReceived++;
                                 totalCompressedBytes += cl.CompressedBlocks.Length;
-                                // Decompress to verify the payload is well-formed.
-                                int decompressed = 0;
+                                var raw = new byte[Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ];
+                                int rd = 0;
                                 using (var ms = new MemoryStream(cl.CompressedBlocks))
                                 using (var gz = new GZipStream(ms, CompressionMode.Decompress))
                                 {
-                                    var buf = new byte[Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ];
-                                    int read;
-                                    while ((read = gz.Read(buf, 0, buf.Length)) > 0) decompressed += read;
+                                    int n;
+                                    while (rd < raw.Length && (n = gz.Read(raw, rd, raw.Length - rd)) > 0) rd += n;
                                 }
-                                if (decompressed != Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ)
+                                if (rd != raw.Length) throw new InvalidDataException($"chunk payload decompressed to {rd} bytes, expected {raw.Length}");
+                                // Cache the (0,0) chunk so we can scan a
+                                // surface column for the dig/place test.
+                                if (cl.ChunkX == 0 && cl.ChunkZ == 0)
                                 {
-                                    throw new InvalidDataException($"chunk payload decompressed to {decompressed} bytes, expected {Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ}");
+                                    spawnChunkBlocks = raw;
+                                    spawnSurfaceY = FindTopSolidY(raw, lx: 8, lz: 8);
                                 }
                                 break;
                             case PacketIds.Disconnect:
                                 var d = DisconnectPacket.Read(r);
                                 throw new IOException($"server disconnected: {d.Reason}");
+                            // Block changes & chunk unloads can race in
+                            // during the burst — drain harmlessly.
+                            case PacketIds.BlockChange: BlockChangePacket.Read(r); break;
+                            case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(r); break;
                             default:
                                 throw new InvalidDataException($"unexpected packet id 0x{id:X2}");
                         }
@@ -200,8 +210,94 @@ namespace VStudioCraft.Server
 
                     if (!sawLoginResponse) throw new InvalidDataException("never received LoginResponse");
                     if (chunksReceived == 0) throw new InvalidDataException("never received any ChunkLoad");
+                    if (spawnChunkBlocks == null) throw new InvalidDataException("never received the spawn (0,0) chunk");
+                    if (spawnSurfaceY < 0) throw new InvalidDataException($"no solid block in spawn column at lx=8, lz=8 (chunk seems empty)");
 
-                    Console.WriteLine($"[selftest] OK: login + {chunksReceived} chunks ({totalCompressedBytes} compressed bytes)");
+                    Console.WriteLine($"[selftest] login + {chunksReceived} chunks ({totalCompressedBytes} compressed bytes); surface at y={spawnSurfaceY}");
+
+                    // --- Phase 3: dig + place loopback test --------------
+                    // Position ourselves above the surface so reach checks
+                    // accept the click. World coords for chunk (0,0)
+                    // local (8,8) are world (8, _, 8).
+                    int wx = 8, wz = 8;
+                    int sy = spawnSurfaceY;
+                    w.WriteByte(PacketIds.PlayerPosLook);
+                    new PlayerPosLookPacket
+                    {
+                        X = wx + 0.5, Y = sy + 1, Z = wz + 0.5,
+                        Yaw = 0f, Pitch = 0f, OnGround = true,
+                    }.Write(w);
+
+                    // Place a Stone (BlockType=1) ON TOP of the surface
+                    // block: click cell = (wx, sy, wz), face=1 (+Y top).
+                    // Server resolves placement target = (wx, sy+1, wz).
+                    const byte StoneType = 1;
+                    w.WriteByte(PacketIds.PlayerPlace);
+                    new PlayerPlacePacket
+                    {
+                        X = wx, Y = sy, Z = wz, Face = 1, BlockType = StoneType,
+                    }.Write(w);
+
+                    // Drain packets until we see BlockChange at (wx, sy+1, wz)
+                    // with type Stone — proves the place reached the world
+                    // and the broadcast loop works.
+                    int placeTargetY = sy + 1;
+                    bool sawPlace = false;
+                    var placeDeadline = DateTime.UtcNow.AddSeconds(2);
+                    while (DateTime.UtcNow < placeDeadline && !sawPlace)
+                    {
+                        byte id2 = r.ReadByte();
+                        switch (id2)
+                        {
+                            case PacketIds.KeepAlive: break;
+                            case PacketIds.ChunkLoad: ChunkLoadPacket.Read(r); break;
+                            case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(r); break;
+                            case PacketIds.BlockChange:
+                                var bc = BlockChangePacket.Read(r);
+                                if (bc.X == wx && bc.Y == placeTargetY && bc.Z == wz && bc.BlockType == StoneType) sawPlace = true;
+                                break;
+                            case PacketIds.Disconnect:
+                                var d2 = DisconnectPacket.Read(r);
+                                throw new IOException($"server disconnected during place: {d2.Reason}");
+                            default:
+                                throw new InvalidDataException($"unexpected packet id 0x{id2:X2}");
+                        }
+                    }
+                    if (!sawPlace) throw new InvalidDataException($"never received BlockChange confirming place at ({wx}, {placeTargetY}, {wz})");
+                    Console.WriteLine($"[selftest] place OK: stone at ({wx}, {placeTargetY}, {wz})");
+
+                    // Now dig the cell we just placed. Server should
+                    // SetBlock(Air) and broadcast BlockChange with type=0.
+                    w.WriteByte(PacketIds.PlayerDigStart);
+                    new PlayerDigPacket
+                    {
+                        Status = 0, X = wx, Y = placeTargetY, Z = wz, Face = 1,
+                    }.Write(w);
+                    bool sawDig = false;
+                    var digDeadline = DateTime.UtcNow.AddSeconds(2);
+                    while (DateTime.UtcNow < digDeadline && !sawDig)
+                    {
+                        byte id3 = r.ReadByte();
+                        switch (id3)
+                        {
+                            case PacketIds.KeepAlive: break;
+                            case PacketIds.ChunkLoad: ChunkLoadPacket.Read(r); break;
+                            case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(r); break;
+                            case PacketIds.BlockChange:
+                                var bc2 = BlockChangePacket.Read(r);
+                                if (bc2.X == wx && bc2.Y == placeTargetY && bc2.Z == wz && bc2.BlockType == 0) sawDig = true;
+                                break;
+                            case PacketIds.Disconnect:
+                                var d3 = DisconnectPacket.Read(r);
+                                throw new IOException($"server disconnected during dig: {d3.Reason}");
+                            default:
+                                throw new InvalidDataException($"unexpected packet id 0x{id3:X2}");
+                        }
+                    }
+                    if (!sawDig) throw new InvalidDataException($"never received BlockChange confirming dig at ({wx}, {placeTargetY}, {wz})");
+                    Console.WriteLine($"[selftest] dig OK: air at ({wx}, {placeTargetY}, {wz})");
+
+                    Console.WriteLine($"[selftest] OK: login + chunks + place + dig roundtrip");
 
                     // Send orderly Disconnect so the server logs a clean exit.
                     w.WriteByte(PacketIds.Disconnect);
@@ -217,6 +313,20 @@ namespace VStudioCraft.Server
             {
                 _stopRequested = true;
             }
+        }
+
+        // Find topmost solid (non-air) block in a column inside a raw
+        // chunk byte buffer. Indexing matches Chunk.Index: (lx*SizeY+y)*SizeZ+lz.
+        // Returns -1 if the entire column is air (shouldn't happen for
+        // any normal terrain, but guards against an empty world.)
+        private static int FindTopSolidY(byte[] raw, int lx, int lz)
+        {
+            for (int y = Chunk.SizeY - 1; y >= 0; y--)
+            {
+                int idx = (lx * Chunk.SizeY + y) * Chunk.SizeZ + lz;
+                if (raw[idx] != 0) return y; // BlockType.Air == 0
+            }
+            return -1;
         }
 
         // --port=N or --port N. Falls back to ServerHub.DefaultPort.
