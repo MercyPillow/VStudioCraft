@@ -114,29 +114,6 @@ defaults to 25566 (one above Notch's 25565); username defaults to
 
 ## Known issues / follow-ups
 
-### KI-2 — Server-side player physics validation still missing (now Phase 5+)
-
-**Symptom**: Server trusts client-reported position. A modified client
-could send positions implying flight, noclip, or arbitrary teleportation
-and the server would accept all of it (within the 6-block reach
-tolerance for dig/place but otherwise unrestricted).
-
-**Phase 3 update**: chunk-window streaming follows reported position.
-
-**Phase 4 update**: entity replication now broadcasts the trusted
-position to other clients. Position is still purely client-claimed —
-only chunk-window streaming and reach-checked dig/place gate on it.
-
-**Still missing**: actual rate-check / AABB physics validation against
-last-tick. The MP demo works fine for cooperative play (the originally
-chosen design point); this is an anti-cheat polish item, not a blocker.
-
-**Fix (deferred to Phase 5+)**: introduce a server-side `Player`
-entity per `ServerClient` with the same AABB-vs-block integrator the
-standalone uses (`Entity.IntegrateMotion`). Compare inbound positions
-against `last + maxStep`, snap back via a new `PlayerPosLookCorrect`
-packet (0x11, already reserved in PacketIds) on outliers.
-
 ### KI-3 — TryInteract still a no-op in net-driven mode (Phase 5d/6)
 
 **Symptom**: Connect to a server, right-click a door / crafting table /
@@ -165,6 +142,33 @@ when we add a proper "Connect to Server" dialog in Phase 7+.
 
 **Fix**: Document. Eventually: an IP-or-hostname text field with format
 hints in the connect dialog.
+
+## Backlog
+
+Things that are known to be missing/imperfect but explicitly NOT issues
+for the current cooperative-LAN design point. Park here so they don't
+clutter the live KI list, but stay findable if the design evolves.
+
+### Server-side player physics validation (anti-cheat)
+
+Server trusts client-reported position. A modified client could send
+positions implying flight, noclip, or arbitrary teleportation and the
+server would accept all of it (within the 6-block reach tolerance for
+dig/place but otherwise unrestricted).
+
+This is an anti-cheat hardening item. The MP demo works fine for
+cooperative LAN play (the originally chosen design point) — there's
+no incentive to cheat against your friends, and trusted offline
+clients on a trusted LAN don't need server-side validation.
+
+**Promote to live KI when**: opening to internet-facing hosting, or
+running a server where players might be motivated to cheat.
+
+**Implementation sketch (when revived)**: server-side `Player`
+entity per `ServerClient` with the same AABB-vs-block integrator the
+standalone uses (`Entity.IntegrateMotion`). Compare inbound positions
+against `last + maxStep`, snap back via the already-reserved
+`PlayerPosLookCorrect` packet (0x11) on outliers.
 
 ## Feature: Open to LAN
 
