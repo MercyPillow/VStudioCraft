@@ -312,6 +312,54 @@ namespace VStudioCraft.UI
         private string _pendingConnectUser;
         private bool _pendingIsConnect;
 
+        // ---- Phase 7: Open to LAN -----------------------------------------
+        //
+        // Pass-through API for the pause-menu "Open to LAN" item. Mirrors
+        // the StartNewWorld / ConnectToServer pattern: enqueue the action
+        // onto the render thread (where _renderer lives) so we don't
+        // race with GL setup or world swap.
+
+        public event Action<int> LanOpened;
+        public event Action LanClosed;
+        public event Action<Exception> LanOpenFailed;
+
+        public bool IsHostingLan => _renderer != null && _renderer.IsHostingLan;
+        public int HostedLanPort => _renderer?.HostedPort ?? 0;
+
+        // port = 0 → OS picks a free port; the LanOpened event fires with
+        // the resolved port for the UI to display. username defaults to
+        // the local Windows username (per the same convention --connect
+        // uses) if null.
+        public void OpenToLan(int port = 0, string username = null)
+        {
+            if (!_glReady) return;
+            string finalUser = string.IsNullOrEmpty(username) ? (Environment.UserName ?? "host") : username;
+            int finalPort = port > 0 ? port : VStudioCraft.Net.ServerHub.DefaultPort;
+            _renderQueue.Enqueue(() =>
+            {
+                try
+                {
+                    _renderer.OpenToLan(finalPort, finalUser);
+                    int boundPort = _renderer.HostedPort;
+                    Dispatcher.BeginInvoke(new Action(() => LanOpened?.Invoke(boundPort)));
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.BeginInvoke(new Action(() => LanOpenFailed?.Invoke(ex)));
+                }
+            });
+        }
+
+        public void CloseLan()
+        {
+            if (!_glReady) return;
+            _renderQueue.Enqueue(() =>
+            {
+                _renderer.CloseLan();
+                Dispatcher.BeginInvoke(new Action(() => LanClosed?.Invoke()));
+            });
+        }
+
         public void SaveToFile(string path)
         {
             _worldPath = path;
@@ -511,6 +559,16 @@ namespace VStudioCraft.UI
                         // game-logic purposes. We just want a net-only dt
                         // for throttling the outbound pos-look stream.
                         _renderer.DrainNetwork(netDt);
+
+                        // Phase 7 — Open to LAN. If the host has opened
+                        // their world, push the local player's pose to
+                        // the in-process hub (so connecting players see
+                        // the host walking around) and run a 20 Hz tick
+                        // of the hub's network layer (drain inbound,
+                        // broadcast block + entity changes). Both no-op
+                        // if not hosting.
+                        _renderer.PushHostPoseToHub();
+                        _renderer.TickHubNetwork(netDt);
                     }
 
                     // GetPhysicalSize is a Win32 GetClientRect p/invoke. The

@@ -621,16 +621,11 @@ namespace VStudioCraft.Server
         // the client process.
         private static void RunTickLoop(World world, ServerHub hub)
         {
-            // Anchor for mob-spawn / fluid simulation. Today there's no
-            // player connected, so we tick with the world origin as the
-            // "interest point". When Phase 2 adds player sessions, this
-            // becomes a per-player loop and the spawn / fluid passes use
-            // the union of all players' positions. SkySubtract=0 (full
-            // daylight) for the same reason — without a real day/night
-            // driver, hostile mobs would never spawn. Phase 5 plugs the
-            // real value in.
-            var anchor = OpenTK.Vector3.Zero;
-            const int skySubtract = 0;
+            // Spawn anchor + skySubtract for mob-spawn passes are now
+            // hidden inside ServerHub.SimulateTick which uses the world
+            // origin as the interest point. Per-player anchors are an
+            // open follow-up tracked alongside KI-2 (server-side player
+            // physics validation).
 
             long tickCount = 0;
             var startedAt = Stopwatch.StartNew();
@@ -651,20 +646,14 @@ namespace VStudioCraft.Server
                 // --- network: drain inbound, advance per-client state -------
                 // Runs before the world sim so client intents (chunk requests,
                 // PlayerPosLook) can influence this tick's simulation rather
-                // than waiting for the next one. Phase 3+ adds dig / place
-                // packets, which absolutely must land before the world tick
-                // applies their effects.
+                // than waiting for the next one.
                 hub.Tick();
 
                 // --- simulation ---------------------------------------------
-                // These three are the world-level passes that don't require a
-                // player today. Everything else (entity physics, pickups,
-                // damage, projectiles) currently lives in GameHostControl.
-                // RenderLoop and will move into a unified World.Tick in
-                // Phase 3.
-                FluidTick.Tick(world);
-                world.TickRandomCrops((float)TickSeconds);
-                world.TickMobSpawns((float)TickSeconds, anchor, skySubtract);
+                // Dedicated server drives world simulation here. Open-to-LAN
+                // hosts (`GameRenderer.OpenToLan`) skip this — their RenderLoop
+                // already runs the equivalent SP simulation passes.
+                hub.SimulateTick((float)TickSeconds);
 
                 tickCount++;
 

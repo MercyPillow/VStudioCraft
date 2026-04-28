@@ -164,6 +164,7 @@
     <Compile Include="Net\PacketReader.cs" />
     <Compile Include="Net\Packets.cs" />
     <Compile Include="Net\PacketWriter.cs" />
+    <Compile Include="Net\ServerHub.cs" />
   </ItemGroup>
   <ItemGroup>
     <Page Include="UI\GameHostControl.xaml">

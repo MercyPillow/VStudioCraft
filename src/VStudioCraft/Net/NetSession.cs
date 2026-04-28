@@ -58,6 +58,18 @@ namespace VStudioCraft.Net
         public string DeadReason => _deadReason;
         public string RemoteEndpoint { get; }
 
+        // Phase 7 / Open-to-LAN — a loopback session is a stand-in for
+        // the host themselves on an open-to-LAN server. The host has no
+        // socket; their player position is updated each frame via
+        // ServerHub.UpdateLocalHostPose. Send becomes a no-op (we don't
+        // ship packets to ourselves) but the session is otherwise
+        // a regular ServerClient.Session — broadcast loops can include
+        // the host as a target so OTHER players see the host's entity
+        // updates flow through the same EntitySpawn / RelMove pipeline.
+        // Viewer-side loops in ServerHub explicitly skip IsLoopback so
+        // we don't waste cycles formatting packets we'll throw away.
+        public bool IsLoopback { get; }
+
         public NetSession(TcpClient tcp)
         {
             _tcp = tcp ?? throw new ArgumentNullException(nameof(tcp));
@@ -73,8 +85,27 @@ namespace VStudioCraft.Net
             catch { RemoteEndpoint = "<unknown>"; }
         }
 
+        // Loopback constructor — for the open-to-LAN host's phantom
+        // ServerClient. _tcp / _stream / _reader / _writer all stay null;
+        // Send and the read loop short-circuit on IsLoopback before
+        // touching them.
+        private NetSession(string label)
+        {
+            IsLoopback = true;
+            RemoteEndpoint = "<loopback>";
+            Label = label;
+        }
+
+        public static NetSession CreateLoopback(string label = "host")
+            => new NetSession(label);
+
         public void Start()
         {
+            // Loopback sessions have no socket and no read thread —
+            // packets are pushed in directly by the host's RenderLoop
+            // via ServerHub helpers, not parsed off a stream.
+            if (IsLoopback) return;
+
             _readThread = new Thread(ReadLoop)
             {
                 IsBackground = true,
@@ -96,6 +127,12 @@ namespace VStudioCraft.Net
         public void Send(byte packetId, Action<PacketWriter> body)
         {
             if (_dead) return;
+            // Loopback host: drop the send. We don't ship packets to
+            // ourselves; the host's local sim already has the state
+            // these packets would convey. ServerHub's viewer-side
+            // broadcast loops also short-circuit on IsLoopback so this
+            // is a defensive guard rather than the primary path.
+            if (IsLoopback) return;
             byte[] frame;
             using (var ms = new MemoryStream(64))
             {
@@ -130,7 +167,12 @@ namespace VStudioCraft.Net
         public void Disconnect(string reason)
         {
             MarkDead(reason);
-            try { _tcp.Close(); } catch { /* ignored */ }
+            // Loopback session has no socket to close; null-guard so
+            // CloseLan doesn't NRE.
+            if (_tcp != null)
+            {
+                try { _tcp.Close(); } catch { /* ignored */ }
+            }
         }
 
         private void MarkDead(string reason)

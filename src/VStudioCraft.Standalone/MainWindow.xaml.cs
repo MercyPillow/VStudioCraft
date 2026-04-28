@@ -102,6 +102,26 @@ namespace VStudioCraft.Standalone
                         "Bad command line", MessageBoxButton.OK, MessageBoxImage.Warning);
                     break;
                 }
+                // Phase 7 — `--openlan[=PORT]` starts a fresh SP world and
+                // immediately opens it to LAN on the chosen port (default
+                // 25566). Useful for dev / CI to spin up a host process
+                // without clicking through the title screen + pause menu.
+                if (a == "--openlan" || a.StartsWith("--openlan=", StringComparison.Ordinal))
+                {
+                    int lanPort = VStudioCraft.Net.ServerHub.DefaultPort;
+                    if (a.StartsWith("--openlan=", StringComparison.Ordinal))
+                    {
+                        var v = a.Substring("--openlan=".Length);
+                        if (!int.TryParse(v, out lanPort)) lanPort = VStudioCraft.Net.ServerHub.DefaultPort;
+                    }
+                    Host.LanOpened   += p   => Title = $"VStudioCraft (hosting on :{p})";
+                    Host.LanOpenFailed += ex => MessageBox.Show(this,
+                        $"OpenToLan failed: {ex.Message}", "LAN open failed",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    Host.StartNewWorld(RandomSeed());
+                    Host.OpenToLan(lanPort, Environment.UserName);
+                    return;
+                }
             }
             // Tier 6 #47 — Default Standalone path: open the title screen
             // and let the player pick what to do. Replaces the prior

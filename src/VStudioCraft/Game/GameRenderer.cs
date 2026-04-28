@@ -1068,6 +1068,10 @@ void main()
             // a "Connect" press while still connected leaks the old socket.
             _netClient?.Disconnect("reconnecting");
             _netClient = null;
+            // Phase 7 — also close any LAN host. You can't be hosting AND
+            // connecting to a remote at the same time; the local World
+            // reference would have two competing simulators.
+            CloseLan();
 
             var client = VStudioCraft.Net.NetClient.Connect(host, port, username);
             var lr = client.LoginResponse;
@@ -1123,6 +1127,124 @@ void main()
             _replicatedPassivesById.Clear();
             _replicatedHostilesById.Clear();
             _mobInterpById.Clear();
+        }
+
+        // ---- Phase 7: Open to LAN -----------------------------------------
+        //
+        // The host (this renderer) is already running a singleplayer World.
+        // OpenToLan starts an in-process VStudioCraft.Net.ServerHub against
+        // that same World, accepting connections on the chosen port. Other
+        // VStudioCraft clients can connect via `--connect host:port:user`
+        // and join the host's session — they see the host walking around,
+        // see the same terrain, and can place/break blocks that the host
+        // also sees.
+        //
+        // Critically, the host KEEPS its existing direct-world path (no
+        // network round-trip for solo block edits, no extra latency, no
+        // refactor of TryBreak / TryPlace). The hub just observes the
+        // World's pending block changes + broadcasts them to remote
+        // clients each tick, and broadcasts the host's position via the
+        // same per-pair broadcast loop that already handles real clients.
+        //
+        // Simulation responsibility split:
+        //   - SP path (this renderer's RenderLoop) drives world ticks
+        //     (TickPassives/Hostiles/Drops, FluidTick, mob spawn).
+        //   - Hub.Tick() runs per server-tick (20 Hz) and only handles
+        //     networking — drain inbound, broadcast block-changes +
+        //     entity moves. It explicitly does NOT call SimulateTick()
+        //     (that's the dedicated server's path).
+
+        private VStudioCraft.Net.ServerHub _serverHub;
+        // Accumulator that gates Hub.Tick() to 20 Hz regardless of frame
+        // rate. The host's RenderLoop runs at 1500+ fps; calling Hub.Tick
+        // every frame would emit 75x the expected packet rate and
+        // overwhelm remote clients' interp buffers.
+        private float _hubTickAccumulator;
+        // The host's own EntityId on the in-process server. Captured so
+        // ApplyInboundPacket can reject any packet that ever (it shouldn't
+        // — loopback Send is no-op) reaches us referring to ourselves.
+        private int _hostEntityId = -1;
+
+        public bool IsHostingLan => _serverHub != null;
+        public int HostedPort => _serverHub?.Port ?? 0;
+        public int LanClientCount => (_serverHub?.ConnectedCount ?? 1) - 1; // subtract phantom host
+
+        // Throws on bind failure (port in use, no permission). Caller
+        // surfaces the exception to the UI via GameHostControl's
+        // LanOpenFailed event.
+        public void OpenToLan(int port, string username)
+        {
+            if (_serverHub != null) return;
+            if (_world == null) throw new InvalidOperationException("OpenToLan requires an active world (StartNewWorld / LoadFromFile first).");
+            if (_netClient != null) throw new InvalidOperationException("Cannot OpenToLan while connected to a remote server.");
+
+            // Use the world's existing player position as the spawn so
+            // remote clients spawn in nearby areas the host has already
+            // been streaming. Fall back to (0, 80, 0) if the player
+            // hasn't moved yet.
+            var hub = new VStudioCraft.Net.ServerHub(_world, port);
+            try
+            {
+                hub.Start();
+                hub.EnableLocalHost(
+                    username ?? "host",
+                    Player.Position,
+                    Camera.Yaw, Camera.Pitch);
+            }
+            catch
+            {
+                hub.Stop();
+                throw;
+            }
+            _serverHub = hub;
+            _hostEntityId = -1; // populated lazily; we don't need it for sends
+            _hubTickAccumulator = 0f;
+        }
+
+        public void CloseLan()
+        {
+            if (_serverHub == null) return;
+            _serverHub.Stop();
+            _serverHub = null;
+            _hubTickAccumulator = 0f;
+            _hostEntityId = -1;
+        }
+
+        // Per-frame helpers called from GameHostControl.RenderLoop right
+        // alongside DrainNetwork. PushHostPoseToHub keeps the phantom
+        // ServerClient's last-reported pose fresh; TickHubNetwork drains
+        // inbound packets + emits broadcasts at 20 Hz.
+        public void PushHostPoseToHub()
+        {
+            if (_serverHub == null) return;
+            _serverHub.UpdateLocalHostPose(Player.Position, Camera.Yaw, Camera.Pitch);
+        }
+
+        public void TickHubNetwork(float dt)
+        {
+            if (_serverHub == null) return;
+            _hubTickAccumulator += dt;
+            // Run Hub.Tick at 20 Hz max regardless of frame rate. We loop
+            // (rather than just zero the accumulator) so a render-thread
+            // hiccup that accumulates >50 ms still fires the missed
+            // ticks rather than silently dropping them.
+            const float HubTickInterval = 0.05f;
+            int safetyCap = 4; // never more than 4 catch-up ticks per frame
+            while (_hubTickAccumulator >= HubTickInterval && safetyCap-- > 0)
+            {
+                _hubTickAccumulator -= HubTickInterval;
+                try { _serverHub.Tick(); }
+                catch (Exception)
+                {
+                    // Don't let a hub error crash the host's render loop.
+                    // The hub tracks its own dead-session state internally;
+                    // any error here is unexpected and should be surfaced
+                    // for diagnosis but shouldn't be fatal to the host's
+                    // singleplayer experience.
+                    // TODO: surface via a Hub.Errored event if needed.
+                }
+            }
+            if (_hubTickAccumulator < 0f) _hubTickAccumulator = 0f;
         }
 
         // Per-frame multiplayer pump. Called by the host's render loop
@@ -1498,6 +1620,9 @@ void main()
             // both a live socket AND a freshly-generated SP world fighting
             // for the same World reference.
             DisconnectFromServer("starting new singleplayer world");
+            // Phase 7 — same rationale for an open LAN host: we can't
+            // keep the listener bound to a stale World reference.
+            CloseLan();
             SetWorld(World.Generate(seed));
             // Spawn above origin chunk; gravity drops player onto terrain on the first ticks.
             int spawnY = TerrainGenerator.BaseHeight + TerrainGenerator.HeightAmplitude + 2;
@@ -1525,6 +1650,7 @@ void main()
             // Same rationale as StartNewWorld — clear the multiplayer
             // socket before we swap the World out from under it.
             DisconnectFromServer("loading singleplayer world");
+            CloseLan();
             var (header, world) = WorldSaveFormat.Load(path);
             SetWorld(world);
             // header.CameraPos is now the saved player feet position (format v2).

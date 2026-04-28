@@ -6,9 +6,13 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using VStudioCraft.Game;
-using VStudioCraft.Net;
 
-namespace VStudioCraft.Server
+// Phase 7 (Open to LAN) — ServerHub moved from VStudioCraft.Server to
+// VStudioCraft.Net so the standalone client can host an in-process
+// server alongside its singleplayer World. The dedicated server's
+// `Program.cs` keeps using ServerHub via the same `using VStudioCraft.Net`
+// import; nothing else changed about its behaviour.
+namespace VStudioCraft.Net
 {
     // Top-level server orchestrator. Owns:
     //   - the simulated World
@@ -171,10 +175,15 @@ namespace VStudioCraft.Server
             _clients.Clear();
         }
 
-        // Called once per tick from Program.RunTickLoop, BEFORE the world
-        // simulation. We process inbound packets first so client-driven
-        // intents (chunk requests, position updates) reach the simulation
-        // in the same tick they arrive in, minimising round-trip latency.
+        // Called once per tick — handles networking only (drain inbound,
+        // broadcast state changes accumulated this tick). Two callers:
+        //
+        //   - Dedicated server (`Program.RunTickLoop`): pairs Tick() with
+        //     SimulateTick() to also drive world simulation each tick.
+        //   - Open-to-LAN host (`GameRenderer.TickHubNetwork`): calls
+        //     ONLY Tick(); the host's RenderLoop drives world simulation
+        //     in the SP path. Calling SimulateTick() here would double-
+        //     tick mobs / fluid / crops at frame rate.
         //
         // Order within the tick:
         //   1. Promote pending sockets (handoff from accept thread)
@@ -183,7 +192,8 @@ namespace VStudioCraft.Server
         //      records in World._pendingBlockChanges
         //   3. Advance per-client streaming state (chunks, keepalive)
         //   4. Broadcast queued BlockChange records to clients in range
-        //   5. Reap dead sessions
+        //   5. Broadcast entity updates (players + mobs)
+        //   6. Reap dead sessions
         public void Tick()
         {
             PromotePendingClients();
@@ -192,6 +202,7 @@ namespace VStudioCraft.Server
             {
                 var client = _clients[i];
                 if (client.Session.IsDead) continue;
+                if (client.Session.IsLoopback) continue; // host has no inbound socket
                 DrainInbound(client);
             }
 
@@ -199,6 +210,7 @@ namespace VStudioCraft.Server
             {
                 var client = _clients[i];
                 if (client.Session.IsDead) continue;
+                if (client.Session.IsLoopback) continue; // host doesn't need chunks shipped to itself
                 AdvanceState(client);
             }
 
@@ -210,17 +222,8 @@ namespace VStudioCraft.Server
             //    ChunkLoad to that area will carry the new bytes.
             BroadcastPendingBlockChanges();
 
-            // 5. Phase 5 — mob simulation. Server runs wander+AI directly
-            //    (clients don't, in net-driven mode). Server tick is the
-            //    fixed 50 ms step already; no per-mob accumulator needed.
-            TickPassiveMobs();
-            TickHostileMobs();
-
-            // 6. Phase 4 — per-pair player entity replication. For every
-            //    (a, b) pair of in-game clients, ensure b knows about a's
-            //    current position via the cheapest packet that conveys
-            //    the change since b's last anchor for a. Phase 5 extends
-            //    this to broadcast non-player entities (passives + hostiles).
+            // 5. Phase 4/5 — per-pair entity replication. Players + mobs.
+            //    Reads positions from World / _clients; doesn't simulate.
             BroadcastEntityUpdates();
             BroadcastMobUpdates();
             BroadcastHostileUpdates();
@@ -252,6 +255,76 @@ namespace VStudioCraft.Server
                     _clients.RemoveAt(i);
                 }
             }
+        }
+
+        // Drive the server-side world simulation passes that aren't tied
+        // to a specific client connection. ONLY called by the dedicated
+        // server (`Program.RunTickLoop`); the open-to-LAN host's
+        // RenderLoop already runs equivalent passes (`TickPassives`,
+        // `TickHostiles`, `World.TickMobSpawns`, `FluidTick.Tick`,
+        // `TickRandomCrops`) on the host's own update path, and we'd
+        // double-tick if we also ran them here.
+        public void SimulateTick(float dtSeconds)
+        {
+            FluidTick.Tick(_world);
+            _world.TickRandomCrops(dtSeconds);
+            // Mob spawn anchored on the spawn origin for now; per-player
+            // spawn anchors are an open follow-up tracked alongside KI-2.
+            _world.TickMobSpawns(dtSeconds, OpenTK.Vector3.Zero, skySubtract: 0);
+            TickPassiveMobs();
+            TickHostileMobs();
+        }
+
+        // ---- Open-to-LAN host wiring -----------------------------------
+        // The host (a real player on the same machine) doesn't have a
+        // socket. EnableLocalHost installs a phantom ServerClient with
+        // a loopback NetSession so the existing per-pair broadcast loops
+        // include the host as a TARGET (so connecting players see the
+        // host's entity moves) without wasting cycles formatting packets
+        // for the host as a VIEWER.
+
+        private ServerClient _hostClient;
+
+        public bool HasLocalHost => _hostClient != null;
+
+        public void EnableLocalHost(string username, OpenTK.Vector3 spawnPos, float yaw, float pitch)
+        {
+            if (_hostClient != null) return;
+
+            var session = NetSession.CreateLoopback(username);
+            _hostClient = new ServerClient(session)
+            {
+                EntityId = _nextEntityId++,
+                Username = username,
+                Phase = ClientPhase.InGame,
+                SpawnX = (int)Math.Floor(spawnPos.X),
+                SpawnY = (int)Math.Floor(spawnPos.Y),
+                SpawnZ = (int)Math.Floor(spawnPos.Z),
+                HasReportedPos = true,
+                LastReportedX = spawnPos.X,
+                LastReportedY = spawnPos.Y,
+                LastReportedZ = spawnPos.Z,
+                LastReportedYaw = yaw,
+                LastReportedPitch = pitch,
+                WindowCx = (int)Math.Floor(spawnPos.X / Chunk.SizeX),
+                WindowCz = (int)Math.Floor(spawnPos.Z / Chunk.SizeZ),
+            };
+            _clients.Add(_hostClient);
+            Console.WriteLine($"[lan-host] {username} hosting (eid {_hostClient.EntityId})");
+        }
+
+        // Called from the host's RenderLoop each frame. Updates the
+        // phantom ServerClient's last-reported pose so the next
+        // BroadcastEntityUpdates tick emits the correct deltas to
+        // remote viewers.
+        public void UpdateLocalHostPose(OpenTK.Vector3 pos, float yaw, float pitch)
+        {
+            if (_hostClient == null) return;
+            _hostClient.LastReportedX = pos.X;
+            _hostClient.LastReportedY = pos.Y;
+            _hostClient.LastReportedZ = pos.Z;
+            _hostClient.LastReportedYaw = yaw;
+            _hostClient.LastReportedPitch = pitch;
         }
 
         private void PromotePendingClients()
@@ -663,6 +736,7 @@ namespace VStudioCraft.Server
             {
                 var viewer = _clients[v];
                 if (viewer.Session.IsDead) continue;
+                if (viewer.Session.IsLoopback) continue; // don't ship to local host
                 if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
 
                 for (int t = 0; t < _clients.Count; t++)
@@ -952,6 +1026,7 @@ namespace VStudioCraft.Server
             {
                 var viewer = _clients[v];
                 if (viewer.Session.IsDead) continue;
+                if (viewer.Session.IsLoopback) continue; // don't ship to local host
                 if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
                 if (!viewer.TrackedEntities.Remove(networkId)) continue;
                 viewer.Session.Send(PacketIds.EntityDespawn, w => new EntityDespawnPacket
@@ -1008,6 +1083,7 @@ namespace VStudioCraft.Server
                 {
                     var viewer = _clients[v];
                     if (viewer.Session.IsDead) continue;
+                    if (viewer.Session.IsLoopback) continue; // don't ship to local host
                     if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
 
                     bool inView = viewer.TrackedChunks.Contains((mcx, mcz));
@@ -1178,6 +1254,7 @@ namespace VStudioCraft.Server
                 {
                     var viewer = _clients[v];
                     if (viewer.Session.IsDead) continue;
+                    if (viewer.Session.IsLoopback) continue; // don't ship to local host
                     if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
 
                     bool inView = viewer.TrackedChunks.Contains((mcx, mcz));
