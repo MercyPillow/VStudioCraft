@@ -98,17 +98,12 @@ defaults to 25566 (one above Notch's 25565); username defaults to
   - [x] **5g** — ~~Walk-cycle phase for replicated mobs~~ — turns out moot; passive mobs (Pig/Cow/Sheep/Chicken) don't have walk-cycle animation in either SP or MP. Their legs are static cuboids. Closing without code change.
 - **Phase 6** — Inventory + recipes + tile entities
   - [x] **6a** — Server-authoritative inventory + friend drop pickup. New `InventoryUpdatePacket` (0x51, single-slot) sent on login (full 49-slot prime) and on each pickup. `ServerClient.ServerInventory` is mutated by `ProcessFriendDropPickups` which scans (host's `_drops` × in-game friends) for AABB overlap, calls `Inventory.TryAdd`, ships updates, and despawns drops the host should remove. Friend-side handler writes the inbound slot into `Input.Inventory.Slots[]` so the existing inventory panel + hotbar render see it.
-  - **6b** — Friend → host action intents (minimal subset shipped):
-    - ✅ `PlayerHeldSlot` (0x44) — friend's hotbar selection synced via per-tick diff (no need to hook every 1..9 / wheel write).
-    - ✅ `PlayerDropItem` (0x45) — Q / Shift+Q intent. Server decrements `ServerInventory[hotbar+held]`, calls `SpawnDropHook` to add a `DroppedItem` to the host's `_drops`, ships InventoryUpdate. The drop then ships through the existing Phase 5c `BroadcastLocalDropsDiff` so the friend's own thrown drop appears via the same pipeline as host-thrown drops.
-    - ✅ `PlayerUseItem` (0x43) — friend RMB. Server resolves held slot; for Snowball/Egg it calls `SpawnThrownHook` which adds to the host's `_thrown` (broadcast via existing 5d projectile diff). Bow/bucket/fishing rod return silently (need charge state / target raycast — deferred).
-    - ❌ Full `InventoryClickPacket` (0x50) — drag/drop within inventory panel, shift-click stack moves, RMB-split. Friend's `HandleInventoryClick` still mutates locally without server round-trip; reorganization desyncs from server. Deferred — Alpha's window-click model has many edge cases (cursor stack, drag-deposit, armor-slot type gates, creative catalog) and warrants its own scoped pass.
-  - [ ] **6c** — Tile entities + crafting + chests/furnaces:
-    - `OpenWindow` (0x52) / `CloseWindow` (0x53) for chest/furnace/crafting-table interaction.
-    - `TileEntityData` (0x60) for furnace cook progress + chest contents broadcast.
-    - Server-side crafting (recipes already pure in `CraftingRecipes.cs`; just need to run match against the server's inventory state when an `InventoryClick` lands on the craft output slot).
-    - All three are blocked on the full `InventoryClickPacket` — there's no point opening a chest if the friend can't click items in/out.
-    - Server-authoritative player health (host getting hurt by mobs, friends seeing host's hurt-flash via `EntityHealth` for the host's entity id) folds in here too — needs a `ServerPlayer` entity tied to each `ServerClient`.
+  - [x] **6b** — Friend → host action intents (minimal subset shipped):
+    - [x] `PlayerHeldSlot` (0x44) — friend's hotbar selection synced via per-tick diff (no need to hook every 1..9 / wheel write).
+    - [x] `PlayerDropItem` (0x45) — Q / Shift+Q intent. Server decrements `ServerInventory[hotbar+held]`, calls `SpawnDropHook` to add a `DroppedItem` to the host's `_drops`, ships InventoryUpdate. The drop then ships through the existing Phase 5c `BroadcastLocalDropsDiff` so the friend's own thrown drop appears via the same pipeline as host-thrown drops.
+    - [x] `PlayerUseItem` (0x43) — friend RMB. Server resolves held slot; for Snowball/Egg it calls `SpawnThrownHook` which adds to the host's `_thrown` (broadcast via existing 5d projectile diff). Bow/bucket/fishing rod return silently (need charge state / target raycast — deferred).
+    - [x] Full `InventoryClickPacket` (0x50). Friend's `HandleInventoryClick` does the local hit-test (server doesn't know screen layout), sends slot+button+shift, then `return`s without local mutation — server runs the same `Inventory.HandleLeftClickSlot` / `RightClickSlot` / `ShiftClickSlot` on `ServerInventory` and replies with a full inventory + cursor burst. `InventoryUpdate` (0x51) now uses `Slot=0xFF` as the cursor sentinel; outside-click with cursor sends `Slot=0xFF` upstream and the server tosses it as a `DroppedItem` via `SpawnDropHook`. Drag-deposit (RMB drag across slots) currently lands a single right-click on the first slot — proper drag is a per-tick stream of right-clicks; deferred as a small follow-up.
+  - [ ] **6c** — Tile entities + crafting + chests/furnaces. See [Feature: Phase 6c (windowed inventories)](#feature-phase-6c-windowed-inventories) below for the full design.
 - [x] **Phase 7** — "Open to LAN" — host an in-process server alongside running SP world. Working end-to-end: `--openlan[=PORT]` on Standalone starts a SP world and binds a listener; remote clients can `--connect host:port:user` and join. See [Feature: Open to LAN](#feature-open-to-lan) below for the full design.
 - [x] **Phase 8** — Persistence v13 (per-username MP state appended to existing single-player save format) + dedicated-server autosave + admin console
   - **Save format**: bumped `WorldSaveFormat.CurrentVersion` from 12 → 13. Trailing block contains a `(playerCount, [{username, x, y, z, yaw, pitch, health, heldSlot, 49 ItemStacks}])` tuple. Pre-v13 saves load with an empty player table; SP saves get a 4-byte 0-count block (negligible overhead). Single-overload `Save(path, header, world)` still works (passes null player list); new `Save(path, header, world, IList<PersistedPlayer>)` for MP. Loader returns 3-tuple via new `LoadWithPlayers(path)`; existing `Load(path)` wrapper preserves the old 2-tuple call sites.
@@ -174,6 +169,183 @@ entity per `ServerClient` with the same AABB-vs-block integrator the
 standalone uses (`Entity.IntegrateMotion`). Compare inbound positions
 against `last + maxStep`, snap back via the already-reserved
 `PlayerPosLookCorrect` packet (0x11) on outliers.
+
+## Feature: Phase 6c (windowed inventories)
+
+Read this before starting work on Phase 6c. It's the design spec for
+chests / furnaces / crafting tables in the Open-to-LAN scenario.
+Roughly **400–600 LoC** total; not blocked on anything (Phase 6b
+extended is the prerequisite and shipped).
+
+### Goal
+
+Friends can interact with shared world tile entities — chest, furnace,
+crafting table — exactly like the host already does in the SP path:
+right-click to open, drag/click items in and out, close to commit.
+State persists in the world so a chest filled by one player is full
+when another opens it.
+
+### What already exists
+
+- `World.GetOrCreateChestEntity` / `GetOrCreateFurnaceEntity` —
+  per-cell tile-entity storage; persisted in v7+ saves; survives
+  chunk unload via the world-level dict.
+- `ChestTileEntity` (27 slots), `FurnaceTileEntity` (3 slots + cook
+  timers), `CraftingScreen` (3×3 grid + output, lives only on the
+  host's UI — there's no persistent crafting tile entity, the grid
+  state lives on the open window).
+- Host SP path handles all three via `TryInteract` / `InventoryScreen`
+  — friend's `TryInteract` currently `return false`s in net mode for
+  chests/furnaces and routes snowball/egg through `PlayerUseItem`.
+
+### What's missing for friends
+
+1. Way to open a window from a block click
+2. Way to mirror the window's slots to the friend
+3. Way to apply friend clicks to the window
+4. Way to close the window and commit state
+
+### Wire protocol additions
+
+| ID | Name | Direction | Payload |
+|----|------|-----------|---------|
+| 0x52 | OpenWindow | S→C | `byte windowId`, `byte kind`, `byte slotCount`, `int x, y, z` |
+| 0x53 | CloseWindow | both | `byte windowId` |
+| 0x60 | TileEntityData | S→C | `byte windowId`, `byte slotCount`, `slotCount × ItemStack`, optional kind-specific tail (furnace cook progress + burn time) |
+
+`kind` byte: 1=Chest, 2=Furnace, 3=CraftingTable. Reserved 0=PlayerInventory
+(implicit window 0; not actually opened/closed via packet).
+
+`InventoryClickPacket` (already 0x50) gains a new sentinel: `Slot >= 100`
+means the click landed on the OPEN window's slot `Slot - 100`.
+Implementation choice — I prefer a separate `WindowClickPacket` because
+the slot-space differs and conflating them in one packet means the
+server has to know "is window 1 open for this client" to disambiguate.
+Either works; new packet is cleaner.
+
+Recommended: extend `InventoryClickPacket` with a `byte WindowId` field
+(0 = player inventory, 1+ = open window). Slots within each window are
+local: chest window has slots 0..26 = chest contents, 27..62 = player
+inventory (matches Alpha's layout convention where the player inventory
+is appended at the bottom of every modal window).
+
+Bump protocol version to 2 if this changes the existing `InventoryClick`
+shape; otherwise add a new packet ID.
+
+### Open / close lifecycle
+
+1. Friend RMB on a Chest/Furnace/CraftingTable cell → `TryInteract`
+   in net mode sends a new `PlayerInteractBlockPacket` (or extend
+   existing `PlayerUseItem` with a target cell — better to add a new
+   one because the semantics differ).
+2. Server validates: cell exists, is a recognised window-bearing
+   block, friend is within 6-block reach (same tolerance as Phase 3
+   dig/place).
+3. Server creates a `ServerClient.OpenWindow` state record:
+   `{ WindowId, Kind, CellX/Y/Z, ServerSlots[] }`. WindowId is a
+   per-client monotonic counter starting at 1 (window 0 is the
+   implicit player inventory).
+4. Server sends `OpenWindow(id, kind, slotCount, cell)` followed by
+   `TileEntityData(id, slots, ...)` populating the initial state.
+5. Friend's UI receives, opens the appropriate panel (chest, furnace,
+   or crafting screen), populates from `TileEntityData`.
+6. While open: clicks within the window slots use `InventoryClick`
+   with `WindowId` set; player inventory clicks (slots 27..62 in
+   the chest window) route to `ServerInventory` like today.
+7. Server applies clicks to the right Inventory (chest's `Slots[]`,
+   furnace's three slots, crafting grid) and ships back a fresh
+   `TileEntityData` for window slots + `InventoryUpdate` for player
+   slots.
+8. Friend closes (Esc or click outside) → sends `CloseWindow(id)` →
+   server commits any cursor stack to the player's main grid, drops
+   leftover, removes the window record.
+
+### Server-side state
+
+- `ServerClient.OpenWindows` — `Dictionary<byte, OpenWindowState>` keyed
+  on the per-client `windowId`. The state struct holds the cell
+  coords (so close commits to the right tile entity) and a reference
+  to the underlying `ChestTileEntity` / `FurnaceTileEntity`.
+- `ServerClient.NextWindowId` — monotonic counter so a quick
+  reopen-after-close gets a fresh id (avoids stale-window-id clicks
+  landing in a recycled window).
+- Crafting table: no persistent entity — the 9 input slots live on
+  the `OpenWindowState` itself. On close, leftover input items get
+  dumped into the player's inventory or dropped at the player's
+  feet.
+
+### Click semantics
+
+Reuse `Inventory.HandleLeftClickSlot` etc. but pass the window's
+backing `Inventory` instead of `ServerInventory`. The cursor stack
+is shared across windows (same `ServerInventory.Cursor`) — picking
+something up in a chest and clicking the player inventory drops it
+there. This matches Alpha's behaviour.
+
+For shift-click in a chest window:
+- Shift-click in chest slot → move stack to player inventory
+- Shift-click in player slot → move stack to chest
+
+That's a tweak to `HandleShiftClickSlot` — currently the host's
+implementation moves between hotbar ↔ main grid. Server-side override
+or an extra parameter. Cleanest: add a `ShiftClickContext` enum (None,
+ToContainer, FromContainer) parameter to the existing methods.
+
+### Crafting
+
+Recipes live in `CraftingRecipes.cs`. They're pure functions on a
+`ItemStack[9]`. The window's input grid IS that array. After every
+click that touches an input slot, server runs `CraftingRecipes.Match`
+against the current grid; if a recipe matches, the output slot
+contents become the recipe's result; otherwise the output slot is
+empty.
+
+Output-slot click consumes one of each input (the recipe's "consume"
+function — already pure) and drops the result into the cursor.
+
+### Furnace
+
+Server already runs `TickFurnacesIfDue` in… wait — that's on
+`GameRenderer`, not a hub. The dedicated server doesn't tick furnaces
+today. Phase 6c needs:
+
+- Move furnace tick into `World.TickFurnaces(dt)` so both SP and
+  dedicated paths drive it.
+- Server's `SimulateTick` calls it.
+- When a furnace's cook progress changes, broadcast `TileEntityData`
+  to any client whose window currently shows that cell.
+
+### Estimated cost
+
+| Piece | LoC |
+|------|-----|
+| New packets (OpenWindow, CloseWindow, TileEntityData, PlayerInteractBlock) | 100 |
+| `ServerClient.OpenWindows` + `OpenWindowState` | 60 |
+| Server-side dispatch on PlayerInteractBlock + open + populate | 80 |
+| Server-side click routing (InventoryClick with WindowId) | 100 |
+| Furnace move from renderer to World + server tick | 80 |
+| Friend-side open/close window UI integration | 100 |
+| Crafting table grid handling | 60 |
+| **Total** | **~580** |
+
+### Risks
+
+1. **Click race**: Friend clicks slot, server processes, ships new
+   state, friend's UI is mid-render with stale slot — may briefly show
+   a flicker on slow networks. Mitigation: optimistic local update
+   that gets overwritten by the server's authoritative reply (similar
+   to how block-place doesn't predict on the client).
+2. **Multiple players in the same chest**: Two friends open the same
+   chest. Both see independent windows. They each see the chest's
+   slot state at the time THEY opened. If A picks up an item and B
+   sees it disappear from their copy, that needs a broadcast to all
+   currently-open windows of that cell. Solution: chest state lives
+   on the tile entity, server's click handler updates the entity in
+   place, then broadcasts `TileEntityData` to every client with an
+   open window pointing at that cell.
+3. **Client disconnect mid-window**: Close-on-disconnect cleanup —
+   commit cursor + crafting input to the player's inventory in the
+   v13 player table at session end.
 
 ## Feature: Open to LAN
 

@@ -1923,22 +1923,22 @@ void main()
                 case VStudioCraft.Net.PacketIds.InventoryUpdate:
                 {
                     var iu = pkt.InventoryUpdate;
-                    // The friend's local inventory lives on InputState
-                    // (not Player) — see Game\InputState.cs. Both the
-                    // inventory panel and the hotbar read from Slots[]
-                    // directly each frame, so writing the slot here is
-                    // all the work needed for the visual to update.
                     var inv = Input?.Inventory;
                     if (inv == null) break;
-                    if (iu.Slot >= Inventory.TotalSlots) break;
-                    inv.Slots[iu.Slot] = iu.ItemCount == 0
+                    var stack = iu.ItemCount == 0
                         ? ItemStack.Empty
                         : new ItemStack((BlockType)iu.ItemType, iu.ItemCount);
-                    // Phase 6b will add outbound click intents so
-                    // friend-driven inventory mutations also flow
-                    // through the server. For 6a only server-driven
-                    // mutations (drop pickup) reach the friend, and
-                    // this branch handles them.
+                    // Phase 6b-extended — slot=0xFF is the cursor
+                    // sentinel. Anything else is a regular slot
+                    // (range-checked).
+                    if (iu.Slot == 0xFF)
+                    {
+                        inv.Cursor = stack;
+                    }
+                    else if (iu.Slot < Inventory.TotalSlots)
+                    {
+                        inv.Slots[iu.Slot] = stack;
+                    }
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityHealth:
@@ -6255,6 +6255,43 @@ void main()
             if (Input == null) return;
             var inv = Input.Inventory;
 
+            // Phase 6b-extended — net-driven mode: hit-test locally
+            // (server doesn't know screen layout) and ship the slot
+            // index + button + shift to the server. Server runs the
+            // same Inventory.Handle*ClickSlot methods on
+            // ServerInventory and replies with a full inventory +
+            // cursor burst. We DON'T mutate the local Inventory here;
+            // the server's reply is the source of truth.
+            //
+            // Creative-mode catalog clicks aren't synced — friends in
+            // MP play in survival per the original design point.
+            if (_netClient != null)
+            {
+                // InventoryScreen.HitTest returns 0..TotalSlots-1 covering
+                // hotbar + main grid + armor; -1 = outside any slot.
+                int hitSlot = InventoryScreen.HitTest(screenW, screenH, mx, my);
+                byte sendSlot;
+                if (hitSlot >= 0 && hitSlot < Inventory.TotalSlots)
+                {
+                    sendSlot = (byte)hitSlot;
+                }
+                else if (!inv.Cursor.IsEmpty)
+                {
+                    // Click outside any slot while holding cursor —
+                    // send the 0xFF sentinel so the server tosses it.
+                    sendSlot = 0xFF;
+                }
+                else
+                {
+                    // Outside click with empty cursor — ignore.
+                    return;
+                }
+
+                byte sendButton = (byte)(button == 2 ? 1 : 0); // host sends 1=LMB / 2=RMB; net wire is 0=LMB / 1=RMB
+                _netClient.SendInventoryClick(sendSlot, sendButton, shift);
+                return;
+            }
+
             if (GameMode == GameMode.Creative)
             {
                 // Hotbar row is still a real slot — click it to drop the
@@ -9511,11 +9548,19 @@ void main()
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
-        // CamelCase enum -> human-readable label. "FlowingWater" -> "Flowing Water".
-        // Cheap one-pass split since this only runs once per frame for the tooltip.
+        // Friendly display label. Consults BlockData.Name first so any
+        // explicit override there ("Wheat" for WheatItem, "Iron Ingot"
+        // for IronIngot, etc.) wins. When BlockData.Name falls through
+        // to the raw enum ToString, apply the CamelCase split so
+        // "FlowingWater" reads as "Flowing Water". Mirrors
+        // CreativeCatalog.FriendlyName — single source of truth via
+        // BlockData.Name keeps catalog tile, hotbar label, and the
+        // item-name popout all in lockstep.
         private static string FriendlyName(BlockType t)
         {
             string raw = t.ToString();
+            string named = ItemType.Name(t);
+            if (named != null && named != raw) return named;
             if (raw.Length == 0) return raw;
             var sb = new System.Text.StringBuilder(raw.Length + 4);
             sb.Append(raw[0]);

@@ -219,6 +219,21 @@ namespace VStudioCraft.Net
             }.Write(w));
         }
 
+        // Phase 6b-extended — friend clicked an inventory slot. Slot
+        // 0xFF is the outside-click sentinel that drops the cursor
+        // stack. Server will reply with InventoryUpdate burst (49
+        // slots + cursor).
+        public void SendInventoryClick(byte slot, byte button, bool shift)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.InventoryClick, w => new InventoryClickPacket
+            {
+                Slot = slot,
+                Button = button,
+                Shift = (byte)(shift ? 1 : 0),
+            }.Write(w));
+        }
+
         // Phase 6b — friend RMB intent. Server uses the friend's last-
         // known position + held hotbar slot to decide what to do
         // (snowball / egg throw shipped; bow / bucket / fishing rod

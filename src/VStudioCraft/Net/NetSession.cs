@@ -269,6 +269,9 @@ namespace VStudioCraft.Net
                 case PacketIds.PlayerDropItem:
                     return new InboundPacket { Id = id, PlayerDropItem = PlayerDropItemPacket.Read(_reader) };
 
+                case PacketIds.InventoryClick:
+                    return new InboundPacket { Id = id, InventoryClick = InventoryClickPacket.Read(_reader) };
+
                 case PacketIds.EntitySpawn:
                     return new InboundPacket { Id = id, EntitySpawn = EntitySpawnPacket.Read(_reader) };
 
@@ -325,6 +328,7 @@ namespace VStudioCraft.Net
         public PlayerHeldSlotPacket  PlayerHeldSlot;
         public PlayerUseItemPacket   PlayerUseItem;
         public PlayerDropItemPacket  PlayerDropItem;
+        public InventoryClickPacket  InventoryClick;
         public EntitySpawnPacket     EntitySpawn;
         public EntityRelMovePacket   EntityRelMove;
         public EntityLookPacket      EntityLook;

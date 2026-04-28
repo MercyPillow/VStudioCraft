@@ -490,6 +490,45 @@ namespace VStudioCraft.Net
         };
     }
 
+    // 0x50 — friend→server "I clicked slot N with button B (with/without
+    // shift)". Local hit-test resolves the slot index client-side; the
+    // server doesn't need to know about screen layout. Two slot
+    // sentinels:
+    //
+    //   0..48 — main inventory slots (matches Inventory.Slots[] index)
+    //   0xFF  — clicked OUTSIDE the panel while holding cursor;
+    //           server tosses Cursor as a DroppedItem at the friend's
+    //           position. (Same effect as Q-drop on the cursor stack;
+    //           reuses the SpawnDropHook the host already wired.)
+    //
+    // Button: 0=LMB, 1=RMB. Shift: 0/1.
+    //
+    // Server applies via Inventory.HandleLeftClickSlot /
+    // HandleRightClickSlot / HandleShiftClickSlot on ServerInventory
+    // (the same path the host's local UI uses), then ships the full
+    // 49-slot inventory + cursor back. The bandwidth cost is fine —
+    // clicks are infrequent and the full burst is ~150 bytes.
+    internal struct InventoryClickPacket
+    {
+        public byte Slot;     // 0..48, or 0xFF for outside-drop
+        public byte Button;   // 0=LMB, 1=RMB
+        public byte Shift;    // 0/1
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteByte(Slot);
+            w.WriteByte(Button);
+            w.WriteByte(Shift);
+        }
+
+        public static InventoryClickPacket Read(PacketReader r) => new InventoryClickPacket
+        {
+            Slot = r.ReadByte(),
+            Button = r.ReadByte(),
+            Shift = r.ReadByte(),
+        };
+    }
+
     // 0x51 — server→client inventory slot update. Sent when the server's
     // authoritative inventory for a client changes (drop pickup, mob death
     // drop pickup, future crafting / chest interaction). Single-slot packet
@@ -501,6 +540,8 @@ namespace VStudioCraft.Net
     //   0..35  — main grid (4×9, top-down row-major)
     //   36..44 — hotbar
     //   45..48 — armor (helmet, chest, leggings, boots)
+    //   0xFF   — cursor stack (Phase 6b-extended) — the floating stack
+    //            held while the inventory panel is open.
     //
     // ItemStack on the wire is (type byte, count byte). Empty stack is
     // type=Air (0), count=0; the reader maps that back to ItemStack.Empty.

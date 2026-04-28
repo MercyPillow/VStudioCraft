@@ -609,6 +609,31 @@ namespace VStudioCraft.Net
                     ItemCount = count,
                 }.Write(w));
             }
+            // Phase 6b-extended — also ship the cursor stack via the
+            // 0xFF sentinel slot. The friend's UI draws the cursor as
+            // a floating stack while the inventory panel is open;
+            // without this, server-driven cursor mutations (LMB pickup,
+            // RMB split) wouldn't be visible.
+            SendCursor(client);
+        }
+
+        // Cursor-only update — used after a single click that didn't
+        // change non-cursor slots (rare but possible: LMB on a slot
+        // identical to cursor with stack-cap headroom is a no-op).
+        // Cheap (3 bytes); no point gating on equality.
+        public void SendCursor(ServerClient client)
+        {
+            if (client.Session.IsDead) return;
+            if (client.Session.IsLoopback) return;
+            var c = client.ServerInventory.Cursor;
+            byte type = (byte)c.Type;
+            byte count = (byte)(c.IsEmpty ? 0 : c.Count);
+            client.Session.Send(PacketIds.InventoryUpdate, w => new InventoryUpdatePacket
+            {
+                Slot = 0xFF,
+                ItemType = type,
+                ItemCount = count,
+            }.Write(w));
         }
 
         // Phase 5e — entity health change broadcast. Used for hurt-flash
@@ -733,6 +758,10 @@ namespace VStudioCraft.Net
 
                     case PacketIds.PlayerUseItem:
                         HandleUseItem(client);
+                        break;
+
+                    case PacketIds.InventoryClick:
+                        HandleInventoryClick(client, pkt.InventoryClick);
                         break;
 
                     case PacketIds.Disconnect:
@@ -1063,6 +1092,86 @@ namespace VStudioCraft.Net
                 ItemType = typeByte,
                 ItemCount = countByte,
             }.Write(w));
+        }
+
+        // Phase 6b-extended — friend clicked a slot in their inventory
+        // panel (or outside it while holding the cursor stack). The
+        // friend's local UI did the hit-test; we receive a slot index
+        // + button + shift modifier. We run the same `Inventory.Handle*`
+        // methods the host's local UI runs, mutating ServerInventory,
+        // and ship the result back.
+        //
+        // For correctness we always ship the full inventory + cursor —
+        // a shift-click can move stacks across many slots, and a
+        // single-slot delta protocol would either need to enumerate
+        // every changed slot or know which methods touch which slots.
+        // The 49-slot+cursor burst is ~150 bytes and clicks are
+        // infrequent; not worth optimising.
+        //
+        // 0xFF sentinel = "outside click while holding cursor" — toss
+        // the cursor stack as a DroppedItem at the friend's pose.
+        // Reuses the SpawnDropHook the host installed for Q-drop.
+        private void HandleInventoryClick(ServerClient client, InventoryClickPacket pkt)
+        {
+            if (client.Phase == ClientPhase.AwaitingLogin) return;
+            var inv = client.ServerInventory;
+
+            if (pkt.Slot == 0xFF)
+            {
+                // Outside-click cursor toss. Honour only when there's
+                // actually a cursor stack to drop — accidental
+                // outside-clicks with empty cursor are common.
+                if (inv.Cursor.IsEmpty || SpawnThrownHook == null && SpawnDropHook == null)
+                {
+                    return;
+                }
+                if (SpawnDropHook != null && client.HasReportedPos)
+                {
+                    var stack = inv.Cursor;
+                    inv.Cursor = ItemStack.Empty;
+                    // Same pose math as HandleDropItem so the toss arc
+                    // matches a Q-drop visually.
+                    const float eyeHeight = 1.6f;
+                    float yawRad = client.LastReportedYaw * (float)Math.PI / 180f;
+                    float pitchRad = client.LastReportedPitch * (float)Math.PI / 180f;
+                    float fx = (float)(-Math.Sin(yawRad) * Math.Cos(pitchRad));
+                    float fy = (float)(-Math.Sin(pitchRad));
+                    float fz = (float)(-Math.Cos(yawRad) * Math.Cos(pitchRad));
+                    var origin = new OpenTK.Vector3(
+                        (float)(client.LastReportedX + fx * 0.4),
+                        (float)(client.LastReportedY + eyeHeight + fy * 0.4),
+                        (float)(client.LastReportedZ + fz * 0.4));
+                    var vel = new OpenTK.Vector3(fx * 4f, fy * 4f + 0.2f, fz * 4f);
+                    SpawnDropHook(origin, vel, stack);
+                    SendCursor(client);
+                }
+                return;
+            }
+
+            if (pkt.Slot >= Inventory.TotalSlots) return;
+
+            // Dispatch to the existing Inventory click logic. These
+            // methods are the same code path the host's local UI calls
+            // — running them on ServerInventory keeps the friend's
+            // experience byte-identical to the host's where the rules
+            // matter (stack-merge headroom, armor-slot type gating,
+            // etc).
+            int slot = pkt.Slot;
+            if (pkt.Shift != 0)
+            {
+                inv.HandleShiftClickSlot(slot);
+            }
+            else if (pkt.Button == 1) // RMB
+            {
+                inv.HandleRightClickSlot(slot);
+            }
+            else // LMB (default)
+            {
+                inv.HandleLeftClickSlot(slot);
+            }
+
+            // Bandwidth note above — full burst, not a delta.
+            SendFullInventory(client);
         }
 
         // Phase 6b — friend RMB intent. Decode the held hotbar slot's

@@ -82,6 +82,14 @@ namespace VStudioCraft.Game
                 case BlockType.WoodDoorBlockTop:
                 case BlockType.IronDoorBlockBottom:
                 case BlockType.IronDoorBlockTop:
+                // Tier 6 #47 — Wheat is a planted-only world block;
+                // the player only ever holds the WheatSeeds (to plant)
+                // or WheatItem (harvested grain) forms, never the
+                // crop block itself. Excluding it keeps the catalog
+                // showing one "Wheat" entry (the WheatItem) instead
+                // of two (the world block + the item, both labelled
+                // "Wheat" via BlockData.Name).
+                case BlockType.Wheat:
                     return false;
                 default:
                     return true;
@@ -114,12 +122,18 @@ namespace VStudioCraft.Game
             return result;
         }
 
-        // CamelCase enum -> human-readable label. Mirrors the helper in
-        // GameRenderer (kept duplicated here so the catalog has no
-        // dependency back into the renderer).
+        // Friendly display label. Consults BlockData.Name first so any
+        // explicit override there ("Wheat" for WheatItem, "Iron Ingot"
+        // for IronIngot, etc.) wins. When BlockData.Name returns the
+        // raw enum ToString (the fall-through default), apply the
+        // CamelCase split so "GrassTop" reads as "Grass Top". This
+        // keeps the catalog, hotbar tooltip, and item-name popout in
+        // lockstep on a single source of truth.
         public static string FriendlyName(BlockType t)
         {
             string raw = t.ToString();
+            string named = ItemType.Name(t);
+            if (named != null && named != raw) return named;
             if (raw.Length == 0) return raw;
             var sb = new StringBuilder(raw.Length + 4);
             sb.Append(raw[0]);
