@@ -883,6 +883,32 @@ namespace VStudioCraft.Game
             return ((byte)t - (byte)BlockType.LeatherHelmet) % 4;
         }
 
+        // Tier 5 #27 — Map a placed-block id to the inventory item-form
+        // that should land on the hotbar when middle-clicking it.
+        // Most blocks self-map (Stone places & picks as Stone), but a
+        // few multi-id features expose a different "item" id from the
+        // "in-world block" id:
+        //   WoodDoorBlockTop / WoodDoorBlockBottom → WoodDoorItem
+        //   IronDoorBlockTop / IronDoorBlockBottom → IronDoorItem
+        //   Wheat (any growth stage)               → WheatSeeds (you replant)
+        //   SugarCane                              → SugarCaneItem
+        // Anything not in the switch self-maps. Used by
+        // GameRenderer.TryPickBlock; isolated here so future multi-id
+        // features (cake, beds, etc.) get a one-line addition.
+        public static BlockType PickBlockItemFor(BlockType placed)
+        {
+            switch (placed)
+            {
+                case BlockType.WoodDoorBlockTop:
+                case BlockType.WoodDoorBlockBottom: return BlockType.WoodDoorItem;
+                case BlockType.IronDoorBlockTop:
+                case BlockType.IronDoorBlockBottom: return BlockType.IronDoorItem;
+                case BlockType.Wheat:               return BlockType.WheatSeeds;
+                case BlockType.SugarCane:           return BlockType.SugarCaneItem;
+                default: return placed;
+            }
+        }
+
         // Tier 4 #19 — Per-piece flat damage reduction (in HP points)
         // for the Alpha 1.1.2_01 armor formula. The damage formula
         // applied at the Player.TakeDamage call site is:

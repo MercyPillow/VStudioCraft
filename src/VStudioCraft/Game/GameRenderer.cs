@@ -530,7 +530,33 @@ void main()
         // OR themselves in here and the rest of the loop gates on this
         // single flag. Options doesn't add to this list because it only
         // ever opens on top of the pause menu (which is already halted).
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen;
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDeathScreenOpen;
+
+        // Tier 5 #29 — Death modal flag. Halts the world via the OR
+        // above and routes mouse clicks through HandleDeathScreenClick
+        // instead of TryBreak / TryPlace. Set in the survival-damage
+        // tick the moment Player.IsDead transitions to true, cleared
+        // by HandleDeathScreenClick when the player picks Respawn or
+        // Title Screen.
+        private volatile bool _isDeathScreenOpen;
+        public bool IsDeathScreenOpen => _isDeathScreenOpen;
+
+        // Tier 5 #29 — Title-screen request from the death modal. The
+        // host wires this to its existing QuitRequested path so
+        // Title Screen and Pause Menu's Quit converge to the same
+        // exit-to-main-menu logic.
+        public event System.Action QuitToTitleRequested;
+
+        // Tier 5 #29 — Modal-state-changed signals. Opened fires on
+        // the rising edge of _isDeathScreenOpen (survival damage just
+        // killed the player); RespawnedFromDeathScreen fires when the
+        // player clicks Respawn. Host hops to the UI thread for both
+        // — release look on Open (cursor becomes visible for buttons),
+        // re-capture look on Respawn (player drops back into FPS view
+        // ready to play). Title Screen path skips re-capture because
+        // it's about to tear the world down anyway via QuitToTitle.
+        public event System.Action DeathScreenOpened;
+        public event System.Action RespawnedFromDeathScreen;
 
         // Rebuild the block atlas from whichever source the user has
         // currently selected (procedural or embedded Alpha terrain.png).
@@ -621,6 +647,14 @@ void main()
             (a, b) => b.distSq.CompareTo(a.distSq);
 
         private float _timeOfDay = 0.25f;  // start at noon so first view is bright
+
+        // Tier 5 #30 — FPS reading from the host. The host owns the
+        // frame-counter timer (one-second window in GameHostControl);
+        // it pushes the latest count via ReportFps each time the
+        // window rolls. Stale reads are fine — debug overlay is
+        // approximate by nature.
+        private int _hostFps;
+        public void ReportFps(int fps) { _hostFps = fps; }
 
         // Where the player snaps back to on death in survival. Set whenever a
         // world is loaded / started; respawn teleports here with full health.
@@ -1283,6 +1317,21 @@ void main()
             Player.Update(dt, wishHorizVel, wantJump, _world);
             SyncCameraToPlayer();
 
+            // Tier 5 #31 — Hotbar transient-label state. Poll for a
+            // HotbarIndex change first (re-arms the timer on key 1-9
+            // / scroll wheel / pick-block), then tick the timer down
+            // each frame. Cap at zero so RenderHotbar can branch on
+            // "timer > 0" without a separate "ever changed" flag.
+            if (Input != null)
+            {
+                Input.OnHotbarMaybeChanged();
+                if (Input.HotbarLabelTimer > 0f)
+                {
+                    Input.HotbarLabelTimer -= dt;
+                    if (Input.HotbarLabelTimer < 0f) Input.HotbarLabelTimer = 0f;
+                }
+            }
+
             // Advance the third-person walk-cycle phase by horizontal
             // speed × frequency. Stays at zero amplitude when the
             // player isn't moving horizontally (sin(phase) is nonzero
@@ -1576,9 +1625,23 @@ void main()
                 _hungerRegenTimer = 0f;
             }
 
-            if (Player.IsDead)
+            if (Player.IsDead && !_isDeathScreenOpen)
             {
-                Respawn();
+                // Tier 5 #29 — Open the death modal instead of insta-
+                // respawning. World halts via IsWorldHalted (which now
+                // ORs the death flag); the modal's Respawn / Title
+                // buttons drive the actual reset. _isDeathScreenOpen
+                // is volatile + render-thread-only so a paused world
+                // tick never re-enters.
+                _isDeathScreenOpen = true;
+                // Mirror the inventory open path: clear the input
+                // capture flag here, fire the open-event so the host
+                // can dispatch a UI-thread ReleaseMouseLook (which
+                // makes the cursor visible). Without the host hop the
+                // cursor would stay hidden under the look-capture and
+                // the player couldn't see what they're clicking.
+                if (Input != null) Input.MouseLookActive = false;
+                DeathScreenOpened?.Invoke();
             }
         }
 
@@ -2252,6 +2315,69 @@ void main()
         // RMB-on-block interaction dispatch. Runs BEFORE TryPlace so
         // an interactive block (crafting table today; furnace, chest,
         // door later) can swallow the right-click without it being
+        // Tier 5 #27 — Pick-block on middle-click. Casts the same ray
+        // TryBreak / TryPlace use; if it lands on a non-air block,
+        // creative conjures a stack into the first empty hotbar slot
+        // (or clobbers the held slot if all nine are full), and survival
+        // selects the matching hotbar slot if the block is already
+        // there or swaps it in from the main grid (silent no-op if it
+        // isn't anywhere — middle-click in survival is a shortcut, not
+        // a cheat). Multi-id features (doors, wheat, sugar cane) route
+        // through BlockData.PickBlockItemFor so the item-form lands on
+        // the bar instead of the in-world block id.
+        public void TryPickBlock()
+        {
+            if (_world == null || Input == null) return;
+            if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
+                return;
+            var hitType = _world.GetBlock(hit.X, hit.Y, hit.Z);
+            if (hitType == BlockType.Air) return;
+            var pickType = BlockData.PickBlockItemFor(hitType);
+            var inv = Input.Inventory;
+
+            if (GameMode == GameMode.Creative)
+            {
+                // Find an empty hotbar slot first; if all full, overwrite
+                // the currently-selected slot. Either way the new stack
+                // is full (or capped per ItemStack.MaxStackSizeFor for
+                // unstackable items like tools / armor / etc.).
+                int target = -1;
+                for (int i = 0; i < Inventory.HotbarCount; i++)
+                {
+                    if (inv.Slots[Inventory.HotbarStart + i].IsEmpty) { target = i; break; }
+                }
+                if (target < 0) target = Input.HotbarIndex;
+                int cap = ItemStack.MaxStackSizeFor(pickType);
+                inv.Slots[Inventory.HotbarStart + target] = new ItemStack(pickType, cap);
+                Input.HotbarIndex = target;
+                return;
+            }
+
+            // Survival — search the hotbar first (fast path: just move
+            // the selector), then the main grid (swap with the held
+            // slot so the picked item lands ready-to-use).
+            for (int i = 0; i < Inventory.HotbarCount; i++)
+            {
+                if (inv.Slots[Inventory.HotbarStart + i].Type == pickType)
+                {
+                    Input.HotbarIndex = i;
+                    return;
+                }
+            }
+            for (int i = 0; i < Inventory.MainCount; i++)
+            {
+                if (inv.Slots[i].Type == pickType)
+                {
+                    int held = Inventory.HotbarStart + Input.HotbarIndex;
+                    var tmp = inv.Slots[held];
+                    inv.Slots[held] = inv.Slots[i];
+                    inv.Slots[i] = tmp;
+                    return;
+                }
+            }
+            // Not in inventory — silent no-op in survival.
+        }
+
         // interpreted as a placement attempt. Returns true if the
         // interaction was consumed — the caller should not also call
         // TryPlace in that case.
@@ -5132,10 +5258,27 @@ void main()
                     return;
                 }
 
-                // Catalog tile click → fill cursor with a full stack.
+                // Catalog tile click. Two modes:
+                //   - Empty cursor → pick up the tile (LMB = full stack,
+                //     RMB = half stack, capped per ItemStack.MaxStackSizeFor).
+                //   - Full cursor  → DROP (clear) the cursor instead of
+                //     swapping to the new tile. The catalog area in
+                //     creative isn't a real inventory slot — it's a
+                //     palette — so clicking it while holding something
+                //     reads as "deselect what I'm holding", same as the
+                //     player would expect from a paint-bucket palette.
+                //     They can click again with an empty cursor to pick
+                //     up the new item. Avoids the silent-replace surprise
+                //     where a 32-stone cursor turns into 64-cobble on
+                //     a single click.
                 int tile = InventoryScreen.HitTestCatalogTile(screenW, screenH, mx, my);
                 if (tile >= 0)
                 {
+                    if (!inv.Cursor.IsEmpty)
+                    {
+                        inv.Cursor = ItemStack.Empty;
+                        return;
+                    }
                     var filtered = CreativeCatalog.Filter(Input.InventorySearchText ?? string.Empty);
                     int absolute = Input.InventoryScrollRows * InventoryScreen.Cols + tile;
                     if (absolute >= 0 && absolute < filtered.Count)
@@ -6310,11 +6453,19 @@ void main()
 
             RenderHotbar(width, height);
 
+            // Tier 5 #30 — F3 debug overlay. Drawn after the hotbar and
+            // before the modal stack so it survives a paused world view
+            // (you can hit Esc, read coords, then dismiss). Toggle is
+            // a single flag on InputState; pre-toggle frames pay only
+            // a branch.
+            if (Input != null && Input.DebugOverlayVisible) RenderDebugOverlay(width, height);
+
             // Modal overlays. Only one is shown at a time — the host
             // never opens the inventory over an active pause menu, but
             // we still gate on _isInventoryOpen first so a stuck flag
             // can't double-stack the dim wash.
-            if (_isInventoryOpen) RenderInventory(width, height);
+            if (_isDeathScreenOpen) RenderDeathScreen(width, height);
+            else if (_isInventoryOpen) RenderInventory(width, height);
             else if (_isCraftingOpen) RenderCrafting(width, height);
             else if (_isFurnaceOpen) RenderFurnace(width, height);
             else if (_isChestOpen) RenderChest(width, height);
@@ -8231,16 +8382,28 @@ void main()
             }
 
             // ---- tooltip text --------------------------------------------
-            if (inv != null && selected >= 0 && selected < HotbarTextures.SlotCount)
+            // Tier 5 #31 — Transient label. Hidden once HotbarLabelTimer
+            // expires; the last HotbarLabelFadeSeconds of life ramp the
+            // alpha from 1 to 0 so it eases out instead of popping. The
+            // host pumps OnHotbarMaybeChanged once per frame to refresh
+            // the timer on key/scroll changes; the tick-down lives in
+            // the main render entry. Empty slot or pre-first-frame
+            // (timer == 0) hides the label entirely.
+            if (inv != null && selected >= 0 && selected < HotbarTextures.SlotCount
+                && Input != null && Input.HotbarLabelTimer > 0f)
             {
                 var stack = inv.Slots[Inventory.HotbarStart + selected];
                 if (!stack.IsEmpty)
                 {
+                    float t = Input.HotbarLabelTimer;
+                    float a = t >= InputState.HotbarLabelFadeSeconds
+                        ? 1f
+                        : t / InputState.HotbarLabelFadeSeconds;
                     string label = FriendlyName(stack.Type);
                     int labelScale = System.Math.Max(1, UiScale.S(2, width, height));
                     DrawString(label, /*scale*/labelScale, /*centerX*/width / 2,
                         /*topY*/barY - HotbarTextures.GlyphCellH * labelScale - UiScale.S(4, width, height),
-                        new Vector4(1f, 1f, 1f, 1f), ortho);
+                        new Vector4(1f, 1f, 1f, a), ortho);
                 }
             }
 
@@ -8422,6 +8585,194 @@ void main()
                 _spriteShader.SetVector2("uUvOffset", new Vector2(u, v));
                 DrawSpriteQuadFor(_spriteShader, x, topY, glyphW, glyphH, ortho);
                 x += glyphW;
+            }
+        }
+
+        // Tier 5 #29 — Death modal renderer. Dim red wash + "YOU DIED!"
+        // title + Respawn / Title Screen buttons. Mirrors the
+        // RenderPauseMenu visual + hover logic (so the two modals feel
+        // like one chrome family) and uses the shared DeathScreen
+        // layout so click hit-tests on the host always match the
+        // drawn rectangles. Drawn by the main render path when
+        // _isDeathScreenOpen is true.
+        private void RenderDeathScreen(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Red-tinted dim wash. 0.65 alpha is a touch heavier than
+            // the pause menu's 0.55 so the death screen reads as more
+            // urgent / final, but the world still shows through.
+            DrawSolidQuad(0, 0, width, height, new Vector3(0.5f, 0f, 0f), 0.65f, ortho);
+
+            int mx = Input?.MenuMouseX ?? -1;
+            int my = Input?.MenuMouseY ?? -1;
+
+            // Title — "YOU DIED!" centered above the buttons. Uses the
+            // shared DeathScreen.TitleY for vertical alignment so the
+            // hit-tested buttons stay positioned consistently with the
+            // drawn ones at every viewport size.
+            int titleScale = DeathScreen.TitleFontScale(width, height);
+            int titleY = DeathScreen.TitleY(width, height);
+            DrawString("YOU DIED!", titleScale, width / 2, titleY,
+                new Vector4(1f, 0.85f, 0.85f, 1f), ortho);
+
+            int btnBorder = UiScale.S(2, width, height);
+            int btnLabelScale = System.Math.Max(1, UiScale.S(2, width, height));
+            for (int i = 0; i < DeathScreen.Count; i++)
+            {
+                var b = DeathScreen.GetButton(i, width, height);
+                bool hover = mx >= b.X && mx < b.X + b.W && my >= b.Y && my < b.Y + b.H;
+
+                Vector3 fill = hover
+                    ? new Vector3(0.42f, 0.55f, 0.72f)
+                    : new Vector3(0.16f, 0.20f, 0.26f);
+                DrawSolidQuad(b.X, b.Y, b.W, b.H, fill, 0.95f, ortho);
+
+                Vector3 border = hover
+                    ? new Vector3(1f, 1f, 1f)
+                    : new Vector3(0.78f, 0.82f, 0.88f);
+                DrawSolidQuad(b.X, b.Y, b.W, btnBorder, border, 1f, ortho);
+                DrawSolidQuad(b.X, b.Y + b.H - btnBorder, b.W, btnBorder, border, 1f, ortho);
+                DrawSolidQuad(b.X, b.Y, btnBorder, b.H, border, 1f, ortho);
+                DrawSolidQuad(b.X + b.W - btnBorder, b.Y, btnBorder, b.H, border, 1f, ortho);
+
+                int labelTopY = b.Y + (b.H - HotbarTextures.GlyphCellH * btnLabelScale) / 2;
+                DrawString(b.Label, btnLabelScale, b.X + b.W / 2, labelTopY,
+                    new Vector4(1f, 1f, 1f, 1f), ortho);
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        // Tier 5 #29 — Click router for the death modal. Called by the
+        // host's mouse-down dispatch when IsDeathScreenOpen is set.
+        // Coordinates are physical pixels (matching DeathScreen layout
+        // helpers). Respawn closes the modal and runs the existing
+        // Respawn() path; Title Screen closes the modal and fires
+        // QuitToTitleRequested so the host can return to the main menu
+        // with the same flow the pause menu's Quit uses.
+        public void HandleDeathScreenClick(int mx, int my, int screenW, int screenH)
+        {
+            var act = DeathScreen.HitTest(screenW, screenH, mx, my);
+            if (act == DeathScreen.ActionId.Respawn)
+            {
+                _isDeathScreenOpen = false;
+                Respawn();
+                RespawnedFromDeathScreen?.Invoke();
+            }
+            else if (act == DeathScreen.ActionId.Title)
+            {
+                _isDeathScreenOpen = false;
+                QuitToTitleRequested?.Invoke();
+            }
+        }
+
+        // Tier 5 #30 — F3 debug overlay. Top-left text block with the
+        // canonical Minecraft debug fields: XYZ, FPS, chunk count,
+        // sky/block light at the player's feet, cardinal facing,
+        // game mode, and the time-of-day clock. Each line redraws
+        // each frame from live state — no caching — so the values
+        // tick smoothly while the world runs. Toggled via F3 in the
+        // host's keybind handler. Renders BEFORE the modal-pause /
+        // inventory layers so the overlay shows through them (you
+        // can pause and still read your coords) but AFTER the world
+        // so it always sits on top of the scene.
+        private void RenderDebugOverlay(int width, int height)
+        {
+            if (_world == null || Input == null) return;
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Tier 5 #30 — Debug font scale. Bumped from 1× → 2× of
+            // UiScale's base after a "make it larger" pass — at 1080p
+            // the previous size was readable but cramped, especially
+            // for the floating-point XYZ digits. The pad + line gap
+            // ride the scale so the block stays neat at any viewport.
+            int scale = System.Math.Max(2, UiScale.S(2, width, height));
+            int glyphW = HotbarTextures.GlyphCellW * scale;
+            int glyphH = HotbarTextures.GlyphCellH * scale;
+            int line = glyphH + scale * 2;
+            int padX = scale * 2, padY = scale * 2;
+            var fg = new Vector4(1f, 1f, 1f, 1f);
+
+            // Local helper — DrawString centers on centerX, so for
+            // left-aligned overlay text we compute centerX from the
+            // glyph total instead of branching DrawString itself.
+            void Line(string text, int row)
+            {
+                int total = text.Length * glyphW;
+                int centerX = padX + total / 2;
+                DrawString(text, scale, centerX, padY + row * line, fg, ortho);
+            }
+
+            int row = 0;
+            var p = Player.Position;
+            Line($"XYZ: {p.X:F2} / {p.Y:F2} / {p.Z:F2}", row++);
+            Line($"FPS: {_hostFps}   Chunks: {_world.ChunkCount}", row++);
+
+            // Light at the feet block. GetChunk returns null past the
+            // loaded radius (just past the visible edge); guard so the
+            // overlay degrades gracefully instead of throwing.
+            int bx = (int)System.Math.Floor(p.X);
+            int by = (int)System.Math.Floor(p.Y);
+            int bz = (int)System.Math.Floor(p.Z);
+            int sky = 0, blk = 0;
+            int cx = bx >> 4, cz = bz >> 4;  // Chunk.SizeX is 16 → shift by 4
+            int lx = bx & 15, lz = bz & 15;
+            if (by >= 0 && by < Chunk.SizeY)
+            {
+                var ch = _world.GetChunk(cx, cz);
+                if (ch != null)
+                {
+                    sky = ch.GetSkyLight(lx, by, lz);
+                    blk = ch.GetBlockLight(lx, by, lz);
+                }
+            }
+            Line($"Light: sky={sky} blk={blk}", row++);
+
+            Line($"Facing: {FacingFromYaw(Camera.Yaw)}", row++);
+            Line($"Mode: {GameMode}", row++);
+            Line($"Time: {_timeOfDay:F3}", row++);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        // Tier 5 #30 — Yaw → cardinal label. Camera.Yaw=0 means facing
+        // -Z (north in our convention, matching the in-world compass
+        // marker). Quantises to 8 octants so the label cycles through
+        // N → NE → E → SE → S → SW → W → NW as the player turns,
+        // rather than only showing the four cardinals.
+        private static string FacingFromYaw(float yaw)
+        {
+            const float TwoPi = (float)(System.Math.PI * 2.0);
+            const float Octant = (float)(System.Math.PI / 4.0);
+            float y = yaw % TwoPi;
+            if (y < 0) y += TwoPi;
+            int oct = (int)System.Math.Round(y / Octant) % 8;
+            switch (oct)
+            {
+                case 0: return "N";
+                case 1: return "NE";
+                case 2: return "E";
+                case 3: return "SE";
+                case 4: return "S";
+                case 5: return "SW";
+                case 6: return "W";
+                case 7: return "NW";
+                default: return "?";
             }
         }
 
@@ -9505,26 +9856,67 @@ void main()
             GL.Disable(EnableCap.CullFace);
 
             // ---- scrollbar ----------------------------------------------
-            // Thin track on the right edge of the catalog, with a thumb
-            // sized to the visible window. Purely decorative — the wheel
-            // drives the actual scroll — but a useful visual cue when the
-            // catalog overflows.
+            // Wide gutter to the RIGHT of the catalog rect (inside the
+            // panel's extended creative-mode width — see
+            // InventoryScreen.PanelWidth(creative=true)). Shadowed back,
+            // vertical separator on the left edge dividing it from the
+            // catalog tiles, and a tall thumb sized to the visible
+            // window. Purely decorative — the wheel drives the actual
+            // scroll — but the gutter chrome makes overflow obvious at
+            // a glance, and sitting OUTSIDE the catalog rect means it
+            // never overlaps the 9th column of catalog tiles.
             if (totalRows > InventoryScreen.CatalogRows)
             {
-                int trackW = UiScale.S(4, width, height);
                 int trackInset = UiScale.S(2, width, height);
-                int trackX = cx + cw - trackW - trackInset;
-                int trackY = cy + trackInset;
-                int trackH = ch - trackInset * 2;
-                DrawSolidQuad(trackX, trackY, trackW, trackH,
+                // Halved per "make the separator thinner" pass — was
+                // Max(2, S(2)), now Max(1, S(1)) so the divider line
+                // reads as a hairline instead of a chunky bar.
+                int sepW = System.Math.Max(1, UiScale.S(1, width, height));
+                int trackW = InventoryScreen.ScrollbarGutterWidthPx(width, height);
+                // Gutter sits flush against the catalog's right edge —
+                // the panel was widened by exactly trackW so this lands
+                // inside the panel padding zone, not over the tiles.
+                int gutterX = cx + cw;
+                int gutterY = cy;
+                int gutterH = ch;
+
+                // Shadowed back — slightly darker than the catalog's
+                // dim wash so the gutter reads as a recessed channel.
+                DrawSolidQuad(gutterX, gutterY, trackW, gutterH,
+                    new Vector3(0.06f, 0.06f, 0.08f), 0.85f, ortho);
+
+                // Separator on the LEFT edge of the gutter — light
+                // line dividing catalog tiles from the scrollbar
+                // chrome. Sits exactly on gutterX so it's visually
+                // attached to the gutter, not to the catalog grid.
+                DrawSolidQuad(gutterX, gutterY, sepW, gutterH,
+                    new Vector3(0.55f, 0.58f, 0.64f), 1f, ortho);
+
+                // Inner track — a narrower well inside the gutter so
+                // the thumb has visible margins on left/right and the
+                // gutter's recessed look reads as a frame, not a flat
+                // bar. Thumb travels along this inner track.
+                int trackPadX = sepW + UiScale.S(3, width, height);
+                int trackX = gutterX + trackPadX;
+                int trackInnerW = trackW - trackPadX - UiScale.S(3, width, height);
+                int trackY = gutterY + trackInset;
+                int trackH = gutterH - trackInset * 2;
+                DrawSolidQuad(trackX, trackY, trackInnerW, trackH,
                     new Vector3(0.12f, 0.12f, 0.14f), 1f, ortho);
 
-                int thumbH = System.Math.Max(UiScale.S(8, width, height),
+                int thumbH = System.Math.Max(UiScale.S(16, width, height),
                     trackH * InventoryScreen.CatalogRows / totalRows);
                 int thumbY = trackY +
                     (maxScroll == 0 ? 0 : (trackH - thumbH) * scrollRows / maxScroll);
-                DrawSolidQuad(trackX, thumbY, trackW, thumbH,
+                DrawSolidQuad(trackX, thumbY, trackInnerW, thumbH,
                     new Vector3(0.62f, 0.66f, 0.72f), 1f, ortho);
+                // Thumb top/bottom highlight — 1px lighter band so the
+                // thumb reads as a 3D pill inside the recessed track.
+                int hi = System.Math.Max(1, UiScale.S(1, width, height));
+                DrawSolidQuad(trackX, thumbY, trackInnerW, hi,
+                    new Vector3(0.85f, 0.88f, 0.92f), 1f, ortho);
+                DrawSolidQuad(trackX, thumbY + thumbH - hi, trackInnerW, hi,
+                    new Vector3(0.35f, 0.38f, 0.42f), 1f, ortho);
             }
 
             // ---- hotbar wells + icons -----------------------------------

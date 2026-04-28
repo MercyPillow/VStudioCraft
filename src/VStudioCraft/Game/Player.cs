@@ -24,6 +24,10 @@ namespace VStudioCraft.Game
 
         public const float WalkSpeed = 4.3f;
         public const float SprintSpeed = 7.0f;
+        // Tier 5 #27 — Sneak speed. Canonical Alpha 1.1.2_01 sneak is
+        // ~30% of walk; paired with the edge-stop rule in Update so the
+        // player can't walk off a 1-block ledge while sneaking.
+        public const float SneakSpeed = 1.295f;
         public const float Gravity = 28f;        // m/s²
         public const float JumpSpeed = 8.4f;     // apex ≈ 1.26 blocks
         public const float MaxFallSpeed = 78f;
@@ -120,6 +124,12 @@ namespace VStudioCraft.Game
         // force-clears it via the Tick pass so a stale reference
         // can't "ghost reel" empty world.
         public Bobber ActiveBobber;
+
+        // Tier 5 #27 — Sneak modifier. Set by the host each frame from
+        // _input.IsDown(Keys.ShiftKey); consumed inside Update for the
+        // edge-stop pre-check below. Public field (vs property) keeps
+        // the cross-thread write tear-free — single bool assignment.
+        public bool IsSneaking;
 
         // Highest Y reached while airborne — the "peak" from which fall distance
         // is measured. Reset to current Y while on the ground so small hops
@@ -249,6 +259,22 @@ namespace VStudioCraft.Game
                 }
             }
 
+            // Tier 5 #27 — Sneak edge-stop. While sneaking AND on the
+            // ground, reject any horizontal step that would put the
+            // AABB over empty space at foot level — i.e. you can walk
+            // along a 1-wide ledge without falling off. Probed per axis
+            // so a corner-step can still be partially clamped (X gets
+            // zeroed but Z is fine, etc.). Skipped while airborne (Alpha
+            // rule — sneak doesn't catch you mid-fall) and while in
+            // water (swim physics already gates fall through fluid).
+            if (IsSneaking && OnGround && !inWater)
+            {
+                var probeX = new Vector3(Position.X + Velocity.X * dt, Position.Y, Position.Z);
+                if (!HasGroundUnderAabb(world, probeX)) Velocity.X = 0f;
+                var probeZ = new Vector3(Position.X, Position.Y, Position.Z + Velocity.Z * dt);
+                if (!HasGroundUnderAabb(world, probeZ)) Velocity.Z = 0f;
+            }
+
             var step = Velocity * dt;
             MoveAxis(0, step.X, world);
             MoveAxis(1, step.Y, world);
@@ -272,6 +298,27 @@ namespace VStudioCraft.Game
             {
                 SwimBobOffset += (0f - SwimBobOffset) * Math.Min(1f, 8f * dt);
             }
+        }
+
+        // Tier 5 #27 — True if the player AABB at `pos` (feet at pos.Y)
+        // has solid ground under at least one corner. Used by sneak
+        // edge-stop. "Any corner over solid" rather than "all corners"
+        // matches Alpha — the player can stand at the edge of a block
+        // with most of their AABB hanging over the void as long as
+        // some part is still over ground. Probes one block-thickness
+        // below the feet (Y - 0.05f) so the test reads the floor block
+        // even when the AABB is exactly flush with the top of it.
+        private bool HasGroundUnderAabb(World world, Vector3 pos)
+        {
+            int y = (int)Math.Floor(pos.Y - 0.05f);
+            int x0 = (int)Math.Floor(pos.X - HalfWidth);
+            int x1 = (int)Math.Floor(pos.X + HalfWidth);
+            int z0 = (int)Math.Floor(pos.Z - HalfWidth);
+            int z1 = (int)Math.Floor(pos.Z + HalfWidth);
+            for (int x = x0; x <= x1; x++)
+                for (int z = z0; z <= z1; z++)
+                    if (BlockData.IsSolid(world.GetBlock(x, y, z))) return true;
+            return false;
         }
 
         private void UpdateFallTracking(bool wasOnGround, World world)

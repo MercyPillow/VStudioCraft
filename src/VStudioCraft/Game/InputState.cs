@@ -17,6 +17,11 @@ namespace VStudioCraft.Game
 
         public bool BreakPressed;   // one-shot, consumed by renderer
         public bool PlacePressed;   // one-shot, consumed by renderer
+        // Tier 5 #27 — Middle-click pick-block. One-shot press flag
+        // queued by the host on MMB-down; the renderer consumes it on
+        // the next frame and runs TryPickBlock to copy the looked-at
+        // block into / select on the hotbar.
+        public bool PickBlockPressed;
 
         // True while the left mouse button is held with mouse-look captured.
         // Drives survival-mode block-break progress: the renderer accumulates
@@ -101,6 +106,39 @@ namespace VStudioCraft.Game
         public string InventorySearchText = string.Empty;
         public int InventoryScrollRows;
 
+        // Tier 5 #30 — F3 debug overlay toggle. Persists across pause /
+        // inventory / etc. so you can flip it on, open inventory to read
+        // your inventory + coords side by side, then flip it off.
+        public bool DebugOverlayVisible;
+
+        // Tier 5 #31 — Hotbar-change label timer. The renderer reads the
+        // currently-held block name above the hotbar; without a timer the
+        // label sat there permanently and just polluted the bottom of the
+        // screen. With this it fades out HotbarLabelHoldSeconds after the
+        // last selection change, fading over the last HotbarLabelFadeSeconds.
+        // Mutated on the render thread (CountDown each frame + the host's
+        // OnHotbarMaybeChanged poll), but a brief tear from a parallel
+        // numeric-key press just resets the timer to the hold duration —
+        // worst case is one extra blink, never a crash.
+        public float HotbarLabelTimer;
+        public const float HotbarLabelHoldSeconds = 2.0f;
+        public const float HotbarLabelFadeSeconds = 0.5f;
+        private int _lastHotbarIndex = -1;
+
+        // Re-arm the label timer if HotbarIndex changed since the last
+        // poll. Called once per frame by the render thread; -1 sentinel
+        // on first call ensures the very first frame doesn't spuriously
+        // show the label (the next frame's poll matches and stays quiet
+        // until a real key/scroll event flips the index).
+        public void OnHotbarMaybeChanged()
+        {
+            if (HotbarIndex != _lastHotbarIndex)
+            {
+                if (_lastHotbarIndex >= 0) HotbarLabelTimer = HotbarLabelHoldSeconds;
+                _lastHotbarIndex = HotbarIndex;
+            }
+        }
+
         public InputState()
         {
             // Starter loadout — nine canonical Alpha blocks, full stacks.
@@ -182,6 +220,7 @@ namespace VStudioCraft.Game
             }
             MouseLookActive = false;
             BreakPressed = PlacePressed = false;
+            PickBlockPressed = false;
             BreakHeld = false;
             PlaceHeld = false;
             InventoryClickButton = 0;

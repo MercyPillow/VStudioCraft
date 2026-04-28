@@ -128,7 +128,29 @@ namespace VStudioCraft.Game
         // column-1 X via gridX0 below) so the search-bar and catalog
         // hit-rects continue to line up at the right edge.
         public static int PanelWidth(int viewW, int viewH)
-            => GridWidthPx(viewW, viewH) + ArmorColumnWidthPx(viewW, viewH) + PanelPadX(viewW, viewH) * 2;
+            => PanelWidth(viewW, viewH, /*creative*/false);
+
+        // Creative panels add a scrollbar gutter to the right of the
+        // catalog grid so the scrollbar chrome doesn't overlap the
+        // 9th column of catalog tiles. Survival panels skip this —
+        // there's no scroll, no gutter needed. ScrollbarGutterWidthPx
+        // matches the scrollbar render in GameRenderer.RenderCreative
+        // InventoryBody so the rendered chrome and the panel's
+        // claimed width agree.
+        public static int PanelWidth(int viewW, int viewH, bool creative)
+        {
+            int w = GridWidthPx(viewW, viewH) + ArmorColumnWidthPx(viewW, viewH) + PanelPadX(viewW, viewH) * 2;
+            if (creative) w += ScrollbarGutterWidthPx(viewW, viewH);
+            return w;
+        }
+
+        // Tier 5 — Width of the creative-mode scrollbar gutter. Lives
+        // in the right panel padding zone, extending the panel by
+        // exactly this much. ~24px base reads as a comfortable
+        // chrome strip without crowding the catalog tiles.
+        private const int ScrollbarGutterWidthBase = 24;
+        public static int ScrollbarGutterWidthPx(int viewW, int viewH)
+            => UiScale.S(ScrollbarGutterWidthBase, viewW, viewH);
         public static int PanelHeight(int viewW, int viewH)
             => PanelHeight(viewW, viewH, /*creative*/false);
 
@@ -164,7 +186,7 @@ namespace VStudioCraft.Game
         public static void GetPanelRect(int screenW, int screenH, bool creative,
             out int x, out int y, out int w, out int h)
         {
-            w = PanelWidth(screenW, screenH);
+            w = PanelWidth(screenW, screenH, creative);
             h = PanelHeight(screenW, screenH, creative);
             x = (screenW - w) / 2;
 
@@ -243,13 +265,21 @@ namespace VStudioCraft.Game
                 // Tier 4 #19 — Armor slot. Index 0..3 maps to the
                 // four-tall column at the panel's left edge, top-down
                 // in the canonical Helmet→Chestplate→Leggings→Boots
-                // order (matches the per-slot index returned by
-                // BlockData.GetArmorSlot). Vertically aligned with
-                // the main grid's first four rows so the column reads
-                // as a "doll" silhouette flanking the grid.
+                // order. Vertically aligned with the main grid's
+                // first four rows so the column reads as a "doll"
+                // silhouette flanking the grid.
+                //
+                // Creative variant: the catalog grid sits below the
+                // search bar (search bar replaces the first "row"
+                // visually), so the armor column needs the same
+                // search-bar offset to keep its top slot aligned with
+                // the catalog's first row instead of floating up next
+                // to the search bar.
                 int armorIndex = slotIndex - MainSlotCount - HotbarSlotCount;
                 x = armorX;
-                y = gridY0 + armorIndex * slot;
+                int armorY0 = gridY0;
+                if (creative) armorY0 += SearchBarHeight(screenW, screenH) + SearchBarGap(screenW, screenH);
+                y = armorY0 + armorIndex * slot;
             }
             w = slot;
             h = slot;

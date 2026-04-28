@@ -273,6 +273,23 @@ namespace VStudioCraft.UI
 
             _renderer = new GameRenderer();
             _renderer.Input = _input;
+            // Tier 5 #29 — Title Screen button on the death modal exits
+            // to the main menu. Re-uses the existing QuitRequested
+            // pipeline (same as the pause menu's Quit button) so the
+            // host owns the actual exit-flow in one place.
+            _renderer.QuitToTitleRequested += () => Dispatcher.BeginInvoke(new Action(RaiseQuitRequested));
+            // Tier 5 #29 — When survival damage opens the death modal
+            // on the render thread, hop to the UI thread to release
+            // the mouse-look so the cursor becomes visible. Same
+            // pattern the inventory / pause paths use; without it the
+            // player couldn't see the Respawn / Title Screen buttons
+            // they were trying to click.
+            _renderer.DeathScreenOpened += () => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                ReleaseMouseLook();
+                _input.Clear();
+            }));
+            _renderer.RespawnedFromDeathScreen += () => Dispatcher.BeginInvoke(new Action(CaptureMouseLook));
             _renderer.InitializeGraphics();
 
             // Bring up the audio engine + procedural SFX bank alongside
@@ -400,6 +417,18 @@ namespace VStudioCraft.UI
                             changed |= _renderer.TryBreak();
                             _input.BreakPressed = false;
                         }
+                        if (_input.PickBlockPressed)
+                        {
+                            // Tier 5 #27 — Middle-click pick-block. Looks
+                            // up the targeted block via the same raycast
+                            // TryBreak / TryPlace use; survival mode just
+                            // selects the matching hotbar slot if any,
+                            // creative mode conjures a stack into the
+                            // first empty hotbar (or clobbers the held
+                            // slot if all are full).
+                            _renderer.TryPickBlock();
+                            _input.PickBlockPressed = false;
+                        }
                         if (_input.PlacePressed)
                         {
                             // RMB dispatch: interact-first (CraftingTable opens
@@ -441,6 +470,7 @@ namespace VStudioCraft.UI
                         // don't fire the moment we resume.
                         _input.BreakPressed = false;
                         _input.PlacePressed = false;
+                        _input.PickBlockPressed = false;
                     }
 
                     // Drain queued inventory-screen clicks while it's open.
@@ -672,6 +702,10 @@ namespace VStudioCraft.UI
                         _gameMs = g;
                         _renderMs = r;
                         _swapMs = s;
+                        // Tier 5 #30 — Push the rolled FPS value to the
+                        // renderer so its F3 debug overlay can show the
+                        // same number as the title bar / status strip.
+                        _renderer?.ReportFps(frozenFps);
 
                         gameTicks = renderTicks = swapTicks = 0;
                         frames = 0;
@@ -734,7 +768,17 @@ namespace VStudioCraft.UI
             if (_input.IsDown(Keys.A)) wish -= rightH;
             if (wish.LengthSquared > 0f) wish = Vector3.Normalize(wish);
 
-            float speed = _input.IsDown(Keys.ShiftKey) ? Player.SprintSpeed : Player.WalkSpeed;
+            // Tier 5 #27 — Sneak (Shift) and sprint (Ctrl). Sneak wins
+            // over sprint when both held — sneak is the safety modifier
+            // (a stuck Ctrl key shouldn't launch you off a cliff). The
+            // sneaking flag is also pushed into Player so its Update
+            // can run the AABB edge-stop probe before MoveAxis.
+            bool sneaking = _input.IsDown(Keys.ShiftKey);
+            bool sprinting = !sneaking && _input.IsDown(Keys.ControlKey);
+            float speed = sneaking ? Player.SneakSpeed
+                        : sprinting ? Player.SprintSpeed
+                        : Player.WalkSpeed;
+            _renderer.Player.IsSneaking = sneaking;
             bool wantJump = _input.IsDown(Keys.Space);
 
             _renderer.UpdatePlayer(dt, wish * speed, wantJump);
@@ -821,10 +865,20 @@ namespace VStudioCraft.UI
                 case Keys.D8: _input.HotbarIndex = 7; break;
                 case Keys.D9: _input.HotbarIndex = 8; break;
                 case Keys.F3:
+                    // Tier 5 #30 — Debug overlay toggle. Canonical
+                    // Minecraft binding; reads/writes a single bool on
+                    // InputState which the renderer samples each frame.
+                    _input.DebugOverlayVisible = !_input.DebugOverlayVisible;
+                    e.SuppressKeyPress = true;
+                    break;
+                case Keys.F8:
+                    // Tier 5 #30 — Game-mode toggle (moved from F3 so
+                    // the canonical Minecraft F3 debug binding is free).
+                    // Alpha 1.1.2_01 didn't have a runtime mode hotkey
+                    // — we kept this for testing convenience but it
+                    // doesn't need to claim F3.
                     if (_renderer != null)
                     {
-                        // UI-thread write, render-thread read. Enum assignment is a
-                        // single-byte store on x86/x64, so no lock needed.
                         _renderer.GameMode = _renderer.GameMode == GameMode.Creative
                             ? GameMode.Survival
                             : GameMode.Creative;
@@ -1152,6 +1206,22 @@ namespace VStudioCraft.UI
                 return;
             }
 
+            // Tier 5 #29 — Death modal click router. Runs BEFORE the
+            // pause-menu / capture branches so a click while dead can't
+            // re-capture mouse-look or pump a TryBreak through the
+            // halted world. Right/middle buttons are swallowed; only
+            // LMB hits the buttons.
+            if (_renderer != null && _renderer.IsDeathScreenOpen)
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    var (px, py) = ToPhysicalCoord(e.X, e.Y);
+                    var (pw, ph) = GetPhysicalSize();
+                    _renderer.HandleDeathScreenClick(px, py, pw, ph);
+                }
+                return;
+            }
+
             // Paused: clicks hit-test the pause menu (or the options menu
             // if it's layered on top). We swallow them either way so the
             // click never re-captures the cursor or fires a place / break
@@ -1216,6 +1286,15 @@ namespace VStudioCraft.UI
                 // see the held state without changing those existing
                 // callers. Cleared on MouseUp.
                 _input.PlaceHeld = true;
+            }
+            else if (e.Button == MouseButtons.Middle)
+            {
+                // Tier 5 #27 — Pick-block. One-shot; the renderer's
+                // TryPickBlock consumes it next frame and either swaps
+                // the hotbar selector to the looked-at block (survival,
+                // if already in inventory) or conjures a stack
+                // (creative). Misclicks into the sky are silent no-ops.
+                _input.PickBlockPressed = true;
             }
         }
 

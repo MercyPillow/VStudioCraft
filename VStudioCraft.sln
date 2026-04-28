@@ -1,6 +1,6 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
-VisualStudioVersion = 18.5.11716.220 stable
+VisualStudioVersion = 18.5.11716.220
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VStudioCraft", "src\VStudioCraft\VStudioCraft.csproj", "{A8D1C7E2-3F9B-4C5D-8E2A-1B6D4F7C9E3A}"
 EndProject
@@ -10,7 +10,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VStudioCraft.Server", "src\
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{B1E686B0-286F-4B68-BDE0-5132638BE740}"
 	ProjectSection(SolutionItems) = preProject
+		CLAUDE.md = CLAUDE.md
 		features.md = features.md
+		README.md = README.md
 	EndProjectSection
 EndProject
 Global

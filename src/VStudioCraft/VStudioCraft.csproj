@@ -118,6 +118,7 @@
     <Compile Include="Game\OptionsMenu.cs" />
     <Compile Include="Game\OverlayMesh.cs" />
     <Compile Include="Game\Settings.cs" />
+    <Compile Include="Game\DeathScreen.cs" />
     <Compile Include="Game\PauseMenu.cs" />
     <Compile Include="Game\Player.cs" />
     <Compile Include="Game\Raycast.cs" />

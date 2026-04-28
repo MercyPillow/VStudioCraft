@@ -502,13 +502,9 @@ order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
 	
-### Tier 5 — Controls + UX parity (small, every-session improvements)
+### Tier 5 — Controls + UX parity — **COMPLETE**
 
-27. **Middle-click pick-block, Shift sneak (edge-stop) - Ctrl** — Each ~50–100 LoC; ship together. (Q drop + F5 third-person already shipped.)
-28. **Right-click split, shift-click move, right-click drag spread** — Inventory ops Alpha shipped that we're missing.
-29. **Death screen with respawn button** — Replaces the current instant-respawn.
-30. **F3 debug screen** — XYZ, FPS, biome, light values, chunk count.
-31. **Item-name popup on hotbar switch** — Show the held block's name for ~2 s after a hotbar slot change (currently it's persistent above the bar).
+All five Controls+UX features shipped: middle-click pick-block (raycasts the same hit TryBreak/TryPlace use, creative conjures into the first empty hotbar, survival selects the matching slot or swaps from main grid), Shift sneak with AABB edge-stop (canonical Alpha 1.295 m/s — paired with a per-axis "any-corner-over-solid" probe so you can't walk off a 1-block lip while holding shift), Ctrl sprint, right-click drag-spread (was already wired — verified the initial-slot deposit lands via the standard RMB single-click path before MouseMove takes over), F3 debug overlay (XYZ / FPS / chunk count / sky+block light / cardinal facing / mode / time-of-day; toggled with the canonical Minecraft binding, game-mode toggle moved to F8), transient hotbar item-name popup with 0.5s alpha fade-out (re-armed by a HotbarIndex-changed poll on the render thread), and the YOU DIED death modal with Respawn + Title Screen buttons (mirrors PauseMenu's hit-test/render pattern; Title Screen routes through the existing QuitRequested pipeline). Game-mode toggle: Shift→sprint replaced with Shift→sneak / Ctrl→sprint (sneak wins when both held — the safety modifier).
 
 ### Tier 6 — World-gen variety
 
