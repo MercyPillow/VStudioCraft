@@ -1570,6 +1570,17 @@ namespace VStudioCraft.UI
                 case PauseMenu.ActionId.Save:
                     RaiseSaveRequested();
                     break;
+                case PauseMenu.ActionId.ToggleLan:
+                    // Phase 7 — flip the LAN host on/off. OpenToLan
+                    // enqueues onto the render thread (same pattern as
+                    // StartNewWorld); the LanOpened / LanOpenFailed
+                    // events surface success/failure back to the host
+                    // window for UI feedback. Host stays paused
+                    // afterwards so the player can see the menu update
+                    // and dismiss when ready.
+                    if (IsHostingLan) CloseLan();
+                    else OpenToLan();
+                    break;
                 case PauseMenu.ActionId.Quit:
                     // Tier 6 #47 — Pause's Quit returns to the title
                     // screen in Standalone (RaiseReturnedToTitle hops

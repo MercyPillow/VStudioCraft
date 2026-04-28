@@ -18,6 +18,11 @@ namespace VStudioCraft.Game
             Options,
             Save,
             Quit,
+            // Phase 7 — toggles in-process LAN host. Single ActionId
+            // (not separate Open/Close) because the two are mutually
+            // exclusive — you're either hosting or you aren't, and the
+            // button label switches on that state.
+            ToggleLan,
         }
 
         // Base (scale=1) sizes — fed through UiScale at lookup time.
@@ -52,23 +57,33 @@ namespace VStudioCraft.Game
             ActionId.BackToGame,
             ActionId.Options,
             ActionId.Save,
+            ActionId.ToggleLan,
             ActionId.Quit,
         };
 
         // Uppercase to match the bitmap-font glyph table — the font has no
         // lowercase glyphs (lower → upper remap inside HotbarTextures), but
         // writing them upper here keeps the source readable.
+        //
+        // ToggleLan's label is dynamic ("OPEN TO LAN" vs "CLOSE LAN")
+        // depending on whether a host session is running; resolved per
+        // call inside GetButton via the isHostingLan flag the renderer
+        // passes in.
         private static readonly string[] Labels = new[]
         {
             "BACK TO GAME",
             "OPTIONS",
             "SAVE",
+            "OPEN TO LAN",
             "QUIT",
         };
 
         public static int Count => Order.Length;
 
         public static Button GetButton(int index, int screenW, int screenH)
+            => GetButton(index, screenW, screenH, isHostingLan: false);
+
+        public static Button GetButton(int index, int screenW, int screenH, bool isHostingLan)
         {
             int n = Order.Length;
             int bw = ButtonWidth(screenW, screenH);
@@ -77,6 +92,13 @@ namespace VStudioCraft.Game
             int totalH = n * bh + (n - 1) * gap;
             int startY = (screenH - totalH) / 2;
             int x = (screenW - bw) / 2;
+            string label = Labels[index];
+            // Phase 7 — flip the LAN button's label based on host state
+            // so the same slot shows "OPEN TO LAN" when off and "CLOSE
+            // LAN" when on. Geometry stays identical so the click hit-
+            // rect is the same in both states.
+            if (Order[index] == ActionId.ToggleLan && isHostingLan)
+                label = "CLOSE LAN";
             return new Button
             {
                 X = x,
@@ -84,7 +106,7 @@ namespace VStudioCraft.Game
                 W = bw,
                 H = bh,
                 Id = Order[index],
-                Label = Labels[index],
+                Label = label,
             };
         }
 

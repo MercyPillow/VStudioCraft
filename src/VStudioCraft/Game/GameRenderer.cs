@@ -6885,6 +6885,13 @@ void main()
             // a branch.
             if (Input != null && Input.DebugOverlayVisible) RenderDebugOverlay(width, height);
 
+            // Phase 7 — Open-to-LAN status chip. Visible whenever we're
+            // hosting so the player knows the world is exposed without
+            // having to pause each time. Sits top-right so it doesn't
+            // overlap the F3 overlay (top-left). Cheap branch when not
+            // hosting — most frames pay one bool check.
+            if (IsHostingLan) RenderLanHostChip(width, height);
+
             // Modal overlays. Only one is shown at a time — the host
             // never opens the inventory over an active pause menu, but
             // we still gate on _isInventoryOpen first so a stuck flag
@@ -9503,6 +9510,58 @@ void main()
         // inventory layers so the overlay shows through them (you
         // can pause and still read your coords) but AFTER the world
         // so it always sits on top of the scene.
+        // Phase 7 — small status chip top-right showing the LAN host
+        // port + connected friend count. Always visible while hosting
+        // (not gated on F3) so the player has clear feedback that their
+        // world is exposed. Layered after the hotbar / before modals
+        // following the same order as RenderDebugOverlay.
+        private void RenderLanHostChip(int width, int height)
+        {
+            int port = HostedPort;
+            int friends = LanClientCount;
+            if (friends < 0) friends = 0;
+            string text = friends == 1
+                ? $"HOSTING :{port}  1 PLAYER"
+                : $"HOSTING :{port}  {friends} PLAYERS";
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            int scale = System.Math.Max(1, UiScale.S(2, width, height));
+            int glyphW = HotbarTextures.GlyphCellW * scale;
+            int glyphH = HotbarTextures.GlyphCellH * scale;
+            int textW = text.Length * glyphW;
+            int padX = scale * 3, padY = scale * 2;
+            int boxW = textW + padX * 2;
+            int boxH = glyphH + padY * 2;
+            // Top-right corner with a few-pixel margin so the chip
+            // doesn't touch the viewport edge.
+            int boxX = width - boxW - scale * 4;
+            int boxY = scale * 4;
+
+            // Translucent dark backing so the text reads against any sky.
+            DrawSolidQuad(boxX, boxY, boxW, boxH, new Vector3(0.10f, 0.40f, 0.20f), 0.85f, ortho);
+            // Light frame so the chip reads as a UI element, not a HUD
+            // splash. Single-pixel border at any UiScale.
+            int border = System.Math.Max(1, scale / 2);
+            var frame = new Vector3(0.55f, 0.85f, 0.65f);
+            DrawSolidQuad(boxX, boxY, boxW, border, frame, 1f, ortho);
+            DrawSolidQuad(boxX, boxY + boxH - border, boxW, border, frame, 1f, ortho);
+            DrawSolidQuad(boxX, boxY, border, boxH, frame, 1f, ortho);
+            DrawSolidQuad(boxX + boxW - border, boxY, border, boxH, frame, 1f, ortho);
+
+            // Text centred inside the box. DrawString centres on centerX.
+            DrawString(text, scale,
+                centerX: boxX + boxW / 2,
+                topY: boxY + padY,
+                tint: new Vector4(1f, 1f, 1f, 1f),
+                ortho: ortho);
+        }
+
         private void RenderDebugOverlay(int width, int height)
         {
             if (_world == null || Input == null) return;
@@ -9620,9 +9679,12 @@ void main()
             // so the chrome reads as one tier with the button rect itself.
             int btnBorder = UiScale.S(2, width, height);
             int btnLabelScale = System.Math.Max(1, UiScale.S(2, width, height));
+            // Phase 7 — pass current LAN host state so the ToggleLan
+            // button label flips between "OPEN TO LAN" / "CLOSE LAN".
+            bool hostingLan = IsHostingLan;
             for (int i = 0; i < PauseMenu.Count; i++)
             {
-                var b = PauseMenu.GetButton(i, width, height);
+                var b = PauseMenu.GetButton(i, width, height, hostingLan);
                 bool hover = mx >= b.X && mx < b.X + b.W && my >= b.Y && my < b.Y + b.H;
 
                 Vector3 fill = hover
