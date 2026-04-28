@@ -670,6 +670,12 @@ void main()
         private float _posLookSendTimer;
         private const float PosLookSendInterval = 0.05f; // 20 Hz
 
+        // Phase 6b — last hotbar slot we sent upstream. Compared to
+        // Input.HotbarIndex each network tick; mismatches ship a fresh
+        // PlayerHeldSlot. Diffing avoids hooking every site that writes
+        // HotbarIndex (1..9 keys, scroll wheel, F-key bindings).
+        private int _lastSentHeldSlot = -1;
+
         // Phase 4 — other-player replicas. Keyed on server-assigned
         // EntityId; populated by EntitySpawn, drained by EntityDespawn,
         // updated by Entity{Tele,RelMove,Look,RelMoveLook} packets.
@@ -1244,6 +1250,40 @@ void main()
                     username ?? "host",
                     Player.Position,
                     Camera.Yaw, Camera.Pitch);
+                // Phase 6b — friend Q-drop hook. The server-side
+                // HandleDropItem mutates the friend's ServerInventory
+                // and asks the host (us) to actually spawn the
+                // DroppedItem in the world. The next tick's
+                // BroadcastLocalDropsDiff picks it up and ships an
+                // ItemSpawnPacket to all viewers, so the friend sees
+                // their own drop arc through the server's broadcast
+                // — same pipeline as a host-side Q-drop.
+                hub.SpawnDropHook = (pos, vel, stack) =>
+                {
+                    _drops.Add(new DroppedItem
+                    {
+                        Position = pos,
+                        Velocity = vel,
+                        Stack = stack,
+                        PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+                    });
+                };
+                // Phase 6b — friend snowball/egg throw spawns into the
+                // host's _thrown list. BroadcastLocalProjectilesDiff
+                // picks it up next tick and ships ProjectileSpawn to
+                // every viewer (including the friend who threw it).
+                hub.SpawnThrownHook = (pos, vel, type) =>
+                {
+                    _thrown.Add(new ThrownProjectile
+                    {
+                        Position = pos,
+                        Velocity = vel,
+                        Origin = pos,
+                        ProjectileKind = type == BlockType.Egg
+                            ? ThrownProjectile.Kind.Egg
+                            : ThrownProjectile.Kind.Snowball,
+                    });
+                };
             }
             catch
             {
@@ -1614,6 +1654,17 @@ void main()
                     Player.Position.X, Player.Position.Y, Player.Position.Z,
                     Camera.Yaw, Camera.Pitch,
                     Player.OnGround);
+            }
+
+            // Phase 6b — push hotbar selection upstream when it
+            // changes. Diff against last-sent rather than hooking each
+            // 1..9 / wheel / F-key binding so future shortcuts don't
+            // accidentally drop sync.
+            if (Input != null && Input.HotbarIndex != _lastSentHeldSlot
+                && Input.HotbarIndex >= 0 && Input.HotbarIndex < Inventory.HotbarCount)
+            {
+                _netClient.SendHeldSlot((byte)Input.HotbarIndex);
+                _lastSentHeldSlot = Input.HotbarIndex;
             }
 
             // Phase 4 — advance every remote-player replica's
@@ -2110,6 +2161,29 @@ void main()
             _world.InstallGeneratedChunk(chunk);
         }
 
+        // Tier 6 #47 — Find the highest solid (non-air, non-fluid)
+        // block at (worldX, worldZ) so a fresh world's spawn point
+        // can sit on top of the surface instead of dropping the
+        // player from the height limit. Walks Chunk.SizeY-1 → 0;
+        // returns -1 if the column is entirely passable (all-air
+        // edge case). Air, water, and lava are considered passable
+        // — spawning ON water would still cause a fall through
+        // (water doesn't support the player AABB), so we keep
+        // walking until we hit something solid.
+        private int FindSurfaceY(int worldX, int worldZ)
+        {
+            if (_world == null) return -1;
+            for (int y = Chunk.SizeY - 1; y >= 0; y--)
+            {
+                var t = _world.GetBlock(worldX, y, worldZ);
+                if (t == BlockType.Air) continue;
+                if (t == BlockType.Water || t == BlockType.FlowingWater) continue;
+                if (t == BlockType.Lava || t == BlockType.FlowingLava) continue;
+                return y;
+            }
+            return -1;
+        }
+
         public void StartNewWorld(int seed)
         {
             // Make sure any active multiplayer session is torn down before
@@ -2121,11 +2195,25 @@ void main()
             // keep the listener bound to a stale World reference.
             CloseLan();
             SetWorld(World.Generate(seed));
-            // Spawn above origin chunk; gravity drops player onto terrain on the first ticks.
-            int spawnY = TerrainGenerator.BaseHeight + TerrainGenerator.HeightAmplitude + 2;
+            // Tier 6 #47 — Spawn directly on the surface column at the
+            // origin instead of dropping from the height limit. Scan
+            // downward from the top of the world for the highest non-
+            // air block at (0, 0); the player's feet sit one block
+            // above that. Without this, spawn dropped from
+            // BaseHeight+Amplitude+2 onto whatever surface happened to
+            // be there, picking up a fall delta that could subtract HP
+            // before the player even sees the world. Falls back to the
+            // old "drop from the top" position if no surface is found
+            // (all-air column at origin) so a degenerate seed still
+            // produces a valid spawn instead of placing the player at
+            // y=0 in the void.
+            int topY = FindSurfaceY(0, 0);
+            int spawnY = topY >= 0
+                ? topY + 1
+                : TerrainGenerator.BaseHeight + TerrainGenerator.HeightAmplitude + 2;
             Player.Position = new Vector3(0.5f, spawnY, 0.5f);
             Player.Velocity = Vector3.Zero;
-            Player.OnGround = false;
+            Player.OnGround = topY >= 0;
             Player.HealFull();
             // Tier 4 #21 — A fresh world has no rideable pig, and the
             // player starts dismounted. Defensive — should already be
@@ -3296,11 +3384,18 @@ void main()
         public bool TryInteract()
         {
             if (_world == null) return false;
-            // Phase 2c — net-driven mode: RMB interactions (door toggle,
-            // chest open, snowball throw, etc.) become PlayerUseItem /
-            // PlayerPlace intent packets in Phase 3. Swallowed here so
-            // they don't mutate the local replica.
-            if (_netClient != null) return false;
+            // Phase 6b — net-driven mode: ship a PlayerUseItem intent.
+            // Server resolves the held hotbar slot's content and
+            // decides what to do (snowball/egg throw shipped; door
+            // toggle / chest-open / bucket / fishing rod cast still
+            // deferred — those return as Phase 6c). Always returns
+            // false so the caller's RMB-place fallback runs (the
+            // existing TryPlace path is already net-aware via Phase 3).
+            if (_netClient != null)
+            {
+                _netClient.SendUseItem();
+                return false;
+            }
 
             // Tier 4 #20 — Snowball / Egg throw runs BEFORE the raycast
             // gate. Throws fire into open air (over a cliff, into the
@@ -6959,6 +7054,17 @@ void main()
             if (Input == null) return;
             int idx = Input.HotbarIndex;
             if (idx < 0 || idx >= Inventory.HotbarCount) return;
+            // Phase 6b — net mode: ship a PlayerDropItem intent and
+            // let the server mutate ServerInventory + spawn the drop.
+            // The friend's local view of the slot updates when the
+            // server replies with InventoryUpdate; the drop arrives
+            // via ItemSpawn from the host's BroadcastLocalDropsDiff
+            // on the next hub tick.
+            if (_netClient != null)
+            {
+                _netClient.SendDropItem(wholeStack ? (byte)1 : (byte)0);
+                return;
+            }
             int slotIndex = Inventory.HotbarStart + idx;
             DropFromSlotRef(ref Input.Inventory.Slots[slotIndex], wholeStack);
         }

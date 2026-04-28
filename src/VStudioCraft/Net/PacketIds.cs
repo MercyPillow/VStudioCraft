@@ -68,6 +68,16 @@ namespace VStudioCraft.Net
         public const byte PlayerDigStop       = 0x41; // C->S
         public const byte PlayerPlace         = 0x42; // C->S
         public const byte PlayerUseItem       = 0x43; // C->S
+        // Phase 6b — friend hotbar selection (1..9 / scroll wheel).
+        // Server tracks the held slot per ServerClient so future
+        // PlayerUseItem can resolve "what is the friend holding" and
+        // PlayerDropItem can drop from the right slot.
+        public const byte PlayerHeldSlot      = 0x44; // C->S
+        // Phase 6b — friend Q-drop intent. Server removes the item
+        // from ServerInventory and spawns a DroppedItem in the world
+        // at the friend's position with the host's standard toss
+        // velocity, mirroring what the host's local Q-drop path does.
+        public const byte PlayerDropItem      = 0x45; // C->S
 
         // 0x5_ — window / inventory (Phase 6) ------------------------------
         public const byte InventoryClick      = 0x50; // C->S  — Phase 6b

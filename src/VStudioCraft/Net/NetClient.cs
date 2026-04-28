@@ -195,6 +195,40 @@ namespace VStudioCraft.Net
             }.Write(w));
         }
 
+        // Phase 6b — friend changes hotbar slot via 1..9 keys or scroll
+        // wheel. Throttling not needed (single-byte body, infrequent);
+        // the local UI already debounces wheel events.
+        public void SendHeldSlot(byte slot)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.PlayerHeldSlot, w => new PlayerHeldSlotPacket
+            {
+                Slot = slot,
+            }.Write(w));
+        }
+
+        // Phase 6b — friend Q-drop intent. mode = 0 single, 1 stack
+        // (Shift+Q on the host). Server resolves which slot from the
+        // most-recent PlayerHeldSlot it received.
+        public void SendDropItem(byte mode)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.PlayerDropItem, w => new PlayerDropItemPacket
+            {
+                Mode = mode,
+            }.Write(w));
+        }
+
+        // Phase 6b — friend RMB intent. Server uses the friend's last-
+        // known position + held hotbar slot to decide what to do
+        // (snowball / egg throw shipped; bow / bucket / fishing rod
+        // deferred to Phase 6c+).
+        public void SendUseItem()
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.PlayerUseItem);
+        }
+
         public void Disconnect(string reason)
         {
             // Best-effort orderly hangup so the server logs a clean exit

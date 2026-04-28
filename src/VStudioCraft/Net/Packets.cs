@@ -440,6 +440,56 @@ namespace VStudioCraft.Net
         };
     }
 
+    // 0x43 — friend→server "I right-clicked while holding the item in
+    // my selected hotbar slot". Server resolves what to do based on
+    // the slot's content: snowball / egg → spawn ThrownProjectile;
+    // bow → would need draw-charge state (deferred); bucket → fluid
+    // place / scoop (deferred); fishing rod → bobber cast (deferred).
+    // Phase 6b ships only the snowball + egg paths because they're
+    // single-shot intent (no charge timer) and exercise the full
+    // inventory-decrement → projectile-spawn loop end-to-end.
+    //
+    // No payload — the server uses the friend's last-known position +
+    // yaw + held slot. Phase 6b extension could carry a "click target"
+    // for bucket-on-water etc.
+    internal struct PlayerUseItemPacket
+    {
+        public void Write(PacketWriter w) { /* no fields */ }
+        public static PlayerUseItemPacket Read(PacketReader r) => default;
+    }
+
+    // 0x44 — friend→server hotbar slot selection. 0..8. Server stores
+    // it on ServerClient.HeldSlot so future PlayerUseItem / PlayerDrop
+    // can ask "what's the friend holding right now". Cheap (1 byte body)
+    // — clients can spam wheel-scroll without flooding the wire.
+    internal struct PlayerHeldSlotPacket
+    {
+        public byte Slot; // 0..8
+
+        public void Write(PacketWriter w) => w.WriteByte(Slot);
+        public static PlayerHeldSlotPacket Read(PacketReader r) => new PlayerHeldSlotPacket
+        {
+            Slot = r.ReadByte(),
+        };
+    }
+
+    // 0x45 — friend→server Q-drop intent. Mode 0 = drop one item from
+    // the currently-held hotbar slot, mode 1 = drop the whole stack
+    // (Shift+Q on the host). Server resolves the held slot from
+    // ServerClient.HeldSlot, mutates ServerInventory, spawns a
+    // DroppedItem at the friend's position with the standard toss
+    // velocity, and broadcasts ItemSpawn + InventoryUpdate.
+    internal struct PlayerDropItemPacket
+    {
+        public byte Mode; // 0 = single, 1 = whole stack
+
+        public void Write(PacketWriter w) => w.WriteByte(Mode);
+        public static PlayerDropItemPacket Read(PacketReader r) => new PlayerDropItemPacket
+        {
+            Mode = r.ReadByte(),
+        };
+    }
+
     // 0x51 — server→client inventory slot update. Sent when the server's
     // authoritative inventory for a client changes (drop pickup, mob death
     // drop pickup, future crafting / chest interaction). Single-slot packet

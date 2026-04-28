@@ -98,8 +98,17 @@ defaults to 25566 (one above Notch's 25565); username defaults to
   - [x] **5g** — ~~Walk-cycle phase for replicated mobs~~ — turns out moot; passive mobs (Pig/Cow/Sheep/Chicken) don't have walk-cycle animation in either SP or MP. Their legs are static cuboids. Closing without code change.
 - **Phase 6** — Inventory + recipes + tile entities
   - [x] **6a** — Server-authoritative inventory + friend drop pickup. New `InventoryUpdatePacket` (0x51, single-slot) sent on login (full 49-slot prime) and on each pickup. `ServerClient.ServerInventory` is mutated by `ProcessFriendDropPickups` which scans (host's `_drops` × in-game friends) for AABB overlap, calls `Inventory.TryAdd`, ships updates, and despawns drops the host should remove. Friend-side handler writes the inbound slot into `Input.Inventory.Slots[]` so the existing inventory panel + hotbar render see it.
-  - [ ] **6b** — Friend → host click protocol (`InventoryClickPacket` 0x50). Friend's local UI mutations become outbound intents the server applies to `ServerInventory`, replies via `InventoryUpdate`. Closes the "friend can dig but can't carry" loop.
-  - [ ] **6c** — Server-side crafting (recipes already pure in `CraftingRecipes.cs`), `OpenWindow` (0x52) / `CloseWindow` (0x53) for chests/furnaces, `TileEntityData` (0x60) for furnace cook progress + chest contents.
+  - **6b** — Friend → host action intents (minimal subset shipped):
+    - ✅ `PlayerHeldSlot` (0x44) — friend's hotbar selection synced via per-tick diff (no need to hook every 1..9 / wheel write).
+    - ✅ `PlayerDropItem` (0x45) — Q / Shift+Q intent. Server decrements `ServerInventory[hotbar+held]`, calls `SpawnDropHook` to add a `DroppedItem` to the host's `_drops`, ships InventoryUpdate. The drop then ships through the existing Phase 5c `BroadcastLocalDropsDiff` so the friend's own thrown drop appears via the same pipeline as host-thrown drops.
+    - ✅ `PlayerUseItem` (0x43) — friend RMB. Server resolves held slot; for Snowball/Egg it calls `SpawnThrownHook` which adds to the host's `_thrown` (broadcast via existing 5d projectile diff). Bow/bucket/fishing rod return silently (need charge state / target raycast — deferred).
+    - ❌ Full `InventoryClickPacket` (0x50) — drag/drop within inventory panel, shift-click stack moves, RMB-split. Friend's `HandleInventoryClick` still mutates locally without server round-trip; reorganization desyncs from server. Deferred — Alpha's window-click model has many edge cases (cursor stack, drag-deposit, armor-slot type gates, creative catalog) and warrants its own scoped pass.
+  - [ ] **6c** — Tile entities + crafting + chests/furnaces:
+    - `OpenWindow` (0x52) / `CloseWindow` (0x53) for chest/furnace/crafting-table interaction.
+    - `TileEntityData` (0x60) for furnace cook progress + chest contents broadcast.
+    - Server-side crafting (recipes already pure in `CraftingRecipes.cs`; just need to run match against the server's inventory state when an `InventoryClick` lands on the craft output slot).
+    - All three are blocked on the full `InventoryClickPacket` — there's no point opening a chest if the friend can't click items in/out.
+    - Server-authoritative player health (host getting hurt by mobs, friends seeing host's hurt-flash via `EntityHealth` for the host's entity id) folds in here too — needs a `ServerPlayer` entity tied to each `ServerClient`.
 - [x] **Phase 7** — "Open to LAN" — host an in-process server alongside running SP world. Working end-to-end: `--openlan[=PORT]` on Standalone starts a SP world and binds a listener; remote clients can `--connect host:port:user` and join. See [Feature: Open to LAN](#feature-open-to-lan) below for the full design.
 - [ ] **Phase 8** — Persistence v10 (per-username state) + admin console + autosave
 

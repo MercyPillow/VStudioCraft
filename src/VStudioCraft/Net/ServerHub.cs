@@ -625,6 +625,23 @@ namespace VStudioCraft.Net
                         HandlePlace(client, pkt.PlayerPlace);
                         break;
 
+                    case PacketIds.PlayerHeldSlot:
+                        // Phase 6b — friend changed selected hotbar slot.
+                        // Just record; future PlayerUseItem / PlayerDropItem
+                        // handlers consult HeldSlot to find the affected
+                        // ServerInventory slot.
+                        if (pkt.PlayerHeldSlot.Slot < Inventory.HotbarCount)
+                            client.HeldSlot = pkt.PlayerHeldSlot.Slot;
+                        break;
+
+                    case PacketIds.PlayerDropItem:
+                        HandleDropItem(client, pkt.PlayerDropItem);
+                        break;
+
+                    case PacketIds.PlayerUseItem:
+                        HandleUseItem(client);
+                        break;
+
                     case PacketIds.Disconnect:
                         client.Session.Disconnect($"client said: {pkt.Disconnect.Reason}");
                         break;
@@ -861,6 +878,135 @@ namespace VStudioCraft.Net
             // World.SetBlock(record:true) appends to _pendingBlockChanges
             // which the broadcast pass at the end of the tick drains.
             _world.SetBlock(pkt.X, pkt.Y, pkt.Z, BlockType.Air, record: true);
+        }
+
+        // Phase 6b — friend Q-drop. Server owns the friend's inventory;
+        // it removes the right amount from the held hotbar slot and
+        // queues a DroppedItem to be spawned via the host-driven sink
+        // below. The actual world.Drops mutation happens through the
+        // hook the host installs at OpenToLan time — ServerHub doesn't
+        // touch _drops directly because that list lives on GameRenderer.
+        public Action<OpenTK.Vector3, OpenTK.Vector3, ItemStack> SpawnDropHook;
+
+        // Phase 6b — friend RMB → host spawns a projectile. Same hook
+        // pattern as SpawnDropHook: ServerHub doesn't touch _thrown
+        // directly because that list lives on GameRenderer; the host
+        // installs the hook at OpenToLan time and the next
+        // BroadcastLocalProjectilesDiff broadcasts the spawn to everyone.
+        // BlockType is the projectile-kind hint (Snowball or Egg).
+        public Action<OpenTK.Vector3, OpenTK.Vector3, BlockType> SpawnThrownHook;
+
+        private void HandleDropItem(ServerClient client, PlayerDropItemPacket pkt)
+        {
+            if (client.Phase == ClientPhase.AwaitingLogin) return;
+            if (SpawnDropHook == null) return;          // host hasn't wired the hook
+            if (!client.HasReportedPos) return;
+
+            int slotIdx = Inventory.HotbarStart + (client.HeldSlot & 0x07);
+            var current = client.ServerInventory.Slots[slotIdx];
+            if (current.IsEmpty) return;
+
+            // Mode 0 = drop one item, Mode 1 = drop the whole stack.
+            int dropCount = pkt.Mode == 1 ? current.Count : 1;
+            if (dropCount <= 0) return;
+            var dropStack = new ItemStack(current.Type, dropCount);
+
+            int remaining = current.Count - dropCount;
+            client.ServerInventory.Slots[slotIdx] = remaining > 0
+                ? new ItemStack(current.Type, remaining)
+                : ItemStack.Empty;
+
+            // Toss origin — eye height + small forward offset so the
+            // drop visibly arcs forward of the friend's body. Velocity
+            // matches the host's Q-drop value so the friend's local-
+            // looking trajectory and the host's view of the same drop
+            // (via ItemSpawn replication) match.
+            const float eyeHeight = 1.6f;
+            float yawRad = client.LastReportedYaw * (float)Math.PI / 180f;
+            float pitchRad = client.LastReportedPitch * (float)Math.PI / 180f;
+            float fx = (float)(-Math.Sin(yawRad) * Math.Cos(pitchRad));
+            float fy = (float)(-Math.Sin(pitchRad));
+            float fz = (float)(-Math.Cos(yawRad) * Math.Cos(pitchRad));
+            var origin = new OpenTK.Vector3(
+                (float)(client.LastReportedX + fx * 0.4),
+                (float)(client.LastReportedY + eyeHeight + fy * 0.4),
+                (float)(client.LastReportedZ + fz * 0.4));
+            // 4 m/s along forward gives a familiar Alpha-style toss arc.
+            var vel = new OpenTK.Vector3(fx * 4f, fy * 4f + 0.2f, fz * 4f);
+
+            SpawnDropHook(origin, vel, dropStack);
+
+            // Friend's local view of their inventory needs the new state.
+            // Cheap: send the one slot that changed.
+            byte slotByte = (byte)slotIdx;
+            byte typeByte = (byte)client.ServerInventory.Slots[slotIdx].Type;
+            byte countByte = client.ServerInventory.Slots[slotIdx].IsEmpty
+                ? (byte)0
+                : (byte)client.ServerInventory.Slots[slotIdx].Count;
+            client.Session.Send(PacketIds.InventoryUpdate, w => new InventoryUpdatePacket
+            {
+                Slot = slotByte,
+                ItemType = typeByte,
+                ItemCount = countByte,
+            }.Write(w));
+        }
+
+        // Phase 6b — friend RMB intent. Decode the held hotbar slot's
+        // contents and decide what to do. Phase 6b ships the snowball
+        // and egg paths only — both are single-shot intents that don't
+        // need a draw-charge timer. Bow draw, bucket use, fishing rod
+        // cast, and door toggle all need additional state plumbing
+        // (Phase 6c).
+        private void HandleUseItem(ServerClient client)
+        {
+            if (client.Phase == ClientPhase.AwaitingLogin) return;
+            if (SpawnThrownHook == null) return;
+            if (!client.HasReportedPos) return;
+
+            int slotIdx = Inventory.HotbarStart + (client.HeldSlot & 0x07);
+            var stack = client.ServerInventory.Slots[slotIdx];
+            if (stack.IsEmpty) return;
+
+            // Only the throwables this phase ships. Other types are a
+            // silent no-op — the friend's RMB doesn't trigger anything
+            // visible, which is honest about the not-yet-implemented
+            // surface.
+            bool isThrowable = stack.Type == BlockType.Snowball || stack.Type == BlockType.Egg;
+            if (!isThrowable) return;
+
+            // Toss origin + velocity match the host's existing snowball/
+            // egg fire path: ~22 m/s along forward from eye height.
+            const float eyeHeight = 1.6f;
+            float yawRad = client.LastReportedYaw * (float)Math.PI / 180f;
+            float pitchRad = client.LastReportedPitch * (float)Math.PI / 180f;
+            float fx = (float)(-Math.Sin(yawRad) * Math.Cos(pitchRad));
+            float fy = (float)(-Math.Sin(pitchRad));
+            float fz = (float)(-Math.Cos(yawRad) * Math.Cos(pitchRad));
+            var origin = new OpenTK.Vector3(
+                (float)(client.LastReportedX + fx * 0.4),
+                (float)(client.LastReportedY + eyeHeight + fy * 0.4),
+                (float)(client.LastReportedZ + fz * 0.4));
+            const float MuzzleSpeed = 22f;
+            var vel = new OpenTK.Vector3(fx * MuzzleSpeed, fy * MuzzleSpeed, fz * MuzzleSpeed);
+
+            SpawnThrownHook(origin, vel, stack.Type);
+
+            // Decrement the friend's stack and ship the slot update.
+            int newCount = stack.Count - 1;
+            client.ServerInventory.Slots[slotIdx] = newCount > 0
+                ? new ItemStack(stack.Type, newCount)
+                : ItemStack.Empty;
+            byte slotByte = (byte)slotIdx;
+            byte typeByte = (byte)client.ServerInventory.Slots[slotIdx].Type;
+            byte countByte = client.ServerInventory.Slots[slotIdx].IsEmpty
+                ? (byte)0
+                : (byte)client.ServerInventory.Slots[slotIdx].Count;
+            client.Session.Send(PacketIds.InventoryUpdate, w => new InventoryUpdatePacket
+            {
+                Slot = slotByte,
+                ItemType = typeByte,
+                ItemCount = countByte,
+            }.Write(w));
         }
 
         private void HandlePlace(ServerClient client, PlayerPlacePacket pkt)
@@ -1861,6 +2007,15 @@ namespace VStudioCraft.Net
 
         public DateTime LastKeepAliveSent = DateTime.UtcNow;
         public DateTime LastKeepAliveFromPeer = DateTime.UtcNow;
+
+        // Phase 6b — friend's currently-selected hotbar slot (0..8).
+        // Synced from PlayerHeldSlot packets; resolved by PlayerDropItem
+        // (drop the held slot's stack) and future PlayerUseItem (use
+        // the held item — snowball, bucket, etc.). Defaults to 0 so a
+        // freshly-connected friend who hasn't sent a slot packet yet
+        // still has a sensible "selected slot" the server can reason
+        // about.
+        public byte HeldSlot;
 
         // Phase 6a — server-authoritative inventory for this client. The
         // friend's local Player.Inventory mirrors this via InventoryUpdate
