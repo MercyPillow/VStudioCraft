@@ -205,6 +205,26 @@ namespace VStudioCraft.UI
         // it that way for everyone else.
         public void ReleaseMouseLookExternal() => ReleaseMouseLook();
 
+        // Tier 6 #47 — Used by the VSIX LoadDocData path: when VS
+        // reloads the bound .voxworld file we want to land in FPS
+        // view directly, even if the user happened to be sitting on
+        // the title screen at the moment. Closes the title state
+        // (queued onto the render thread to stay consistent with the
+        // LoadFromFile / StartNewWorld enqueues) and captures
+        // mouse-look on the UI thread. Idempotent if title isn't open.
+        public void DismissTitleAndCaptureMouse()
+        {
+            if (_renderer != null)
+            {
+                _renderQueue.Enqueue(() => _renderer.CloseTitleScreen());
+            }
+            // CaptureMouseLook already short-circuits if _gl isn't
+            // ready, so it's safe to call before the GL handle exists
+            // (the title's still up; the user clicks Single Player /
+            // Multiplayer once GL is alive and the capture latches).
+            CaptureMouseLook();
+        }
+
         // Tier 6 #47 — Surfaced from the Standalone-side ConnectFailed
         // hook. Bounces the menu back to the multiplayer connect
         // screen with the error in the error line, so a refused
