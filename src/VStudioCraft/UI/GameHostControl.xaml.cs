@@ -79,6 +79,15 @@ namespace VStudioCraft.UI
         // save-as dialog or persist to a known path. If no subscriber and a
         // path is already known, we silently save to it.
         public event Action SaveRequested;
+
+        // Tier 6 #47 — Raised whenever the host's known world path
+        // changes (LoadFromFile arg, World Select pick, World Create
+        // chosen name). Hosts use this to keep their own "current
+        // path" mirror in sync so a subsequent Pause→Save lands at
+        // the right file without re-prompting. Empty string means
+        // "no current path" (e.g. CLI --connect spawn, or the unset
+        // initial state before any world is loaded).
+        public event Action<string> WorldPathChanged;
         // Raised when the player clicks "Quit" in the pause menu. Hosts hook
         // this to close the window / editor. If no subscriber, we close the
         // owning WPF Window as a fallback.
@@ -135,6 +144,7 @@ namespace VStudioCraft.UI
         public void LoadFromFile(string path)
         {
             _worldPath = path;
+            WorldPathChanged?.Invoke(path);
             if (!_glReady)
             {
                 _pendingIsLoad = true;
@@ -305,6 +315,7 @@ namespace VStudioCraft.UI
         public void SaveToFile(string path)
         {
             _worldPath = path;
+            WorldPathChanged?.Invoke(path);
             if (!_glReady) return;
             _renderQueue.Enqueue(() =>
             {
@@ -312,6 +323,13 @@ namespace VStudioCraft.UI
                 Dispatcher.BeginInvoke(new Action(UpdateStatus));
             });
         }
+
+        // Tier 6 #47 — Read-only accessor on the host's known world
+        // path. Hosts can use this to default a Save-As dialog's
+        // initial filename / directory to the file the host is
+        // already pointing at, instead of asking the user to type
+        // the path they already chose at world creation.
+        public string CurrentWorldPath => _worldPath;
 
         // Return the HWND's client-area size in physical pixels. WinForms' Control.Width
         // can be logical pixels when the control is DPI-virtualised, which puts the GL
@@ -1649,6 +1667,11 @@ namespace VStudioCraft.UI
                     string path = MakeUniqueSavePath(name);
                     _input.FocusedField = InputState.TextField.None;
                     _worldPath = path;
+                    // Notify the host (Standalone main window) so its
+                    // own current-path mirror updates and the next
+                    // Pause→Save lands at the user's chosen filename
+                    // instead of falling through to a Save-As prompt.
+                    WorldPathChanged?.Invoke(path);
                     _renderer.CloseTitleScreen();
                     StartNewWorld(seed);
                     CaptureMouseLook();

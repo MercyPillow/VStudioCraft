@@ -44,6 +44,29 @@ namespace VStudioCraft.Standalone
                 Host.OpenTitleScreen();
                 Host.ReleaseMouseLookExternal();
             };
+            // Tier 6 #47 — Mirror the host's known world path into our
+            // _currentPath so a Pause→Save lands at the file the user
+            // chose at creation/load instead of falling through to
+            // Save-As. Fired on Load / Create / Save / external SaveAs.
+            Host.WorldPathChanged += path =>
+            {
+                _currentPath = string.IsNullOrEmpty(path) ? null : path;
+            };
+        }
+
+        // Tier 6 #47 — Default save / open directory shared between
+        // the title-screen World Select flow and the File menu's
+        // dialogs. Matches the layout EnumerateSaves scans, so the
+        // two paths agree on where worlds live by default and the
+        // user doesn't have to navigate back to %APPDATA% on every
+        // save-as.
+        private static string DefaultSavesDirectory()
+        {
+            var dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "VStudioCraft", "saves");
+            try { System.IO.Directory.CreateDirectory(dir); } catch { /* read-only fs */ }
+            return dir;
         }
 
         private void OnWindowLoaded(object sender, RoutedEventArgs e)
@@ -115,7 +138,16 @@ namespace VStudioCraft.Standalone
 
         private void OnOpen(object sender, RoutedEventArgs e)
         {
-            var dlg = new OpenFileDialog { Filter = Filter, DefaultExt = Extension };
+            var dlg = new OpenFileDialog
+            {
+                Filter = Filter,
+                DefaultExt = Extension,
+                // Tier 6 #47 — Default to the saves directory the
+                // title-screen World Select flow scans, so File→Open
+                // and the in-game World Select see the same world list
+                // by default. The user can still navigate elsewhere.
+                InitialDirectory = DefaultSavesDirectory(),
+            };
             if (dlg.ShowDialog(this) != true) return;
             try
             {
@@ -137,11 +169,23 @@ namespace VStudioCraft.Standalone
 
         private void OnSaveAs(object sender, RoutedEventArgs e)
         {
+            // Tier 6 #47 — Default the dialog to the same saves
+            // directory the title-screen World Select scans. If
+            // _currentPath is already set we put its filename + parent
+            // dir straight into the dialog so the user just confirms;
+            // otherwise the saves dir + a placeholder name.
+            string initialDir = string.IsNullOrEmpty(_currentPath)
+                ? DefaultSavesDirectory()
+                : (System.IO.Path.GetDirectoryName(_currentPath) ?? DefaultSavesDirectory());
+            string initialName = string.IsNullOrEmpty(_currentPath)
+                ? "world" + Extension
+                : System.IO.Path.GetFileName(_currentPath);
             var dlg = new SaveFileDialog
             {
                 Filter = Filter,
                 DefaultExt = Extension,
-                FileName = _currentPath ?? ("world" + Extension),
+                FileName = initialName,
+                InitialDirectory = initialDir,
             };
             if (dlg.ShowDialog(this) != true) return;
             try

@@ -1533,6 +1533,11 @@ void main()
             // pre-existing behaviour where _spawnPos was set to the
             // just-loaded player position.
             _spawnPos = header.SpawnPos;
+            // Tier 6 #47 — Restore the saved time-of-day clock so a
+            // world saved at dusk reloads at dusk (instead of snapping
+            // back to noon like every load before v12). The setter
+            // wraps to [0,1) defensively, mirroring TimeOfDay's prop.
+            TimeOfDay = header.TimeOfDay;
             _voidTimer = 0f;
             _wasSubmergedPrev = false;
             _stepDistance = 0f;
@@ -1559,6 +1564,11 @@ void main()
                 // header so the compass needle and respawn target both
                 // survive a round-trip through disk.
                 SpawnPos = _spawnPos,
+                // Tier 6 #47 — Persist the day/night clock so a world
+                // saved at dusk reloads at dusk. Without this the
+                // renderer snapped back to its 0.25 (noon) default on
+                // every load.
+                TimeOfDay = _timeOfDay,
             };
             WorldSaveFormat.Save(path, header, _world);
         }

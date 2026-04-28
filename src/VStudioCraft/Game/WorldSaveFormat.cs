@@ -59,7 +59,15 @@ namespace VStudioCraft.Game
         //       load with an empty entity table — same legacy-empty
         //       pattern as every preceding tile-entity block. Stops
         //       cleanly at EOF for v10 readers.
-        private const byte CurrentVersion = 11;
+        // v12 = Tier 6 #47 — Time-of-day clock. Single float appended
+        //       at the very end of the file after the v11 jukebox
+        //       block so a v11 reader stops cleanly at EOF without
+        //       seeing the new section. Range [0, 1) where 0.25 = noon
+        //       (matches GameRenderer's _timeOfDay convention). Pre-v12
+        //       saves load with the renderer's default (noon), so a
+        //       round-trip on a legacy world simply resets the clock,
+        //       same behaviour those saves had before this version.
+        private const byte CurrentVersion = 12;
 
         public struct Header
         {
@@ -77,6 +85,10 @@ namespace VStudioCraft.Game
             // legacy worlds (no separate spawn was tracked, so the
             // best stand-in is "wherever the player saved").
             public Vector3 SpawnPos;
+            // v12+ — Time-of-day phase in [0, 1). 0 = midnight, 0.25 = noon.
+            // Pre-v12 saves load with TimeOfDay = 0.25 (noon) so legacy
+            // worlds keep the previous "always start at noon" behaviour.
+            public float TimeOfDay;
         }
 
         public static void Save(string path, Header header, World world)
@@ -218,6 +230,14 @@ namespace VStudioCraft.Game
                     w.Write(kv.Key.z);
                     w.Write((byte)kv.Value.Disc);
                 }
+
+                // v12: Tier 6 #47 — Time-of-day clock. Single float at
+                // the very end of the file. Persists the day/night
+                // phase so a saved-at-dusk world reloads at dusk
+                // instead of snapping back to the renderer's default
+                // (0.25 = noon). Pre-v12 readers stop after the
+                // jukebox block above and never see this byte.
+                w.Write(header.TimeOfDay);
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
@@ -559,6 +579,21 @@ namespace VStudioCraft.Game
                         var je = world.GetOrCreateJukeboxEntity(wx, wy, wz);
                         je.Disc = (BlockType)r.ReadByte();
                     }
+                }
+
+                // v12: Time-of-day clock. Pre-v12 saves don't carry it;
+                // default to 0.25 (noon — the renderer's pre-existing
+                // default) so legacy worlds keep their previous behaviour.
+                header.TimeOfDay = 0.25f;
+                if (version >= 12)
+                {
+                    header.TimeOfDay = r.ReadSingle();
+                    // Wrap defensively in case a hand-edited save
+                    // dropped a value outside [0, 1) — same wrap
+                    // GameRenderer.TimeOfDay applies on assignment.
+                    float t = header.TimeOfDay;
+                    t = ((t % 1f) + 1f) % 1f;
+                    header.TimeOfDay = t;
                 }
 
                 return (header, world);
