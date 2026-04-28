@@ -9976,22 +9976,61 @@ void main()
             }
 
             // ---- catalog hover tooltip ----------------------------------
-            // Show the friendly name of the catalog tile under the cursor
-            // along the bottom of the panel — quick way to confirm what the
-            // player's about to pick without re-reading the search text.
-            if (hoverTile >= 0)
+            // Cursor-following popout: friendly name of the hovered tile,
+            // drawn as a small dim-bg pill just above-right of the
+            // pointer. Replaced the previous bottom-of-panel label —
+            // the bottom version forced the player's eyes to dart away
+            // from where they were looking, the popout reads in-place.
+            // Clamped to the viewport so a hover near the right or
+            // bottom edge doesn't render off-screen.
+            if (hoverTile >= 0 && mxh >= 0)
             {
                 int absolute = (scrollRows + hoverTile / InventoryScreen.Cols) * InventoryScreen.Cols
                              + hoverTile % InventoryScreen.Cols;
                 if (absolute < filtered.Count)
                 {
                     string label = CreativeCatalog.FriendlyName(filtered[absolute]);
-                    InventoryScreen.GetPanelRect(width, height, /*creative*/true,
-                        out int ppx, out int ppy, out int ppw, out int pph);
-                    int tipScale = InventoryScreen.TitleScale(width, height);
-                    DrawString(label, /*scale*/tipScale,
-                        /*centerX*/ppx + ppw / 2,
-                        /*topY*/ppy + pph - HotbarTextures.GlyphCellH * tipScale - UiScale.S(4, width, height),
+                    int tipScale = System.Math.Max(1, UiScale.S(2, width, height));
+                    int glyphW = HotbarTextures.GlyphCellW * tipScale;
+                    int glyphH = HotbarTextures.GlyphCellH * tipScale;
+                    int padX = UiScale.S(4, width, height);
+                    int padY = UiScale.S(3, width, height);
+                    int textW = label.Length * glyphW;
+                    int boxW = textW + padX * 2;
+                    int boxH = glyphH + padY * 2;
+
+                    // Anchor at cursor + offset so the box doesn't
+                    // sit under the pointer. Up-and-right is the
+                    // conventional tooltip direction; clamp on the
+                    // right + bottom edges by flipping left or up
+                    // when the box would otherwise overflow.
+                    int cursorOffset = UiScale.S(12, width, height);
+                    int boxX = mxh + cursorOffset;
+                    int boxY = myh - boxH - cursorOffset / 2;
+                    if (boxX + boxW > width)  boxX = mxh - boxW - cursorOffset;
+                    if (boxY < 0)             boxY = myh + cursorOffset;
+                    if (boxX < 0)             boxX = 0;
+                    if (boxY + boxH > height) boxY = height - boxH;
+
+                    // Drop shadow + dark fill + light edge so the
+                    // popout reads cleanly even over a busy catalog.
+                    int shadow = System.Math.Max(1, UiScale.S(2, width, height));
+                    DrawSolidQuad(boxX + shadow, boxY + shadow, boxW, boxH,
+                        new Vector3(0f, 0f, 0f), 0.55f, ortho);
+                    DrawSolidQuad(boxX, boxY, boxW, boxH,
+                        new Vector3(0.10f, 0.10f, 0.14f), 0.92f, ortho);
+                    int edge = System.Math.Max(1, UiScale.S(1, width, height));
+                    var edgeC = new Vector3(0.55f, 0.58f, 0.66f);
+                    DrawSolidQuad(boxX, boxY, boxW, edge, edgeC, 1f, ortho);
+                    DrawSolidQuad(boxX, boxY + boxH - edge, boxW, edge, edgeC, 1f, ortho);
+                    DrawSolidQuad(boxX, boxY, edge, boxH, edgeC, 1f, ortho);
+                    DrawSolidQuad(boxX + boxW - edge, boxY, edge, boxH, edgeC, 1f, ortho);
+
+                    // DrawString centers on centerX — recompute from
+                    // the box's left edge + half its inner width.
+                    DrawString(label, tipScale,
+                        boxX + boxW / 2,
+                        boxY + padY,
                         new Vector4(1f, 1f, 1f, 1f), ortho);
                 }
             }
