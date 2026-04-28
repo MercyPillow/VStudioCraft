@@ -165,11 +165,22 @@ namespace VStudioCraft.Server
             //    ChunkLoad to that area will carry the new bytes.
             BroadcastPendingBlockChanges();
 
-            // 5. Phase 4 — per-pair entity replication. For every (a, b)
-            //    pair of in-game clients, ensure b knows about a's
+            // 5. Phase 5 — passive-mob simulation. Server runs the wander
+            //    AI directly (clients don't, in net-driven mode). Existing
+            //    PassiveMob.Update operates on a single dt value so we
+            //    pass our fixed 50 ms tick interval; no fixed-step
+            //    accumulator needed because the SERVER tick is already
+            //    that fixed step. Dead mobs reaped after Update so this
+            //    tick's drops/death packets still see them in the list.
+            TickPassiveMobs();
+
+            // 6. Phase 4 — per-pair player entity replication. For every
+            //    (a, b) pair of in-game clients, ensure b knows about a's
             //    current position via the cheapest packet that conveys
-            //    the change since b's last anchor for a.
+            //    the change since b's last anchor for a. Phase 5 extends
+            //    this to also broadcast non-player entities (mobs).
             BroadcastEntityUpdates();
+            BroadcastMobUpdates();
 
             for (int i = _clients.Count - 1; i >= 0; i--)
             {
@@ -762,6 +773,244 @@ namespace VStudioCraft.Server
 
                 if (teleportedThisTick) target.TicksSinceTeleport = 0;
             }
+        }
+
+        // Phase 5 — server-side mob simulation. Drives the wander +
+        // gravity + AABB integrator on each passive mob; reaps dead
+        // mobs and ships an EntityDespawn for any that had been
+        // broadcast. Hostile mobs and chicken egg-lay are out of
+        // Phase 5a scope (egg-lay needs an IDropSink server-side
+        // sink, hostiles need their per-player aggro target — both
+        // are fold-in changes once the basic framework is exercised).
+        private void TickPassiveMobs()
+        {
+            var passives = _world.Passives;
+            // PassiveMob.Update mutates Position + Velocity + Yaw; the
+            // physics path is otherwise side-effect-free, so we can
+            // call it directly on the tick thread without coordinating
+            // with the broadcast pass that runs immediately after.
+            //
+            // Dead mob reap is INSIDE this loop because the broadcast
+            // pass shouldn't have to think about IsDead vs alive
+            // separately from "is in the world list". Iterating
+            // backwards lets RemoveAt run in O(1) without shifting
+            // unread tail.
+            for (int i = passives.Count - 1; i >= 0; i--)
+            {
+                var mob = passives[i];
+                if (mob.IsDead)
+                {
+                    if (mob.NetworkId >= 0)
+                    {
+                        DespawnMobFromAllViewers(mob.NetworkId);
+                    }
+                    passives.RemoveAt(i);
+                    continue;
+                }
+                // 0.05 = 1 / 20 Hz tick. Hardcoded here rather than
+                // pulling Program.TickSeconds (private to that class)
+                // because the server tick rate is a hub-level invariant
+                // that doesn't depend on Program's pacing.
+                mob.Update(0.05f, _world);
+            }
+        }
+
+        // Bookkeeping for Despawn-on-disconnect / Despawn-on-OOR. Each
+        // viewer's TrackedEntities is keyed on the mob's NetworkId
+        // (same set we use for player-entity spawns), so removal is a
+        // simple Remove + Despawn-packet emit.
+        private void DespawnMobFromAllViewers(int networkId)
+        {
+            for (int v = 0; v < _clients.Count; v++)
+            {
+                var viewer = _clients[v];
+                if (viewer.Session.IsDead) continue;
+                if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
+                if (!viewer.TrackedEntities.Remove(networkId)) continue;
+                viewer.Session.Send(PacketIds.EntityDespawn, w => new EntityDespawnPacket
+                {
+                    EntityId = networkId,
+                }.Write(w));
+            }
+        }
+
+        // Phase 5 — mob equivalent of BroadcastEntityUpdates. Walks the
+        // passive list once, assigning a fresh NetworkId to any mob the
+        // server hasn't broadcast yet, and emits the cheapest-applicable
+        // update packet to each viewer whose tracked-chunks set includes
+        // the mob's current chunk. Same anchor-and-delta machinery as
+        // the player path; the per-mob anchor lives in the Entity base
+        // class fields (AnchorX/Y/Z/Yaw/Pitch/AnchorValid).
+        private void BroadcastMobUpdates()
+        {
+            var passives = _world.Passives;
+            for (int i = 0; i < passives.Count; i++)
+            {
+                var mob = passives[i];
+                byte type = MobEntityType(mob);
+                if (type == byte.MaxValue) continue; // unknown mob kind; skip
+
+                // Assign a NetworkId on first sight. We use the same
+                // _nextEntityId counter as players so the server's id
+                // space is unified — a server-assigned id is unique
+                // across all connected clients and entities, no
+                // collision is possible.
+                if (mob.NetworkId < 0) mob.NetworkId = _nextEntityId++;
+
+                int mcx = (int)Math.Floor(mob.Position.X / Chunk.SizeX);
+                int mcz = (int)Math.Floor(mob.Position.Z / Chunk.SizeZ);
+
+                if (!mob.AnchorValid)
+                {
+                    mob.AnchorX = mob.Position.X;
+                    mob.AnchorY = mob.Position.Y;
+                    mob.AnchorZ = mob.Position.Z;
+                    mob.AnchorYaw = MobYaw(mob);
+                    mob.AnchorPitch = 0f;
+                    mob.AnchorValid = true;
+                    mob.TicksSinceTeleport = 0;
+                }
+                mob.TicksSinceTeleport++;
+
+                // Per-viewer packet selection. Same shape as
+                // BroadcastEntityUpdates' inner loop, deduped wherever
+                // the mob path differs (e.g. spawn packet carries the
+                // mob's display-name slot blank — only players have
+                // real names today).
+                for (int v = 0; v < _clients.Count; v++)
+                {
+                    var viewer = _clients[v];
+                    if (viewer.Session.IsDead) continue;
+                    if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
+
+                    bool inView = viewer.TrackedChunks.Contains((mcx, mcz));
+                    bool tracked = viewer.TrackedEntities.Contains(mob.NetworkId);
+
+                    if (!inView)
+                    {
+                        if (tracked)
+                        {
+                            viewer.TrackedEntities.Remove(mob.NetworkId);
+                            int idCap = mob.NetworkId;
+                            viewer.Session.Send(PacketIds.EntityDespawn, w => new EntityDespawnPacket
+                            {
+                                EntityId = idCap,
+                            }.Write(w));
+                        }
+                        continue;
+                    }
+
+                    if (!tracked)
+                    {
+                        viewer.TrackedEntities.Add(mob.NetworkId);
+                        var snap = mob;
+                        byte typeCap = type;
+                        viewer.Session.Send(PacketIds.EntitySpawn, w => new EntitySpawnPacket
+                        {
+                            EntityId    = snap.NetworkId,
+                            EntityType  = typeCap,
+                            X           = snap.Position.X,
+                            Y           = snap.Position.Y,
+                            Z           = snap.Position.Z,
+                            Yaw         = MobYaw(snap),
+                            Pitch       = 0f,
+                            DisplayName = string.Empty,
+                        }.Write(w));
+                        continue; // spawn carries the absolute; deltas resume next tick
+                    }
+
+                    double dx = mob.Position.X - mob.AnchorX;
+                    double dy = mob.Position.Y - mob.AnchorY;
+                    double dz = mob.Position.Z - mob.AnchorZ;
+                    float curYaw = MobYaw(mob);
+                    float dyaw = NormalizeDegrees(curYaw - mob.AnchorYaw);
+
+                    bool moveSig = Math.Abs(dx) > MoveEpsilon || Math.Abs(dy) > MoveEpsilon || Math.Abs(dz) > MoveEpsilon;
+                    bool lookSig = Math.Abs(dyaw) > LookEpsilon;
+                    bool teleportDue = mob.TicksSinceTeleport >= EntityTeleportEveryTicks;
+                    bool teleportFar = Math.Abs(dx) > 16 || Math.Abs(dy) > 16 || Math.Abs(dz) > 16;
+
+                    if (teleportDue || teleportFar)
+                    {
+                        var snap = mob;
+                        viewer.Session.Send(PacketIds.EntityTeleport, w => new EntityTeleportPacket
+                        {
+                            EntityId = snap.NetworkId,
+                            X = snap.Position.X, Y = snap.Position.Y, Z = snap.Position.Z,
+                            Yaw = MobYaw(snap), Pitch = 0f,
+                        }.Write(w));
+                    }
+                    else if (moveSig && lookSig)
+                    {
+                        var snap = mob;
+                        float fdx = (float)dx, fdy = (float)dy, fdz = (float)dz;
+                        viewer.Session.Send(PacketIds.EntityRelMoveLook, w => new EntityRelMoveLookPacket
+                        {
+                            EntityId = snap.NetworkId,
+                            Dx = fdx, Dy = fdy, Dz = fdz,
+                            Yaw = MobYaw(snap), Pitch = 0f,
+                        }.Write(w));
+                    }
+                    else if (moveSig)
+                    {
+                        var snap = mob;
+                        float fdx = (float)dx, fdy = (float)dy, fdz = (float)dz;
+                        viewer.Session.Send(PacketIds.EntityRelMove, w => new EntityRelMovePacket
+                        {
+                            EntityId = snap.NetworkId,
+                            Dx = fdx, Dy = fdy, Dz = fdz,
+                        }.Write(w));
+                    }
+                    else if (lookSig)
+                    {
+                        var snap = mob;
+                        viewer.Session.Send(PacketIds.EntityLook, w => new EntityLookPacket
+                        {
+                            EntityId = snap.NetworkId,
+                            Yaw = MobYaw(snap), Pitch = 0f,
+                        }.Write(w));
+                    }
+                }
+
+                // Bake new anchors. Mirrors the third pass of the player
+                // path. Reset TicksSinceTeleport when this tick fired a
+                // Teleport so the 1-second cadence resumes from this
+                // moment rather than from the previous Teleport.
+                bool teleportedThisTick =
+                    mob.TicksSinceTeleport >= EntityTeleportEveryTicks
+                    || Math.Abs(mob.Position.X - mob.AnchorX) > 16
+                    || Math.Abs(mob.Position.Y - mob.AnchorY) > 16
+                    || Math.Abs(mob.Position.Z - mob.AnchorZ) > 16;
+
+                mob.AnchorX = mob.Position.X;
+                mob.AnchorY = mob.Position.Y;
+                mob.AnchorZ = mob.Position.Z;
+                mob.AnchorYaw = MobYaw(mob);
+                mob.AnchorPitch = 0f;
+                if (teleportedThisTick) mob.TicksSinceTeleport = 0;
+            }
+        }
+
+        // Map a concrete PassiveMob subclass to its on-wire entity-type
+        // tag. Returns 0xFF when the mob kind has no wire ID yet (Phase
+        // 5b will fold in hostiles). Calling site filters those out and
+        // skips broadcast — they remain server-only entities for now.
+        private static byte MobEntityType(PassiveMob mob)
+        {
+            if (mob is Pig)     return EntityType.Pig;
+            if (mob is Cow)     return EntityType.Cow;
+            if (mob is Sheep)   return EntityType.Sheep;
+            if (mob is Chicken) return EntityType.Chicken;
+            return byte.MaxValue;
+        }
+
+        // PassiveMob.Yaw is in radians; the wire format uses degrees.
+        // Convert here so the server-internal radians form doesn't leak
+        // out and so the client receives a number it can hand straight
+        // to its degree-based interpolator.
+        private static float MobYaw(PassiveMob mob)
+        {
+            return mob.Yaw * (180f / (float)Math.PI);
         }
 
         // Wrap a yaw delta into [-180, 180] so a 359° → 1° change is

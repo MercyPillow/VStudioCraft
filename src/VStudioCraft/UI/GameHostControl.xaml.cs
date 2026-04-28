@@ -163,6 +163,56 @@ namespace VStudioCraft.UI
             });
         }
 
+        // Tier 6 #47 — Open the title screen. Same queueing pattern as
+        // LoadFromFile / StartNewWorld so the renderer thread sees a
+        // consistent transition. If the GL hasn't readied yet, set a
+        // pending flag and OnGlReady's drain branch flips into title
+        // state once initialisation finishes — used by Standalone's
+        // OnWindowLoaded which calls this BEFORE GL is up.
+        public void OpenTitleScreen()
+        {
+            if (!_glReady)
+            {
+                _pendingShowTitle = true;
+                return;
+            }
+            _renderQueue.Enqueue(() =>
+            {
+                _renderer.OpenTitleScreen();
+                Dispatcher.BeginInvoke(new Action(UpdateStatus));
+            });
+        }
+        private bool _pendingShowTitle;
+
+        // Tier 6 #47 — Released externally so the title-flow code in
+        // Standalone (after a return-to-title) can flip mouse-look off
+        // without reaching into private host state. The host's existing
+        // ReleaseMouseLook is private; this thin public wrapper keeps
+        // it that way for everyone else.
+        public void ReleaseMouseLookExternal() => ReleaseMouseLook();
+
+        // Tier 6 #47 — Surfaced from the Standalone-side ConnectFailed
+        // hook. Bounces the menu back to the multiplayer connect
+        // screen with the error in the error line, so a refused
+        // connection lands the user on the form they typed into
+        // instead of silently dropping into a fallback SP world.
+        public void ShowMultiplayerConnectError(string message)
+        {
+            if (_renderer == null) return;
+            _input.MultiplayerErrorText = message ?? "CONNECTION FAILED";
+            _renderer.OpenTitleScreen();
+            _renderer.NavigateTitle(GameRenderer.TitleScreenState.MultiplayerConnect);
+            ReleaseMouseLook();
+        }
+
+        // Tier 6 #47 — Pause-menu Quit fires this through the renderer
+        // so Standalone can hop back to the title screen instead of
+        // closing the window. VSIX wires Quit → close-pane through
+        // QuitRequested, which is independent. Forwarded inside
+        // OnGlReady so handlers attached at host-construction time
+        // (i.e. in MainWindow's ctor, before GL is ready) still fire.
+        public event Action ReturnedToTitleRequested;
+
         // Phase 2c — connect the host to a dedicated VStudioCraft server.
         // Mirrors StartNewWorld / LoadFromFile: the connect (which blocks
         // for the login handshake — typically <100 ms on loopback, up to
@@ -290,6 +340,17 @@ namespace VStudioCraft.UI
                 _input.Clear();
             }));
             _renderer.RespawnedFromDeathScreen += () => Dispatcher.BeginInvoke(new Action(CaptureMouseLook));
+            // Tier 6 #47 — Forward the renderer-thread "go back to
+            // title" signal up to the host's own ReturnedToTitleRequested
+            // event. Subscribers attach at host-construction time (in
+            // MainWindow ctor) so we can't forward at the renderer level
+            // — by-value capture here is safe because the renderer
+            // outlives the host event subscription.
+            _renderer.ReturnedToTitleRequested += () =>
+            {
+                var cb = ReturnedToTitleRequested;
+                if (cb != null) Dispatcher.BeginInvoke(cb);
+            };
             _renderer.InitializeGraphics();
 
             // Bring up the audio engine + procedural SFX bank alongside
@@ -322,6 +383,14 @@ namespace VStudioCraft.UI
             else if (_pendingIsLoad && !string.IsNullOrEmpty(_pendingLoadPath))
             {
                 _renderer.LoadFromFile(_pendingLoadPath);
+            }
+            else if (_pendingShowTitle)
+            {
+                // Tier 6 #47 — Standalone main menu path. No world is
+                // loaded; flip the renderer into TitleRoot so the menu
+                // is the first thing the player sees instead of an
+                // auto-generated world.
+                _renderer.OpenTitleScreen();
             }
             else
             {
@@ -806,6 +875,51 @@ namespace VStudioCraft.UI
         {
             _input.KeyDown(e.KeyCode);
 
+            // Tier 6 #47 — Title-screen text-field key handling.
+            // Backspace pops a char from the focused field; Escape
+            // walks back one navigation level. Every other key
+            // either flows through KeyPress (printable) or is
+            // swallowed (digits, function keys etc. shouldn't
+            // double-fire in-game shortcuts while the menu is up).
+            if (_renderer != null && _renderer.IsTitleScreenOpen)
+            {
+                if (e.KeyCode == Keys.Back && _input.FocusedField != InputState.TextField.None)
+                {
+                    _input.Backspace();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+                if (e.KeyCode == Keys.Escape)
+                {
+                    if (_renderer.IsOptionsOpen)
+                    {
+                        _renderer.IsOptionsOpen = false;
+                    }
+                    else if (_renderer.TitleState == GameRenderer.TitleScreenState.WorldCreate)
+                    {
+                        _renderer.NavigateTitle(GameRenderer.TitleScreenState.WorldSelect);
+                        _input.FocusedField = InputState.TextField.None;
+                    }
+                    else if (_renderer.TitleState == GameRenderer.TitleScreenState.WorldSelect
+                          || _renderer.TitleState == GameRenderer.TitleScreenState.MultiplayerConnect)
+                    {
+                        _renderer.NavigateTitle(GameRenderer.TitleScreenState.TitleRoot);
+                        _input.FocusedField = InputState.TextField.None;
+                    }
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+                if (_input.FocusedField != InputState.TextField.None)
+                {
+                    // Suppress every other key so digit/letter shortcuts
+                    // don't double-fire while typing into a field.
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             // Creative inventory open → search bar has focus. Only Esc /
             // Backspace / digit-hotbar shortcuts get game treatment; every
             // other printable key flows through KeyPress into the search
@@ -964,8 +1078,6 @@ namespace VStudioCraft.UI
         private void GlOnKeyPress(object sender, System.Windows.Forms.KeyPressEventArgs e)
         {
             if (_renderer == null) return;
-            if (!_renderer.IsInventoryOpen) return;
-            if (_renderer.GameMode != GameMode.Creative) return;
 
             char c = e.KeyChar;
             // Ignore control chars (Backspace, Enter, etc.) — KeyDown
@@ -973,7 +1085,20 @@ namespace VStudioCraft.UI
             // through; the bitmap font is upper-case-only, so we keep the
             // raw char and the renderer normalises to upper at draw time.
             if (c < 32 || c == 127) return;
-            // Cap search length so a runaway keystroke can't blow the bar.
+
+            // Tier 6 #47 — Title-screen text fields. Routes through
+            // the focused-field pointer on InputState; cap at 64 chars
+            // so a runaway keystroke can't blow any field's buffer.
+            if (_renderer.IsTitleScreenOpen && _input.FocusedField != InputState.TextField.None)
+            {
+                _input.AppendChar(c, /*maxLen*/64);
+                e.Handled = true;
+                return;
+            }
+
+            // In-game creative-inventory search bar (existing path).
+            if (!_renderer.IsInventoryOpen) return;
+            if (_renderer.GameMode != GameMode.Creative) return;
             if (_input.InventorySearchText.Length >= 32) return;
 
             _input.InventorySearchText += c;
@@ -1206,6 +1331,22 @@ namespace VStudioCraft.UI
                 return;
             }
 
+            // Tier 6 #47 — Title-screen click router. Runs first so a
+            // click on the menu never starts a world or re-captures
+            // mouse-look. Each title state has its own HitTest helper
+            // that returns a small ActionId; HandleTitleClick routes
+            // the transition (open submenu, fire StartNewWorld, etc.).
+            if (_renderer != null && _renderer.IsTitleScreenOpen)
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    var (px, py) = ToPhysicalCoord(e.X, e.Y);
+                    var (pw, ph) = GetPhysicalSize();
+                    HandleTitleClick(px, py, pw, ph);
+                }
+                return;
+            }
+
             // Tier 5 #29 — Death modal click router. Runs BEFORE the
             // pause-menu / capture branches so a click while dead can't
             // re-capture mouse-look or pump a TryBreak through the
@@ -1320,11 +1461,270 @@ namespace VStudioCraft.UI
                     RaiseSaveRequested();
                     break;
                 case PauseMenu.ActionId.Quit:
-                    RaiseQuitRequested();
+                    // Tier 6 #47 — Pause's Quit returns to the title
+                    // screen in Standalone (RaiseReturnedToTitle hops
+                    // through the renderer-thread event). VSIX hosts
+                    // can ignore the event or hook it differently;
+                    // those still get the existing QuitRequested
+                    // path through the File→Exit / window-close flow.
+                    if (_renderer != null) _renderer.RaiseReturnedToTitle();
+                    TogglePause();
                     break;
                 case PauseMenu.ActionId.None:
                     break;
             }
+        }
+
+        // Tier 6 #47 — Title-screen click router. Switches on the
+        // current TitleState; each state's HitTest helper returns a
+        // small ActionId. Deep transitions (Create World → load
+        // / Connect → connect) close the title screen and then call
+        // the existing world-bootstrap APIs (StartNewWorld, LoadFromFile,
+        // ConnectToServer) — same surface a CLI launch hits.
+        private void HandleTitleClick(int mx, int my, int width, int height)
+        {
+            if (_renderer == null) return;
+
+            // Options layered over title (just like over PauseMenu).
+            // Reuse the same options click path that the pause flow uses.
+            if (_renderer.IsOptionsOpen)
+            {
+                bool isSurvival = _renderer.GameMode == VStudioCraft.Game.GameMode.Survival;
+                float masterVol = VStudioCraft.Game.AudioEngine.MasterGain;
+                float musicVol  = VStudioCraft.Game.AudioEngine.MusicGain;
+                var hit = OptionsMenu.HitTestEx(width, height, mx, my,
+                    _renderer.HungerEnabled, isSurvival,
+                    VStudioCraft.Game.Settings.UseRealTextures,
+                    masterVol, musicVol);
+                HandleOptionsMenuAction(hit.Id, hit.SliderValue);
+                if (hit.Id == OptionsMenu.ActionId.SetMasterVolume ||
+                    hit.Id == OptionsMenu.ActionId.SetMusicVolume)
+                {
+                    _optionsSliderDrag = hit.Id;
+                }
+                return;
+            }
+
+            switch (_renderer.TitleState)
+            {
+                case GameRenderer.TitleScreenState.TitleRoot:
+                    HandleTitleRootClick(mx, my, width, height);
+                    break;
+                case GameRenderer.TitleScreenState.WorldSelect:
+                    HandleWorldSelectClick(mx, my, width, height);
+                    break;
+                case GameRenderer.TitleScreenState.WorldCreate:
+                    HandleWorldCreateClick(mx, my, width, height);
+                    break;
+                case GameRenderer.TitleScreenState.MultiplayerConnect:
+                    HandleMultiplayerConnectClick(mx, my, width, height);
+                    break;
+            }
+        }
+
+        private void HandleTitleRootClick(int mx, int my, int width, int height)
+        {
+            var act = TitleScreen.HitTest(width, height, mx, my);
+            if (act != TitleScreen.ActionId.None) VStudioCraft.Game.SfxBank.PlayClick();
+            switch (act)
+            {
+                case TitleScreen.ActionId.SinglePlayer:
+                    _input.WorldSelectScroll = 0;
+                    _renderer.NavigateTitle(GameRenderer.TitleScreenState.WorldSelect);
+                    break;
+                case TitleScreen.ActionId.Multiplayer:
+                    _input.MultiplayerErrorText = string.Empty;
+                    _input.FocusedField = InputState.TextField.None;
+                    _renderer.NavigateTitle(GameRenderer.TitleScreenState.MultiplayerConnect);
+                    break;
+                case TitleScreen.ActionId.Settings:
+                    _renderer.IsOptionsOpen = true;
+                    break;
+                case TitleScreen.ActionId.Quit:
+                    RaiseQuitRequested();
+                    break;
+            }
+        }
+
+        private void HandleWorldSelectClick(int mx, int my, int width, int height)
+        {
+            var saves = VStudioCraft.Game.WorldSaveFormat.EnumerateSaves();
+            var (kind, payload) = WorldSelectScreen.HitTest(width, height, mx, my, saves, _input.WorldSelectScroll);
+            if (kind != WorldSelectScreen.ActionId.None) VStudioCraft.Game.SfxBank.PlayClick();
+            switch (kind)
+            {
+                case WorldSelectScreen.ActionId.SelectWorld:
+                {
+                    if (payload < 0 || payload >= saves.Length) break;
+                    var s = saves[payload];
+                    if (!s.HeaderValid) break;   // can't load corrupt; ignore click
+                    _renderer.CloseTitleScreen();
+                    LoadFromFile(s.Path);
+                    CaptureMouseLook();
+                    break;
+                }
+                case WorldSelectScreen.ActionId.CreateNew:
+                    _input.WorldNameText = "";
+                    _input.WorldSeedText = "";
+                    _input.FocusedField = InputState.TextField.WorldName;
+                    _renderer.NavigateTitle(GameRenderer.TitleScreenState.WorldCreate);
+                    break;
+                case WorldSelectScreen.ActionId.Back:
+                    _renderer.NavigateTitle(GameRenderer.TitleScreenState.TitleRoot);
+                    break;
+            }
+        }
+
+        private void HandleWorldCreateClick(int mx, int my, int width, int height)
+        {
+            var act = WorldCreateScreen.HitTest(width, height, mx, my);
+            if (act != WorldCreateScreen.ActionId.None) VStudioCraft.Game.SfxBank.PlayClick();
+            switch (act)
+            {
+                case WorldCreateScreen.ActionId.FocusName:
+                    _input.FocusedField = InputState.TextField.WorldName;
+                    break;
+                case WorldCreateScreen.ActionId.FocusSeed:
+                    _input.FocusedField = InputState.TextField.WorldSeed;
+                    break;
+                case WorldCreateScreen.ActionId.ToggleMode:
+                    _renderer.GameMode = _renderer.GameMode == VStudioCraft.Game.GameMode.Creative
+                        ? VStudioCraft.Game.GameMode.Survival
+                        : VStudioCraft.Game.GameMode.Creative;
+                    break;
+                case WorldCreateScreen.ActionId.Create:
+                {
+                    int seed = ParseSeedOrRandom(_input.WorldSeedText);
+                    string name = string.IsNullOrWhiteSpace(_input.WorldNameText)
+                        ? "World" : _input.WorldNameText.Trim();
+                    string path = MakeUniqueSavePath(name);
+                    _input.FocusedField = InputState.TextField.None;
+                    _worldPath = path;
+                    _renderer.CloseTitleScreen();
+                    StartNewWorld(seed);
+                    CaptureMouseLook();
+                    break;
+                }
+                case WorldCreateScreen.ActionId.Back:
+                    _input.FocusedField = InputState.TextField.None;
+                    _renderer.NavigateTitle(GameRenderer.TitleScreenState.WorldSelect);
+                    break;
+            }
+        }
+
+        private void HandleMultiplayerConnectClick(int mx, int my, int width, int height)
+        {
+            var act = MultiplayerConnectScreen.HitTest(width, height, mx, my);
+            if (act != MultiplayerConnectScreen.ActionId.None) VStudioCraft.Game.SfxBank.PlayClick();
+            switch (act)
+            {
+                case MultiplayerConnectScreen.ActionId.FocusServer:
+                    _input.FocusedField = InputState.TextField.ServerAddress;
+                    break;
+                case MultiplayerConnectScreen.ActionId.FocusUsername:
+                    _input.FocusedField = InputState.TextField.ServerUsername;
+                    break;
+                case MultiplayerConnectScreen.ActionId.Connect:
+                    if (TryParseHostPort(_input.ServerAddressText, out var host, out var port))
+                    {
+                        _input.MultiplayerErrorText = string.Empty;
+                        _input.FocusedField = InputState.TextField.None;
+                        string user = string.IsNullOrWhiteSpace(_input.ServerUsernameText)
+                            ? "Player" : _input.ServerUsernameText.Trim();
+                        _renderer.CloseTitleScreen();
+                        ConnectToServer(host, port, user);
+                        CaptureMouseLook();
+                    }
+                    else
+                    {
+                        _input.MultiplayerErrorText = "INVALID HOST:PORT";
+                    }
+                    break;
+                case MultiplayerConnectScreen.ActionId.Back:
+                    _input.FocusedField = InputState.TextField.None;
+                    _renderer.NavigateTitle(GameRenderer.TitleScreenState.TitleRoot);
+                    break;
+            }
+        }
+
+        // Tier 6 #47 — "host:port" parser for the multiplayer screen.
+        // Returns true on success and emits the parsed components;
+        // false on any malformed input (no colon, non-numeric port,
+        // out-of-range port). Empty host strings count as invalid —
+        // we don't infer "localhost" silently because the user might
+        // have just blanked the field.
+        private static bool TryParseHostPort(string spec, out string host, out int port)
+        {
+            host = null; port = 0;
+            if (string.IsNullOrWhiteSpace(spec)) return false;
+            int colon = spec.LastIndexOf(':');
+            if (colon <= 0 || colon >= spec.Length - 1) return false;
+            host = spec.Substring(0, colon).Trim();
+            if (host.Length == 0) return false;
+            if (!int.TryParse(spec.Substring(colon + 1).Trim(), out port)) return false;
+            if (port <= 0 || port > 65535) { port = 0; return false; }
+            return true;
+        }
+
+        // Tier 6 #47 — Seed parser. Empty / whitespace yields a random
+        // 31-bit int. Non-numeric strings hash via a stable string hash
+        // (so a player typing "hello" gets a deterministic seed). Bare
+        // numbers go through directly so "12345" produces seed 12345.
+        private static int ParseSeedOrRandom(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return (int)(DateTime.Now.Ticks & 0x7FFFFFFF);
+            string s = raw.Trim();
+            if (int.TryParse(s, out var n)) return n;
+            // String → stable 32-bit hash. Mask to 31 bits so the seed
+            // stays positive (some downstream RNGs expect non-negative).
+            unchecked
+            {
+                int h = 17;
+                foreach (var c in s) h = h * 31 + c;
+                return h & 0x7FFFFFFF;
+            }
+        }
+
+        // Tier 6 #47 — Build a non-colliding path for a freshly-created
+        // world inside %APPDATA%\VStudioCraft\saves\. Uses the user's
+        // chosen name as the file stem; appends ` (n)` if a file with
+        // that name already exists. Identical scheme to the existing
+        // NewWorldCommand fallback so both code paths produce the same
+        // shape of file names.
+        private static string MakeUniqueSavePath(string name)
+        {
+            var dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "VStudioCraft", "saves");
+            System.IO.Directory.CreateDirectory(dir);
+            string safe = SanitiseFilename(name);
+            string path = System.IO.Path.Combine(dir, safe + ".voxworld");
+            int n = 2;
+            while (System.IO.File.Exists(path))
+            {
+                path = System.IO.Path.Combine(dir, safe + $" ({n}).voxworld");
+                n++;
+            }
+            return path;
+        }
+
+        // Tier 6 #47 — Strip filesystem-illegal characters from a user-
+        // provided world name. Replaces each invalid char with '_';
+        // collapses an empty result to "World" so we never produce
+        // `.voxworld` (which would be a hidden file on Linux and a
+        // weirdly-named one on Windows).
+        private static string SanitiseFilename(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "World";
+            var invalid = System.IO.Path.GetInvalidFileNameChars();
+            var chars = name.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (Array.IndexOf(invalid, chars[i]) >= 0) chars[i] = '_';
+            }
+            string s = new string(chars).Trim();
+            return s.Length == 0 ? "World" : s;
         }
 
         // Click handling for the Options sub-menu. Toggles flip the matching

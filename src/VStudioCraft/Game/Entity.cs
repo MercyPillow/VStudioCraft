@@ -35,6 +35,27 @@ namespace VStudioCraft.Game
         public Vector3 Velocity;
         public bool OnGround;
 
+        // Phase 5 — server-assigned network identifier. -1 in singleplayer
+        // and during the brief window between local construction and the
+        // server's BroadcastEntityUpdates pass spotting the entity. Used
+        // by the multiplayer broadcast loop to look the entity up across
+        // ticks and by the client to route inbound EntityRelMove /
+        // EntityDespawn packets to the right replica. Not persisted —
+        // re-allocated on every server start.
+        public int NetworkId = -1;
+
+        // Phase 5 — last position+look this entity was broadcast at
+        // (set by the server's per-target anchor pass). Mob entities
+        // store anchors here directly because the per-mob count is
+        // small enough that the inline storage is cheaper than a
+        // sidecar dict in ServerHub. Players use the AnchorX/Y/Z
+        // fields on ServerClient instead — they need a lifecycle that
+        // tracks login phase, which a simple Entity field doesn't have.
+        public double AnchorX, AnchorY, AnchorZ;
+        public float  AnchorYaw, AnchorPitch;
+        public bool   AnchorValid;
+        public int    TicksSinceTeleport;
+
         // Cap on per-sub-step displacement so a fast-moving entity can't
         // skip through a 1-block wall in a single tick. 0.05 is small
         // enough that wall gaps are imperceptible and big enough that

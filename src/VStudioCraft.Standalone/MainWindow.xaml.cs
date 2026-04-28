@@ -24,12 +24,25 @@ namespace VStudioCraft.Standalone
             // Phase 2c — surface multiplayer connect failures to the user
             // via a modal dialog. Without this hook, a refused / mistyped
             // server address silently drops back to a fresh SP world.
+            //
+            // Tier 6 #47 — When the connect failure originated from the
+            // main-menu Multiplayer screen, bounce back there with the
+            // error displayed in the screen's error line so the user can
+            // edit and retry without losing context. The renderer's
+            // ConnectToServer fallback runs ahead of this, but the title
+            // re-open here puts the menu back on top and the error
+            // becomes part of the natural retry flow.
             Host.ConnectFailed += ex =>
             {
-                MessageBox.Show(this,
-                    $"Failed to connect to server.\n\n{ex.Message}",
-                    "Connection failed",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                Host.ShowMultiplayerConnectError(ex.Message);
+            };
+            // Tier 6 #47 — Pause-menu Quit returns to the title screen
+            // instead of closing the window in Standalone. VSIX still
+            // wires Quit → close-pane via a separate event.
+            Host.ReturnedToTitleRequested += () =>
+            {
+                Host.OpenTitleScreen();
+                Host.ReleaseMouseLookExternal();
             };
         }
 
@@ -67,7 +80,11 @@ namespace VStudioCraft.Standalone
                     break;
                 }
             }
-            Host.StartNewWorld(RandomSeed());
+            // Tier 6 #47 — Default Standalone path: open the title screen
+            // and let the player pick what to do. Replaces the prior
+            // auto-StartNewWorld so a fresh launch never silently
+            // creates a throwaway world.
+            Host.OpenTitleScreen();
         }
 
         // host:port               -> host, port, $env:USERNAME

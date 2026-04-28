@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using OpenTK;
@@ -220,6 +221,126 @@ namespace VStudioCraft.Game
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
+        }
+
+        // Tier 6 #47 — Lightweight save-file summary used by the main
+        // menu's World Select screen. Built from the header alone (no
+        // chunk decode) so listing 100 saves is cheap. DisplayName
+        // falls back to the file name for headers we couldn't read
+        // cleanly; HeaderValid carries that distinction so the
+        // renderer can grey-out broken entries.
+        public struct SaveSummary
+        {
+            public string Path;
+            public string DisplayName;
+            public int Seed;
+            public DateTime LastWriteUtc;
+            public bool HeaderValid;
+        }
+
+        // Tier 6 #47 — Scan %APPDATA%\VStudioCraft\saves\*.voxworld and
+        // return one summary per file, ordered most-recently-modified
+        // first so the World Select screen reads as "your last world is
+        // on top". Per-file errors are swallowed with a sentinel
+        // (HeaderValid=false, Seed=0) so a single corrupt save doesn't
+        // blank the whole list. The directory location matches the
+        // existing NewWorldCommand / OpenWorldCommand convention.
+        public static SaveSummary[] EnumerateSaves()
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "VStudioCraft", "saves");
+            if (!Directory.Exists(dir)) return Array.Empty<SaveSummary>();
+
+            var files = Directory.GetFiles(dir, "*.voxworld");
+            var list = new List<SaveSummary>(files.Length);
+            foreach (var path in files)
+            {
+                var name = Path.GetFileNameWithoutExtension(path);
+                DateTime mtime;
+                try { mtime = File.GetLastWriteTimeUtc(path); } catch { mtime = DateTime.MinValue; }
+                try
+                {
+                    var hdr = ReadHeaderOnly(path);
+                    list.Add(new SaveSummary
+                    {
+                        Path = path,
+                        DisplayName = name,
+                        Seed = hdr.Seed,
+                        LastWriteUtc = mtime,
+                        HeaderValid = true,
+                    });
+                }
+                catch
+                {
+                    list.Add(new SaveSummary
+                    {
+                        Path = path,
+                        DisplayName = name,
+                        Seed = 0,
+                        LastWriteUtc = mtime,
+                        HeaderValid = false,
+                    });
+                }
+            }
+            list.Sort((a, b) => b.LastWriteUtc.CompareTo(a.LastWriteUtc));
+            return list.ToArray();
+        }
+
+        // Tier 6 #47 — Read just the header fields from a save file
+        // and stop. Used by EnumerateSaves to avoid a full chunk
+        // decode for every file in the saves directory. Reads the
+        // same magic + version + header layout as Load() but skips
+        // everything past the v4 hunger byte (the chunks block); the
+        // GZipStream is closed before any chunk data is touched, so
+        // the cost is one decompression of ~tens of bytes. Throws on
+        // any I/O / decode error so the caller can flag the file as
+        // corrupt in the listing.
+        public static Header ReadHeaderOnly(string path)
+        {
+            using (var fs = File.OpenRead(path))
+            using (var gz = new GZipStream(fs, CompressionMode.Decompress))
+            using (var r = new BinaryReader(gz))
+            {
+                uint magic = r.ReadUInt32();
+                if (magic != Magic)
+                    throw new InvalidDataException("Not a VStudioCraft save file");
+                byte version = r.ReadByte();
+                if (version > CurrentVersion)
+                    throw new InvalidDataException($"Save version {version} is newer than supported ({CurrentVersion})");
+
+                var header = new Header
+                {
+                    Seed = r.ReadInt32(),
+                    CameraPos = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()),
+                    CameraYaw = r.ReadSingle(),
+                    CameraPitch = r.ReadSingle(),
+                    GameMode = GameMode.Creative,
+                    Health = Player.MaxHealth,
+                    HungerEnabled = false,
+                };
+                if (version == 1)
+                {
+                    header.CameraPos = new Vector3(
+                        header.CameraPos.X,
+                        header.CameraPos.Y - Player.EyeHeight,
+                        header.CameraPos.Z);
+                }
+                if (version >= 3)
+                {
+                    header.GameMode = (GameMode)r.ReadByte();
+                    int hp = r.ReadInt32();
+                    if (hp <= 0 || hp > Player.MaxHealth) hp = Player.MaxHealth;
+                    header.Health = hp;
+                }
+                if (version >= 4)
+                {
+                    header.HungerEnabled = r.ReadByte() != 0;
+                }
+                // Stop here — chunks come next and we don't need them.
+                // SpawnPos (v9+) lives at the file tail, also skipped.
+                return header;
+            }
         }
 
         public static (Header header, World world) Load(string path)

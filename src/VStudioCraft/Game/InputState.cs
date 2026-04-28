@@ -106,6 +106,85 @@ namespace VStudioCraft.Game
         public string InventorySearchText = string.Empty;
         public int InventoryScrollRows;
 
+        // Tier 6 #47 — Generic text-entry pipeline. Each modal that
+        // needs a text field declares an enum value here; the host's
+        // KeyPress / Backspace path branches on FocusedField and
+        // appends to / pops from the matching buffer. Persists across
+        // frames so a user can type, click another field, and resume
+        // typing without losing their previous input. Renderer reads
+        // the field-of-interest + active focus to decide caret visibility.
+        public enum TextField
+        {
+            None,
+            InventorySearch,
+            WorldName,
+            WorldSeed,
+            ServerAddress,
+            ServerUsername,
+        }
+
+        public TextField FocusedField;
+        public string WorldNameText = string.Empty;
+        public string WorldSeedText = string.Empty;
+        public string ServerAddressText = "localhost:25565";
+        public string ServerUsernameText = "Player";
+        public string MultiplayerErrorText = string.Empty;
+        public int WorldSelectScroll;
+
+        // Append a printable character to the focused text field, capped
+        // at maxLen. Routes via FocusedField so call sites don't have to
+        // switch on it. No-op if no field is focused.
+        public void AppendChar(char c, int maxLen)
+        {
+            switch (FocusedField)
+            {
+                case TextField.InventorySearch:
+                    if (InventorySearchText.Length < maxLen) InventorySearchText += c;
+                    break;
+                case TextField.WorldName:
+                    if (WorldNameText.Length < maxLen) WorldNameText += c;
+                    break;
+                case TextField.WorldSeed:
+                    if (WorldSeedText.Length < maxLen) WorldSeedText += c;
+                    break;
+                case TextField.ServerAddress:
+                    if (ServerAddressText.Length < maxLen) ServerAddressText += c;
+                    break;
+                case TextField.ServerUsername:
+                    if (ServerUsernameText.Length < maxLen) ServerUsernameText += c;
+                    break;
+            }
+        }
+
+        // Pop one character from the end of the focused text field.
+        // No-op if no field is focused or the field is already empty.
+        public void Backspace()
+        {
+            switch (FocusedField)
+            {
+                case TextField.InventorySearch:
+                    if (InventorySearchText.Length > 0)
+                        InventorySearchText = InventorySearchText.Substring(0, InventorySearchText.Length - 1);
+                    break;
+                case TextField.WorldName:
+                    if (WorldNameText.Length > 0)
+                        WorldNameText = WorldNameText.Substring(0, WorldNameText.Length - 1);
+                    break;
+                case TextField.WorldSeed:
+                    if (WorldSeedText.Length > 0)
+                        WorldSeedText = WorldSeedText.Substring(0, WorldSeedText.Length - 1);
+                    break;
+                case TextField.ServerAddress:
+                    if (ServerAddressText.Length > 0)
+                        ServerAddressText = ServerAddressText.Substring(0, ServerAddressText.Length - 1);
+                    break;
+                case TextField.ServerUsername:
+                    if (ServerUsernameText.Length > 0)
+                        ServerUsernameText = ServerUsernameText.Substring(0, ServerUsernameText.Length - 1);
+                    break;
+            }
+        }
+
         // Tier 5 #30 — F3 debug overlay toggle. Persists across pause /
         // inventory / etc. so you can flip it on, open inventory to read
         // your inventory + coords side by side, then flip it off.

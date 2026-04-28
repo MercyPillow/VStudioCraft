@@ -483,6 +483,38 @@ namespace VStudioCraft.Server
                         if (!sawMove) throw new InvalidDataException("alice never received an entity-update packet for bob's motion");
                         Console.WriteLine($"[selftest-mp] alice sees entity update (id=0x{movId:X2}) for bob's move");
 
+                        // Phase 5 — verify mob replication. The server's
+                        // initial 5×5 spawn pass populates _passives with
+                        // a few pigs/cows/sheep/chickens; once bob's chunk
+                        // window contains those mobs, bob should receive
+                        // EntitySpawn packets with EntityType in [1..4].
+                        bool sawMobSpawn = false;
+                        var mobDeadline = DateTime.UtcNow.AddSeconds(3);
+                        while (DateTime.UtcNow < mobDeadline && !sawMobSpawn)
+                        {
+                            byte mid = br.ReadByte();
+                            switch (mid)
+                            {
+                                case PacketIds.KeepAlive: break;
+                                case PacketIds.ChunkLoad: ChunkLoadPacket.Read(br); break;
+                                case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(br); break;
+                                case PacketIds.BlockChange: BlockChangePacket.Read(br); break;
+                                case PacketIds.EntitySpawn:
+                                    var es = EntitySpawnPacket.Read(br);
+                                    // Pig=1, Cow=2, Sheep=3, Chicken=4
+                                    if (es.EntityType >= 1 && es.EntityType <= 4) sawMobSpawn = true;
+                                    break;
+                                case PacketIds.EntityRelMove: EntityRelMovePacket.Read(br); break;
+                                case PacketIds.EntityLook: EntityLookPacket.Read(br); break;
+                                case PacketIds.EntityRelMoveLook: EntityRelMoveLookPacket.Read(br); break;
+                                case PacketIds.EntityTeleport: EntityTeleportPacket.Read(br); break;
+                                case PacketIds.EntityDespawn: EntityDespawnPacket.Read(br); break;
+                                default: throw new InvalidDataException($"unexpected 0x{mid:X2}");
+                            }
+                        }
+                        if (!sawMobSpawn) throw new InvalidDataException("bob never received EntitySpawn for any passive mob");
+                        Console.WriteLine($"[selftest-mp] bob sees EntitySpawn for a passive mob");
+
                         // Disconnect bob and verify alice gets EntityDespawn.
                         bw.WriteByte(PacketIds.Disconnect);
                         new DisconnectPacket { Reason = "selftest-mp bob done" }.Write(bw);
@@ -492,7 +524,7 @@ namespace VStudioCraft.Server
                         if (!sawDespawn) throw new InvalidDataException("alice never received EntityDespawn after bob disconnected");
                         Console.WriteLine($"[selftest-mp] alice sees EntityDespawn for bob");
 
-                        Console.WriteLine($"[selftest-mp] OK: spawn + move + despawn replication");
+                        Console.WriteLine($"[selftest-mp] OK: spawn + move + despawn + mob replication");
 
                         aw.WriteByte(PacketIds.Disconnect);
                         new DisconnectPacket { Reason = "selftest-mp alice done" }.Write(aw);

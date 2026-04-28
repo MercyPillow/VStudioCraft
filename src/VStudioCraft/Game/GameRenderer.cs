@@ -530,7 +530,40 @@ void main()
         // OR themselves in here and the rest of the loop gates on this
         // single flag. Options doesn't add to this list because it only
         // ever opens on top of the pause menu (which is already halted).
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDeathScreenOpen;
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None;
+
+        // Tier 6 #47 — Title-screen state machine. None = world is live
+        // (renderer paints the world + HUD as today). The four other
+        // states each render their own modal in place of the world.
+        // Settings reuses the existing OptionsMenu layered on top of
+        // whichever title screen was active, exactly the way it
+        // layers over PauseMenu in-game.
+        public enum TitleScreenState
+        {
+            None,
+            TitleRoot,
+            WorldSelect,
+            WorldCreate,
+            MultiplayerConnect,
+        }
+
+        private volatile TitleScreenState _titleState = TitleScreenState.None;
+        public TitleScreenState TitleState => _titleState;
+        public bool IsTitleScreenOpen => _titleState != TitleScreenState.None;
+
+        public void OpenTitleScreen()    { _titleState = TitleScreenState.TitleRoot; }
+        public void CloseTitleScreen()   { _titleState = TitleScreenState.None; }
+        public void NavigateTitle(TitleScreenState next) { _titleState = next; }
+
+        // Tier 6 #47 — Quit-to-title hook. Pause menu's Quit fires
+        // this so the host can release mouse-look + flip the renderer
+        // back to TitleRoot. Distinct from QuitRequested (full app
+        // exit) and QuitToTitleRequested (death-modal flow). The
+        // pause-menu Quit was previously wired to QuitRequested; in
+        // Standalone we now route it here so the player ends up at
+        // the menu instead of closing the window.
+        public event System.Action ReturnedToTitleRequested;
+        public void RaiseReturnedToTitle() => ReturnedToTitleRequested?.Invoke();
 
         // Tier 5 #29 — Death modal flag. Halts the world via the OR
         // above and routes mouse clicks through HandleDeathScreenClick
@@ -631,6 +664,16 @@ void main()
         // RemotePlayer.Tick — see that file for the interp design.
         private readonly Dictionary<int, RemotePlayer> _remotePlayers = new Dictionary<int, RemotePlayer>();
         public IReadOnlyDictionary<int, RemotePlayer> RemotePlayers => _remotePlayers;
+
+        // Phase 5 — replicated passive mobs, keyed by server NetworkId
+        // for O(1) inbound packet dispatch. The mob INSTANCES also live
+        // in _world.Passives so the existing RenderPassives path renders
+        // them with no further changes; this dict is purely for the
+        // packet handler to find the right mob by ID. No interpolation
+        // for Phase 5a — Position is overwritten directly on each
+        // RelMove, which produces visible 20 Hz tick jitter that's the
+        // first scheduled polish in Phase 5b.
+        private readonly Dictionary<int, PassiveMob> _replicatedPassivesById = new Dictionary<int, PassiveMob>();
         // Wall-clock used to time-stamp remote-player snapshots and feed
         // RemotePlayer.Tick. Driven by the host's render-loop dt; the
         // absolute origin doesn't matter, only the delta between samples.
@@ -1055,6 +1098,11 @@ void main()
             // without a live session, and the next connect will get a
             // fresh batch of EntitySpawn packets to repopulate.
             _remotePlayers.Clear();
+            // Phase 5 — same rationale for replicated mobs. The mob
+            // instances also live in _world.Passives; they'll be cleared
+            // by the SetWorld call inside StartNewWorld / LoadFromFile
+            // / ConnectToServer if the host is transitioning out of MP.
+            _replicatedPassivesById.Clear();
         }
 
         // Per-frame multiplayer pump. Called by the host's render loop
@@ -1149,14 +1197,30 @@ void main()
                 case VStudioCraft.Net.PacketIds.EntitySpawn:
                 {
                     var s = pkt.EntitySpawn;
-                    // Phase 4 only ships Player entities (EntityType=0);
-                    // ignore other types until Phase 5 wires their
-                    // client-side renderable kinds.
-                    if (s.EntityType != VStudioCraft.Net.EntityType.Player) break;
-                    _remotePlayers[s.EntityId] = new RemotePlayer(
-                        s.EntityId, s.DisplayName,
-                        new Vector3((float)s.X, (float)s.Y, (float)s.Z),
-                        s.Yaw, s.Pitch, _netClock);
+                    if (s.EntityType == VStudioCraft.Net.EntityType.Player)
+                    {
+                        _remotePlayers[s.EntityId] = new RemotePlayer(
+                            s.EntityId, s.DisplayName,
+                            new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                            s.Yaw, s.Pitch, _netClock);
+                    }
+                    else
+                    {
+                        // Phase 5 — passive-mob spawn. The factory dispatches
+                        // on the on-wire type byte to construct the right
+                        // PassiveMob subclass; if the type is unknown
+                        // (forward-compat or hostile shipped before its
+                        // client-side handler), the spawn is dropped.
+                        var mob = SpawnReplicatedPassive(
+                            s.EntityType, s.EntityId,
+                            new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                            s.Yaw);
+                        if (mob != null && _world != null)
+                        {
+                            _world.Passives.Add(mob);
+                            _replicatedPassivesById[s.EntityId] = mob;
+                        }
+                    }
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityRelMove:
@@ -1164,6 +1228,8 @@ void main()
                     var m = pkt.EntityRelMove;
                     if (_remotePlayers.TryGetValue(m.EntityId, out var rp))
                         rp.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
+                    else if (_replicatedPassivesById.TryGetValue(m.EntityId, out var mob))
+                        mob.Position += new Vector3(m.Dx, m.Dy, m.Dz);
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityLook:
@@ -1171,6 +1237,8 @@ void main()
                     var l = pkt.EntityLook;
                     if (_remotePlayers.TryGetValue(l.EntityId, out var rp))
                         rp.ApplyLook(l.Yaw, l.Pitch, _netClock);
+                    else if (_replicatedPassivesById.TryGetValue(l.EntityId, out var mob))
+                        mob.Yaw = l.Yaw * (float)Math.PI / 180f;
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityRelMoveLook:
@@ -1178,6 +1246,11 @@ void main()
                     var ml = pkt.EntityRelMoveLook;
                     if (_remotePlayers.TryGetValue(ml.EntityId, out var rp))
                         rp.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), ml.Yaw, ml.Pitch, _netClock);
+                    else if (_replicatedPassivesById.TryGetValue(ml.EntityId, out var mob))
+                    {
+                        mob.Position += new Vector3(ml.Dx, ml.Dy, ml.Dz);
+                        mob.Yaw = ml.Yaw * (float)Math.PI / 180f;
+                    }
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityTeleport:
@@ -1185,11 +1258,22 @@ void main()
                     var t = pkt.EntityTeleport;
                     if (_remotePlayers.TryGetValue(t.EntityId, out var rp))
                         rp.ApplyTeleport(new Vector3((float)t.X, (float)t.Y, (float)t.Z), t.Yaw, t.Pitch, _netClock);
+                    else if (_replicatedPassivesById.TryGetValue(t.EntityId, out var mob))
+                    {
+                        mob.Position = new Vector3((float)t.X, (float)t.Y, (float)t.Z);
+                        mob.Yaw = t.Yaw * (float)Math.PI / 180f;
+                    }
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityDespawn:
                 {
-                    _remotePlayers.Remove(pkt.EntityDespawn.EntityId);
+                    int eid = pkt.EntityDespawn.EntityId;
+                    if (_remotePlayers.Remove(eid)) break;
+                    if (_replicatedPassivesById.TryGetValue(eid, out var mob))
+                    {
+                        _world?.Passives.Remove(mob);
+                        _replicatedPassivesById.Remove(eid);
+                    }
                     break;
                 }
 
@@ -1225,6 +1309,31 @@ void main()
             // light, so the next ProcessDirtyChunks pass remeshes the
             // affected region. No additional client work needed.
             _world.SetBlock(pkt.X, pkt.Y, pkt.Z, (BlockType)pkt.BlockType, record: false);
+        }
+
+        // Construct the right PassiveMob subclass for a wire entity-type
+        // tag, returning null if the type isn't a known passive (Phase 5b
+        // hostiles, Phase 5c drops/projectiles will extend this dispatch
+        // — for now they fall through to "unknown" and the spawn drops
+        // silently). The seed parameter for PassiveMob's _rng comes from
+        // the EntityId so two clients with the same world view see the
+        // same wander-RNG sequence; doesn't really matter for correctness
+        // (server is authoritative on motion) but keeps the behaviour
+        // reproducible.
+        private static PassiveMob SpawnReplicatedPassive(byte type, int entityId, Vector3 pos, float yawDegrees)
+        {
+            PassiveMob mob;
+            switch (type)
+            {
+                case VStudioCraft.Net.EntityType.Pig:     mob = new Pig(pos, entityId);     break;
+                case VStudioCraft.Net.EntityType.Cow:     mob = new Cow(pos, entityId);     break;
+                case VStudioCraft.Net.EntityType.Sheep:   mob = new Sheep(pos, entityId);   break;
+                case VStudioCraft.Net.EntityType.Chicken: mob = new Chicken(pos, entityId); break;
+                default: return null;
+            }
+            mob.NetworkId = entityId;
+            mob.Yaw = yawDegrees * (float)Math.PI / 180f;
+            return mob;
         }
 
         // Pack a raycast face normal into the 0..5 face index used on the
@@ -6340,6 +6449,18 @@ void main()
             // here every frame is cheap insurance against a stale viewport misplacing the HUD.
             GL.Viewport(0, 0, width, height);
 
+            // Tier 6 #47 — Title-screen short-circuit. When the menu is
+            // up the world isn't drawn at all (HUD, sky, mobs, etc. all
+            // skipped). Sky-coloured fill + the menu chrome render in
+            // place. World may still be loaded behind (re-entered from
+            // pause→Title) but its tick is gated by IsWorldHalted so
+            // we don't pay the chunk-mesh / mob-update cost.
+            if (_titleState != TitleScreenState.None)
+            {
+                RenderTitleScreen(width, height);
+                return;
+            }
+
             var sun = ComputeSunDirection();
             var sky = ComputeSkyColor(sun);
             var sunColor = ComputeSunColor(sun);
@@ -8789,6 +8910,366 @@ void main()
             {
                 _isDeathScreenOpen = false;
                 QuitToTitleRequested?.Invoke();
+            }
+        }
+
+        // Tier 6 #47 — Title-screen render entry. Switches on
+        // _titleState; each per-state render method paints the
+        // background fill + the screen's chrome. OptionsMenu layers
+        // on top exactly the way it layers over PauseMenu in-game,
+        // so Settings is reachable from any title state via the
+        // Title Root's Settings button + the existing _isOptionsOpen
+        // path.
+        private void RenderTitleScreen(int width, int height)
+        {
+            // Sky-blue full fill so the menu doesn't sit over a
+            // black void. Same hue family as the in-game daytime
+            // sky so transitions don't jar the eye.
+            GL.ClearColor(0.45f, 0.65f, 0.95f, 1.0f);
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            switch (_titleState)
+            {
+                case TitleScreenState.TitleRoot:          RenderTitleRoot(width, height); break;
+                case TitleScreenState.WorldSelect:        RenderWorldSelect(width, height); break;
+                case TitleScreenState.WorldCreate:        RenderWorldCreate(width, height); break;
+                case TitleScreenState.MultiplayerConnect: RenderMultiplayerConnect(width, height); break;
+            }
+
+            if (_isOptionsOpen) RenderOptionsMenu(width, height);
+        }
+
+        // Tier 6 #47 — Title-root menu: 4 buttons + a big "VStudioCraft"
+        // header. Mirrors RenderPauseMenu's button render exactly so
+        // the chrome reads identically; only the title text + button
+        // count differ.
+        private void RenderTitleRoot(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Title text — bigger than PauseMenu's title and slightly
+            // off-white so it sits cleanly on the sky-blue fill.
+            int titleScale = TitleScreen.TitleFontScale(width, height);
+            int titleY = TitleScreen.TitleY(width, height);
+            DrawString("VSTUDIOCRAFT", titleScale, width / 2, titleY,
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            int mx = Input?.MenuMouseX ?? -1;
+            int my = Input?.MenuMouseY ?? -1;
+            for (int i = 0; i < TitleScreen.Count; i++)
+            {
+                var b = TitleScreen.GetButton(i, width, height);
+                bool hover = mx >= b.X && mx < b.X + b.W && my >= b.Y && my < b.Y + b.H;
+                DrawMenuButton(b.X, b.Y, b.W, b.H, b.Label, hover, width, height, ortho);
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        private void RenderWorldSelect(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            int titleScale = WorldSelectScreen.TitleFontScale(width, height);
+            int titleY = WorldSelectScreen.TitleY(width, height);
+            DrawString("SELECT WORLD", titleScale, width / 2, titleY,
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            // Saves are re-enumerated each frame. Cheap (header reads
+            // only) and keeps the list live if the user creates one
+            // out-of-process. List is cached on first Render of this
+            // state in _cachedSaves; we re-read on a state-change
+            // boundary (caller flips _titleState) but here we just
+            // refresh every frame for simplicity — typical saves
+            // count is small enough that the cost is in the noise.
+            var saves = WorldSaveFormat.EnumerateSaves();
+            int scroll = Input != null ? Input.WorldSelectScroll : 0;
+            scroll = WorldSelectScreen.ClampScroll(scroll, saves.Length);
+            if (Input != null) Input.WorldSelectScroll = scroll;
+
+            int mx = Input?.MenuMouseX ?? -1;
+            int my = Input?.MenuMouseY ?? -1;
+
+            // Rows.
+            var rows = WorldSelectScreen.BuildRows(width, height, saves, scroll);
+            int subScale = System.Math.Max(1, UiScale.S(2, width, height));
+            int padX = UiScale.S(8, width, height);
+            for (int i = 0; i < rows.Length; i++)
+            {
+                var r = rows[i];
+                bool hover = mx >= r.X && mx < r.X + r.W && my >= r.Y && my < r.Y + r.H;
+                DrawMenuButton(r.X, r.Y, r.W, r.H, "", hover, width, height, ortho);
+
+                // Left-aligned name; right-aligned seed/mtime sub-line.
+                string label = r.HeaderValid ? r.DisplayName : r.DisplayName + "  (corrupt)";
+                int glyphW = HotbarTextures.GlyphCellW * subScale;
+                int labelTotal = label.Length * glyphW;
+                DrawString(label, subScale,
+                    r.X + padX + labelTotal / 2,
+                    r.Y + padX,
+                    new Vector4(1f, 1f, 1f, 1f), ortho);
+
+                string sub = r.HeaderValid
+                    ? $"SEED {r.Seed}  {r.LastWriteUtc.ToLocalTime():yyyy-MM-dd HH:mm}"
+                    : "FILE UNREADABLE";
+                int subTotal = sub.Length * glyphW;
+                DrawString(sub, subScale,
+                    r.X + padX + subTotal / 2,
+                    r.Y + padX + HotbarTextures.GlyphCellH * subScale + UiScale.S(2, width, height),
+                    new Vector4(0.85f, 0.88f, 0.92f, 1f), ortho);
+            }
+
+            // Empty list helper text.
+            if (saves.Length == 0)
+            {
+                int hintScale = System.Math.Max(1, UiScale.S(2, width, height));
+                DrawString("NO SAVED WORLDS - PRESS CREATE NEW WORLD", hintScale,
+                    width / 2,
+                    titleY + HotbarTextures.GlyphCellH * titleScale + UiScale.S(20, width, height),
+                    new Vector4(0.85f, 0.88f, 0.92f, 1f), ortho);
+            }
+
+            // Footer buttons.
+            var c = WorldSelectScreen.GetCreateNewRect(width, height);
+            DrawMenuButton(c.x, c.y, c.w, c.h, "CREATE NEW WORLD",
+                mx >= c.x && mx < c.x + c.w && my >= c.y && my < c.y + c.h,
+                width, height, ortho);
+            var b2 = WorldSelectScreen.GetBackRect(width, height);
+            DrawMenuButton(b2.x, b2.y, b2.w, b2.h, "BACK",
+                mx >= b2.x && mx < b2.x + b2.w && my >= b2.y && my < b2.y + b2.h,
+                width, height, ortho);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        private void RenderWorldCreate(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            int titleScale = WorldCreateScreen.TitleFontScale(width, height);
+            int titleY = WorldCreateScreen.TitleY(width, height);
+            DrawString("CREATE NEW WORLD", titleScale, width / 2, titleY,
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            int labelScale = System.Math.Max(1, UiScale.S(2, width, height));
+            var fg = new Vector4(1f, 1f, 1f, 1f);
+
+            int mx = Input?.MenuMouseX ?? -1;
+            int my = Input?.MenuMouseY ?? -1;
+
+            // Name field.
+            var nf = WorldCreateScreen.GetNameFieldRect(width, height);
+            int labelW = "NAME".Length * HotbarTextures.GlyphCellW * labelScale;
+            DrawString("NAME", labelScale, nf.x + labelW / 2,
+                WorldCreateScreen.GetRowLabelY(width, height, 0), fg, ortho);
+            DrawTextField(nf.x, nf.y, nf.w, nf.h,
+                Input != null ? Input.WorldNameText : string.Empty,
+                Input != null && Input.FocusedField == InputState.TextField.WorldName,
+                width, height, ortho);
+
+            // Seed field.
+            var sf = WorldCreateScreen.GetSeedFieldRect(width, height);
+            labelW = "SEED (BLANK = RANDOM)".Length * HotbarTextures.GlyphCellW * labelScale;
+            DrawString("SEED (BLANK = RANDOM)", labelScale,
+                sf.x + labelW / 2,
+                WorldCreateScreen.GetRowLabelY(width, height, 1), fg, ortho);
+            DrawTextField(sf.x, sf.y, sf.w, sf.h,
+                Input != null ? Input.WorldSeedText : string.Empty,
+                Input != null && Input.FocusedField == InputState.TextField.WorldSeed,
+                width, height, ortho);
+
+            // Mode toggle row — label + button-styled rectangle showing
+            // the current mode. Click toggles via the click router.
+            var mr = WorldCreateScreen.GetModeToggleRect(width, height);
+            labelW = "GAME MODE".Length * HotbarTextures.GlyphCellW * labelScale;
+            DrawString("GAME MODE", labelScale,
+                mr.x + labelW / 2,
+                WorldCreateScreen.GetRowLabelY(width, height, 2), fg, ortho);
+            string modeLabel = GameMode == GameMode.Creative ? "CREATIVE" : "SURVIVAL";
+            bool modeHover = mx >= mr.x && mx < mr.x + mr.w && my >= mr.y && my < mr.y + mr.h;
+            DrawMenuButton(mr.x, mr.y, mr.w, mr.h, modeLabel, modeHover, width, height, ortho);
+
+            // Footer.
+            var c = WorldCreateScreen.GetCreateRect(width, height);
+            DrawMenuButton(c.x, c.y, c.w, c.h, "CREATE",
+                mx >= c.x && mx < c.x + c.w && my >= c.y && my < c.y + c.h,
+                width, height, ortho);
+            var b2 = WorldCreateScreen.GetBackRect(width, height);
+            DrawMenuButton(b2.x, b2.y, b2.w, b2.h, "BACK",
+                mx >= b2.x && mx < b2.x + b2.w && my >= b2.y && my < b2.y + b2.h,
+                width, height, ortho);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        private void RenderMultiplayerConnect(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            int titleScale = MultiplayerConnectScreen.TitleFontScale(width, height);
+            int titleY = MultiplayerConnectScreen.TitleY(width, height);
+            DrawString("CONNECT TO SERVER", titleScale, width / 2, titleY,
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            int labelScale = System.Math.Max(1, UiScale.S(2, width, height));
+            var fg = new Vector4(1f, 1f, 1f, 1f);
+
+            int mx = Input?.MenuMouseX ?? -1;
+            int my = Input?.MenuMouseY ?? -1;
+
+            // Server address field.
+            var sf = MultiplayerConnectScreen.GetServerFieldRect(width, height);
+            int labelW = "SERVER (HOST:PORT)".Length * HotbarTextures.GlyphCellW * labelScale;
+            DrawString("SERVER (HOST:PORT)", labelScale,
+                sf.x + labelW / 2,
+                MultiplayerConnectScreen.GetRowLabelY(width, height, 0), fg, ortho);
+            DrawTextField(sf.x, sf.y, sf.w, sf.h,
+                Input != null ? Input.ServerAddressText : string.Empty,
+                Input != null && Input.FocusedField == InputState.TextField.ServerAddress,
+                width, height, ortho);
+
+            // Username field.
+            var uf = MultiplayerConnectScreen.GetUsernameFieldRect(width, height);
+            labelW = "USERNAME".Length * HotbarTextures.GlyphCellW * labelScale;
+            DrawString("USERNAME", labelScale,
+                uf.x + labelW / 2,
+                MultiplayerConnectScreen.GetRowLabelY(width, height, 1), fg, ortho);
+            DrawTextField(uf.x, uf.y, uf.w, uf.h,
+                Input != null ? Input.ServerUsernameText : string.Empty,
+                Input != null && Input.FocusedField == InputState.TextField.ServerUsername,
+                width, height, ortho);
+
+            // Error line — drawn in red so it's distinguishable from
+            // labels. Empty string means "no error to surface", which
+            // skips the draw entirely.
+            string err = Input != null ? Input.MultiplayerErrorText : string.Empty;
+            if (!string.IsNullOrEmpty(err))
+            {
+                var er = MultiplayerConnectScreen.GetErrorLineRect(width, height);
+                int errTotal = err.Length * HotbarTextures.GlyphCellW * labelScale;
+                DrawString(err, labelScale,
+                    er.x + errTotal / 2,
+                    er.y,
+                    new Vector4(1f, 0.45f, 0.45f, 1f), ortho);
+            }
+
+            // Footer.
+            var c = MultiplayerConnectScreen.GetConnectRect(width, height);
+            DrawMenuButton(c.x, c.y, c.w, c.h, "CONNECT",
+                mx >= c.x && mx < c.x + c.w && my >= c.y && my < c.y + c.h,
+                width, height, ortho);
+            var b2 = MultiplayerConnectScreen.GetBackRect(width, height);
+            DrawMenuButton(b2.x, b2.y, b2.w, b2.h, "BACK",
+                mx >= b2.x && mx < b2.x + b2.w && my >= b2.y && my < b2.y + b2.h,
+                width, height, ortho);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        // Tier 6 #47 — Shared button-render helper. Same fill +
+        // border + label chrome as RenderPauseMenu's per-button block,
+        // factored out so the four title screens don't each inline a
+        // copy. Hover state swaps to the brighter pair.
+        private void DrawMenuButton(int x, int y, int w, int h, string label, bool hover,
+            int viewW, int viewH, Matrix4 ortho)
+        {
+            int btnBorder = UiScale.S(2, viewW, viewH);
+            int btnLabelScale = System.Math.Max(1, UiScale.S(2, viewW, viewH));
+
+            Vector3 fill = hover
+                ? new Vector3(0.42f, 0.55f, 0.72f)
+                : new Vector3(0.16f, 0.20f, 0.26f);
+            DrawSolidQuad(x, y, w, h, fill, 0.95f, ortho);
+
+            Vector3 border = hover
+                ? new Vector3(1f, 1f, 1f)
+                : new Vector3(0.78f, 0.82f, 0.88f);
+            DrawSolidQuad(x, y, w, btnBorder, border, 1f, ortho);
+            DrawSolidQuad(x, y + h - btnBorder, w, btnBorder, border, 1f, ortho);
+            DrawSolidQuad(x, y, btnBorder, h, border, 1f, ortho);
+            DrawSolidQuad(x + w - btnBorder, y, btnBorder, h, border, 1f, ortho);
+
+            if (!string.IsNullOrEmpty(label))
+            {
+                int labelTopY = y + (h - HotbarTextures.GlyphCellH * btnLabelScale) / 2;
+                DrawString(label, btnLabelScale, x + w / 2, labelTopY,
+                    new Vector4(1f, 1f, 1f, 1f), ortho);
+            }
+        }
+
+        // Tier 6 #47 — Shared text-field chrome. Recessed dark well +
+        // light border (brighter when focused), value text drawn left-
+        // aligned with a small left padding, and a caret block at the
+        // text end when focused. Caret blink is wall-clock based so
+        // it ticks even while the renderer is otherwise idle.
+        private void DrawTextField(int x, int y, int w, int h, string value, bool focused,
+            int viewW, int viewH, Matrix4 ortho)
+        {
+            int border = UiScale.S(2, viewW, viewH);
+            int labelScale = System.Math.Max(1, UiScale.S(2, viewW, viewH));
+            int padX = UiScale.S(6, viewW, viewH);
+
+            DrawSolidQuad(x, y, w, h, new Vector3(0.08f, 0.09f, 0.12f), 0.95f, ortho);
+            Vector3 borderC = focused
+                ? new Vector3(0.95f, 0.95f, 1.0f)
+                : new Vector3(0.55f, 0.58f, 0.66f);
+            DrawSolidQuad(x, y, w, border, borderC, 1f, ortho);
+            DrawSolidQuad(x, y + h - border, w, border, borderC, 1f, ortho);
+            DrawSolidQuad(x, y, border, h, borderC, 1f, ortho);
+            DrawSolidQuad(x + w - border, y, border, h, borderC, 1f, ortho);
+
+            int glyphW = HotbarTextures.GlyphCellW * labelScale;
+            int glyphH = HotbarTextures.GlyphCellH * labelScale;
+            int textY = y + (h - glyphH) / 2;
+            string text = value ?? string.Empty;
+            int textTotal = text.Length * glyphW;
+            int textCenter = x + padX + textTotal / 2;
+            if (textTotal > 0)
+            {
+                DrawString(text, labelScale, textCenter, textY,
+                    new Vector4(1f, 1f, 1f, 1f), ortho);
+            }
+
+            if (focused)
+            {
+                // Blink at ~2 Hz off the wall clock.
+                long ms = System.Environment.TickCount;
+                bool show = (ms / 500) % 2 == 0;
+                if (show)
+                {
+                    int caretX = x + padX + textTotal;
+                    int caretW = System.Math.Max(1, UiScale.S(2, viewW, viewH));
+                    DrawSolidQuad(caretX, textY, caretW, glyphH,
+                        new Vector4(1f, 1f, 1f, 1f).Xyz, 1f, ortho);
+                }
             }
         }
 

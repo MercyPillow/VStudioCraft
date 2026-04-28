@@ -163,12 +163,17 @@ namespace VStudioCraft.Net
     // Spider/Creeper next.
     internal static class EntityType
     {
-        public const byte Player = 0;
-        // Reserved (Phase 5+):
-        // public const byte Pig          = 1;
-        // public const byte Cow          = 2;
-        // public const byte Sheep        = 3;
-        // public const byte Chicken      = 4;
+        public const byte Player       = 0;
+
+        // Phase 5 — passives. Bucket starting at 1 so a future reorder
+        // doesn't disturb Player=0; gaps are deliberate to leave room
+        // for future passives without rebucketing.
+        public const byte Pig          = 1;
+        public const byte Cow          = 2;
+        public const byte Sheep        = 3;
+        public const byte Chicken      = 4;
+
+        // Reserved (Phase 5b+):
         // public const byte Zombie       = 16;
         // public const byte Skeleton     = 17;
         // public const byte Spider       = 18;

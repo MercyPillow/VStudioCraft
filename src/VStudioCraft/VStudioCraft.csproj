@@ -127,7 +127,11 @@
     <Compile Include="Game\OverlayMesh.cs" />
     <Compile Include="Game\Settings.cs" />
     <Compile Include="Game\DeathScreen.cs" />
+    <Compile Include="Game\MultiplayerConnectScreen.cs" />
     <Compile Include="Game\PauseMenu.cs" />
+    <Compile Include="Game\TitleScreen.cs" />
+    <Compile Include="Game\WorldCreateScreen.cs" />
+    <Compile Include="Game\WorldSelectScreen.cs" />
     <Compile Include="Game\Player.cs" />
     <Compile Include="Game\RemotePlayer.cs" />
     <Compile Include="Game\Raycast.cs" />
