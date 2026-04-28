@@ -9728,6 +9728,18 @@ void main()
                     DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
                 }
             }
+
+            // ---- hover tooltip ------------------------------------------
+            // Cursor-following popout matching the creative catalog
+            // tooltip — same chrome, same logic. Hovers all 49 slots
+            // (main + hotbar + armor) so the player can confirm what's
+            // in any well at a glance.
+            int mxh = Input?.MenuMouseX ?? -1;
+            int myh = Input?.MenuMouseY ?? -1;
+            string hover = GetHoveredSlotLabel(0, InventoryScreen.TotalSlots,
+                mxh, myh, width, height, /*creative*/false);
+            if (hover != null)
+                DrawHoverTooltip(hover, mxh, myh, width, height, ortho);
         }
 
         // Creative inventory body — search bar + scrollable catalog where
@@ -9976,64 +9988,99 @@ void main()
             }
 
             // ---- catalog hover tooltip ----------------------------------
-            // Cursor-following popout: friendly name of the hovered tile,
-            // drawn as a small dim-bg pill just above-right of the
-            // pointer. Replaced the previous bottom-of-panel label —
-            // the bottom version forced the player's eyes to dart away
-            // from where they were looking, the popout reads in-place.
-            // Clamped to the viewport so a hover near the right or
-            // bottom edge doesn't render off-screen.
+            // Cursor-following popout: friendly name of the hovered tile.
+            // Shared helper so survival inventory + creative hotbar /
+            // armor slots get the same chrome. Catalog hover wins if
+            // both ranges are over (they shouldn't overlap, but defend).
             if (hoverTile >= 0 && mxh >= 0)
             {
                 int absolute = (scrollRows + hoverTile / InventoryScreen.Cols) * InventoryScreen.Cols
                              + hoverTile % InventoryScreen.Cols;
                 if (absolute < filtered.Count)
                 {
-                    string label = CreativeCatalog.FriendlyName(filtered[absolute]);
-                    int tipScale = System.Math.Max(1, UiScale.S(2, width, height));
-                    int glyphW = HotbarTextures.GlyphCellW * tipScale;
-                    int glyphH = HotbarTextures.GlyphCellH * tipScale;
-                    int padX = UiScale.S(4, width, height);
-                    int padY = UiScale.S(3, width, height);
-                    int textW = label.Length * glyphW;
-                    int boxW = textW + padX * 2;
-                    int boxH = glyphH + padY * 2;
-
-                    // Anchor at cursor + offset so the box doesn't
-                    // sit under the pointer. Up-and-right is the
-                    // conventional tooltip direction; clamp on the
-                    // right + bottom edges by flipping left or up
-                    // when the box would otherwise overflow.
-                    int cursorOffset = UiScale.S(12, width, height);
-                    int boxX = mxh + cursorOffset;
-                    int boxY = myh - boxH - cursorOffset / 2;
-                    if (boxX + boxW > width)  boxX = mxh - boxW - cursorOffset;
-                    if (boxY < 0)             boxY = myh + cursorOffset;
-                    if (boxX < 0)             boxX = 0;
-                    if (boxY + boxH > height) boxY = height - boxH;
-
-                    // Drop shadow + dark fill + light edge so the
-                    // popout reads cleanly even over a busy catalog.
-                    int shadow = System.Math.Max(1, UiScale.S(2, width, height));
-                    DrawSolidQuad(boxX + shadow, boxY + shadow, boxW, boxH,
-                        new Vector3(0f, 0f, 0f), 0.55f, ortho);
-                    DrawSolidQuad(boxX, boxY, boxW, boxH,
-                        new Vector3(0.10f, 0.10f, 0.14f), 0.92f, ortho);
-                    int edge = System.Math.Max(1, UiScale.S(1, width, height));
-                    var edgeC = new Vector3(0.55f, 0.58f, 0.66f);
-                    DrawSolidQuad(boxX, boxY, boxW, edge, edgeC, 1f, ortho);
-                    DrawSolidQuad(boxX, boxY + boxH - edge, boxW, edge, edgeC, 1f, ortho);
-                    DrawSolidQuad(boxX, boxY, edge, boxH, edgeC, 1f, ortho);
-                    DrawSolidQuad(boxX + boxW - edge, boxY, edge, boxH, edgeC, 1f, ortho);
-
-                    // DrawString centers on centerX — recompute from
-                    // the box's left edge + half its inner width.
-                    DrawString(label, tipScale,
-                        boxX + boxW / 2,
-                        boxY + padY,
-                        new Vector4(1f, 1f, 1f, 1f), ortho);
+                    DrawHoverTooltip(CreativeCatalog.FriendlyName(filtered[absolute]),
+                        mxh, myh, width, height, ortho);
                 }
             }
+            else
+            {
+                // Hotbar (slots 36..44) + armor (45..48) hover tooltip.
+                // Skips the main grid in creative — slots 0..35 aren't
+                // rendered (catalog occupies that space), so a stale
+                // ItemStack[i] there would be invisible anyway.
+                int hotbarStart = InventoryScreen.MainSlotCount;
+                string hover = GetHoveredSlotLabel(hotbarStart, InventoryScreen.TotalSlots,
+                    mxh, myh, width, height, /*creative*/true);
+                if (hover != null)
+                    DrawHoverTooltip(hover, mxh, myh, width, height, ortho);
+            }
+        }
+
+        // Tier 5 — Cursor-following hover tooltip popout. Shared between
+        // the catalog hover, survival inventory slot hover, and the
+        // creative hotbar / armor slot hover paths. Up-and-right of the
+        // pointer is the conventional direction; the box auto-flips left
+        // or up when it would overflow the viewport edge, then clamps
+        // as a final safety. Drop shadow + dark fill + light 1px frame
+        // make it read cleanly over busy slot backgrounds.
+        private void DrawHoverTooltip(string label, int mxh, int myh,
+            int width, int height, Matrix4 ortho)
+        {
+            if (string.IsNullOrEmpty(label)) return;
+            int tipScale = System.Math.Max(1, UiScale.S(2, width, height));
+            int glyphW = HotbarTextures.GlyphCellW * tipScale;
+            int glyphH = HotbarTextures.GlyphCellH * tipScale;
+            int padX = UiScale.S(4, width, height);
+            int padY = UiScale.S(3, width, height);
+            int textW = label.Length * glyphW;
+            int boxW = textW + padX * 2;
+            int boxH = glyphH + padY * 2;
+
+            int cursorOffset = UiScale.S(12, width, height);
+            int boxX = mxh + cursorOffset;
+            int boxY = myh - boxH - cursorOffset / 2;
+            if (boxX + boxW > width)  boxX = mxh - boxW - cursorOffset;
+            if (boxY < 0)             boxY = myh + cursorOffset;
+            if (boxX < 0)             boxX = 0;
+            if (boxY + boxH > height) boxY = height - boxH;
+
+            int shadow = System.Math.Max(1, UiScale.S(2, width, height));
+            DrawSolidQuad(boxX + shadow, boxY + shadow, boxW, boxH,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+            DrawSolidQuad(boxX, boxY, boxW, boxH,
+                new Vector3(0.10f, 0.10f, 0.14f), 0.92f, ortho);
+            int edge = System.Math.Max(1, UiScale.S(1, width, height));
+            var edgeC = new Vector3(0.55f, 0.58f, 0.66f);
+            DrawSolidQuad(boxX, boxY, boxW, edge, edgeC, 1f, ortho);
+            DrawSolidQuad(boxX, boxY + boxH - edge, boxW, edge, edgeC, 1f, ortho);
+            DrawSolidQuad(boxX, boxY, edge, boxH, edgeC, 1f, ortho);
+            DrawSolidQuad(boxX + boxW - edge, boxY, edge, boxH, edgeC, 1f, ortho);
+
+            DrawString(label, tipScale, boxX + boxW / 2, boxY + padY,
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+        }
+
+        // Tier 5 — Hover-test every slot in the panel, return the
+        // FriendlyName of any non-empty stack the cursor's over.
+        // Returns null when the cursor isn't on a slot or the slot is
+        // empty. Shared between survival + creative inventory paths.
+        // Slot range is caller-controlled so creative skips the main
+        // grid (catalog has its own popout).
+        private string GetHoveredSlotLabel(int slotStart, int slotEnd, int mxh, int myh,
+            int width, int height, bool creative)
+        {
+            if (Input == null || mxh < 0) return null;
+            var inv = Input.Inventory;
+            for (int i = slotStart; i < slotEnd; i++)
+            {
+                InventoryScreen.GetSlotRect(i, width, height, creative,
+                    out int sx, out int sy, out int sw, out int sh);
+                if (mxh < sx || mxh >= sx + sw || myh < sy || myh >= sy + sh) continue;
+                var stack = inv.Slots[i];
+                if (stack.IsEmpty) return null;
+                return FriendlyName(stack.Type);
+            }
+            return null;
         }
 
         // Slot well + chiseled border helper (extracted so survival and
