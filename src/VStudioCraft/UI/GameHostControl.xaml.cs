@@ -163,6 +163,20 @@ namespace VStudioCraft.UI
             });
         }
 
+        // Tier 6 #47 — Optional override for the title screen's
+        // "Single Player" button. Standalone leaves it null → click
+        // navigates to World Select. VSIX's editor pane sets it so
+        // Single Player loads whichever .voxworld file the pane was
+        // opened on (or starts a fresh world if the file is empty)
+        // without going through the World Select picker — the pane
+        // is already bound to a specific file, so re-prompting for
+        // one would be redundant. Invoked synchronously on the UI
+        // thread; should call LoadFromFile / StartNewWorld which
+        // queue onto the render thread themselves.
+        private Action _singlePlayerOverride;
+        public void SetSinglePlayerHandler(Action handler) => _singlePlayerOverride = handler;
+        public bool HasSinglePlayerOverride => _singlePlayerOverride != null;
+
         // Tier 6 #47 — Open the title screen. Same queueing pattern as
         // LoadFromFile / StartNewWorld so the renderer thread sees a
         // consistent transition. If the GL hasn't readied yet, set a
@@ -1529,8 +1543,23 @@ namespace VStudioCraft.UI
             switch (act)
             {
                 case TitleScreen.ActionId.SinglePlayer:
-                    _input.WorldSelectScroll = 0;
-                    _renderer.NavigateTitle(GameRenderer.TitleScreenState.WorldSelect);
+                    if (_singlePlayerOverride != null)
+                    {
+                        // VSIX path — pane is already bound to a file;
+                        // skip the World Select picker and just play it.
+                        // The override does the LoadFromFile / StartNewWorld
+                        // (both render-thread-queued) and we close the
+                        // title + capture mouse here so the player drops
+                        // straight into FPS view.
+                        _singlePlayerOverride();
+                        _renderer.CloseTitleScreen();
+                        CaptureMouseLook();
+                    }
+                    else
+                    {
+                        _input.WorldSelectScroll = 0;
+                        _renderer.NavigateTitle(GameRenderer.TitleScreenState.WorldSelect);
+                    }
                     break;
                 case TitleScreen.ActionId.Multiplayer:
                     _input.MultiplayerErrorText = string.Empty;

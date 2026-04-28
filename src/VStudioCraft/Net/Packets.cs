@@ -173,11 +173,12 @@ namespace VStudioCraft.Net
         public const byte Sheep        = 3;
         public const byte Chicken      = 4;
 
-        // Reserved (Phase 5b+):
-        // public const byte Zombie       = 16;
-        // public const byte Skeleton     = 17;
-        // public const byte Spider       = 18;
-        // public const byte Creeper      = 19;
+        // Phase 5b — hostiles. Bucket starts at 16 to leave headroom
+        // above the passive range for new passives without renumbering.
+        public const byte Zombie       = 16;
+        public const byte Skeleton     = 17;
+        public const byte Spider       = 18;
+        public const byte Creeper      = 19;
         // public const byte DroppedItem  = 32;
         // public const byte Arrow        = 48;
         // public const byte Snowball     = 49;

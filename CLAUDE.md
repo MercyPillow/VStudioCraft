@@ -72,7 +72,13 @@ defaults to 25566 (one above Notch's 25565); username defaults to
 - [x] **Phase 2c** — Client-side NetClient + GameRenderer net-driven mode
 - [x] **Phase 3** — Funnel block mutations through `World.SetBlock`; dig/place intent packets; `BlockChange` broadcast; per-player chunk-window slide + `ChunkUnload`
 - [x] **Phase 4** — Entity replication (spawn/despawn/relmove/look/relmovelook/teleport) + `RemotePlayer` snapshot interpolation (100 ms render-behind buffer) + Steve rig rendering for remote players
-- [ ] **Phase 5** — Mob/drop/projectile replication
+- **Phase 5** — Mob/drop/projectile replication
+  - [x] **5a** — Passive mob replication (Pig/Cow/Sheep/Chicken). Server ticks AI, broadcasts spawn/move/despawn; client adds replicas to `_world.Passives` so the existing `RenderPassives` path draws them. Snap-to-position (no interp) — visible 50ms tick stutter is the first 5b polish item.
+  - [x] **5b** — Hostile mob replication (Zombie/Skeleton/Spider/Creeper). Same shape; server uses closest-player as aggro target via `ClosestPlayerPosTo`. `NoopServerSinks` for `IPlayerDamageSink`/`IDropSink` so mobs simulate but don't deliver damage or drops yet (Phase 5c).
+  - [ ] **5c** — Drops (`DroppedItem`) replication, server-side death-drop spawning, item pickup on player AABB
+  - [ ] **5d** — Projectile replication (Arrow, ThrownProjectile/Snowball/Egg, Bobber) and `PlayerUseItem` (0x43) RMB-intent packet
+  - [ ] **5e** — Damage delivery: `EntityHealth` packet, server-side `Player` health tracking, hurt-flash sync
+  - [ ] **5f** — Mob/drop interpolation polish (currently snap-to-position; want lerp like RemotePlayer)
 - [ ] **Phase 6** — Inventory click protocol + server-side recipes + tile-entity sync
 - [ ] **Phase 7** — Integrated server for SP (in-process loopback)
 - [ ] **Phase 8** — Persistence v10 (per-username state) + admin console + autosave
@@ -129,24 +135,42 @@ standalone uses (`Entity.IntegrateMotion`). Compare inbound positions
 against `last + maxStep`, snap back via a new `PlayerPosLookCorrect`
 packet (0x11, already reserved in PacketIds) on outliers.
 
-### KI-3 — TryInteract still a no-op in net-driven mode (Phase 5)
+### KI-3 — TryInteract still a no-op in net-driven mode (Phase 5d/6)
 
 **Symptom**: Connect to a server, right-click a door / crafting table /
 chest / furnace — nothing happens. Block break and block place both
 work as of Phase 3.
 
-**Cause**: TryInteract handles many distinct intents (door toggle, snowball
-throw, bucket use, fishing rod cast, chest/furnace/crafting open). Each
-needs its own server-side handler + per-block intent packet variant.
-Folded into Phase 5 (mob/projectile replication) and Phase 6 (inventory
-/ tile entity sync) where the natural pairing lives.
+**Cause**: TryInteract handles many distinct intents (door toggle,
+snowball throw, bucket use, fishing rod cast, chest/furnace/crafting
+open).
 
-**Fix**: Phase 5 adds `PlayerUseItem` (snowball, egg, bucket). Phase 6
-adds `OpenWindow` and the chest/furnace open path. Door toggle is a
-small extra packet variant we'll fit in alongside.
+**Fix**: Phase 5d adds `PlayerUseItem` (snowball, egg, bucket, fishing
+rod). Phase 6 adds `OpenWindow` and the chest/furnace open path. Door
+toggle is a small extra variant.
 
 (Phase 3 update — 2026-04-28 — break/place no longer no-ops; they ship
-PlayerDigStart and PlayerPlace and roundtrip a BlockChange.)
+`PlayerDigStart` and `PlayerPlace` and roundtrip a `BlockChange`.)
+
+### KI-7 — Mob replicas snap-to-position (no interpolation)
+
+**Symptom (Phase 5a/b)**: Replicated passive + hostile mobs visibly
+stutter at the server tick boundary (every 50 ms). Walk cycle still
+runs because PassiveMob.Update is called on the client too — wait, no
+it isn't. Check.
+
+**Cause**: client's `EntityRelMove` handler writes `mob.Position +=
+delta` directly. With ticks at 20 Hz and rendering at 1500+ fps, the
+mob teleports by ~5cm every 50ms instead of moving smoothly.
+Compare to `RemotePlayer` which lerps over a snapshot pair.
+
+**Fix (Phase 5f)**: factor out the `RemotePlayer` snapshot/interp
+machinery into a generic helper that can wrap a `PassiveMob` /
+`HostileMob`. Either store snapshot pairs sidecar-style in a
+`Dictionary<int, EntityInterpState>` on `GameRenderer`, or thread
+prev/curr fields directly through `Entity`. Sidecar is less invasive
+and matches the way `RemotePlayer` already lives separately from
+the player class.
 
 ### KI-4 — No reconnect / error UX on broken socket
 

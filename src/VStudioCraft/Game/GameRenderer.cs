@@ -674,6 +674,13 @@ void main()
         // RelMove, which produces visible 20 Hz tick jitter that's the
         // first scheduled polish in Phase 5b.
         private readonly Dictionary<int, PassiveMob> _replicatedPassivesById = new Dictionary<int, PassiveMob>();
+
+        // Phase 5b — replicated hostile mobs. Same role as
+        // _replicatedPassivesById; separate dict because the underlying
+        // _world.Hostiles list and PassiveMob/HostileMob class hierarchy
+        // are sibling, not parent/child. The packet handler tries one
+        // dict then the other before giving up on the lookup.
+        private readonly Dictionary<int, HostileMob> _replicatedHostilesById = new Dictionary<int, HostileMob>();
         // Wall-clock used to time-stamp remote-player snapshots and feed
         // RemotePlayer.Tick. Driven by the host's render-loop dt; the
         // absolute origin doesn't matter, only the delta between samples.
@@ -1099,10 +1106,12 @@ void main()
             // fresh batch of EntitySpawn packets to repopulate.
             _remotePlayers.Clear();
             // Phase 5 — same rationale for replicated mobs. The mob
-            // instances also live in _world.Passives; they'll be cleared
-            // by the SetWorld call inside StartNewWorld / LoadFromFile
-            // / ConnectToServer if the host is transitioning out of MP.
+            // instances also live in _world.Passives / Hostiles; they'll
+            // be cleared by the SetWorld call inside StartNewWorld /
+            // LoadFromFile / ConnectToServer if the host is transitioning
+            // out of MP.
             _replicatedPassivesById.Clear();
+            _replicatedHostilesById.Clear();
         }
 
         // Per-frame multiplayer pump. Called by the host's render loop
@@ -1204,13 +1213,9 @@ void main()
                             new Vector3((float)s.X, (float)s.Y, (float)s.Z),
                             s.Yaw, s.Pitch, _netClock);
                     }
-                    else
+                    else if (s.EntityType >= VStudioCraft.Net.EntityType.Pig
+                          && s.EntityType <= VStudioCraft.Net.EntityType.Chicken)
                     {
-                        // Phase 5 — passive-mob spawn. The factory dispatches
-                        // on the on-wire type byte to construct the right
-                        // PassiveMob subclass; if the type is unknown
-                        // (forward-compat or hostile shipped before its
-                        // client-side handler), the spawn is dropped.
                         var mob = SpawnReplicatedPassive(
                             s.EntityType, s.EntityId,
                             new Vector3((float)s.X, (float)s.Y, (float)s.Z),
@@ -1221,6 +1226,21 @@ void main()
                             _replicatedPassivesById[s.EntityId] = mob;
                         }
                     }
+                    else if (s.EntityType >= VStudioCraft.Net.EntityType.Zombie
+                          && s.EntityType <= VStudioCraft.Net.EntityType.Creeper)
+                    {
+                        var mob = SpawnReplicatedHostile(
+                            s.EntityType, s.EntityId,
+                            new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                            s.Yaw);
+                        if (mob != null && _world != null)
+                        {
+                            _world.Hostiles.Add(mob);
+                            _replicatedHostilesById[s.EntityId] = mob;
+                        }
+                    }
+                    // Other types (drops, projectiles) — fall through; not
+                    // wired client-side until Phase 5c.
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityRelMove:
@@ -1228,40 +1248,58 @@ void main()
                     var m = pkt.EntityRelMove;
                     if (_remotePlayers.TryGetValue(m.EntityId, out var rp))
                         rp.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
-                    else if (_replicatedPassivesById.TryGetValue(m.EntityId, out var mob))
-                        mob.Position += new Vector3(m.Dx, m.Dy, m.Dz);
+                    else if (_replicatedPassivesById.TryGetValue(m.EntityId, out var pmob))
+                        pmob.Position += new Vector3(m.Dx, m.Dy, m.Dz);
+                    else if (_replicatedHostilesById.TryGetValue(m.EntityId, out var hmob))
+                        hmob.Position += new Vector3(m.Dx, m.Dy, m.Dz);
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityLook:
                 {
                     var l = pkt.EntityLook;
+                    float yawRad = l.Yaw * (float)Math.PI / 180f;
                     if (_remotePlayers.TryGetValue(l.EntityId, out var rp))
                         rp.ApplyLook(l.Yaw, l.Pitch, _netClock);
-                    else if (_replicatedPassivesById.TryGetValue(l.EntityId, out var mob))
-                        mob.Yaw = l.Yaw * (float)Math.PI / 180f;
+                    else if (_replicatedPassivesById.TryGetValue(l.EntityId, out var pmob))
+                        pmob.Yaw = yawRad;
+                    else if (_replicatedHostilesById.TryGetValue(l.EntityId, out var hmob))
+                        hmob.Yaw = yawRad;
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityRelMoveLook:
                 {
                     var ml = pkt.EntityRelMoveLook;
+                    float yawRad = ml.Yaw * (float)Math.PI / 180f;
                     if (_remotePlayers.TryGetValue(ml.EntityId, out var rp))
                         rp.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), ml.Yaw, ml.Pitch, _netClock);
-                    else if (_replicatedPassivesById.TryGetValue(ml.EntityId, out var mob))
+                    else if (_replicatedPassivesById.TryGetValue(ml.EntityId, out var pmob))
                     {
-                        mob.Position += new Vector3(ml.Dx, ml.Dy, ml.Dz);
-                        mob.Yaw = ml.Yaw * (float)Math.PI / 180f;
+                        pmob.Position += new Vector3(ml.Dx, ml.Dy, ml.Dz);
+                        pmob.Yaw = yawRad;
+                    }
+                    else if (_replicatedHostilesById.TryGetValue(ml.EntityId, out var hmob))
+                    {
+                        hmob.Position += new Vector3(ml.Dx, ml.Dy, ml.Dz);
+                        hmob.Yaw = yawRad;
                     }
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityTeleport:
                 {
                     var t = pkt.EntityTeleport;
+                    var newPos = new Vector3((float)t.X, (float)t.Y, (float)t.Z);
+                    float yawRad = t.Yaw * (float)Math.PI / 180f;
                     if (_remotePlayers.TryGetValue(t.EntityId, out var rp))
-                        rp.ApplyTeleport(new Vector3((float)t.X, (float)t.Y, (float)t.Z), t.Yaw, t.Pitch, _netClock);
-                    else if (_replicatedPassivesById.TryGetValue(t.EntityId, out var mob))
+                        rp.ApplyTeleport(newPos, t.Yaw, t.Pitch, _netClock);
+                    else if (_replicatedPassivesById.TryGetValue(t.EntityId, out var pmob))
                     {
-                        mob.Position = new Vector3((float)t.X, (float)t.Y, (float)t.Z);
-                        mob.Yaw = t.Yaw * (float)Math.PI / 180f;
+                        pmob.Position = newPos;
+                        pmob.Yaw = yawRad;
+                    }
+                    else if (_replicatedHostilesById.TryGetValue(t.EntityId, out var hmob))
+                    {
+                        hmob.Position = newPos;
+                        hmob.Yaw = yawRad;
                     }
                     break;
                 }
@@ -1269,10 +1307,16 @@ void main()
                 {
                     int eid = pkt.EntityDespawn.EntityId;
                     if (_remotePlayers.Remove(eid)) break;
-                    if (_replicatedPassivesById.TryGetValue(eid, out var mob))
+                    if (_replicatedPassivesById.TryGetValue(eid, out var pmob))
                     {
-                        _world?.Passives.Remove(mob);
+                        _world?.Passives.Remove(pmob);
                         _replicatedPassivesById.Remove(eid);
+                        break;
+                    }
+                    if (_replicatedHostilesById.TryGetValue(eid, out var hmob))
+                    {
+                        _world?.Hostiles.Remove(hmob);
+                        _replicatedHostilesById.Remove(eid);
                     }
                     break;
                 }
@@ -1329,6 +1373,26 @@ void main()
                 case VStudioCraft.Net.EntityType.Cow:     mob = new Cow(pos, entityId);     break;
                 case VStudioCraft.Net.EntityType.Sheep:   mob = new Sheep(pos, entityId);   break;
                 case VStudioCraft.Net.EntityType.Chicken: mob = new Chicken(pos, entityId); break;
+                default: return null;
+            }
+            mob.NetworkId = entityId;
+            mob.Yaw = yawDegrees * (float)Math.PI / 180f;
+            return mob;
+        }
+
+        // Hostile-mob factory; mirror of SpawnReplicatedPassive for the
+        // hostile bucket (EntityType 16..19). Slimes are not yet wired
+        // because the on-wire type list doesn't include them — Phase 5b
+        // tracks the four canonical Alpha hostiles.
+        private static HostileMob SpawnReplicatedHostile(byte type, int entityId, Vector3 pos, float yawDegrees)
+        {
+            HostileMob mob;
+            switch (type)
+            {
+                case VStudioCraft.Net.EntityType.Zombie:   mob = new Zombie(pos, entityId);   break;
+                case VStudioCraft.Net.EntityType.Skeleton: mob = new Skeleton(pos, entityId); break;
+                case VStudioCraft.Net.EntityType.Spider:   mob = new Spider(pos, entityId);   break;
+                case VStudioCraft.Net.EntityType.Creeper:  mob = new Creeper(pos, entityId);  break;
                 default: return null;
             }
             mob.NetworkId = entityId;

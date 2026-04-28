@@ -165,22 +165,20 @@ namespace VStudioCraft.Server
             //    ChunkLoad to that area will carry the new bytes.
             BroadcastPendingBlockChanges();
 
-            // 5. Phase 5 — passive-mob simulation. Server runs the wander
-            //    AI directly (clients don't, in net-driven mode). Existing
-            //    PassiveMob.Update operates on a single dt value so we
-            //    pass our fixed 50 ms tick interval; no fixed-step
-            //    accumulator needed because the SERVER tick is already
-            //    that fixed step. Dead mobs reaped after Update so this
-            //    tick's drops/death packets still see them in the list.
+            // 5. Phase 5 — mob simulation. Server runs wander+AI directly
+            //    (clients don't, in net-driven mode). Server tick is the
+            //    fixed 50 ms step already; no per-mob accumulator needed.
             TickPassiveMobs();
+            TickHostileMobs();
 
             // 6. Phase 4 — per-pair player entity replication. For every
             //    (a, b) pair of in-game clients, ensure b knows about a's
             //    current position via the cheapest packet that conveys
             //    the change since b's last anchor for a. Phase 5 extends
-            //    this to also broadcast non-player entities (mobs).
+            //    this to broadcast non-player entities (passives + hostiles).
             BroadcastEntityUpdates();
             BroadcastMobUpdates();
+            BroadcastHostileUpdates();
 
             for (int i = _clients.Count - 1; i >= 0; i--)
             {
@@ -775,13 +773,97 @@ namespace VStudioCraft.Server
             }
         }
 
+        // Phase 5b — no-op IPlayerDamageSink + IDropSink. Hostile mobs
+        // require these on Update; for now they're inert because
+        // server-side player health and item-drop replication aren't
+        // yet wired (Phase 5c+ adds EntityHealth packets and a
+        // server-side DroppedItem broadcast path). The mob behaves
+        // correctly otherwise — wander, chase, melee-distance check —
+        // it just can't actually damage anyone yet.
+        private sealed class NoopServerSinks : IPlayerDamageSink, IDropSink
+        {
+            public static readonly NoopServerSinks Instance = new NoopServerSinks();
+            public void DamagePlayer(int amount) { /* Phase 5c+ */ }
+            public void SpawnDrop(OpenTK.Vector3 pos, BlockType item, int count, OpenTK.Vector3 velocity) { /* Phase 5c+ */ }
+            public void SpawnHostile(HostileMob mob)
+            {
+                // Slimes in Alpha split into smaller copies on death;
+                // this would need to be appended to _world.Hostiles.
+                // Phase 5b: ignored. Re-evaluate when slimes become
+                // actually hittable (currently a no-op damage sink
+                // means slimes never die).
+            }
+        }
+
+        // Find the closest connected player's position for a given mob
+        // location, or Vector3.Zero if no player is connected (in which
+        // case hostiles wander pacifically). The "closest" choice is
+        // important: HostileMob.Update aggros if the player is within
+        // DetectRange, so feeding the closest player gives the mob the
+        // most realistic target. Fine for our 4-player cap; would need
+        // a spatial index at scale.
+        private OpenTK.Vector3 ClosestPlayerPosTo(OpenTK.Vector3 mobPos)
+        {
+            double bestSq = double.MaxValue;
+            OpenTK.Vector3 best = OpenTK.Vector3.Zero;
+            bool found = false;
+            for (int i = 0; i < _clients.Count; i++)
+            {
+                var c = _clients[i];
+                if (c.Session.IsDead) continue;
+                if (c.Phase == ClientPhase.AwaitingLogin) continue;
+                if (!c.HasReportedPos) continue;
+                double dx = c.LastReportedX - mobPos.X;
+                double dy = c.LastReportedY - mobPos.Y;
+                double dz = c.LastReportedZ - mobPos.Z;
+                double sq = dx * dx + dy * dy + dz * dz;
+                if (sq < bestSq)
+                {
+                    bestSq = sq;
+                    best = new OpenTK.Vector3((float)c.LastReportedX, (float)c.LastReportedY, (float)c.LastReportedZ);
+                    found = true;
+                }
+            }
+            // No player connected: return the spawn-area centre so
+            // hostiles still gravity-tick somewhere visible. Sentinel
+            // (0,0,0) is intentionally out of the spawn-radius detect
+            // range so mobs fall back to wander rather than chasing
+            // an empty point.
+            return found ? best : OpenTK.Vector3.Zero;
+        }
+
+        private void TickHostileMobs()
+        {
+            var hostiles = _world.Hostiles;
+            for (int i = hostiles.Count - 1; i >= 0; i--)
+            {
+                var mob = hostiles[i];
+                if (mob.IsDead)
+                {
+                    if (mob.NetworkId >= 0)
+                    {
+                        DespawnMobFromAllViewers(mob.NetworkId);
+                    }
+                    hostiles.RemoveAt(i);
+                    continue;
+                }
+                var target = ClosestPlayerPosTo(mob.Position);
+                mob.Update(0.05f, _world, target, NoopServerSinks.Instance);
+                // Creeper fuse decoupled from Update (matches the
+                // Alpha "primed creeper doesn't always defuse" rule).
+                if (mob is Creeper creeper)
+                {
+                    creeper.TickFuse(0.05f, target, NoopServerSinks.Instance);
+                }
+            }
+        }
+
         // Phase 5 — server-side mob simulation. Drives the wander +
         // gravity + AABB integrator on each passive mob; reaps dead
         // mobs and ships an EntityDespawn for any that had been
-        // broadcast. Hostile mobs and chicken egg-lay are out of
-        // Phase 5a scope (egg-lay needs an IDropSink server-side
-        // sink, hostiles need their per-player aggro target — both
-        // are fold-in changes once the basic framework is exercised).
+        // broadcast. Chicken egg-lay is out of Phase 5a scope (needs
+        // IDropSink wired through to server-side drop replication —
+        // Phase 5c+ work).
         private void TickPassiveMobs()
         {
             var passives = _world.Passives;
@@ -992,9 +1074,8 @@ namespace VStudioCraft.Server
         }
 
         // Map a concrete PassiveMob subclass to its on-wire entity-type
-        // tag. Returns 0xFF when the mob kind has no wire ID yet (Phase
-        // 5b will fold in hostiles). Calling site filters those out and
-        // skips broadcast — they remain server-only entities for now.
+        // tag. Returns 0xFF for unknown kinds (forward-compat). Calling
+        // site filters those out and skips broadcast.
         private static byte MobEntityType(PassiveMob mob)
         {
             if (mob is Pig)     return EntityType.Pig;
@@ -1002,6 +1083,165 @@ namespace VStudioCraft.Server
             if (mob is Sheep)   return EntityType.Sheep;
             if (mob is Chicken) return EntityType.Chicken;
             return byte.MaxValue;
+        }
+
+        // Map a concrete HostileMob subclass to its on-wire entity-type
+        // tag. Mirror of MobEntityType for the hostile bucket (16..19).
+        private static byte HostileEntityType(HostileMob mob)
+        {
+            if (mob is Zombie)   return EntityType.Zombie;
+            if (mob is Skeleton) return EntityType.Skeleton;
+            if (mob is Spider)   return EntityType.Spider;
+            if (mob is Creeper)  return EntityType.Creeper;
+            return byte.MaxValue;
+        }
+
+        // Phase 5b — hostile-mob broadcast. Mirrors BroadcastMobUpdates
+        // exactly, just over _world.Hostiles. The factor-shared helper
+        // approach (one method, type-erased entity list) is tempting but
+        // PassiveMob and HostileMob don't share a common Yaw / NetworkId
+        // accessor signature past Entity, so the dedup'd version would
+        // need a dispatch interface that's more code than the duplication.
+        // If a third entity-list type lands (drops?), fold then.
+        private void BroadcastHostileUpdates()
+        {
+            var hostiles = _world.Hostiles;
+            for (int i = 0; i < hostiles.Count; i++)
+            {
+                var mob = hostiles[i];
+                byte type = HostileEntityType(mob);
+                if (type == byte.MaxValue) continue;
+
+                if (mob.NetworkId < 0) mob.NetworkId = _nextEntityId++;
+
+                int mcx = (int)Math.Floor(mob.Position.X / Chunk.SizeX);
+                int mcz = (int)Math.Floor(mob.Position.Z / Chunk.SizeZ);
+
+                if (!mob.AnchorValid)
+                {
+                    mob.AnchorX = mob.Position.X;
+                    mob.AnchorY = mob.Position.Y;
+                    mob.AnchorZ = mob.Position.Z;
+                    mob.AnchorYaw = HostileYaw(mob);
+                    mob.AnchorPitch = 0f;
+                    mob.AnchorValid = true;
+                    mob.TicksSinceTeleport = 0;
+                }
+                mob.TicksSinceTeleport++;
+
+                for (int v = 0; v < _clients.Count; v++)
+                {
+                    var viewer = _clients[v];
+                    if (viewer.Session.IsDead) continue;
+                    if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
+
+                    bool inView = viewer.TrackedChunks.Contains((mcx, mcz));
+                    bool tracked = viewer.TrackedEntities.Contains(mob.NetworkId);
+
+                    if (!inView)
+                    {
+                        if (tracked)
+                        {
+                            viewer.TrackedEntities.Remove(mob.NetworkId);
+                            int idCap = mob.NetworkId;
+                            viewer.Session.Send(PacketIds.EntityDespawn, w => new EntityDespawnPacket
+                            {
+                                EntityId = idCap,
+                            }.Write(w));
+                        }
+                        continue;
+                    }
+
+                    if (!tracked)
+                    {
+                        viewer.TrackedEntities.Add(mob.NetworkId);
+                        var snap = mob;
+                        byte typeCap = type;
+                        viewer.Session.Send(PacketIds.EntitySpawn, w => new EntitySpawnPacket
+                        {
+                            EntityId    = snap.NetworkId,
+                            EntityType  = typeCap,
+                            X           = snap.Position.X,
+                            Y           = snap.Position.Y,
+                            Z           = snap.Position.Z,
+                            Yaw         = HostileYaw(snap),
+                            Pitch       = 0f,
+                            DisplayName = string.Empty,
+                        }.Write(w));
+                        continue;
+                    }
+
+                    double dx = mob.Position.X - mob.AnchorX;
+                    double dy = mob.Position.Y - mob.AnchorY;
+                    double dz = mob.Position.Z - mob.AnchorZ;
+                    float curYaw = HostileYaw(mob);
+                    float dyaw = NormalizeDegrees(curYaw - mob.AnchorYaw);
+
+                    bool moveSig = Math.Abs(dx) > MoveEpsilon || Math.Abs(dy) > MoveEpsilon || Math.Abs(dz) > MoveEpsilon;
+                    bool lookSig = Math.Abs(dyaw) > LookEpsilon;
+                    bool teleportDue = mob.TicksSinceTeleport >= EntityTeleportEveryTicks;
+                    bool teleportFar = Math.Abs(dx) > 16 || Math.Abs(dy) > 16 || Math.Abs(dz) > 16;
+
+                    if (teleportDue || teleportFar)
+                    {
+                        var snap = mob;
+                        viewer.Session.Send(PacketIds.EntityTeleport, w => new EntityTeleportPacket
+                        {
+                            EntityId = snap.NetworkId,
+                            X = snap.Position.X, Y = snap.Position.Y, Z = snap.Position.Z,
+                            Yaw = HostileYaw(snap), Pitch = 0f,
+                        }.Write(w));
+                    }
+                    else if (moveSig && lookSig)
+                    {
+                        var snap = mob;
+                        float fdx = (float)dx, fdy = (float)dy, fdz = (float)dz;
+                        viewer.Session.Send(PacketIds.EntityRelMoveLook, w => new EntityRelMoveLookPacket
+                        {
+                            EntityId = snap.NetworkId,
+                            Dx = fdx, Dy = fdy, Dz = fdz,
+                            Yaw = HostileYaw(snap), Pitch = 0f,
+                        }.Write(w));
+                    }
+                    else if (moveSig)
+                    {
+                        var snap = mob;
+                        float fdx = (float)dx, fdy = (float)dy, fdz = (float)dz;
+                        viewer.Session.Send(PacketIds.EntityRelMove, w => new EntityRelMovePacket
+                        {
+                            EntityId = snap.NetworkId,
+                            Dx = fdx, Dy = fdy, Dz = fdz,
+                        }.Write(w));
+                    }
+                    else if (lookSig)
+                    {
+                        var snap = mob;
+                        viewer.Session.Send(PacketIds.EntityLook, w => new EntityLookPacket
+                        {
+                            EntityId = snap.NetworkId,
+                            Yaw = HostileYaw(snap), Pitch = 0f,
+                        }.Write(w));
+                    }
+                }
+
+                bool teleportedThisTick =
+                    mob.TicksSinceTeleport >= EntityTeleportEveryTicks
+                    || Math.Abs(mob.Position.X - mob.AnchorX) > 16
+                    || Math.Abs(mob.Position.Y - mob.AnchorY) > 16
+                    || Math.Abs(mob.Position.Z - mob.AnchorZ) > 16;
+
+                mob.AnchorX = mob.Position.X;
+                mob.AnchorY = mob.Position.Y;
+                mob.AnchorZ = mob.Position.Z;
+                mob.AnchorYaw = HostileYaw(mob);
+                mob.AnchorPitch = 0f;
+                if (teleportedThisTick) mob.TicksSinceTeleport = 0;
+            }
+        }
+
+        private static float HostileYaw(HostileMob mob)
+        {
+            return mob.Yaw * (180f / (float)Math.PI);
         }
 
         // PassiveMob.Yaw is in radians; the wire format uses degrees.
