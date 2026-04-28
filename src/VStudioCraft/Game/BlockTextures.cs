@@ -698,19 +698,22 @@ namespace VStudioCraft.Game
         }
 
         // Tier 4 #14 — Slice FarmlandTop + 8 wheat stages out of the
-        // already-decoded terrain.png buffer. Farming items in the same
-        // tail range have sentinel coords and stay procedural; only
-        // the block-face tiles are overlaid here. Caller passes the
-        // decoded terrain bgra so we don't re-decode. Bounded at
-        // FirstTailCaneLayer (Tier 4 #26) so the cane slice doesn't get
-        // pulled out of terrain.png by accident — it has its own
-        // dedicated slicer.
+        // already-decoded terrain.png buffer. Farming ITEMS in the same
+        // tail range (wheat seeds / wheat item / bread / mushroom stew
+        // at layers 99..102) live in alpha_tools.png and are sliced by
+        // UploadTailItemsFromAlphaTools — gating on
+        // IsTailLayerTerrainSourced ensures their alpha_tools coords
+        // can't be misread as terrain coords here (which is what was
+        // making bread/wheat/stew render block textures before this
+        // gate was tightened). Caller passes the decoded terrain bgra
+        // so we don't re-decode.
         private static void UploadFarmingBlockLayersFromTerrain(byte[] bgra, int srcW, int srcH, byte[] layerPixels)
         {
             for (int layer = FirstTailFarmLayer; layer < FirstTailCaneLayer; layer++)
             {
+                if (!IsTailLayerTerrainSourced(layer)) continue;
                 var (col, row) = AlphaTileCoords[layer];
-                if (col < 0 || row < 0) continue; // farming items — keep procedural fill
+                if (col < 0 || row < 0) continue;
                 CopyTile(bgra, srcW, srcH, col, row, layerPixels);
                 GL.TexSubImage3D(
                     TextureTarget.Texture2DArray, 0,
@@ -720,19 +723,23 @@ namespace VStudioCraft.Game
             }
         }
 
-        // True for tail layers (>= FirstTailCaneLayer) whose AlphaTileCoords
+        // True for tail layers (>= FirstTailFarmLayer) whose AlphaTileCoords
         // entry indexes into terrain.png rather than alpha_tools.png. Used
-        // by UploadCaneBlockLayersFromTerrain to ignore item-icon layers
-        // in the same range — without this gate the terrain slicer would
-        // happily copy a grass-top tile into an armor slot if we put a
-        // real (col,row) there. The list is whitelist-explicit rather
+        // by both Upload*BlockLayersFromTerrain slicers (so a real (col,row)
+        // for an alpha_tools.png-sourced item can never be misinterpreted
+        // as a terrain.png coord and end up sliced from the wrong sheet)
+        // and by UploadTailItemsFromAlphaTools (which inverts the gate to
+        // skip terrain layers). Whitelist is explicit per-layer rather
         // than range-based because the terrain-source vs tools-source
-        // distinction is interleaved through the tail layers (door BLOCKS
-        // are terrain, door ICONS are tools; jukebox FACES are terrain,
-        // music DISCS are tools), so a single boundary doesn't fit.
+        // distinction is interleaved through the tail (farmland + wheat
+        // BLOCKS are terrain, farming ITEMS are tools; door BLOCKS are
+        // terrain, door ICONS are tools; jukebox FACES are terrain, music
+        // DISCS are tools), so a single boundary doesn't fit.
         private static bool IsTailLayerTerrainSourced(int layer)
         {
-            return layer == TileSugarCane
+            return layer == TileFarmlandTop
+                || (layer >= TileWheat0 && layer <= TileWheat7)
+                || layer == TileSugarCane
                 || layer == TileWoodDoorTop  || layer == TileWoodDoorBottom
                 || layer == TileIronDoorTop  || layer == TileIronDoorBottom
                 || layer == TileJukeboxTop   || layer == TileJukeboxSide
@@ -766,20 +773,27 @@ namespace VStudioCraft.Game
             }
         }
 
-        // Tier 4 — Slice the post-cane tail-ITEM tiles out of alpha_tools.png.
-        // Covers everything from FirstTailDoorLayer onward that ISN'T flagged
-        // as terrain-sourced: door inventory icons, flint+steel, apple,
+        // Tier 4 — Slice the tail-ITEM tiles out of alpha_tools.png.
+        // Covers everything from FirstTailFarmLayer onward that ISN'T
+        // flagged as terrain-sourced: farming items (wheat seeds /
+        // wheat item / bread / mushroom stew — layers 99..102; the
+        // FarmlandTop + Wheat0..Wheat7 BLOCKS at 90..98 are terrain
+        // and skipped via IsTailLayerTerrainSourced), cane item / paper
+        // / book (104..106), door inventory icons, flint+steel, apple,
         // snowball, buckets, slimeball, compass, saddle, fishing rod,
-        // paintings, music discs, and the 20 armor pieces. Same idempotent
-        // contract as the other tools slicers — a missing alpha_tools.png
-        // or a sentinel coord just leaves the procedural pixels in place,
-        // so the atlas degrades gracefully (every layer was painted by
-        // its procedural generator before this overlay runs).
+        // paintings, music discs, and the 20 armor pieces. Starting at
+        // FirstTailFarmLayer (vs. FirstTailCaneLayer / FirstTailDoorLayer
+        // previously) was the latest fix — wheat seeds / wheat item /
+        // bread / stew had real alpha_tools coords wired but no slicer
+        // was walking 99..102, so they kept rendering block-texture
+        // garbage from terrain.png misinterpretation. Same idempotent
+        // contract as the other tools slicers — missing PNG or sentinel
+        // coord just leaves the procedural pixels in place.
         private static void UploadTailItemsFromAlphaTools(byte[] layerPixels)
         {
             if (!TryDecodeEmbeddedTools(out byte[] toolBgra, out int toolW, out int toolH))
                 return;
-            for (int layer = FirstTailDoorLayer; layer < LayerCount; layer++)
+            for (int layer = FirstTailFarmLayer; layer < LayerCount; layer++)
             {
                 if (IsTailLayerTerrainSourced(layer)) continue;
                 var (col, row) = AlphaTileCoords[layer];

@@ -327,6 +327,99 @@ namespace VStudioCraft.Net
             _hostClient.LastReportedPitch = pitch;
         }
 
+        // Phase 8 — return one PersistedPlayer per non-loopback,
+        // logged-in client, for inclusion in the v13 player table on
+        // save. The loopback host is skipped because the host's pose
+        // and inventory persist through the existing v9 header /
+        // singleplayer path (CameraPos, Health, plus the
+        // host-renderer's own Player.Inventory which the SP path
+        // doesn't currently serialise — that's a TODO that lands with
+        // 6b-extended). Friends fall through this path.
+        //
+        // We snapshot CURRENTLY-CONNECTED clients only. A friend who
+        // disconnected mid-session before save would not be persisted
+        // in this version. Phase 8 follow-up: keep a "recently
+        // disconnected" cache for ~5 min so a brief reconnect doesn't
+        // wipe their state.
+        public List<WorldSaveFormat.PersistedPlayer> SnapshotPlayers()
+        {
+            var snap = new List<WorldSaveFormat.PersistedPlayer>(_clients.Count);
+            for (int i = 0; i < _clients.Count; i++)
+            {
+                var c = _clients[i];
+                if (c.Session.IsDead) continue;
+                if (c.Session.IsLoopback) continue;
+                if (c.Phase == ClientPhase.AwaitingLogin) continue;
+                if (string.IsNullOrEmpty(c.Username)) continue;
+                // Copy slots (the source array is mutated each tick by
+                // pickup logic — defensive copy ensures the on-disk
+                // record reflects this exact moment).
+                var inv = new ItemStack[Inventory.TotalSlots];
+                Array.Copy(c.ServerInventory.Slots, inv, Inventory.TotalSlots);
+                snap.Add(new WorldSaveFormat.PersistedPlayer
+                {
+                    Username = c.Username,
+                    X = c.LastReportedX,
+                    Y = c.LastReportedY,
+                    Z = c.LastReportedZ,
+                    Yaw = c.LastReportedYaw,
+                    Pitch = c.LastReportedPitch,
+                    // Health isn't yet server-authoritative for players
+                    // (Phase 6c work). Persist a default — actual
+                    // damage and respawn will land alongside that.
+                    Health = 20,
+                    HeldSlot = c.HeldSlot,
+                    Inventory = inv,
+                });
+            }
+            return snap;
+        }
+
+        // Phase 8 — restore loaded player records into a lookup the
+        // login handler consults. Called by the host's LoadFromFile
+        // path (via GameRenderer) before OpenToLan, so a friend
+        // reconnecting after a load gets their saved inventory back.
+        // Defensive: ignores empty / whitespace usernames.
+        private Dictionary<string, WorldSaveFormat.PersistedPlayer> _persistedPlayers;
+        public void InstallPersistedPlayers(Dictionary<string, WorldSaveFormat.PersistedPlayer> table)
+        {
+            _persistedPlayers = table;
+        }
+
+        // Phase 8.d — admin console accessors. Read-only enumeration
+        // of currently-connected non-loopback clients, identified by
+        // username + endpoint for the `list` command. Kick disconnects
+        // by username with a server-side reason; matches the friend
+        // disconnect pipeline so EntityDespawn etc. fire correctly.
+        public IEnumerable<(string username, string endpoint, int eid)> ListClients()
+        {
+            foreach (var c in _clients)
+            {
+                if (c.Session.IsDead) continue;
+                if (c.Session.IsLoopback) continue;
+                yield return (c.Username ?? "<unnamed>", c.Session.RemoteEndpoint, c.EntityId);
+            }
+        }
+
+        public bool KickByUsername(string username, string reason)
+        {
+            if (string.IsNullOrEmpty(username)) return false;
+            for (int i = 0; i < _clients.Count; i++)
+            {
+                var c = _clients[i];
+                if (c.Session.IsDead) continue;
+                if (c.Session.IsLoopback) continue;
+                if (!string.Equals(c.Username, username, StringComparison.Ordinal)) continue;
+                c.Session.Send(PacketIds.Disconnect, w => new DisconnectPacket
+                {
+                    Reason = reason ?? "kicked by op",
+                }.Write(w));
+                c.Session.Disconnect($"kicked: {reason ?? "by op"}");
+                return true;
+            }
+            return false;
+        }
+
         // ---- Phase 5c: lifecycle broadcasts driven by the host -----------
         //
         // The host's existing _drops list lives on GameRenderer (singleplayer
@@ -691,11 +784,32 @@ namespace VStudioCraft.Net
             client.Session.Label = username;
             client.Phase = ClientPhase.LoggingIn;
 
-            // Spawn at the world origin for Phase 2; Phase 3 picks the real
-            // surface Y from World.GetTopmostSolidY or the saved spawn.
-            var spawnX = 0;
-            var spawnY = 80;
-            var spawnZ = 0;
+            // Phase 8 — restore saved state if we have a record for
+            // this username. Falls back to default spawn / empty
+            // inventory when no record exists (fresh user, or a v12
+            // load with no v13 player table).
+            int spawnX = 0, spawnY = 80, spawnZ = 0;
+            if (_persistedPlayers != null
+                && _persistedPlayers.TryGetValue(username, out var saved))
+            {
+                spawnX = (int)Math.Floor(saved.X);
+                spawnY = (int)Math.Floor(saved.Y);
+                spawnZ = (int)Math.Floor(saved.Z);
+                client.LastReportedX = saved.X;
+                client.LastReportedY = saved.Y;
+                client.LastReportedZ = saved.Z;
+                client.LastReportedYaw = saved.Yaw;
+                client.LastReportedPitch = saved.Pitch;
+                client.HasReportedPos = true;
+                if (saved.HeldSlot >= 0 && saved.HeldSlot < Inventory.HotbarCount)
+                    client.HeldSlot = (byte)saved.HeldSlot;
+                if (saved.Inventory != null)
+                {
+                    int n = Math.Min(saved.Inventory.Length, Inventory.TotalSlots);
+                    for (int i = 0; i < n; i++)
+                        client.ServerInventory.Slots[i] = saved.Inventory[i];
+                }
+            }
             client.SpawnX = spawnX;
             client.SpawnY = spawnY;
             client.SpawnZ = spawnZ;

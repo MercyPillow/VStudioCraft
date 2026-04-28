@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -42,15 +43,30 @@ namespace VStudioCraft.Server
 
         private static volatile bool _stopRequested;
 
+        // Phase 8 paths and timing. Default save lives next to the exe
+        // so a no-arg server invocation Just Persists. Override via
+        // --world=<path>; absent file → generate a fresh world with
+        // the provided seed.
+        private static readonly string DefaultWorldPath = System.IO.Path.Combine(
+            AppDomain.CurrentDomain.BaseDirectory, "world.voxworld");
+        // 5 minutes between autosaves — same default as Notchian
+        // dedicated. Tunable via --autosave=<minutes>; 0 disables.
+        private const double DefaultAutosaveMinutes = 5.0;
+
         private static int Main(string[] args)
         {
             int seed = ParseSeed(args);
             int port = ParsePort(args);
-            Console.WriteLine($"[server] VStudioCraft headless server (Phase 2)");
+            string worldPath = ParseStringArg(args, "--world=", DefaultWorldPath);
+            double autosaveMin = ParseDoubleArg(args, "--autosave=", DefaultAutosaveMinutes);
+            Console.WriteLine($"[server] VStudioCraft headless server (Phase 8)");
             Console.WriteLine($"[server] Seed: {seed}, Port: {port}");
+            Console.WriteLine($"[server] World file: {worldPath}");
+            Console.WriteLine($"[server] Autosave: {(autosaveMin <= 0 ? "disabled" : autosaveMin + " min")}");
 
             // Ctrl+C cleanly drops out of the tick loop instead of killing
-            // the process mid-tick. Phase 8 will hook autosave in here.
+            // the process mid-tick. The final save happens after the loop
+            // exits so the world is always persisted before exit.
             Console.CancelKeyPress += (_, e) =>
             {
                 e.Cancel = true;
@@ -59,16 +75,30 @@ namespace VStudioCraft.Server
             };
 
             World world;
+            Dictionary<string, WorldSaveFormat.PersistedPlayer> persistedPlayers = null;
             try
             {
-                var genWatch = Stopwatch.StartNew();
-                world = World.Generate(seed);
-                genWatch.Stop();
-                Console.WriteLine($"[server] World generated in {genWatch.ElapsedMilliseconds} ms ({World.InitialRadiusChunks * 2 + 1}x{World.InitialRadiusChunks * 2 + 1} initial chunks).");
+                if (System.IO.File.Exists(worldPath))
+                {
+                    var loadWatch = Stopwatch.StartNew();
+                    var (header, w, players) = WorldSaveFormat.LoadWithPlayers(worldPath);
+                    world = w;
+                    persistedPlayers = players;
+                    seed = header.Seed; // saved seed wins over CLI arg
+                    loadWatch.Stop();
+                    Console.WriteLine($"[server] Loaded world from {worldPath} in {loadWatch.ElapsedMilliseconds} ms (seed={seed}, players={players.Count}, chunks={world.PersistentChunkCount}).");
+                }
+                else
+                {
+                    var genWatch = Stopwatch.StartNew();
+                    world = World.Generate(seed);
+                    genWatch.Stop();
+                    Console.WriteLine($"[server] No save at {worldPath} — generated fresh world in {genWatch.ElapsedMilliseconds} ms (seed={seed}, {World.InitialRadiusChunks * 2 + 1}x{World.InitialRadiusChunks * 2 + 1} initial chunks).");
+                }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[server] FATAL: world generation failed: {ex}");
+                Console.Error.WriteLine($"[server] FATAL: world load/gen failed: {ex}");
                 return 1;
             }
 
@@ -77,6 +107,11 @@ namespace VStudioCraft.Server
             {
                 hub = new ServerHub(world, port);
                 hub.Start();
+                if (persistedPlayers != null && persistedPlayers.Count > 0)
+                {
+                    hub.InstallPersistedPlayers(persistedPlayers);
+                    Console.WriteLine($"[server] Installed {persistedPlayers.Count} persisted player record(s) — friends reconnecting will restore inventory.");
+                }
                 Console.WriteLine($"[server] Listening on 0.0.0.0:{hub.Port}");
             }
             // ReSharper disable once RedundantCatchClause — explicit error
@@ -86,6 +121,25 @@ namespace VStudioCraft.Server
             {
                 Console.Error.WriteLine($"[server] FATAL: failed to start network listener on port {port}: {ex.Message}");
                 return 3;
+            }
+
+            // Phase 8.d — admin console runs on a background thread,
+            // reads Console.ReadLine, dispatches commands. Skipped
+            // when running with --selftest / --selftest-mp because
+            // those drive Console.ReadLine themselves (or just exit
+            // before the prompt would matter). Skipped when stdin is
+            // redirected (`Console.IsInputRedirected` true) because
+            // the typical scenario is service-style hosting where
+            // there's no TTY to read from.
+            if (!HasFlag(args, "--selftest") && !HasFlag(args, "--selftest-mp")
+                && !Console.IsInputRedirected)
+            {
+                var consoleThread = new Thread(() => RunAdminConsole(hub, world, worldPath))
+                {
+                    IsBackground = true,
+                    Name = "AdminConsole",
+                };
+                consoleThread.Start();
             }
 
             // --selftest exercises the protocol against ourselves on
@@ -121,7 +175,7 @@ namespace VStudioCraft.Server
 
             try
             {
-                RunTickLoop(world, hub);
+                RunTickLoop(world, hub, worldPath, autosaveMin);
             }
             catch (Exception ex)
             {
@@ -130,9 +184,45 @@ namespace VStudioCraft.Server
                 return 2;
             }
 
+            // Final save on graceful exit — captures the latest world
+            // state and any connected friends' inventories. Errors here
+            // are reported but don't change the exit code; we'd rather
+            // shut down cleanly with a stale save than refuse to exit.
+            try { lock (_saveLock) { SaveWorld(worldPath, world, hub); } }
+            catch (Exception ex) { Console.Error.WriteLine($"[server] final save failed: {ex.Message}"); }
+
             hub.Stop();
             Console.WriteLine("[server] Stopped.");
             return 0;
+        }
+
+        // Phase 8 — write the world + v13 player table to disk. Used by
+        // both the autosave timer and the final save on Ctrl+C. Caller
+        // owns error handling.
+        private static void SaveWorld(string worldPath, World world, ServerHub hub)
+        {
+            var header = new WorldSaveFormat.Header
+            {
+                Seed = world.Seed,
+                // Dedicated server has no host player — these fields are
+                // unused by the load path's MP code. Filling sensible
+                // defaults so a save loaded into a singleplayer client
+                // (e.g. operator inspecting the dedicated world) sees a
+                // surface spawn instead of garbage.
+                CameraPos = new OpenTK.Vector3(0.5f, 80f, 0.5f),
+                CameraYaw = 0f,
+                CameraPitch = 0f,
+                GameMode = GameMode.Survival,
+                Health = 20,
+                HungerEnabled = true,
+                SpawnPos = new OpenTK.Vector3(0.5f, 80f, 0.5f),
+                TimeOfDay = 0.25f, // noon — TODO sync from world tick clock
+            };
+            var players = hub.SnapshotPlayers();
+            var sw = Stopwatch.StartNew();
+            WorldSaveFormat.Save(worldPath, header, world, players);
+            sw.Stop();
+            Console.WriteLine($"[server] Saved world to {worldPath} in {sw.ElapsedMilliseconds} ms ({players.Count} players, {world.PersistentChunkCount} chunks).");
         }
 
         private static bool HasFlag(string[] args, string flag)
@@ -566,6 +656,99 @@ namespace VStudioCraft.Server
             }
         }
 
+        // Phase 8.d — admin console. Blocking ReadLine on a background
+        // thread; commands run on this thread (NOT the tick thread)
+        // but they only call hub methods that are themselves thread-
+        // safe (Stop / KickByUsername / ListClients use the same
+        // _clients list the tick thread mutates — these are safe
+        // because hub methods don't mutate during enumeration of the
+        // list, and KickByUsername only flips a `_dead` flag that the
+        // tick thread reads next iteration).
+        //
+        // Save command needs to NOT race with the tick-thread's
+        // autosave. We use a simple lock — a save in flight blocks the
+        // other save's start; both serialise correctly.
+        private static readonly object _saveLock = new object();
+
+        private static void RunAdminConsole(ServerHub hub, World world, string worldPath)
+        {
+            Console.WriteLine("[server] Admin console ready. Type 'help' for commands.");
+            while (!_stopRequested)
+            {
+                string line;
+                try { line = Console.ReadLine(); }
+                catch { return; } // stdin closed
+                if (line == null) return; // EOF
+                line = line.Trim();
+                if (line.Length == 0) continue;
+
+                var parts = line.Split(new[] { ' ' }, 2);
+                var cmd = parts[0].ToLowerInvariant();
+                var rest = parts.Length > 1 ? parts[1].Trim() : "";
+
+                switch (cmd)
+                {
+                    case "help":
+                    case "?":
+                        Console.WriteLine("[server] commands:");
+                        Console.WriteLine("  list                 — list connected clients");
+                        Console.WriteLine("  save                 — force save now");
+                        Console.WriteLine("  kick <username> [reason] — disconnect a client");
+                        Console.WriteLine("  stop / quit          — graceful shutdown (saves first)");
+                        break;
+
+                    case "list":
+                        int n = 0;
+                        foreach (var c in hub.ListClients())
+                        {
+                            Console.WriteLine($"  eid={c.eid,-4} {c.username,-16} from {c.endpoint}");
+                            n++;
+                        }
+                        Console.WriteLine($"[server] {n} client(s) connected.");
+                        break;
+
+                    case "save":
+                        try
+                        {
+                            lock (_saveLock) { SaveWorld(worldPath, world, hub); }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[server] save failed: {ex.Message}");
+                        }
+                        break;
+
+                    case "kick":
+                    {
+                        var kickArgs = rest.Split(new[] { ' ' }, 2);
+                        var who = kickArgs.Length > 0 ? kickArgs[0] : "";
+                        var why = kickArgs.Length > 1 ? kickArgs[1] : "kicked by op";
+                        if (string.IsNullOrEmpty(who))
+                        {
+                            Console.WriteLine("usage: kick <username> [reason]");
+                            break;
+                        }
+                        bool ok = hub.KickByUsername(who, why);
+                        Console.WriteLine(ok
+                            ? $"[server] kicked {who}"
+                            : $"[server] no connected client named '{who}'");
+                        break;
+                    }
+
+                    case "stop":
+                    case "quit":
+                    case "exit":
+                        Console.WriteLine("[server] Stop requested. Saving and shutting down...");
+                        _stopRequested = true;
+                        return;
+
+                    default:
+                        Console.WriteLine($"[server] unknown command: {cmd}. Type 'help'.");
+                        break;
+                }
+            }
+        }
+
         // Find topmost solid (non-air) block in a column inside a raw
         // chunk byte buffer. Indexing matches Chunk.Index: (lx*SizeY+y)*SizeZ+lz.
         // Returns -1 if the entire column is air (shouldn't happen for
@@ -578,6 +761,33 @@ namespace VStudioCraft.Server
                 if (raw[idx] != 0) return y; // BlockType.Air == 0
             }
             return -1;
+        }
+
+        // Generic --flag=VALUE parser. Returns the default if no
+        // matching arg is present. Used by --world= and --autosave=
+        // for Phase 8 dedicated-server config.
+        private static string ParseStringArg(string[] args, string flagPrefix, string fallback)
+        {
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i].StartsWith(flagPrefix, StringComparison.Ordinal))
+                    return args[i].Substring(flagPrefix.Length);
+            }
+            return fallback;
+        }
+
+        private static double ParseDoubleArg(string[] args, string flagPrefix, double fallback)
+        {
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i].StartsWith(flagPrefix, StringComparison.Ordinal)
+                    && double.TryParse(
+                        args[i].Substring(flagPrefix.Length),
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var v)) return v;
+            }
+            return fallback;
         }
 
         // --port=N or --port N. Falls back to ServerHub.DefaultPort.
@@ -619,7 +829,7 @@ namespace VStudioCraft.Server
         // up to (but not past) it, then yield. Phase 7 (integrated server)
         // will replace this with the same pacer running on a thread inside
         // the client process.
-        private static void RunTickLoop(World world, ServerHub hub)
+        private static void RunTickLoop(World world, ServerHub hub, string worldPath, double autosaveMinutes)
         {
             // Spawn anchor + skySubtract for mob-spawn passes are now
             // hidden inside ServerHub.SimulateTick which uses the world
@@ -631,6 +841,14 @@ namespace VStudioCraft.Server
             var startedAt = Stopwatch.StartNew();
             var nextTickAt = startedAt.Elapsed;
             var lastHeartbeatTick = 0L;
+            // Phase 8 — autosave bookkeeping. Compared against
+            // startedAt.Elapsed each tick; <= 0 disables.
+            var autosaveInterval = autosaveMinutes > 0
+                ? TimeSpan.FromMinutes(autosaveMinutes)
+                : TimeSpan.Zero;
+            var nextAutosaveAt = autosaveInterval > TimeSpan.Zero
+                ? startedAt.Elapsed + autosaveInterval
+                : TimeSpan.MaxValue;
 
             Console.WriteLine($"[server] Tick loop started ({TickHz:F0} Hz). Ctrl+C to stop.");
 
@@ -694,6 +912,18 @@ namespace VStudioCraft.Server
                     Console.WriteLine($"[server] tick {tickCount,-7} sim_max={worstSimMs,5:F1} ms chunks={world.ChunkCount} clients={hub.ConnectedCount}");
                     lastHeartbeatTick = tickCount;
                     worstSimMs = 0.0;
+                }
+
+                // Phase 8 — autosave check. Runs AFTER the tick (so
+                // the saved state reflects this tick's mutations).
+                // Errors are logged and the next-save-time is bumped
+                // by one interval so we don't spin-fail; the world
+                // stays in memory regardless.
+                if (autosaveInterval > TimeSpan.Zero && startedAt.Elapsed >= nextAutosaveAt)
+                {
+                    try { lock (_saveLock) { SaveWorld(worldPath, world, hub); } }
+                    catch (Exception ex) { Console.Error.WriteLine($"[server] autosave failed: {ex.Message}"); }
+                    nextAutosaveAt = startedAt.Elapsed + autosaveInterval;
                 }
             }
         }

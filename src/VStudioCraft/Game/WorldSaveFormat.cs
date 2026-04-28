@@ -713,7 +713,48 @@ namespace VStudioCraft.Game
                     header.TimeOfDay = t;
                 }
 
-                return (header, world);
+                // v13: Multiplayer player table. Pre-v13 saves stop at
+                // the time-of-day float; the empty dict returned to the
+                // caller lets the SP path proceed unchanged. MP-aware
+                // callers (ServerHub login) consult by username; missing
+                // entries spawn fresh.
+                var players = new Dictionary<string, PersistedPlayer>(StringComparer.Ordinal);
+                if (version >= 13)
+                {
+                    int playerCount = r.ReadInt32();
+                    if (playerCount < 0 || playerCount > 1024)
+                        throw new InvalidDataException($"v13 playerCount {playerCount} out of expected range");
+                    for (int i = 0; i < playerCount; i++)
+                    {
+                        var p = new PersistedPlayer
+                        {
+                            Username = r.ReadString(),
+                            X = r.ReadDouble(),
+                            Y = r.ReadDouble(),
+                            Z = r.ReadDouble(),
+                            Yaw = r.ReadSingle(),
+                            Pitch = r.ReadSingle(),
+                            Health = r.ReadInt32(),
+                            HeldSlot = r.ReadInt32(),
+                            Inventory = new ItemStack[Inventory.TotalSlots],
+                        };
+                        for (int s = 0; s < Inventory.TotalSlots; s++)
+                            p.Inventory[s] = ReadStack(r);
+                        // Last-write-wins on duplicate username — defensive
+                        // against a hand-edited save with two records for
+                        // the same user. The duplicate-handling here is
+                        // cheaper than throwing because a benign cause is
+                        // a future code path that double-emits during
+                        // shutdown; we don't want save corruption to
+                        // brick the world.
+                        if (!string.IsNullOrEmpty(p.Username))
+                        {
+                            players[p.Username] = p;
+                        }
+                    }
+                }
+
+                return (header, world, players);
             }
         }
 

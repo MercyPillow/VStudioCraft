@@ -1215,6 +1215,13 @@ void main()
         //     (that's the dedicated server's path).
 
         private VStudioCraft.Net.ServerHub _serverHub;
+        // Phase 8 — populated by LoadFromFile; consumed by the next
+        // OpenToLan so a friend reconnecting after a load gets their
+        // saved inventory back. Stays null when StartNewWorld is the
+        // entry point (fresh worlds have no prior state). Cleared
+        // after consumption so a subsequent OpenToLan on a freshly-
+        // generated world doesn't restore stale state.
+        private System.Collections.Generic.Dictionary<string, WorldSaveFormat.PersistedPlayer> _pendingPersistedPlayers;
         // Accumulator that gates Hub.Tick() to 20 Hz regardless of frame
         // rate. The host's RenderLoop runs at 1500+ fps; calling Hub.Tick
         // every frame would emit 75x the expected packet rate and
@@ -1284,6 +1291,16 @@ void main()
                             : ThrownProjectile.Kind.Snowball,
                     });
                 };
+                // Phase 8 — hand the previously-loaded player table
+                // (if any) to the hub so reconnecting friends get
+                // their saved inventory + position. Cleared after
+                // install so a subsequent CloseLan + StartNewWorld +
+                // OpenToLan doesn't re-apply the stale table.
+                if (_pendingPersistedPlayers != null && _pendingPersistedPlayers.Count > 0)
+                {
+                    hub.InstallPersistedPlayers(_pendingPersistedPlayers);
+                }
+                _pendingPersistedPlayers = null;
             }
             catch
             {
@@ -2236,7 +2253,13 @@ void main()
             // socket before we swap the World out from under it.
             DisconnectFromServer("loading singleplayer world");
             CloseLan();
-            var (header, world) = WorldSaveFormat.Load(path);
+            // Phase 8 — read both the world and the v13 multiplayer
+            // player table in one decompression pass. The table is
+            // stashed for the next OpenToLan call to install on the
+            // hub; if the user just stays in SP, the table is harmless
+            // (just sits unused).
+            var (header, world, players) = WorldSaveFormat.LoadWithPlayers(path);
+            _pendingPersistedPlayers = players;
             SetWorld(world);
             // header.CameraPos is now the saved player feet position (format v2).
             Player.Position = header.CameraPos;
@@ -2301,7 +2324,12 @@ void main()
                 // every load.
                 TimeOfDay = _timeOfDay,
             };
-            WorldSaveFormat.Save(path, header, _world);
+            // Phase 8 — if we're hosting a LAN session, snapshot the
+            // connected friends' state into the v13 player table so
+            // they get their inventory back on rejoin. SP saves get a
+            // 0-count v13 block (~4 bytes overhead).
+            var players = _serverHub?.SnapshotPlayers();
+            WorldSaveFormat.Save(path, header, _world, players);
         }
 
         public void UpdatePlayer(float dt, Vector3 wishHorizVel, bool wantJump)
