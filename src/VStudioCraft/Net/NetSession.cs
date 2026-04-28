@@ -281,6 +281,12 @@ namespace VStudioCraft.Net
                 case PacketIds.ItemSpawn:
                     return new InboundPacket { Id = id, ItemSpawn = ItemSpawnPacket.Read(_reader) };
 
+                case PacketIds.ProjectileSpawn:
+                    return new InboundPacket { Id = id, ProjectileSpawn = ProjectileSpawnPacket.Read(_reader) };
+
+                case PacketIds.EntityHealth:
+                    return new InboundPacket { Id = id, EntityHealth = EntityHealthPacket.Read(_reader) };
+
                 default:
                     throw new InvalidDataException($"Unknown packet id 0x{id:X2}");
             }
@@ -311,5 +317,7 @@ namespace VStudioCraft.Net
         public EntityTeleportPacket  EntityTeleport;
         public EntityDespawnPacket   EntityDespawn;
         public ItemSpawnPacket       ItemSpawn;
+        public ProjectileSpawnPacket ProjectileSpawn;
+        public EntityHealthPacket    EntityHealth;
     }
 }

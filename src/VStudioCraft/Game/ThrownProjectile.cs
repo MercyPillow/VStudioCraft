@@ -39,6 +39,10 @@ namespace VStudioCraft.Game
             Egg,
         }
 
+        // Phase 5d — server-assigned id for multiplayer replication.
+        // See ArrowProjectile.NetworkId for the lifecycle contract.
+        public int NetworkId;
+
         public Vector3 Position;
         public Vector3 Velocity;
         public Vector3 Origin;

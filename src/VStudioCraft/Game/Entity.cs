@@ -56,6 +56,16 @@ namespace VStudioCraft.Game
         public bool   AnchorValid;
         public int    TicksSinceTeleport;
 
+        // Phase 5e — last health value the broadcast loop saw for this
+        // entity. Compared to current health each tick; a decrease
+        // triggers an EntityHealth packet so friends see the hurt
+        // flash. Initialised to int.MinValue so the very first
+        // observation always primes the field without spuriously
+        // counting as "took damage". Subclasses (PassiveMob,
+        // HostileMob) own the actual Health field; this is just the
+        // server-side broadcast cache.
+        public int LastBroadcastHealth = int.MinValue;
+
         // Cap on per-sub-step displacement so a fast-moving entity can't
         // skip through a 1-block wall in a single tick. 0.05 is small
         // enough that wall gaps are imperceptible and big enough that

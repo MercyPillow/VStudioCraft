@@ -22,6 +22,10 @@ namespace VStudioCraft.Game
     // lifecycle as the other ephemeral projectile-like entities.
     internal sealed class Bobber
     {
+        // Phase 5d — server-assigned id for multiplayer replication.
+        // See ArrowProjectile.NetworkId for the lifecycle contract.
+        public int NetworkId;
+
         // World-space position of the bobber. Set at cast time and
         // never changes — the bobber is essentially static for the
         // life of the cast.

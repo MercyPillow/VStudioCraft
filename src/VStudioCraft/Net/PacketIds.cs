@@ -50,6 +50,12 @@ namespace VStudioCraft.Net
         // despawn use the existing EntityRelMove (0x21) and
         // EntityDespawn (0x25) packets — those are payload-agnostic.
         public const byte ItemSpawn           = 0x27; // S->C
+        // Phase 5d — projectile spawn (Arrow, Snowball, Egg, Bobber).
+        // Distinct from EntitySpawn (0x20) because the wire payload
+        // carries velocity for the visible toss arc — players need
+        // to see an arrow ARC across a room rather than teleport
+        // toward its rest pose.
+        public const byte ProjectileSpawn     = 0x28; // S->C
 
         // 0x3_ — world streaming -------------------------------------------
         public const byte ChunkLoad           = 0x30; // S->C

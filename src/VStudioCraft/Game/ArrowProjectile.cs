@@ -24,6 +24,12 @@ namespace VStudioCraft.Game
     // when it strikes".
     internal sealed class ArrowProjectile
     {
+        // Phase 5d — server-assigned id for multiplayer replication.
+        // 0 = not yet networked; the host's hub diff pass assigns one
+        // and ships a ProjectileSpawnPacket to each in-range friend.
+        // Untouched in singleplayer.
+        public int NetworkId;
+
         public Vector3 Position;
         public Vector3 Velocity;
 

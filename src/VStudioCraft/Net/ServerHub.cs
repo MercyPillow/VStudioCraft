@@ -337,6 +337,35 @@ namespace VStudioCraft.Net
 
         public int AllocateEntityId() => _nextEntityId++;
 
+        // Phase 5d — projectile spawn broadcast. Same shape and per-
+        // viewer chunk-range filter as BroadcastItemSpawn, with a
+        // type byte instead of an item stack. The friend's render
+        // path dispatches on the type tag from the spawn so an arrow
+        // keeps drawing as an arrow even after ten RelMove updates.
+        public void BroadcastProjectileSpawn(int eid, byte projectileType, OpenTK.Vector3 pos, OpenTK.Vector3 vel)
+        {
+            int cx = (int)Math.Floor(pos.X / Chunk.SizeX);
+            int cz = (int)Math.Floor(pos.Z / Chunk.SizeZ);
+            for (int v = 0; v < _clients.Count; v++)
+            {
+                var viewer = _clients[v];
+                if (viewer.Session.IsDead) continue;
+                if (viewer.Session.IsLoopback) continue;
+                if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
+                if (!viewer.TrackedChunks.Contains((cx, cz))) continue;
+                viewer.TrackedEntities.Add(eid);
+                int eidCap = eid;
+                byte typeCap = projectileType;
+                viewer.Session.Send(PacketIds.ProjectileSpawn, w => new ProjectileSpawnPacket
+                {
+                    EntityId = eidCap,
+                    ProjectileType = typeCap,
+                    X = pos.X, Y = pos.Y, Z = pos.Z,
+                    Vx = vel.X, Vy = vel.Y, Vz = vel.Z,
+                }.Write(w));
+            }
+        }
+
         // Broadcast a drop spawn to every viewer whose tracked-chunks set
         // contains the drop's cell. Skips the loopback host (no point
         // shipping to ourselves). Adds the eid to each receiving viewer's
@@ -380,6 +409,31 @@ namespace VStudioCraft.Net
                 viewer.Session.Send(PacketIds.EntityDespawn, w => new EntityDespawnPacket
                 {
                     EntityId = eidCap,
+                }.Write(w));
+            }
+        }
+
+        // Phase 5e — entity health change broadcast. Used for hurt-flash
+        // sync: when a tracked mob takes damage on the host, every
+        // viewer that tracks it receives the new health so their replica
+        // can mirror the flash. Host-only path; the dedicated server's
+        // mob simulation can also use it once damage delivery lands
+        // there. Skips the loopback host (the SP path already saw the
+        // hurt locally — same reasoning as ItemSpawn).
+        public void BroadcastEntityHealth(int eid, short health)
+        {
+            for (int v = 0; v < _clients.Count; v++)
+            {
+                var viewer = _clients[v];
+                if (viewer.Session.IsDead) continue;
+                if (viewer.Session.IsLoopback) continue;
+                if (!viewer.TrackedEntities.Contains(eid)) continue;
+                int eidCap = eid;
+                short hCap = health;
+                viewer.Session.Send(PacketIds.EntityHealth, w => new EntityHealthPacket
+                {
+                    EntityId = eidCap,
+                    Health = hCap,
                 }.Write(w));
             }
         }
@@ -1255,6 +1309,21 @@ namespace VStudioCraft.Net
                     }
                 }
 
+                // Phase 5e — emit EntityHealth if this mob took damage
+                // since last broadcast. Damage means health decreased;
+                // gain isn't signalled (Alpha doesn't render heal
+                // flashes for other mobs). The first observation
+                // primes LastBroadcastHealth without firing.
+                if (mob.LastBroadcastHealth == int.MinValue)
+                {
+                    mob.LastBroadcastHealth = mob.Health;
+                }
+                else if (mob.Health < mob.LastBroadcastHealth)
+                {
+                    BroadcastEntityHealth(mob.NetworkId, (short)mob.Health);
+                    mob.LastBroadcastHealth = mob.Health;
+                }
+
                 // Bake new anchors. Mirrors the third pass of the player
                 // path. Reset TicksSinceTeleport when this tick fired a
                 // Teleport so the 1-second cadence resumes from this
@@ -1424,6 +1493,17 @@ namespace VStudioCraft.Net
                             Yaw = HostileYaw(snap), Pitch = 0f,
                         }.Write(w));
                     }
+                }
+
+                // Phase 5e — same hurt-flash diff as passive mobs.
+                if (mob.LastBroadcastHealth == int.MinValue)
+                {
+                    mob.LastBroadcastHealth = mob.Health;
+                }
+                else if (mob.Health < mob.LastBroadcastHealth)
+                {
+                    BroadcastEntityHealth(mob.NetworkId, (short)mob.Health);
+                    mob.LastBroadcastHealth = mob.Health;
                 }
 
                 bool teleportedThisTick =

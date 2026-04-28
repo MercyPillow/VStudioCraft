@@ -186,10 +186,16 @@ namespace VStudioCraft.Net
         // RelMove / Despawn use the existing 0x21 / 0x25 packets.
         public const byte DroppedItem  = 32;
 
-        // public const byte Arrow        = 48;
-        // public const byte Snowball     = 49;
-        // public const byte Egg          = 50;
-        // public const byte Bobber       = 51;
+        // Phase 5d — projectiles. All four share ProjectileSpawnPacket
+        // (0x28) — type byte distinguishes them. Subsequent motion
+        // through EntityRelMove (0x21) and EntityDespawn (0x25), same
+        // shape as drops. Bobbers are unusual in that they sit still
+        // most of their life (waiting for a fish) but the same packet
+        // shape works fine — the RelMove deltas just stay near zero.
+        public const byte Arrow        = 48;
+        public const byte Snowball     = 49;
+        public const byte Egg          = 50;
+        public const byte Bobber       = 51;
     }
 
     // 0x20 — a new entity entered this client's awareness. The server
@@ -391,6 +397,74 @@ namespace VStudioCraft.Net
             Vz        = r.ReadFloat(),
             ItemType  = r.ReadByte(),
             ItemCount = r.ReadByte(),
+        };
+    }
+
+    // 0x28 — server→client projectile spawn (Arrow / Snowball / Egg /
+    // Bobber). Same shape as ItemSpawn minus the ItemStack payload:
+    // eid + type + pos + vel. Type byte uses EntityType.Arrow / Snowball
+    // / Egg / Bobber. Subsequent motion + despawn flow through the
+    // existing EntityRelMove (0x21) and EntityDespawn (0x25) packets;
+    // the friend's render path dispatches on the type tag from the
+    // initial spawn so an arrow keeps drawing as an arrow even after
+    // ten RelMove updates.
+    internal struct ProjectileSpawnPacket
+    {
+        public int EntityId;
+        public byte ProjectileType; // EntityType.Arrow/Snowball/Egg/Bobber
+        public double X, Y, Z;
+        public float Vx, Vy, Vz;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(EntityId);
+            w.WriteByte(ProjectileType);
+            w.WriteDouble(X);
+            w.WriteDouble(Y);
+            w.WriteDouble(Z);
+            w.WriteFloat(Vx);
+            w.WriteFloat(Vy);
+            w.WriteFloat(Vz);
+        }
+
+        public static ProjectileSpawnPacket Read(PacketReader r) => new ProjectileSpawnPacket
+        {
+            EntityId       = r.ReadInt(),
+            ProjectileType = r.ReadByte(),
+            X = r.ReadDouble(),
+            Y = r.ReadDouble(),
+            Z = r.ReadDouble(),
+            Vx = r.ReadFloat(),
+            Vy = r.ReadFloat(),
+            Vz = r.ReadFloat(),
+        };
+    }
+
+    // 0x26 — server→client entity health update. Sent when a tracked
+    // entity's health changes (decreases — health gain isn't currently
+    // signalled separately because Alpha doesn't show heal flashes to
+    // other players). Friend's render path uses the change to drive the
+    // existing hurt-flash lerp on the local replica without needing to
+    // run TakeDamage logic itself.
+    //
+    // Health is short (-32768..32767) — mob health caps at low integers
+    // (~20 for mobs, 20 for player) but the wider field leaves room
+    // for future damage scales without a protocol bump.
+    internal struct EntityHealthPacket
+    {
+        public int EntityId;
+        public short Health;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(EntityId);
+            w.WriteShort(Health);
+        }
+
+        public static EntityHealthPacket Read(PacketReader r) => new EntityHealthPacket
+        {
+            EntityId = r.ReadInt(),
+            Health = r.ReadShort(),
         };
     }
 

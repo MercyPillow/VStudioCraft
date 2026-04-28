@@ -705,6 +705,18 @@ void main()
         // the floor, so the visible jitter is minor.
         private readonly Dictionary<int, DroppedItem> _replicatedDropsById = new Dictionary<int, DroppedItem>();
 
+        // Phase 5d — friend-side projectile replicas. Arrows, thrown
+        // (snowball/egg), and bobbers each have their own list on the
+        // renderer (existing fields _arrows, _thrown, _bobbers); the
+        // friend's net path appends to those AND tracks the by-id
+        // mapping so RelMove / Despawn can reach the right object.
+        // No interpolation — projectile motion is short-lived (most
+        // arrows live <2 s) and a 50 ms snap is barely perceptible
+        // against the arc.
+        private readonly Dictionary<int, ArrowProjectile> _replicatedArrowsById = new Dictionary<int, ArrowProjectile>();
+        private readonly Dictionary<int, ThrownProjectile> _replicatedThrownById = new Dictionary<int, ThrownProjectile>();
+        private readonly Dictionary<int, Bobber> _replicatedBobbersById = new Dictionary<int, Bobber>();
+
         // Phase 5f — snapshot-pair interpolators for replicated mobs.
         // mob.Position is overwritten each frame from the Lerped value
         // here so the existing RenderPassives / RenderHostiles paths
@@ -1157,6 +1169,15 @@ void main()
             _drops.Clear();
             _replicatedDropsById.Clear();
             _knownDropsById.Clear();
+            // Phase 5d — same for projectile replicas (and host-side
+            // bookkeeping if we were hosting).
+            _arrows.Clear();
+            _thrown.Clear();
+            _bobbers.Clear();
+            _replicatedArrowsById.Clear();
+            _replicatedThrownById.Clear();
+            _replicatedBobbersById.Clear();
+            _knownProjectilesById.Clear();
         }
 
         // ---- Phase 7: Open to LAN -----------------------------------------
@@ -1245,6 +1266,11 @@ void main()
             // would re-allocate ids and re-spawn them to any new viewers.
             _knownDropsById.Clear();
             for (int i = 0; i < _drops.Count; i++) _drops[i].NetworkId = 0;
+            // Phase 5d — same for in-flight projectiles.
+            _knownProjectilesById.Clear();
+            for (int i = 0; i < _arrows.Count; i++) _arrows[i].NetworkId = 0;
+            for (int i = 0; i < _thrown.Count; i++) _thrown[i].NetworkId = 0;
+            for (int i = 0; i < _bobbers.Count; i++) _bobbers[i].NetworkId = 0;
         }
 
         // Per-frame helpers called from GameHostControl.RenderLoop right
@@ -1287,6 +1313,13 @@ void main()
                 // the same 20 Hz cadence as Tick so the friend's
                 // EntityInterpState gets two-snapshot lerping.
                 BroadcastLocalDropsDiff();
+                // Phase 5d — projectiles. Same diff pattern as drops:
+                // assign network ids on first sight, ship Spawn packet,
+                // emit RelMove on motion, Despawn when removed. One
+                // shared bookkeeping dict because projectile entity ids
+                // never collide with each other or with drops (all
+                // come from the hub's _nextEntityId monotonic counter).
+                BroadcastLocalProjectilesDiff();
             }
             if (_hubTickAccumulator < 0f) _hubTickAccumulator = 0f;
         }
@@ -1383,6 +1416,111 @@ void main()
                     _serverHub.BroadcastEntityDespawn(stale[i]);
                     _knownDropsById.Remove(stale[i]);
                 }
+            }
+        }
+
+        // Phase 5d — same shape as _knownDropsById but for projectiles.
+        // Single dict shared across arrows / thrown / bobbers because
+        // entity ids are unique across the whole server — no collision
+        // possible. Generation counter stays separate from drops so a
+        // tick that removes a drop AND an arrow runs both passes
+        // independently without one cascading into the other.
+        private readonly Dictionary<int, DropBroadcastState> _knownProjectilesById = new Dictionary<int, DropBroadcastState>();
+        private int _projectileBroadcastGeneration;
+
+        private void BroadcastLocalProjectilesDiff()
+        {
+            if (_serverHub == null) return;
+            _projectileBroadcastGeneration++;
+            int gen = _projectileBroadcastGeneration;
+
+            // Three projectile types share the diff pattern. Local
+            // helpers below close over the gen counter so the despawn
+            // pass at the bottom can drop any id that didn't refresh.
+            //
+            // Each projectile type has a distinct EntityType byte that
+            // the friend uses to construct the right local class
+            // (ArrowProjectile vs ThrownProjectile vs Bobber) — see
+            // ApplyInboundPacket's ProjectileSpawn handler.
+            for (int i = 0; i < _arrows.Count; i++)
+            {
+                var a = _arrows[i];
+                ProjectileDiffOne(ref a.NetworkId, a.Position, a.Velocity,
+                    VStudioCraft.Net.EntityType.Arrow, gen);
+            }
+            for (int i = 0; i < _thrown.Count; i++)
+            {
+                var t = _thrown[i];
+                byte type = t.ProjectileKind == ThrownProjectile.Kind.Egg
+                    ? VStudioCraft.Net.EntityType.Egg
+                    : VStudioCraft.Net.EntityType.Snowball;
+                ProjectileDiffOne(ref t.NetworkId, t.Position, t.Velocity, type, gen);
+            }
+            for (int i = 0; i < _bobbers.Count; i++)
+            {
+                var b = _bobbers[i];
+                ProjectileDiffOne(ref b.NetworkId, b.Position, OpenTK.Vector3.Zero,
+                    VStudioCraft.Net.EntityType.Bobber, gen);
+            }
+
+            // Despawn anything we tracked last gen but no longer see.
+            List<int> stale = null;
+            foreach (var kv in _knownProjectilesById)
+            {
+                if (kv.Value.Generation == gen) continue;
+                if (stale == null) stale = new List<int>();
+                stale.Add(kv.Key);
+            }
+            if (stale != null)
+            {
+                for (int i = 0; i < stale.Count; i++)
+                {
+                    _serverHub.BroadcastEntityDespawn(stale[i]);
+                    _knownProjectilesById.Remove(stale[i]);
+                }
+            }
+        }
+
+        // Inner per-projectile diff. NetworkId comes through by ref so
+        // we can lazy-allocate it on the first frame the projectile
+        // exists. Same body for arrows, thrown, and bobbers — only the
+        // type byte differs.
+        private void ProjectileDiffOne(ref int networkId, Vector3 pos, Vector3 vel, byte projectileType, int gen)
+        {
+            if (networkId == 0)
+            {
+                networkId = _serverHub.AllocateEntityId();
+                _serverHub.BroadcastProjectileSpawn(networkId, projectileType, pos, vel);
+                _knownProjectilesById[networkId] = new DropBroadcastState
+                {
+                    Generation = gen,
+                    LastBroadcastPos = pos,
+                };
+                return;
+            }
+            if (_knownProjectilesById.TryGetValue(networkId, out var st))
+            {
+                var delta = pos - st.LastBroadcastPos;
+                if (Math.Abs(delta.X) > DropMoveEpsilon
+                 || Math.Abs(delta.Y) > DropMoveEpsilon
+                 || Math.Abs(delta.Z) > DropMoveEpsilon)
+                {
+                    _serverHub.BroadcastEntityRelMove(networkId, delta.X, delta.Y, delta.Z);
+                    st.LastBroadcastPos = pos;
+                }
+                st.Generation = gen;
+                _knownProjectilesById[networkId] = st;
+            }
+            else
+            {
+                // Has an id but we don't know it (session restart, etc).
+                // Re-broadcast as a fresh spawn.
+                _serverHub.BroadcastProjectileSpawn(networkId, projectileType, pos, vel);
+                _knownProjectilesById[networkId] = new DropBroadcastState
+                {
+                    Generation = gen,
+                    LastBroadcastPos = pos,
+                };
             }
         }
 
@@ -1551,12 +1689,19 @@ void main()
                 case VStudioCraft.Net.PacketIds.EntityRelMove:
                 {
                     var m = pkt.EntityRelMove;
+                    var delta = new Vector3(m.Dx, m.Dy, m.Dz);
                     if (_remotePlayers.TryGetValue(m.EntityId, out var rp))
-                        rp.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
+                        rp.ApplyRelMove(delta, _netClock);
                     else if (_mobInterpById.TryGetValue(m.EntityId, out var st))
-                        st.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
+                        st.ApplyRelMove(delta, _netClock);
                     else if (_replicatedDropsById.TryGetValue(m.EntityId, out var d))
-                        d.Position += new Vector3(m.Dx, m.Dy, m.Dz);
+                        d.Position += delta;
+                    else if (_replicatedArrowsById.TryGetValue(m.EntityId, out var arrow))
+                        arrow.Position += delta;
+                    else if (_replicatedThrownById.TryGetValue(m.EntityId, out var thrown))
+                        thrown.Position += delta;
+                    else if (_replicatedBobbersById.TryGetValue(m.EntityId, out var bobber))
+                        bobber.Position += delta;
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityLook:
@@ -1612,6 +1757,24 @@ void main()
                     {
                         _drops.Remove(d);
                         _replicatedDropsById.Remove(eid);
+                        break;
+                    }
+                    if (_replicatedArrowsById.TryGetValue(eid, out var arrow))
+                    {
+                        _arrows.Remove(arrow);
+                        _replicatedArrowsById.Remove(eid);
+                        break;
+                    }
+                    if (_replicatedThrownById.TryGetValue(eid, out var thrown))
+                    {
+                        _thrown.Remove(thrown);
+                        _replicatedThrownById.Remove(eid);
+                        break;
+                    }
+                    if (_replicatedBobbersById.TryGetValue(eid, out var bobber))
+                    {
+                        _bobbers.Remove(bobber);
+                        _replicatedBobbersById.Remove(eid);
                     }
                     break;
                 }
@@ -1633,6 +1796,83 @@ void main()
                     };
                     _drops.Add(d);
                     _replicatedDropsById[s.EntityId] = d;
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.EntityHealth:
+                {
+                    var h = pkt.EntityHealth;
+                    // Apply to whichever replica owns this id. Setting
+                    // HurtTimer triggers the hurt-flash lerp the
+                    // existing render path already handles. Health is
+                    // also written so the friend's view of "is this
+                    // mob still alive" stays in sync — though the
+                    // server's authoritative EntityDespawn covers the
+                    // actual death cleanup.
+                    if (_replicatedPassivesById.TryGetValue(h.EntityId, out var pmob))
+                    {
+                        if (h.Health < pmob.Health) pmob.HurtTimer = PassiveMob.HurtFlashSeconds;
+                        pmob.Health = h.Health;
+                    }
+                    else if (_replicatedHostilesById.TryGetValue(h.EntityId, out var hmob))
+                    {
+                        if (h.Health < hmob.Health) hmob.HurtTimer = HostileMob.HurtFlashSeconds;
+                        hmob.Health = h.Health;
+                    }
+                    // Player/host health intentionally unhandled here;
+                    // Phase 5e+ adds server-authoritative player health.
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.ProjectileSpawn:
+                {
+                    var p = pkt.ProjectileSpawn;
+                    var pos = new Vector3((float)p.X, (float)p.Y, (float)p.Z);
+                    var vel = new Vector3(p.Vx, p.Vy, p.Vz);
+                    if (p.ProjectileType == VStudioCraft.Net.EntityType.Arrow)
+                    {
+                        var arrow = new ArrowProjectile
+                        {
+                            NetworkId = p.EntityId,
+                            Position = pos,
+                            Velocity = vel,
+                            Origin = pos,
+                            // Damage isn't replicated — friend never
+                            // applies it (server is authoritative for
+                            // damage; Phase 5e wires EntityHealth).
+                            // Default to 0 so the friend's TickArrows
+                            // (gated off in net mode anyway) wouldn't
+                            // do harm if it did run.
+                            Damage = 0,
+                        };
+                        _arrows.Add(arrow);
+                        _replicatedArrowsById[p.EntityId] = arrow;
+                    }
+                    else if (p.ProjectileType == VStudioCraft.Net.EntityType.Snowball
+                          || p.ProjectileType == VStudioCraft.Net.EntityType.Egg)
+                    {
+                        var t = new ThrownProjectile
+                        {
+                            NetworkId = p.EntityId,
+                            Position = pos,
+                            Velocity = vel,
+                            Origin = pos,
+                            ProjectileKind = p.ProjectileType == VStudioCraft.Net.EntityType.Egg
+                                ? ThrownProjectile.Kind.Egg
+                                : ThrownProjectile.Kind.Snowball,
+                        };
+                        _thrown.Add(t);
+                        _replicatedThrownById[p.EntityId] = t;
+                    }
+                    else if (p.ProjectileType == VStudioCraft.Net.EntityType.Bobber)
+                    {
+                        var b = new Bobber
+                        {
+                            NetworkId = p.EntityId,
+                            Position = pos,
+                        };
+                        _bobbers.Add(b);
+                        _replicatedBobbersById[p.EntityId] = b;
+                    }
+                    // Other types fall through silently (forward-compat).
                     break;
                 }
 
