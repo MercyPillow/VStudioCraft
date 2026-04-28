@@ -287,6 +287,9 @@ namespace VStudioCraft.Net
                 case PacketIds.EntityHealth:
                     return new InboundPacket { Id = id, EntityHealth = EntityHealthPacket.Read(_reader) };
 
+                case PacketIds.InventoryUpdate:
+                    return new InboundPacket { Id = id, InventoryUpdate = InventoryUpdatePacket.Read(_reader) };
+
                 default:
                     throw new InvalidDataException($"Unknown packet id 0x{id:X2}");
             }
@@ -319,5 +322,6 @@ namespace VStudioCraft.Net
         public ItemSpawnPacket       ItemSpawn;
         public ProjectileSpawnPacket ProjectileSpawn;
         public EntityHealthPacket    EntityHealth;
+        public InventoryUpdatePacket InventoryUpdate;
     }
 }

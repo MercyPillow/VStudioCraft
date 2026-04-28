@@ -1323,6 +1323,26 @@ void main()
                 // never collide with each other or with drops (all
                 // come from the hub's _nextEntityId monotonic counter).
                 BroadcastLocalProjectilesDiff();
+                // Phase 6a — friend drop pickup. The hub scans (drops ×
+                // friends) for AABB overlap, mutates each friend's
+                // server-side inventory, broadcasts InventoryUpdate, and
+                // returns the network ids that should be despawned. We
+                // then remove those drops from the host's _drops list so
+                // the host's TickDrops on the next frame doesn't try to
+                // re-process them. _serverHub knows nothing about the
+                // host's _drops storage; this method is the bridge.
+                _pickedUpDropIds.Clear();
+                _serverHub.ProcessFriendDropPickups(_drops, _pickedUpDropIds);
+                if (_pickedUpDropIds.Count > 0)
+                {
+                    for (int i = _drops.Count - 1; i >= 0; i--)
+                    {
+                        if (_pickedUpDropIds.Contains(_drops[i].NetworkId))
+                        {
+                            _drops.RemoveAt(i);
+                        }
+                    }
+                }
             }
             if (_hubTickAccumulator < 0f) _hubTickAccumulator = 0f;
         }
@@ -1430,6 +1450,12 @@ void main()
         // independently without one cascading into the other.
         private readonly Dictionary<int, DropBroadcastState> _knownProjectilesById = new Dictionary<int, DropBroadcastState>();
         private int _projectileBroadcastGeneration;
+
+        // Scratch list reused each tick by ProcessFriendDropPickups so
+        // we don't allocate on the GC for the common no-pickup case.
+        // Cleared inside the hub method before population, then drained
+        // by the caller to remove despawned drops from _drops.
+        private readonly List<int> _pickedUpDropIds = new List<int>();
 
         private void BroadcastLocalProjectilesDiff()
         {
@@ -1824,6 +1850,27 @@ void main()
                     // 1500 fps stutters at every server tick boundary.
                     _entityInterpById[s.EntityId] = new EntityInterpState(
                         d.Position, /*yaw*/ 0f, _netClock);
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.InventoryUpdate:
+                {
+                    var iu = pkt.InventoryUpdate;
+                    // The friend's local inventory lives on InputState
+                    // (not Player) — see Game\InputState.cs. Both the
+                    // inventory panel and the hotbar read from Slots[]
+                    // directly each frame, so writing the slot here is
+                    // all the work needed for the visual to update.
+                    var inv = Input?.Inventory;
+                    if (inv == null) break;
+                    if (iu.Slot >= Inventory.TotalSlots) break;
+                    inv.Slots[iu.Slot] = iu.ItemCount == 0
+                        ? ItemStack.Empty
+                        : new ItemStack((BlockType)iu.ItemType, iu.ItemCount);
+                    // Phase 6b will add outbound click intents so
+                    // friend-driven inventory mutations also flow
+                    // through the server. For 6a only server-driven
+                    // mutations (drop pickup) reach the friend, and
+                    // this branch handles them.
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityHealth:

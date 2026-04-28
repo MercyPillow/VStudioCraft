@@ -440,6 +440,41 @@ namespace VStudioCraft.Net
         };
     }
 
+    // 0x51 — server→client inventory slot update. Sent when the server's
+    // authoritative inventory for a client changes (drop pickup, mob death
+    // drop pickup, future crafting / chest interaction). Single-slot packet
+    // because most updates are 1-slot (one drop picked up = one slot
+    // changes); a multi-slot variant can come if profiling shows the
+    // overhead matters.
+    //
+    // Slot indexing matches Inventory.Slots[]:
+    //   0..35  — main grid (4×9, top-down row-major)
+    //   36..44 — hotbar
+    //   45..48 — armor (helmet, chest, leggings, boots)
+    //
+    // ItemStack on the wire is (type byte, count byte). Empty stack is
+    // type=Air (0), count=0; the reader maps that back to ItemStack.Empty.
+    internal struct InventoryUpdatePacket
+    {
+        public byte Slot;       // 0..48 inclusive
+        public byte ItemType;   // BlockType byte; 0 = empty
+        public byte ItemCount;  // 1..64; 0 alongside type=0 = empty
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteByte(Slot);
+            w.WriteByte(ItemType);
+            w.WriteByte(ItemCount);
+        }
+
+        public static InventoryUpdatePacket Read(PacketReader r) => new InventoryUpdatePacket
+        {
+            Slot = r.ReadByte(),
+            ItemType = r.ReadByte(),
+            ItemCount = r.ReadByte(),
+        };
+    }
+
     // 0x26 — server→client entity health update. Sent when a tracked
     // entity's health changes (decreases — health gain isn't currently
     // signalled separately because Alpha doesn't show heal flashes to

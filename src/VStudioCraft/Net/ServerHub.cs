@@ -413,6 +413,111 @@ namespace VStudioCraft.Net
             }
         }
 
+        // Phase 6a — drop pickup for connected friends. Host's existing
+        // SP-side TickDrops handles the host's own pickup; this method
+        // handles friends. Walks every (drop, friend) pair: if the
+        // friend's AABB overlap brings them within DroppedItem.PickupRadius
+        // and the drop is past its spawn cooldown, the drop is added to
+        // the friend's ServerInventory and an InventoryUpdate packet is
+        // shipped. The drop's NetworkId is appended to the returned
+        // list so the caller can despawn it from the host's _drops on
+        // the same tick.
+        //
+        // No-op when no friend has a tracked position. The host's
+        // loopback client is skipped — the host's SP path picks up
+        // their own drops via the existing _drops.Remove logic in
+        // GameRenderer.TickDrops.
+        public void ProcessFriendDropPickups(List<DroppedItem> drops, List<int> pickedUp)
+        {
+            pickedUp.Clear();
+            if (drops.Count == 0) return;
+            float radiusSq = DroppedItem.PickupRadius * DroppedItem.PickupRadius;
+
+            for (int di = 0; di < drops.Count; di++)
+            {
+                var d = drops[di];
+                // Skip drops still in their post-spawn cooldown — same
+                // gate the host's TickDrops uses so a friend can't
+                // pick up a drop the host just spawned and was about
+                // to pick up themselves.
+                if (d.PickupCooldownSec > 0f) continue;
+                if (d.Stack.IsEmpty) continue;
+                if (d.NetworkId == 0) continue; // not yet broadcast — let it stabilise
+
+                for (int ci = 0; ci < _clients.Count; ci++)
+                {
+                    var client = _clients[ci];
+                    if (client.Session.IsDead) continue;
+                    if (client.Session.IsLoopback) continue; // host handled by SP path
+                    if (client.Phase == ClientPhase.AwaitingLogin) continue;
+                    if (!client.HasReportedPos) continue;
+
+                    // 2D-ish overlap — match the host's TickDrops which
+                    // uses a sphere centred at the player feet+1m. Eye
+                    // height is irrelevant for pickup; what matters is
+                    // sweeping the player's body cylinder against the
+                    // drop's centre.
+                    double dx = d.Position.X - client.LastReportedX;
+                    double dy = d.Position.Y - (client.LastReportedY + 1.0);
+                    double dz = d.Position.Z - client.LastReportedZ;
+                    double sq = dx * dx + dy * dy + dz * dz;
+                    if (sq > radiusSq) continue;
+
+                    var leftover = client.ServerInventory.TryAdd(d.Stack);
+                    // Find which slot(s) ended up with the new content
+                    // and ship updates. Since TryAdd doesn't tell us
+                    // which slots changed, we ship the whole inventory
+                    // in this minimal version — small at 49 slots, and
+                    // pickup events are infrequent. The protocol
+                    // payload is 3 bytes/slot so a full inventory
+                    // refresh is 147 bytes, trivial.
+                    SendFullInventory(client);
+
+                    // If TryAdd consumed everything, despawn the drop.
+                    // If there was leftover, the drop sticks around with
+                    // the leftover stack.
+                    if (leftover.IsEmpty)
+                    {
+                        pickedUp.Add(d.NetworkId);
+                        BroadcastEntityDespawn(d.NetworkId);
+                        break; // drop is gone; next drop
+                    }
+                    else
+                    {
+                        d.Stack = leftover;
+                        // Don't break — another player might be in range
+                        // for the leftover stack on the next iteration
+                        // (rare but legit if two friends pile on a
+                        // drop). Continue checking other clients.
+                    }
+                }
+            }
+        }
+
+        // Ship every populated slot of a client's ServerInventory as a
+        // sequence of InventoryUpdatePacket sends. Used after pickup
+        // (granularity-trade described in ProcessFriendDropPickups) and
+        // on login to prime the friend with their starting state.
+        public void SendFullInventory(ServerClient client)
+        {
+            if (client.Session.IsDead) return;
+            if (client.Session.IsLoopback) return;
+            var inv = client.ServerInventory;
+            for (byte slot = 0; slot < Inventory.TotalSlots; slot++)
+            {
+                var s = inv.Slots[slot];
+                byte type = (byte)s.Type;
+                byte count = (byte)(s.IsEmpty ? 0 : s.Count);
+                byte slotCap = slot;
+                client.Session.Send(PacketIds.InventoryUpdate, w => new InventoryUpdatePacket
+                {
+                    Slot = slotCap,
+                    ItemType = type,
+                    ItemCount = count,
+                }.Write(w));
+            }
+        }
+
         // Phase 5e — entity health change broadcast. Used for hurt-flash
         // sync: when a tracked mob takes damage on the host, every
         // viewer that tracks it receives the new health so their replica
@@ -661,6 +766,13 @@ namespace VStudioCraft.Net
                 // SlideChunkWindow recompute.
                 client.WindowCx = client.SpawnX >> 4;
                 client.WindowCz = client.SpawnZ >> 4;
+                // Phase 6a — prime the friend with their server-side
+                // inventory state. For a fresh connection this is all
+                // empty slots, which both wipes whatever local default
+                // the friend's Player constructor populated AND signals
+                // "I'm in charge now" so subsequent pickup updates
+                // overlay onto a known-empty start state.
+                SendFullInventory(client);
                 Console.WriteLine($"[server] {client.Label} fully streamed (entered InGame)");
             }
 
@@ -1749,6 +1861,16 @@ namespace VStudioCraft.Net
 
         public DateTime LastKeepAliveSent = DateTime.UtcNow;
         public DateTime LastKeepAliveFromPeer = DateTime.UtcNow;
+
+        // Phase 6a — server-authoritative inventory for this client. The
+        // friend's local Player.Inventory mirrors this via InventoryUpdate
+        // packets. The host's loopback ServerClient also has one but it's
+        // unused (the host's SP path already mutates Player.Inventory
+        // directly; the loopback session's Send is a no-op so the dual
+        // path doesn't show up on the wire). Initialised empty;
+        // population happens via drop pickup, future crafting, and
+        // future chest withdrawal.
+        public Inventory ServerInventory = new Inventory();
 
         public bool HasReportedPos;
         public double LastReportedX, LastReportedY, LastReportedZ;

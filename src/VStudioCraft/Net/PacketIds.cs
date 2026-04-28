@@ -70,8 +70,8 @@ namespace VStudioCraft.Net
         public const byte PlayerUseItem       = 0x43; // C->S
 
         // 0x5_ — window / inventory (Phase 6) ------------------------------
-        public const byte InventoryClick      = 0x50; // C->S
-        public const byte InventoryUpdate     = 0x51; // S->C
+        public const byte InventoryClick      = 0x50; // C->S  — Phase 6b
+        public const byte InventoryUpdate     = 0x51; // S->C  — Phase 6a (single-slot updates from server-authoritative inventory)
         public const byte OpenWindow          = 0x52; // S->C
         public const byte CloseWindow         = 0x53; // both
 
