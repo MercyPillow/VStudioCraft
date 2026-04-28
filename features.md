@@ -502,10 +502,6 @@ order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
 	
-### Tier 4 — Alpha 1.1.2 item catalogue (the remaining items) — **COMPLETE**
-
-All audited Alpha items now exist in code: the full Tier 4 lineup (paintings, jukeboxes + discs, doors, beds, wheat/farming, signs, ladders, ice, snow, pumpkin / jack-o'-lantern, cake, mushroom soup, raw / cooked beef + porkchop + chicken, leather, feathers, eggs, gold ingot + nugget, redstone dust, lapis, diamond, emerald, bow + arrow, fishing rod, flint + steel, painting + sign + door items, and finally **#19 — armor** (leather / iron / gold / diamond × 4 slots, chainmail mob-drop only, 4 inventory armor slots, Alpha damage-reduction formula)) shipped. Tier 4 graduates next-cycle work to Tier 5 (controls/UX parity) and beyond.
-
 ### Tier 5 — Controls + UX parity (small, every-session improvements)
 
 27. **Middle-click pick-block, Shift sneak (edge-stop) - Ctrl** — Each ~50–100 LoC; ship together. (Q drop + F5 third-person already shipped.)

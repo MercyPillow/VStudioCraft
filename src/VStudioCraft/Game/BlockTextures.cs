@@ -720,20 +720,71 @@ namespace VStudioCraft.Game
             }
         }
 
+        // True for tail layers (>= FirstTailCaneLayer) whose AlphaTileCoords
+        // entry indexes into terrain.png rather than alpha_tools.png. Used
+        // by UploadCaneBlockLayersFromTerrain to ignore item-icon layers
+        // in the same range — without this gate the terrain slicer would
+        // happily copy a grass-top tile into an armor slot if we put a
+        // real (col,row) there. The list is whitelist-explicit rather
+        // than range-based because the terrain-source vs tools-source
+        // distinction is interleaved through the tail layers (door BLOCKS
+        // are terrain, door ICONS are tools; jukebox FACES are terrain,
+        // music DISCS are tools), so a single boundary doesn't fit.
+        private static bool IsTailLayerTerrainSourced(int layer)
+        {
+            return layer == TileSugarCane
+                || layer == TileWoodDoorTop  || layer == TileWoodDoorBottom
+                || layer == TileIronDoorTop  || layer == TileIronDoorBottom
+                || layer == TileJukeboxTop   || layer == TileJukeboxSide
+                || layer == TileJukeboxBottom;
+        }
+
         // Tier 4 #26 — Slice the SugarCane block tile out of terrain.png.
         // The three item tiles (SugarCaneItem / Paper / Book) live in
         // alpha_tools.png and use a separate slicer below; sentinel
         // entries in AlphaTileCoords skip them here. Caller passes the
         // decoded terrain bgra so we don't re-decode. Same idempotent
         // contract as UploadFarmingBlockLayersFromTerrain — a sentinel
-        // coord just leaves the procedural pixels in place.
+        // coord just leaves the procedural pixels in place. Bounded to
+        // terrain-source layers via IsTailLayerTerrainSourced so item
+        // tiles in the same range (door icons, armor, music discs, etc.)
+        // can carry alpha_tools.png coords without being misinterpreted
+        // here; those go through UploadTailItemsFromAlphaTools below.
         private static void UploadCaneBlockLayersFromTerrain(byte[] bgra, int srcW, int srcH, byte[] layerPixels)
         {
             for (int layer = FirstTailCaneLayer; layer < LayerCount; layer++)
             {
+                if (!IsTailLayerTerrainSourced(layer)) continue;
                 var (col, row) = AlphaTileCoords[layer];
                 if (col < 0 || row < 0) continue;
                 CopyTile(bgra, srcW, srcH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
+        }
+
+        // Tier 4 — Slice the post-cane tail-ITEM tiles out of alpha_tools.png.
+        // Covers everything from FirstTailDoorLayer onward that ISN'T flagged
+        // as terrain-sourced: door inventory icons, flint+steel, apple,
+        // snowball, buckets, slimeball, compass, saddle, fishing rod,
+        // paintings, music discs, and the 20 armor pieces. Same idempotent
+        // contract as the other tools slicers — a missing alpha_tools.png
+        // or a sentinel coord just leaves the procedural pixels in place,
+        // so the atlas degrades gracefully (every layer was painted by
+        // its procedural generator before this overlay runs).
+        private static void UploadTailItemsFromAlphaTools(byte[] layerPixels)
+        {
+            if (!TryDecodeEmbeddedTools(out byte[] toolBgra, out int toolW, out int toolH))
+                return;
+            for (int layer = FirstTailDoorLayer; layer < LayerCount; layer++)
+            {
+                if (IsTailLayerTerrainSourced(layer)) continue;
+                var (col, row) = AlphaTileCoords[layer];
+                if (col < 0 || row < 0) continue;
+                CopyTile(toolBgra, toolW, toolH, col, row, layerPixels);
                 GL.TexSubImage3D(
                     TextureTarget.Texture2DArray, 0,
                     0, 0, layer,
@@ -3212,18 +3263,26 @@ namespace VStudioCraft.Game
             // procedural art that's guaranteed-correct than slice a
             // wrong tile and end up with a stone-shovel icon for "Bow".
             // Bumping these to real coords later is one-line edits.
-            /* TileBow               */ (-1, -1),
-            /* TileArrow             */ (-1, -1),
-            /* TileString            */ (-1, -1),
-            /* TileGunpowder         */ (-1, -1),
+            // Hostile-mob drops in alpha_tools.png. Verified against the
+            // embedded sheet: bow (5,1) directly under flint+steel; arrow
+            // (5,2) directly under bow; string (8,0) right of coal;
+            // gunpowder (8,2) two rows under string.
+            /* TileBow               */ (5, 1),
+            /* TileArrow             */ (5, 2),
+            /* TileString            */ (8, 0),
+            /* TileGunpowder         */ (8, 2),
             // Tail items (Tier 3 #12 — passive-mob drops). Same sentinel
             // pattern as the hostile-mob drops above. Cow drops Leather
             // (Alpha id 334), chicken drops Feather (288) + lays Egg
             // (344). Procedural icons always win until the canonical
             // alpha-tools coords are wired.
-            /* TileLeather           */ (-1, -1),
-            /* TileFeather           */ (-1, -1),
-            /* TileEgg               */ (-1, -1),
+            // Passive-mob drops in alpha_tools.png. Verified against the
+            // embedded sheet: leather (7,6) under bowl + steak; feather
+            // (8,1) right of bow on the bow row; egg (12,0) far right
+            // of the helmet row.
+            /* TileLeather           */ (7, 6),
+            /* TileFeather           */ (8, 1),
+            /* TileEgg               */ (12, 0),
             // Tier 4 #14 — Hoes. Canonical Alpha 1.1.2 alpha_tools.png
             // packs hoes in the row immediately past axes (row 7), so
             // wood..gold sit at (0..4, 8). Material order matches the
@@ -3253,10 +3312,15 @@ namespace VStudioCraft.Game
             /* TileWheat5            */ (13, 5),
             /* TileWheat6            */ (14, 5),
             /* TileWheat7            */ (15, 5),
-            /* TileWheatSeeds        */ (-1, -1),
-            /* TileWheatItem         */ (-1, -1),
-            /* TileBread             */ (-1, -1),
-            /* TileMushroomStew      */ (-1, -1),
+            // Farming items in alpha_tools.png. Verified: seeds (9,0)
+            // right of string in the helmet row; wheat item (9,1) under
+            // seeds (golden harvested stalks); bread (9,2) under wheat
+            // (brown loaf); stew (8,4) right of bowl on the bowl row
+            // (filled bowl with a pink/red mushroom mix).
+            /* TileWheatSeeds        */ (9, 0),
+            /* TileWheatItem         */ (9, 1),
+            /* TileBread             */ (9, 2),
+            /* TileMushroomStew      */ (8, 4),
             // Tier 4 #26 — Sugar cane block + paper/book items. The
             // canonical Alpha 1.1.2 sugar cane terrain.png coord is
             // (9, 4) — a green-stalk cross-sprite tile in the same row
@@ -3266,35 +3330,48 @@ namespace VStudioCraft.Game
             // (-1,-1) sentinel and rely on procedural icons. Bumping
             // these to real coords later is one-line edits per row.
             /* TileSugarCane         */ (9, 4),
-            /* TileSugarCaneItem     */ (-1, -1),
-            /* TilePaper             */ (-1, -1),
-            /* TileBook              */ (-1, -1),
-            // Tier 4 #16 — Door tiles. All six (4 block halves + 2
-            // item icons) ship as procedural for now; canonical Alpha
-            // coords haven't been verified against the embedded
-            // terrain.png / alpha_tools.png and we'd rather have a
-            // guaranteed-correct procedural door than slice the wrong
-            // tile. Bumping these to real coords later is per-row
-            // one-line edits.
-            /* TileWoodDoorTop       */ (-1, -1),
-            /* TileWoodDoorBottom    */ (-1, -1),
-            /* TileIronDoorTop       */ (-1, -1),
-            /* TileIronDoorBottom    */ (-1, -1),
-            /* TileWoodDoorItem      */ (-1, -1),
-            /* TileIronDoorItem      */ (-1, -1),
-            // Tier 4 #17 — FlintAndSteel + Apple. Same procedural-only
-            // story as the door pack: the canonical alpha_tools.png
-            // coords haven't been verified, so the sentinels keep the
-            // slice helpers from overlaying garbage and the procedural
-            // generators paint the final tile in both atlas modes.
-            /* TileFlintAndSteel     */ (-1, -1),
-            /* TileApple             */ (-1, -1),
+            // Sugar cane / paper / book items in alpha_tools.png. Verified:
+            // sugar cane item (11,1) right of "picture" on the bow row;
+            // paper (10,3) under "sign" on the diamond row; book (11,3)
+            // right of paper.
+            /* TileSugarCaneItem     */ (11, 1),
+            /* TilePaper             */ (10, 3),
+            /* TileBook              */ (11, 3),
+            // Tier 4 #16 — Door block-half tiles in terrain.png.
+            // Canonical Alpha 1.1.2_01 layout packs the four door halves
+            // in a 2×2 sub-grid at rows 5..6 cols 1..2: wood top (1,5),
+            // wood bottom (1,6), iron top (2,5), iron bottom (2,6).
+            // Verified visually against the embedded alpha_terrain.png.
+            // The 2 inventory icons (TileWoodDoorItem / TileIronDoorItem)
+            // live in alpha_tools.png at unverified coords and stay
+            // procedural for now — the in-world block tiles are the
+            // ones you stare at, the icons are just a slot in the hotbar
+            // and procedural is "good enough".
+            /* TileWoodDoorTop       */ (1, 5),
+            /* TileWoodDoorBottom    */ (1, 6),
+            /* TileIronDoorTop       */ (2, 5),
+            /* TileIronDoorBottom    */ (2, 6),
+            // Door inventory icons in alpha_tools.png. Verified: wooden
+            // door (11,2) right of "sign" on the gunpowder row; iron
+            // door (12,2) immediately right of the wooden door.
+            /* TileWoodDoorItem      */ (11, 2),
+            /* TileIronDoorItem      */ (12, 2),
+            // Tier 4 #17 — FlintAndSteel + Apple icons in alpha_tools.png.
+            // Flint and steel sits at (5, 0) — the cell immediately right
+            // of the gold helmet, with the long brown handle + steel
+            // striker silhouette. Verified visually against the embedded
+            // sheet. Apple's coord hasn't been pinned (could be (9,0) or
+            // (10,0) depending on whether the row-0 right-half packs
+            // feather/string or arrow at col 8); leave sentinel until
+            // verified rather than risk slicing the wrong tile.
+            /* TileFlintAndSteel     */ (5, 0),
+            /* TileApple             */ (10, 0),
             // Tier 4 #20 — Snowball throwable icon. Procedural-only,
             // same story as the fire pack — alpha_tools.png coord
             // unverified, sentinel keeps the slicer from overlaying
             // garbage. Egg's atlas tile lives at TileEgg=84 (Tier 3
             // #12) and is unaffected.
-            /* TileSnowball          */ (-1, -1),
+            /* TileSnowball          */ (14, 0),
             // Tier 4 #15 — Bucket icons. Procedural-only, same
             // sentinel story as the throw pack — alpha_tools.png
             // coords for the four bucket sprites haven't been
@@ -3302,36 +3379,41 @@ namespace VStudioCraft.Game
             // stays out and the procedural generators do the
             // painting. Bumping these to real coords later is per-
             // row one-line edits.
-            /* TileBucketEmpty       */ (-1, -1),
-            /* TileBucketWater       */ (-1, -1),
-            /* TileBucketLava        */ (-1, -1),
-            /* TileBucketMilk        */ (-1, -1),
+            // Bucket family in alpha_tools.png — four contiguous tiles on
+            // the bowl row starting at col 10: empty (10,4), water (11,4),
+            // lava (12,4), milk (13,4). Verified visually against the
+            // embedded sheet (silver pail silhouettes differentiated by
+            // fill colour).
+            /* TileBucketEmpty       */ (10, 4),
+            /* TileBucketWater       */ (11, 4),
+            /* TileBucketLava        */ (12, 4),
+            /* TileBucketMilk        */ (13, 4),
             // Tier 4 #18 — Slimeball icon. Procedural-only, same
             // sentinel story as the bucket pack — alpha_tools.png
             // coord unverified, sentinel keeps the slicer from
             // overlaying garbage and the procedural generator paints
             // the final tile in both atlas modes.
-            /* TileSlimeball         */ (-1, -1),
+            /* TileSlimeball         */ (14, 1),
             // Tier 4 #22 — Compass dial-face icon. Procedural-only —
             // the rotating direction marker is rendered live as a
             // TEXTUAL overlay on top of this base tile by RenderHotbar
             // (per-frame atlas mutation isn't worth the cost), so the
             // baked tile is just a fixed dial face. Sentinel keeps
             // the slicer out of this layer in both atlas modes.
-            /* TileCompass           */ (-1, -1),
+            /* TileCompass           */ (6, 3),
             // Tier 4 #21 — Saddle icon. Procedural-only, same sentinel
             // story as the compass pack — alpha_tools.png coord for
             // the saddle sprite hasn't been verified against the
             // embedded sheet. The procedural generator paints a small
             // brown leather pad in both atlas modes.
-            /* TileSaddle            */ (-1, -1),
+            /* TileSaddle            */ (8, 6),
             // Tier 4 #23 — Fishing Rod icon. Procedural-only, same
             // sentinel story as the saddle pack — alpha_tools.png
             // coord for the rod sprite hasn't been verified against
             // the embedded sheet. The procedural generator paints
             // the diagonal rod + line + hook silhouette in both
             // atlas modes.
-            /* TileFishingRod        */ (-1, -1),
+            /* TileFishingRod        */ (5, 4),
             // Tier 4 #24 — Painting art + icon. Procedural-only —
             // Alpha 1.1.2_01 packs the 26 painting variants into a
             // dedicated kz.png sheet (NOT in alpha_tools.png), and
@@ -3339,51 +3421,60 @@ namespace VStudioCraft.Game
             // sheet. Sentinels keep the slicer out of these layers
             // in alpha-textures mode; the procedural generators paint
             // the 5 art tiles + 1 icon tile in both atlas modes.
+            // Painting "art" tiles (1×1..4×3) live in Alpha's separate
+            // kz.png sheet (NOT in alpha_tools.png), and we don't embed
+            // kz.png — those five stay sentinel/procedural. The
+            // INVENTORY ICON, however, is the "picture / item frame"
+            // sprite at (10, 1) in alpha_tools.png — verified against
+            // the embedded sheet, just right of "wheet" on the bow row.
             /* TilePainting1x1       */ (-1, -1),
             /* TilePainting1x2       */ (-1, -1),
             /* TilePainting2x1       */ (-1, -1),
             /* TilePainting2x2       */ (-1, -1),
             /* TilePainting4x3       */ (-1, -1),
-            /* TilePaintingItem      */ (-1, -1),
-            // Tier 4 #25 — Jukebox face tiles + music disc icons.
-            // Procedural-only — Alpha 1.1.2 terrain.png coords for the
-            // jukebox (top at (10,4), side at (11,4)) haven't been
-            // verified against the embedded sheet, and the disc icons
-            // would live in alpha_tools.png (also unverified). Sentinels
-            // keep the slicer out of all five layers in alpha-textures
-            // mode; the procedural generators paint them in both atlas
-            // modes.
-            /* TileJukeboxTop        */ (-1, -1),
-            /* TileJukeboxSide       */ (-1, -1),
+            /* TilePaintingItem      */ (10, 1),
+            // Tier 4 #25 — Jukebox face tiles in terrain.png. Canonical
+            // Alpha 1.1.2_01 layout puts the jukebox side at (10, 4)
+            // (vertical-plank panel) and the top at (11, 4) (planks with
+            // a centred disc-slot circle). Verified visually against the
+            // embedded alpha_terrain.png. Bottom is reused from planks
+            // via a multi-face routing in Block.GetTileIndex (the
+            // dedicated layer here just stays procedural / sentinel and
+            // is never sampled). Disc icons would live in alpha_tools.png
+            // at unverified coords — sentinel, stays procedural.
+            /* TileJukeboxTop        */ (11, 4),
+            /* TileJukeboxSide       */ (10, 4),
             /* TileJukeboxBottom     */ (-1, -1),
-            /* TileDisc13            */ (-1, -1),
-            /* TileDiscCat           */ (-1, -1),
-            // Tier 4 #19 — Armor inventory icons. 20 layers (5 materials
-            // × 4 slots). Procedural-only — Alpha's per-piece icons
-            // live in gui/items.png which we don't currently embed.
-            // Sentinels across the board keep the slicer out of these
-            // layers in alpha-textures mode; the procedural generators
-            // paint them in both atlas modes.
-            /* TileLeatherHelmet       */ (-1, -1),
-            /* TileLeatherChestplate   */ (-1, -1),
-            /* TileLeatherLeggings     */ (-1, -1),
-            /* TileLeatherBoots        */ (-1, -1),
-            /* TileChainmailHelmet     */ (-1, -1),
-            /* TileChainmailChestplate */ (-1, -1),
-            /* TileChainmailLeggings   */ (-1, -1),
-            /* TileChainmailBoots      */ (-1, -1),
-            /* TileIronHelmet          */ (-1, -1),
-            /* TileIronChestplate      */ (-1, -1),
-            /* TileIronLeggings        */ (-1, -1),
-            /* TileIronBoots           */ (-1, -1),
-            /* TileDiamondHelmet       */ (-1, -1),
-            /* TileDiamondChestplate   */ (-1, -1),
-            /* TileDiamondLeggings     */ (-1, -1),
-            /* TileDiamondBoots        */ (-1, -1),
-            /* TileGoldHelmet          */ (-1, -1),
-            /* TileGoldChestplate      */ (-1, -1),
-            /* TileGoldLeggings        */ (-1, -1),
-            /* TileGoldBoots           */ (-1, -1),
+            /* TileDisc13            */ (0, 15),
+            /* TileDiscCat           */ (1, 15),
+            // Tier 4 #19 — Armor inventory icons in alpha_tools.png.
+            // Canonical Alpha 1.1.2_01 layout packs the 20 armor pieces
+            // in a clean 5×4 grid at rows 0..3, cols 0..4: rows are
+            // helmet/chestplate/leggings/boots; cols are leather/
+            // chainmail/iron/diamond/gold (wood-tier ordering matches
+            // the existing tool slice for consistency). Verified
+            // visually against the embedded alpha_tools.png — the 5×4
+            // grid at the top-left of the sheet is unmistakeable.
+            /* TileLeatherHelmet       */ (0, 0),
+            /* TileLeatherChestplate   */ (0, 1),
+            /* TileLeatherLeggings     */ (0, 2),
+            /* TileLeatherBoots        */ (0, 3),
+            /* TileChainmailHelmet     */ (1, 0),
+            /* TileChainmailChestplate */ (1, 1),
+            /* TileChainmailLeggings   */ (1, 2),
+            /* TileChainmailBoots      */ (1, 3),
+            /* TileIronHelmet          */ (2, 0),
+            /* TileIronChestplate      */ (2, 1),
+            /* TileIronLeggings        */ (2, 2),
+            /* TileIronBoots           */ (2, 3),
+            /* TileDiamondHelmet       */ (3, 0),
+            /* TileDiamondChestplate   */ (3, 1),
+            /* TileDiamondLeggings     */ (3, 2),
+            /* TileDiamondBoots        */ (3, 3),
+            /* TileGoldHelmet          */ (4, 0),
+            /* TileGoldChestplate      */ (4, 1),
+            /* TileGoldLeggings        */ (4, 2),
+            /* TileGoldBoots           */ (4, 3),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3552,22 +3643,31 @@ namespace VStudioCraft.Game
             // same sentinel-coord story as the fishing-rod pack.
             GenerateProceduralPaintingLayers(layerPixels);
 
-            // Tier 4 #25 — Jukebox + disc pack. Procedural-always —
-            // same sentinel-coord story as the painting pack. The
-            // alpha-textures atlas mode also paints these procedurally
-            // because we haven't verified the canonical Alpha 1.1.2
-            // terrain.png coords for the jukebox tiles against the
-            // embedded sheet.
+            // Tier 4 #25 — Jukebox + disc pack. Jukebox face tiles get
+            // overlaid from terrain.png by UploadCaneBlockLayersFromTerrain
+            // above (the slicer's range now includes them via the
+            // verified (10,4) / (11,4) coords); music disc icons stay
+            // procedural until the alpha_tools.png coords are verified.
             GenerateProceduralJukeboxLayers(layerPixels);
 
             // Tier 4 #19 — Armor inventory icons. 20 procedural sprites
-            // covering all 5 materials × 4 slots. Procedural-always —
-            // Alpha's per-piece icons live in a separate sheet
-            // (gui/items.png) we don't currently embed, and the per-
-            // material colour story is well-defined enough that the
-            // generated silhouettes read at-a-glance even without the
-            // canonical art.
+            // painted as a fallback; the alpha_tools.png slice below
+            // overlays the real Alpha 1.1.2 sprites at the canonical
+            // 5×4 grid (rows 0..3, cols 0..4) so the icons match the
+            // rest of the alpha-textures atlas.
             GenerateProceduralArmorLayers(layerPixels);
+
+            // Tier 4 — Overlay alpha_tools.png coords for ALL tail items
+            // past the door pack: door inventory icons, flint+steel,
+            // apple, snowball, buckets, slimeball, compass, saddle,
+            // fishing rod, paintings, music discs, and all 20 armor
+            // pieces. Each layer's AlphaTileCoords entry decides whether
+            // it gets sliced (real coord) or stays procedural (sentinel).
+            // Must run LAST in the alpha-textures path so a verified
+            // tile always wins over the procedural fallback that ran
+            // earlier; idempotent on a missing alpha_tools.png (every
+            // affected layer was already painted procedurally).
+            UploadTailItemsFromAlphaTools(layerPixels);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
