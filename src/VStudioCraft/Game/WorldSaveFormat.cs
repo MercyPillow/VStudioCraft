@@ -427,6 +427,27 @@ namespace VStudioCraft.Game
                     world.AddChunk(chunk);
                 }
 
+                // Tier 6 #47 — Re-propagate sky + block light on every
+                // loaded chunk. The save format stores ONLY block ids
+                // per chunk (Chunk.WriteTo writes _blocks; _light is
+                // derived state and isn't persisted), so freshly-loaded
+                // chunks have all-zero sky-light arrays. Without this
+                // pass the shader's vSkyLight reads as 0 everywhere
+                // and the world renders dark in broad daytime — the
+                // user-visible bug. World-gen runs the same recompute
+                // call inside World.Generate's chunk loop, so this is
+                // just bringing the load path into parity with the
+                // gen path. Cost: one full BFS per loaded chunk
+                // (~hundreds of µs each), comparable to a fresh world
+                // generation pass. Done in chunk-order before any
+                // tile-entity / spawn-vector blocks are read so the
+                // chunk graph is complete (lighting needs neighbors
+                // for cross-chunk edge propagation).
+                foreach (var c in world.AllChunksForPersistence())
+                {
+                    LightCalculator.RecomputeChunk(c);
+                }
+
                 // v5: furnace tile entities. Pre-v5 saves had no furnaces
                 // (the block didn't exist), so legacy worlds load with
                 // an empty entity table. The block layer in restored

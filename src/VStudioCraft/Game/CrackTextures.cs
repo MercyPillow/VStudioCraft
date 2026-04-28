@@ -40,24 +40,60 @@ namespace VStudioCraft.Game
                 TileSize, TileSize, FrameCount, 0,
                 PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
 
-            // Buffer is reused across layers; we keep the previous frame's
-            // pixels so each frame is a superset of the one before.
             var pixels = new byte[TileSize * TileSize * 4];
-            // Single shared RNG so the segments are stable across runs and
-            // each later frame literally extends the earlier one.
-            var rng = new Random(0xC4AC); // "crack"
 
-            for (int frame = 0; frame < FrameCount; frame++)
+            // Tier 6 #47 — Try to slice the canonical Alpha break frames
+            // out of terrain.png at row 15 (cols 0..9 = destroy_stage_0
+            // through destroy_stage_9). Each tile in that row is a dark
+            // grey-on-transparent crack overlay shaped exactly like the
+            // procedural fallback below — same dark-line / monotone-
+            // alpha aesthetic — so swapping to the canonical art doesn't
+            // change rendering shape, just art fidelity. If the embedded
+            // terrain.png isn't available (older deploy or corrupt
+            // resource), fall through to the procedural path so the
+            // overlays still render.
+            if (BlockTextures.TryDecodeEmbeddedTerrain(out byte[] terrainBgra, out int srcW, out int srcH))
             {
-                for (int s = 0; s < SegmentsPerFrame; s++)
+                for (int frame = 0; frame < FrameCount; frame++)
                 {
-                    DrawCrackSegment(pixels, rng, frame);
+                    BlockTextures.CopyTile(terrainBgra, srcW, srcH, /*col*/frame, /*row*/15, pixels);
+                    // Convert the Alpha destroy_stage tile into an
+                    // alpha-mask overlay. The source PNG paints the
+                    // crack as dark lines on a near-opaque LIGHT
+                    // background — without this transform that
+                    // background would cover the block texture and
+                    // it would look like the block disappears mid-
+                    // break. Map luminance → alpha (white = 0, black
+                    // = full) so only the dark crack lines remain
+                    // visible while the breaking block's actual face
+                    // stays readable underneath.
+                    MaskAlphaCrackBackground(pixels);
+                    GL.TexSubImage3D(
+                        TextureTarget.Texture2DArray, 0,
+                        0, 0, frame,
+                        TileSize, TileSize, 1,
+                        PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
                 }
-                GL.TexSubImage3D(
-                    TextureTarget.Texture2DArray, 0,
-                    0, 0, frame,
-                    TileSize, TileSize, 1,
-                    PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+            }
+            else
+            {
+                // Procedural fallback. Single shared RNG so the segments
+                // are stable across runs and each later frame literally
+                // extends the earlier one (no buffer clear between
+                // frames — pixels stays "monotonically darkening").
+                var rng = new Random(0xC4AC); // "crack"
+                for (int frame = 0; frame < FrameCount; frame++)
+                {
+                    for (int s = 0; s < SegmentsPerFrame; s++)
+                    {
+                        DrawCrackSegment(pixels, rng, frame);
+                    }
+                    GL.TexSubImage3D(
+                        TextureTarget.Texture2DArray, 0,
+                        0, 0, frame,
+                        TileSize, TileSize, 1,
+                        PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+                }
             }
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
@@ -167,6 +203,54 @@ namespace VStudioCraft.Game
                 }
             }
             return count;
+        }
+
+        // Tier 6 #47 — Convert the Alpha destroy_stage tile to a true
+        // overlay mask. The source paints cracks as LIGHT pixels on a
+        // DARK opaque background — opposite of what the first pass
+        // assumed. Without this conversion the dark background would
+        // sit opaque on top of the breaking block's face and the
+        // crack lines themselves would punch through to the block
+        // (the user reported seeing "block through crack lines, not
+        // crack lines forming on top"), which is the inverse of what
+        // we want.
+        //
+        // Transform per pixel:
+        //   luminance = (R + G + B) / 3
+        //   alpha    *= luminance / 255
+        // Black background (luminance 0)   → alpha 0 (gone)
+        // White cracks    (luminance 255)  → alpha unchanged (kept)
+        // Mid-grey                          → partial alpha (smooth edges)
+        // RGB is then pinned to dark grey so the lines render as a
+        // consistent dark stroke across all 10 stage tiles regardless
+        // of the source's exact palette — same shade the procedural
+        // fallback uses, so the two paths are visually identical
+        // except for line shape.
+        private static void MaskAlphaCrackBackground(byte[] rgba)
+        {
+            for (int i = 0; i < rgba.Length; i += 4)
+            {
+                byte r = rgba[i + 0];
+                byte g = rgba[i + 1];
+                byte b = rgba[i + 2];
+                byte a = rgba[i + 3];
+                int lum = (r + g + b) / 3;
+                int newA = a * lum / 255;
+                if (newA <= 0)
+                {
+                    rgba[i + 0] = 0;
+                    rgba[i + 1] = 0;
+                    rgba[i + 2] = 0;
+                    rgba[i + 3] = 0;
+                }
+                else
+                {
+                    rgba[i + 0] = 30;
+                    rgba[i + 1] = 30;
+                    rgba[i + 2] = 30;
+                    rgba[i + 3] = (byte)newA;
+                }
+            }
         }
 
         private static void PaintCrackPixel(byte[] pixels, int x, int y, Random rng)

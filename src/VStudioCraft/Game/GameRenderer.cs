@@ -650,6 +650,19 @@ void main()
         //   - keepalive
         private VStudioCraft.Net.NetClient _netClient;
         public bool IsNetClient => _netClient != null;
+
+        // KI-4 — fired when an active multiplayer session terminates
+        // unexpectedly (peer hangup, IO error, server kicked us). The
+        // host UI subscribes to surface a dialog and route the user
+        // back to the title screen instead of leaving them staring at
+        // a frozen world replica. Does NOT fire on user-initiated
+        // disconnect (e.g. quitting to title), since the host already
+        // knows about that path.
+        //
+        // Reason is the human-readable string from NetSession.DeadReason
+        // when available, or the inbound DisconnectPacket.Reason if the
+        // server sent us one before closing.
+        public event Action<string> SessionLost;
         // Throttle for the upstream PlayerPosLook stream. Client position
         // ships at 20 Hz (matching server tick) regardless of frame rate;
         // sending one per render frame at 1500 fps would drown the wire
@@ -681,6 +694,16 @@ void main()
         // are sibling, not parent/child. The packet handler tries one
         // dict then the other before giving up on the lookup.
         private readonly Dictionary<int, HostileMob> _replicatedHostilesById = new Dictionary<int, HostileMob>();
+
+        // Phase 5c — replicated drops on the friend side. Keyed by
+        // server NetworkId for O(1) inbound packet dispatch (RelMove,
+        // Despawn). The DroppedItem instances ALSO live in _drops so
+        // the existing RenderDrops path draws them with no further
+        // changes; this dict is just for the packet handler to find
+        // the right one. No interp polish for Phase 5c — RelMove
+        // writes Position directly. Drops barely move once they hit
+        // the floor, so the visible jitter is minor.
+        private readonly Dictionary<int, DroppedItem> _replicatedDropsById = new Dictionary<int, DroppedItem>();
 
         // Phase 5f — snapshot-pair interpolators for replicated mobs.
         // mob.Position is overwritten each frame from the Lerped value
@@ -1127,6 +1150,13 @@ void main()
             _replicatedPassivesById.Clear();
             _replicatedHostilesById.Clear();
             _mobInterpById.Clear();
+            // Phase 5c — friend-side _drops is empty in non-net mode and
+            // populated only via ItemSpawn packets, so clearing it on
+            // disconnect drops the now-stale replicas. Host-side _drops
+            // is cleared by SetWorld instead (covers SP world swap).
+            _drops.Clear();
+            _replicatedDropsById.Clear();
+            _knownDropsById.Clear();
         }
 
         // ---- Phase 7: Open to LAN -----------------------------------------
@@ -1208,6 +1238,13 @@ void main()
             _serverHub = null;
             _hubTickAccumulator = 0f;
             _hostEntityId = -1;
+            // Reset the drop-broadcast bookkeeping so a re-open starts
+            // clean. The actual DroppedItem instances stay in _drops
+            // (they're SP-side; the host will keep seeing them locally)
+            // but lose their NetworkIds. The next BroadcastLocalDropsDiff
+            // would re-allocate ids and re-spawn them to any new viewers.
+            _knownDropsById.Clear();
+            for (int i = 0; i < _drops.Count; i++) _drops[i].NetworkId = 0;
         }
 
         // Per-frame helpers called from GameHostControl.RenderLoop right
@@ -1243,8 +1280,110 @@ void main()
                     // singleplayer experience.
                     // TODO: surface via a Hub.Errored event if needed.
                 }
+                // Phase 5c — diff the host's _drops list against last
+                // tick and emit ItemSpawn / RelMove / Despawn packets to
+                // remote viewers so the friend sees the host's drops
+                // appear, fall, and disappear when picked up. Runs on
+                // the same 20 Hz cadence as Tick so the friend's
+                // EntityInterpState gets two-snapshot lerping.
+                BroadcastLocalDropsDiff();
             }
             if (_hubTickAccumulator < 0f) _hubTickAccumulator = 0f;
+        }
+
+        // Per-drop tracking data so we can emit cheap delta packets
+        // instead of an absolute position every tick. _knownDropById
+        // also doubles as "which drops have we already spawned" so
+        // friends don't get a re-spawn each tick for the same item.
+        private struct DropBroadcastState
+        {
+            public int Generation;          // bumps each pass to detect removal
+            public Vector3 LastBroadcastPos;
+        }
+        private readonly Dictionary<int, DropBroadcastState> _knownDropsById = new Dictionary<int, DropBroadcastState>();
+        private int _dropBroadcastGeneration;
+        private const float DropMoveEpsilon = 0.001f;
+
+        // Walk the host's renderer-private _drops list and bring the
+        // hub's view of that list up to date for any connected friends.
+        // Three passes:
+        //   1. Each drop with NetworkId == 0 gets one allocated and a
+        //      fresh ItemSpawn ships to every in-range viewer.
+        //   2. Each drop with a valid id whose position has moved more
+        //      than DropMoveEpsilon since last broadcast gets an
+        //      EntityRelMove. We don't need the Look or RelMoveLook
+        //      variants — drops don't yaw.
+        //   3. Any id we tracked last tick but isn't in the current
+        //      list (host picked it up, age-out despawned it, or it
+        //      fell out of any chunk) gets EntityDespawn.
+        private void BroadcastLocalDropsDiff()
+        {
+            if (_serverHub == null) return;
+            _dropBroadcastGeneration++;
+            int gen = _dropBroadcastGeneration;
+
+            for (int i = 0; i < _drops.Count; i++)
+            {
+                var d = _drops[i];
+                if (d.NetworkId == 0)
+                {
+                    d.NetworkId = _serverHub.AllocateEntityId();
+                    _serverHub.BroadcastItemSpawn(
+                        d.NetworkId, d.Position, d.Velocity,
+                        (byte)d.Stack.Type, (byte)d.Stack.Count);
+                    _knownDropsById[d.NetworkId] = new DropBroadcastState
+                    {
+                        Generation = gen,
+                        LastBroadcastPos = d.Position,
+                    };
+                    continue;
+                }
+                if (_knownDropsById.TryGetValue(d.NetworkId, out var st))
+                {
+                    var delta = d.Position - st.LastBroadcastPos;
+                    if (Math.Abs(delta.X) > DropMoveEpsilon
+                     || Math.Abs(delta.Y) > DropMoveEpsilon
+                     || Math.Abs(delta.Z) > DropMoveEpsilon)
+                    {
+                        _serverHub.BroadcastEntityRelMove(d.NetworkId, delta.X, delta.Y, delta.Z);
+                        st.LastBroadcastPos = d.Position;
+                    }
+                    st.Generation = gen;
+                    _knownDropsById[d.NetworkId] = st;
+                }
+                else
+                {
+                    // Drop has a network id but we don't have state for
+                    // it (e.g. session restarted while drops in flight).
+                    // Treat as a fresh spawn.
+                    _serverHub.BroadcastItemSpawn(
+                        d.NetworkId, d.Position, d.Velocity,
+                        (byte)d.Stack.Type, (byte)d.Stack.Count);
+                    _knownDropsById[d.NetworkId] = new DropBroadcastState
+                    {
+                        Generation = gen,
+                        LastBroadcastPos = d.Position,
+                    };
+                }
+            }
+
+            // Despawn pass — any id that wasn't refreshed this generation
+            // isn't in _drops anymore, so it's gone.
+            List<int> stale = null;
+            foreach (var kv in _knownDropsById)
+            {
+                if (kv.Value.Generation == gen) continue;
+                if (stale == null) stale = new List<int>();
+                stale.Add(kv.Key);
+            }
+            if (stale != null)
+            {
+                for (int i = 0; i < stale.Count; i++)
+                {
+                    _serverHub.BroadcastEntityDespawn(stale[i]);
+                    _knownDropsById.Remove(stale[i]);
+                }
+            }
         }
 
         // Per-frame multiplayer pump. Called by the host's render loop
@@ -1274,13 +1413,19 @@ void main()
 
             if (!_netClient.IsConnected)
             {
-                // The session died (peer hangup, IO error, protocol
-                // violation). Surface it as a clean disconnect on our
-                // side so subsequent frames see IsNetClient==false and
-                // stop trying to send. The host UI will eventually
-                // notice and route the user back to the menu — Phase 3
-                // wires that error-surface event.
+                // KI-4 — session died unexpectedly (peer hangup, IO
+                // error, protocol violation). Capture the reason
+                // BEFORE we null _netClient so the SessionLost event
+                // can carry a human-readable explanation, then drop
+                // every replica + raise the event. The UI subscriber
+                // (MainWindow) shows a dialog and bounces to title.
+                var reason = _netClient.DisconnectReason ?? "connection lost";
                 _netClient = null;
+                _remotePlayers.Clear();
+                _replicatedPassivesById.Clear();
+                _replicatedHostilesById.Clear();
+                _mobInterpById.Clear();
+                try { SessionLost?.Invoke(reason); } catch { /* host event handler must not crash render thread */ }
                 return;
             }
 
@@ -1410,6 +1555,8 @@ void main()
                         rp.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
                     else if (_mobInterpById.TryGetValue(m.EntityId, out var st))
                         st.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
+                    else if (_replicatedDropsById.TryGetValue(m.EntityId, out var d))
+                        d.Position += new Vector3(m.Dx, m.Dy, m.Dz);
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityLook:
@@ -1459,16 +1606,48 @@ void main()
                         _world?.Hostiles.Remove(hmob);
                         _replicatedHostilesById.Remove(eid);
                         _mobInterpById.Remove(eid);
+                        break;
                     }
+                    if (_replicatedDropsById.TryGetValue(eid, out var d))
+                    {
+                        _drops.Remove(d);
+                        _replicatedDropsById.Remove(eid);
+                    }
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.ItemSpawn:
+                {
+                    var s = pkt.ItemSpawn;
+                    var stack = new ItemStack((BlockType)s.ItemType, s.ItemCount);
+                    var d = new DroppedItem
+                    {
+                        NetworkId = s.EntityId,
+                        Position = new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                        Velocity = new Vector3(s.Vx, s.Vy, s.Vz),
+                        Stack = stack,
+                        // Spawn cooldown matches the host's value so a
+                        // remote-side render of the drop arc matches the
+                        // host's. Friend never picks up — pickup runs on
+                        // the host's local TickDrops in net mode.
+                        PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+                    };
+                    _drops.Add(d);
+                    _replicatedDropsById[s.EntityId] = d;
                     break;
                 }
 
                 case VStudioCraft.Net.PacketIds.Disconnect:
+                {
                     // Server-initiated hangup. Tear our side down so the
                     // next DrainNetwork sees IsNetClient false and stops
-                    // touching the dead session.
-                    DisconnectFromServer($"server: {pkt.Disconnect.Reason}");
+                    // touching the dead session. KI-4 — fire SessionLost
+                    // so the UI can show why we got booted (kicked,
+                    // server stopping, protocol mismatch, etc.).
+                    var reason = pkt.Disconnect.Reason ?? "server disconnected";
+                    DisconnectFromServer($"server: {reason}");
+                    try { SessionLost?.Invoke(reason); } catch { /* swallow */ }
                     break;
+                }
 
                 // Phases 3+ add: BlockChange, MultiBlockChange, ChunkUnload,
                 // EntitySpawn, EntityRelMove, EntityLook, EntityRelMoveLook,

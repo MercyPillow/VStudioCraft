@@ -179,7 +179,13 @@ namespace VStudioCraft.Net
         public const byte Skeleton     = 17;
         public const byte Spider       = 18;
         public const byte Creeper      = 19;
-        // public const byte DroppedItem  = 32;
+
+        // Phase 5c — dropped items (block-break drops, mob death drops,
+        // Q-tossed items). Sent via ItemSpawnPacket (0x27) which carries
+        // the ItemStack payload alongside position + velocity; subsequent
+        // RelMove / Despawn use the existing 0x21 / 0x25 packets.
+        public const byte DroppedItem  = 32;
+
         // public const byte Arrow        = 48;
         // public const byte Snowball     = 49;
         // public const byte Egg          = 50;
@@ -338,6 +344,53 @@ namespace VStudioCraft.Net
             Z        = r.ReadDouble(),
             Yaw      = r.ReadFloat(),
             Pitch    = r.ReadFloat(),
+        };
+    }
+
+    // 0x27 — server→client dropped-item spawn. Distinct from EntitySpawn
+    // because dropped items carry an ItemStack payload (item type +
+    // count) plus a velocity vector for the toss arc; encoding both in
+    // EntitySpawn would have ballooned every player/mob spawn packet
+    // for two fields they never use.
+    //
+    // Velocity is included so the client's local DroppedItem can render
+    // a brief toss arc instead of teleporting to the resting position.
+    // Subsequent updates flow through EntityRelMove (cheap delta packets
+    // as gravity pulls the drop down to its rest position) and
+    // EntityDespawn (when the host picks it up or the 5-minute Alpha
+    // lifetime expires).
+    internal struct ItemSpawnPacket
+    {
+        public int EntityId;
+        public double X, Y, Z;
+        public float Vx, Vy, Vz;
+        public byte ItemType;   // BlockType byte
+        public byte ItemCount;  // 1..64
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(EntityId);
+            w.WriteDouble(X);
+            w.WriteDouble(Y);
+            w.WriteDouble(Z);
+            w.WriteFloat(Vx);
+            w.WriteFloat(Vy);
+            w.WriteFloat(Vz);
+            w.WriteByte(ItemType);
+            w.WriteByte(ItemCount);
+        }
+
+        public static ItemSpawnPacket Read(PacketReader r) => new ItemSpawnPacket
+        {
+            EntityId  = r.ReadInt(),
+            X         = r.ReadDouble(),
+            Y         = r.ReadDouble(),
+            Z         = r.ReadDouble(),
+            Vx        = r.ReadFloat(),
+            Vy        = r.ReadFloat(),
+            Vz        = r.ReadFloat(),
+            ItemType  = r.ReadByte(),
+            ItemCount = r.ReadByte(),
         };
     }
 

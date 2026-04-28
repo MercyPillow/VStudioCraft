@@ -18,6 +18,16 @@ namespace VStudioCraft.Game
         public Vector3 Velocity;
         public ItemStack Stack;
 
+        // Phase 5c — server-assigned id for multiplayer replication.
+        // 0 means "not yet networked" (a drop that just spawned on the
+        // host hasn't been broadcast yet); the host's hub broadcast pass
+        // assigns a fresh id on first sight and ships an ItemSpawnPacket.
+        // Friends (remote clients) receive ItemSpawn packets and create
+        // their own DroppedItem with the server-assigned id; subsequent
+        // RelMove / Despawn packets dispatch by this field. Untouched in
+        // singleplayer.
+        public int NetworkId;
+
         // Seconds since spawn. Drives the bob phase + lifetime check.
         public float AgeSec;
 

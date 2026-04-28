@@ -323,6 +323,12 @@ namespace VStudioCraft.UI
         public event Action LanClosed;
         public event Action<Exception> LanOpenFailed;
 
+        // KI-4 — surfaced when an active multiplayer session dies
+        // unexpectedly (server kicked us, network blip, peer hangup).
+        // Fires on the UI thread; subscriber typically shows a dialog
+        // and routes the user back to the title screen.
+        public event Action<string> SessionLost;
+
         public bool IsHostingLan => _renderer != null && _renderer.IsHostingLan;
         public int HostedLanPort => _renderer?.HostedPort ?? 0;
 
@@ -450,6 +456,15 @@ namespace VStudioCraft.UI
             {
                 var cb = ReturnedToTitleRequested;
                 if (cb != null) Dispatcher.BeginInvoke(cb);
+            };
+            // KI-4 — bubble session-lost from render thread to UI thread
+            // via Dispatcher. Capturing the field-accessor lambda here
+            // means re-subscriptions don't accidentally fire on the
+            // wrong thread.
+            _renderer.SessionLost += reason =>
+            {
+                var cb = SessionLost;
+                if (cb != null) Dispatcher.BeginInvoke(new Action(() => cb(reason)));
             };
             _renderer.InitializeGraphics();
 

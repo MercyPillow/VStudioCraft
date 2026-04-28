@@ -44,6 +44,20 @@ namespace VStudioCraft.Standalone
                 Host.OpenTitleScreen();
                 Host.ReleaseMouseLookExternal();
             };
+
+            // KI-4 — multiplayer session lost (server kicked, network
+            // blip, peer hangup). Show a dialog with the reason and
+            // route back to the title screen so the user has a clear
+            // recovery path instead of a frozen world replica.
+            Host.SessionLost += reason =>
+            {
+                MessageBox.Show(this,
+                    $"Disconnected from server.\n\n{reason}",
+                    "Connection lost",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                Host.OpenTitleScreen();
+                Host.ReleaseMouseLookExternal();
+            };
             // Tier 6 #47 — Mirror the host's known world path into our
             // _currentPath so a Pause→Save lands at the file the user
             // chose at creation/load instead of falling through to

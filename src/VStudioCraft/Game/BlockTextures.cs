@@ -3717,7 +3717,7 @@ namespace VStudioCraft.Game
         // assembly's manifest, or if the decoder throws (a stale build
         // or unusual WPF host setup) — caller falls back to procedural
         // art rather than crashing the render thread.
-        private static bool TryDecodeEmbeddedTerrain(out byte[] bgra, out int width, out int height)
+        internal static bool TryDecodeEmbeddedTerrain(out byte[] bgra, out int width, out int height)
         {
             // Fast path: reuse cached buffer once we've decoded once.
             if (s_cachedBgra != null)
@@ -4007,7 +4007,7 @@ namespace VStudioCraft.Game
         //      a face). Without this flip, terrain.png sliced tiles
         //      would render upside-down: grass-side fringe at the
         //      bottom, torches pointing down, flowers inverted.
-        private static void CopyTile(byte[] srcBgra, int srcW, int srcH, int col, int row, byte[] dstRgba)
+        internal static void CopyTile(byte[] srcBgra, int srcW, int srcH, int col, int row, byte[] dstRgba)
         {
             int x0 = col * TileSize;
             int y0 = row * TileSize;

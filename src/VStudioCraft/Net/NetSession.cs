@@ -278,6 +278,9 @@ namespace VStudioCraft.Net
                 case PacketIds.EntityDespawn:
                     return new InboundPacket { Id = id, EntityDespawn = EntityDespawnPacket.Read(_reader) };
 
+                case PacketIds.ItemSpawn:
+                    return new InboundPacket { Id = id, ItemSpawn = ItemSpawnPacket.Read(_reader) };
+
                 default:
                     throw new InvalidDataException($"Unknown packet id 0x{id:X2}");
             }
@@ -307,5 +310,6 @@ namespace VStudioCraft.Net
         public EntityRelMoveLookPacket EntityRelMoveLook;
         public EntityTeleportPacket  EntityTeleport;
         public EntityDespawnPacket   EntityDespawn;
+        public ItemSpawnPacket       ItemSpawn;
     }
 }

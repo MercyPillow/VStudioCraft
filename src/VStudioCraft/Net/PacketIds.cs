@@ -44,6 +44,12 @@ namespace VStudioCraft.Net
         public const byte EntityTeleport      = 0x24; // S->C
         public const byte EntityDespawn       = 0x25; // S->C
         public const byte EntityHealth        = 0x26; // S->C
+        // Phase 5c — DroppedItem replication. EntitySpawn (0x20) doesn't
+        // carry an item payload, so dropped items use a dedicated spawn
+        // packet that includes the ItemStack tuple. Subsequent motion +
+        // despawn use the existing EntityRelMove (0x21) and
+        // EntityDespawn (0x25) packets — those are payload-agnostic.
+        public const byte ItemSpawn           = 0x27; // S->C
 
         // 0x3_ — world streaming -------------------------------------------
         public const byte ChunkLoad           = 0x30; // S->C

@@ -91,10 +91,11 @@ defaults to 25566 (one above Notch's 25565); username defaults to
 - **Phase 5** — Mob/drop/projectile replication
   - [x] **5a** — Passive mob replication (Pig/Cow/Sheep/Chicken). Server ticks AI, broadcasts spawn/move/despawn; client adds replicas to `_world.Passives` so the existing `RenderPassives` path draws them. Snap-to-position (no interp) — visible 50ms tick stutter is the first 5b polish item.
   - [x] **5b** — Hostile mob replication (Zombie/Skeleton/Spider/Creeper). Same shape; server uses closest-player as aggro target via `ClosestPlayerPosTo`. `NoopServerSinks` for `IPlayerDamageSink`/`IDropSink` so mobs simulate but don't deliver damage or drops yet (Phase 5c).
-  - [ ] **5c** — Drops (`DroppedItem`) replication, server-side death-drop spawning, item pickup on player AABB
+  - **5c** — Drop replication: ✅ host's `_drops` list diff'd each tick by `BroadcastLocalDropsDiff`, friends see new drops via `ItemSpawnPacket` (0x27) + RelMove + Despawn. New `EntityType.DroppedItem`. ❌ Pickup-by-remote-players deferred to Phase 6 (needs inventory sync).
   - [ ] **5d** — Projectile replication (Arrow, ThrownProjectile/Snowball/Egg, Bobber) and `PlayerUseItem` (0x43) RMB-intent packet
   - [ ] **5e** — Damage delivery: `EntityHealth` packet, server-side `Player` health tracking, hurt-flash sync
   - [ ] **5f** — Mob/drop interpolation polish (currently snap-to-position; want lerp like RemotePlayer)
+  - **5g** — ~~Walk-cycle phase for replicated mobs~~ — turns out moot; passive mobs (Pig/Cow/Sheep/Chicken) don't have walk-cycle animation in either SP or MP. Their legs are static cuboids. Closing without code change.
 - [ ] **Phase 6** — Inventory click protocol + server-side recipes + tile-entity sync
 - [x] **Phase 7** — "Open to LAN" — host an in-process server alongside running SP world. Working end-to-end: `--openlan[=PORT]` on Standalone starts a SP world and binds a listener; remote clients can `--connect host:port:user` and join. See [Feature: Open to LAN](#feature-open-to-lan) below for the full design.
 - [ ] **Phase 8** — Persistence v10 (per-username state) + admin console + autosave
@@ -140,35 +141,6 @@ toggle is a small extra variant.
 
 (Phase 3 update — 2026-04-28 — break/place no longer no-ops; they ship
 `PlayerDigStart` and `PlayerPlace` and roundtrip a `BlockChange`.)
-
-### KI-4 — No reconnect / error UX on broken socket
-
-**Symptom**: If the server drops mid-session (process kill, network blip),
-`DrainNetwork` notices `IsConnected==false`, sets `_netClient=null`, and…
-the user is left staring at a frozen world replica with no error message.
-
-**Cause**: No "session lost" event surfaced to the host.
-
-**Fix**: Add a `Disconnected(reason)` event on `GameRenderer`,
-subscribed by `MainWindow` to show a dialog and route back to the menu.
-Low-priority polish; do alongside Phase 7 (when integrated SP makes
-abrupt disconnects rarer in the common case).
-
-### KI-5 — Chunk gen on demand can race with `_world.GetChunk`
-
-**Symptom**: None observed yet, but the path
-`GetChunk → null → new Chunk → TerrainGenerator.Generate →
-InstallGeneratedChunk` in `ServerHub.SendChunk` runs on the tick thread
-while the World's `_chunks` is a `ConcurrentDictionary`. Concurrent
-streams could double-generate the same chunk.
-
-**Cause**: No "chunk generation in flight" guard server-side.
-
-**Fix**: Track in-flight chunk gens in a `HashSet<(int,int)>` keyed on
-chunk coords; `SendChunk` becomes idempotent. Risk is reduced now that
-spawn pre-gen at boot fills the common-case window before any client
-connects — the on-demand path only fires when a player walks past the
-13×13 spawn ring. Still address before mass-multiplayer testing.
 
 ### KI-6 — `--connect` can't reach a private LAN host without explicit IP
 

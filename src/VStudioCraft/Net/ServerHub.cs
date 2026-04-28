@@ -327,6 +327,86 @@ namespace VStudioCraft.Net
             _hostClient.LastReportedPitch = pitch;
         }
 
+        // ---- Phase 5c: lifecycle broadcasts driven by the host -----------
+        //
+        // The host's existing _drops list lives on GameRenderer (singleplayer
+        // path). Rather than refactor every drop-spawn site to know about
+        // the network, we let GameRenderer call these helpers each tick to
+        // diff its drop list and emit the right packets. Same shape applies
+        // to projectiles (Phase 5d).
+
+        public int AllocateEntityId() => _nextEntityId++;
+
+        // Broadcast a drop spawn to every viewer whose tracked-chunks set
+        // contains the drop's cell. Skips the loopback host (no point
+        // shipping to ourselves). Adds the eid to each receiving viewer's
+        // TrackedEntities so subsequent RelMove / Despawn packets pass
+        // their existing per-viewer "are we tracking this entity?" gate.
+        public void BroadcastItemSpawn(int eid, OpenTK.Vector3 pos, OpenTK.Vector3 vel, byte itemType, byte itemCount)
+        {
+            int cx = (int)Math.Floor(pos.X / Chunk.SizeX);
+            int cz = (int)Math.Floor(pos.Z / Chunk.SizeZ);
+            for (int v = 0; v < _clients.Count; v++)
+            {
+                var viewer = _clients[v];
+                if (viewer.Session.IsDead) continue;
+                if (viewer.Session.IsLoopback) continue;
+                if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
+                if (!viewer.TrackedChunks.Contains((cx, cz))) continue;
+                viewer.TrackedEntities.Add(eid);
+                int eidCap = eid;
+                viewer.Session.Send(PacketIds.ItemSpawn, w => new ItemSpawnPacket
+                {
+                    EntityId  = eidCap,
+                    X = pos.X, Y = pos.Y, Z = pos.Z,
+                    Vx = vel.X, Vy = vel.Y, Vz = vel.Z,
+                    ItemType = itemType, ItemCount = itemCount,
+                }.Write(w));
+            }
+        }
+
+        // Despawn an entity-by-id from every viewer that tracks it. Used
+        // for drops on pickup / age-out, and for projectiles on impact.
+        // Generic enough to belong here rather than being drop-specific.
+        public void BroadcastEntityDespawn(int eid)
+        {
+            for (int v = 0; v < _clients.Count; v++)
+            {
+                var viewer = _clients[v];
+                if (viewer.Session.IsDead) continue;
+                if (viewer.Session.IsLoopback) continue;
+                if (!viewer.TrackedEntities.Remove(eid)) continue;
+                int eidCap = eid;
+                viewer.Session.Send(PacketIds.EntityDespawn, w => new EntityDespawnPacket
+                {
+                    EntityId = eidCap,
+                }.Write(w));
+            }
+        }
+
+        // Cheap relative move broadcast for entities the host is driving
+        // (drops, projectiles). Caller is responsible for tracking the
+        // last-broadcast position; we just ship the delta. Skips clients
+        // not tracking the entity (they'll get a fresh ItemSpawn / spawn
+        // packet when the entity enters their chunk window).
+        public void BroadcastEntityRelMove(int eid, float dx, float dy, float dz)
+        {
+            for (int v = 0; v < _clients.Count; v++)
+            {
+                var viewer = _clients[v];
+                if (viewer.Session.IsDead) continue;
+                if (viewer.Session.IsLoopback) continue;
+                if (!viewer.TrackedEntities.Contains(eid)) continue;
+                int eidCap = eid;
+                float dxCap = dx, dyCap = dy, dzCap = dz;
+                viewer.Session.Send(PacketIds.EntityRelMove, w => new EntityRelMovePacket
+                {
+                    EntityId = eidCap,
+                    Dx = dxCap, Dy = dyCap, Dz = dzCap,
+                }.Write(w));
+            }
+        }
+
         private void PromotePendingClients()
         {
             lock (_pendingLock)
@@ -1415,6 +1495,16 @@ namespace VStudioCraft.Net
             _world.ClearPendingBlockChanges();
         }
 
+        // KI-5 — guards on-demand chunk generation against double-work
+        // when two clients' SendChunk calls overlap on the same (cx, cz)
+        // before the first call finishes its TerrainGenerator pass.
+        // Today the tick is single-threaded so this can't actually
+        // happen, but Open-to-LAN puts hub.Tick on the render thread
+        // alongside other chunk consumers (mesh worker, SP TickPassives)
+        // and the cost of being defensive is one HashSet lookup. If a
+        // race ever surfaces in profiling, this short-circuit kicks in.
+        private readonly HashSet<(int, int)> _chunkGenInFlight = new HashSet<(int, int)>();
+
         private void SendChunk(ServerClient client, int cx, int cz)
         {
             // Make sure the chunk is generated. Server-side world starts
@@ -1425,10 +1515,28 @@ namespace VStudioCraft.Net
             var chunk = _world.GetChunk(cx, cz);
             if (chunk == null)
             {
-                chunk = new Chunk(cx, cz);
-                TerrainGenerator.Generate(chunk, _world.Noise);
-                LightCalculator.RecomputeChunk(chunk);
-                _world.InstallGeneratedChunk(chunk);
+                // Already generating elsewhere (Open-to-LAN host's job
+                // worker, or another SendChunk pending later in the
+                // same tick). Re-queue this client behind it so we
+                // don't double-generate. Cheap because PendingChunkSends
+                // is per-client and ChunkLoad is idempotent on receive.
+                if (_chunkGenInFlight.Contains((cx, cz)))
+                {
+                    client.PendingChunkSends.Enqueue((cx, cz));
+                    return;
+                }
+                _chunkGenInFlight.Add((cx, cz));
+                try
+                {
+                    chunk = new Chunk(cx, cz);
+                    TerrainGenerator.Generate(chunk, _world.Noise);
+                    LightCalculator.RecomputeChunk(chunk);
+                    _world.InstallGeneratedChunk(chunk);
+                }
+                finally
+                {
+                    _chunkGenInFlight.Remove((cx, cz));
+                }
             }
 
             // Gzip the raw block bytes. ~6 KiB per chunk typical, vs 32 KiB
