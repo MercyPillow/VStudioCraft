@@ -1,0 +1,202 @@
+# CLAUDE.md — Multiplayer feature notes
+
+This file tracks design notes, known issues, and follow-ups for the
+multiplayer (feature 50) work. Originally spawned out of the Phase 2
+implementation; updated as later phases land.
+
+The detailed plan lives in `~/.claude/plans/do-an-analysis-of-abundant-crescent.md`.
+
+## Project layout
+
+```
+src/
+  VStudioCraft/                 # VSIX extension (canonical home of Game\ + Net\)
+    Game/                       # Simulation + renderer + audio (28k LoC)
+    Net/                        # Wire protocol + sessions  (Phase 2)
+    UI/GameHostControl.xaml.cs  # WPF host with the render-thread loop
+  VStudioCraft.Standalone/      # WPF console app — links Game\ + Net\
+  VStudioCraft.Server/          # Headless dedicated server (Phase 1+)
+    Program.cs                  # 20 Hz tick loop, --selftest, --port, --seed
+    ServerHub.cs                # TcpListener + per-client state machine
+```
+
+The Server links `Game\*.cs` (with no exclusions) and `Net\*.cs`. It uses
+the WindowsDesktop SDK + `UseWindowsForms=true` so the InputState /
+BlockTextures / AudioEngine references compile — those modules are inert
+at runtime because Server.Program never instantiates GameRenderer or calls
+`AudioEngine.Initialize`.
+
+## Build commands
+
+```powershell
+# Full solution build
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" VStudioCraft.sln /t:Build /v:minimal /nologo
+
+# Just the headless server (faster iteration)
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" src\VStudioCraft.Server\VStudioCraft.Server.csproj /t:Build /v:minimal /nologo
+
+# Server smoke test (loopback handshake + 5 chunks)
+src\VStudioCraft.Server\bin\Debug\net472\VStudioCraft.Server.exe --selftest
+```
+
+## End-to-end multiplayer demo
+
+```powershell
+# Terminal 1 — dedicated server
+src\VStudioCraft.Server\bin\Debug\net472\VStudioCraft.Server.exe --seed=4242
+
+# Terminal 2 — Standalone client
+src\VStudioCraft.Standalone\bin\Debug\net472\VStudioCraft.Standalone.exe --connect localhost:25566:tester
+```
+
+`--connect` accepts `host`, `host:port`, or `host:port:username`. Port
+defaults to 25566 (one above Notch's 25565); username defaults to
+`$env:USERNAME`.
+
+## Phase status
+
+- [x] **Phase 1** — Server project + headless World boot at 20 Hz
+- [x] **Phase 2a** — Codec + 6 packets (KeepAlive, LoginRequest/Response, Disconnect, PlayerPosLook, ChunkLoad)
+- [x] **Phase 2b** — TcpListener + NetSession + login handshake + chunk burst
+- [x] **Phase 2c** — Client-side NetClient + GameRenderer net-driven mode
+- [ ] **Phase 3** — Funnel block mutations through `World.SetBlock`; dig/place/use intent packets; `BlockChange` broadcast
+- [ ] **Phase 4** — Entity replication (spawn/despawn/move/look) + remote-player render with 100 ms render-behind interp
+- [ ] **Phase 5** — Mob/drop/projectile replication
+- [ ] **Phase 6** — Inventory click protocol + server-side recipes + tile-entity sync
+- [ ] **Phase 7** — Integrated server for SP (in-process loopback)
+- [ ] **Phase 8** — Persistence v10 (per-username state) + admin console + autosave
+
+## Known issues / follow-ups
+
+### KI-1 — Tick lag spike on first connect
+
+**Symptom**: When the first client joins a fresh server, the server logs
+`Tick lag 1021 ms — resetting pacer.` immediately after, and `sim_max`
+spikes to ~120 ms for two ticks.
+
+**Cause**: Server boots with only the InitialRadiusChunks (5×5 = 25)
+chunks generated. A new client needs the 13×13 spawn-view-radius window
+(169 chunks). The 144 missing chunks are generated on-demand inside
+`ServerHub.SendChunk` via `TerrainGenerator.Generate +
+LightCalculator.RecomputeChunk`, which is ~10–20 ms per chunk. Combined
+with the 5-chunks-per-tick send pace, the first ~10 ticks each pay the
+full per-chunk gen cost.
+
+**Fix options**:
+1. Pre-generate the spawn 13×13 ring at server boot (during `World
+   .Generate`). Adds ~1.5 s to startup, removes the join spike entirely.
+2. Move chunk gen onto a worker thread (mirror the client's
+   `ChunkJobSystem`). Sends start delayed by ~50 ms but tick stays at
+   20 Hz throughout.
+
+**Ranking**: option 1 is simpler and the right choice for now — startup
+time is one-shot, join lag affects every player.
+
+**When to do it**: Phase 3 (touching server-side world streaming anyway)
+or as a small PR before Phase 4. Not blocking.
+
+### KI-2 — Server doesn't simulate the player yet
+
+**Symptom**: Client sends `PlayerPosLook` 20 times per second; server
+records "last reported pos" for telemetry but doesn't run physics, doesn't
+follow the player with chunk-window streaming, doesn't detect
+collisions/falls/damage.
+
+**Cause**: Phase 2 scope. `ServerClient` has `LastReportedX/Y/Z` fields
+but no actual `Player` entity in `World.Players`.
+
+**Fix**: Phase 3 introduces a server-side `Player` entity per
+`ServerClient`. Position is updated from inbound `PlayerPosLook`; chunk
+window slides per-player; broadcasts to other clients (Phase 4).
+
+### KI-3 — TryBreak/TryPlace/TryInteract are no-ops in net-driven mode
+
+**Symptom**: Connect to a server, click any block — nothing happens.
+
+**Cause**: Phase 2c stub. The handlers `return false` early when
+`_netClient != null` so the client doesn't desync by mutating local
+world state behind the server's back.
+
+**Fix**: Phase 3 turns each into an outbound intent packet
+(`PlayerDigStart`, `PlayerPlace`, `PlayerUseItem`); server applies the
+mutation, broadcasts `BlockChange`, client applies via inbound dispatch.
+
+### KI-4 — No reconnect / error UX on broken socket
+
+**Symptom**: If the server drops mid-session (process kill, network blip),
+`DrainNetwork` notices `IsConnected==false`, sets `_netClient=null`, and…
+the user is left staring at a frozen world replica with no error message.
+
+**Cause**: No "session lost" event surfaced to the host.
+
+**Fix**: Add a `Disconnected(reason)` event on `GameRenderer`,
+subscribed by `MainWindow` to show a dialog and route back to the menu.
+Low-priority polish; do alongside Phase 7 (when integrated SP makes
+abrupt disconnects rarer in the common case).
+
+### KI-5 — Chunk gen on demand can race with `_world.GetChunk`
+
+**Symptom**: None observed yet, but the path
+`GetChunk → null → new Chunk → TerrainGenerator.Generate →
+InstallGeneratedChunk` in `ServerHub.SendChunk` runs on the tick thread
+while the World's `_chunks` is a `ConcurrentDictionary`. Concurrent
+streams could double-generate the same chunk.
+
+**Cause**: No "chunk generation in flight" guard server-side.
+
+**Fix**: Track in-flight chunk gens in a `HashSet<(int,int)>` keyed on
+chunk coords; `SendChunk` becomes idempotent. Folds naturally into
+KI-1's worker-thread fix if we go that route. Address before Phase 4
+when multiple clients stream concurrently.
+
+### KI-6 — `--connect` can't reach a private LAN host without explicit IP
+
+**Symptom**: `--connect localhost` works; `--connect ServerMachine`
+might not depending on local DNS / hosts file.
+
+**Cause**: `TcpClient.BeginConnect(string, int, ...)` uses standard
+hostname resolution; this isn't actually a bug, just a docs/ux note for
+when we add a proper "Connect to Server" dialog in Phase 7+.
+
+**Fix**: Document. Eventually: an IP-or-hostname text field with format
+hints in the connect dialog.
+
+## Architectural notes worth preserving
+
+### Why one canonical `Net\` source instead of a `VStudioCraft.Net` assembly
+
+The codebase already uses the "canonical-in-VSIX-project, linked-everywhere"
+idiom for `Game\*.cs`. Replicating it for `Net\*.cs` keeps the build graph
+flat — three consumers (Server, Standalone, VSIX), zero project references
+between source-shared assemblies, no version-skew risk between Net and
+the Game types it doesn't actually reference. If we ever want to ship Net
+separately (e.g. third-party server tooling), promoting the folder to a
+csproj is a 10-minute change.
+
+### Why server-authoritative with no client prediction
+
+Per the user's choice when scoping the feature: matches Alpha 1.1.2
+behaviour, simplest correct option, easiest to reason about. The downside
+(block edits feel laggy on high ping) is acceptable for a hobby project
+where most play is loopback or LAN. Phase 4 adds entity interp so other
+players' movement looks smooth despite this; the local player's own
+movement runs predictively (camera tracks input directly) but position
+authority still lives server-side.
+
+### Why big-endian wire format despite no Alpha-client compat
+
+Hex-dumped packet bytes read in the same order as the C# field
+declarations, which makes handshake bugs trivial to spot by eye in
+Wireshark. Costs ~0 perf on x86/x64 (one `bswap` per primitive). The
+Alpha-shape table at the top of the multiplayer plan reads directly as
+the `PacketIds` source.
+
+### Why `internal` types crossing the Net/Game/Server boundary work
+
+All three projects compile the canonical `Game\*.cs` and `Net\*.cs`
+sources directly into their own assembly via `<Compile Include>` (with
+`<Link>` for path display). There's no inter-assembly reference, so
+`internal` access from `ServerHub` to `World` works as in-assembly
+internal access. If we ever do split into separate assemblies, we'd
+either need `[InternalsVisibleTo]` or to widen specific surfaces to
+`public`.

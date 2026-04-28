@@ -576,6 +576,27 @@ void main()
         private SkyRenderer _sky;
         private World _world;
         private ChunkJobSystem _jobs;
+
+        // Multiplayer client handle. Non-null when this renderer is driving
+        // a connection to a dedicated server (Phase 2c+); null when the
+        // renderer owns its own World via StartNewWorld / LoadFromFile.
+        // Net-driven mode short-circuits server-authoritative work:
+        //   - World mob/fluid/crop ticks (server runs them; client would
+        //     drift)
+        //   - TryBreak / TryPlace direct mutations (Phase 3 turns these
+        //     into outbound packets; for Phase 2c they're no-ops)
+        // and adds per-frame:
+        //   - draining inbound packets (chunks now, entities later)
+        //   - throttled PlayerPosLook upstream
+        //   - keepalive
+        private VStudioCraft.Net.NetClient _netClient;
+        public bool IsNetClient => _netClient != null;
+        // Throttle for the upstream PlayerPosLook stream. Client position
+        // ships at 20 Hz (matching server tick) regardless of frame rate;
+        // sending one per render frame at 1500 fps would drown the wire
+        // and the server's input queue.
+        private float _posLookSendTimer;
+        private const float PosLookSendInterval = 0.05f; // 20 Hz
         private readonly Dictionary<(int x, int z), Mesh> _chunkMeshes = new Dictionary<(int x, int z), Mesh>();
         private bool _initialized;
 
@@ -923,8 +944,215 @@ void main()
             return m;
         }
 
+        // Phase 2c — connect to a dedicated server. Performs the synchronous
+        // login handshake (so a connect-failure surfaces as a thrown
+        // exception the host can catch and show in a dialog), then swaps
+        // the renderer's World for an empty client-side replica seeded
+        // from the server's response. Chunks then arrive over time via
+        // ChunkLoad packets drained inside DrainNetwork.
+        //
+        // After this call the renderer is in net-driven mode: IsNetClient
+        // is true, server-authoritative ticks (mob spawn, fluid spread,
+        // crop random tick) skip on the host's side, and dig/place
+        // intents become outbound packets in Phase 3.
+        public void ConnectToServer(string host, int port, string username)
+        {
+            // Drop any prior session before we open a new one — otherwise
+            // a "Connect" press while still connected leaks the old socket.
+            _netClient?.Disconnect("reconnecting");
+            _netClient = null;
+
+            var client = VStudioCraft.Net.NetClient.Connect(host, port, username);
+            var lr = client.LoginResponse;
+
+            SetWorld(World.CreateEmpty(lr.Seed));
+            _netClient = client;
+
+            // Pre-position camera at the server-supplied spawn so the
+            // first frame has somewhere sensible to render from while
+            // chunks stream in. ChunkLoad packets fill the visual gap
+            // over the next handful of ticks.
+            Player.Position = new Vector3(lr.SpawnX + 0.5f, lr.SpawnY, lr.SpawnZ + 0.5f);
+            Player.Velocity = Vector3.Zero;
+            Player.OnGround = false;
+            Player.HealFull();
+            Player.Riding = null;
+            _spawnPos = Player.Position;
+            _voidTimer = 0f;
+            _wasSubmergedPrev = false;
+            _stepDistance = 0f;
+            _stepUnderfoot = BlockType.Air;
+            Camera.Yaw = 0f;
+            Camera.Pitch = -0.1f;
+            // Server's authoritative GameMode wins over whatever the
+            // local renderer was last set to. Cast is safe — the server
+            // emits a value from the same enum (we share Game\GameMode.cs).
+            GameMode = (GameMode)lr.GameMode;
+            SyncCameraToPlayer();
+
+            // Reset the upstream PlayerPosLook throttle so the very first
+            // frame after connect emits a snapshot promptly (server uses
+            // it to confirm the spawn position before view tracking).
+            _posLookSendTimer = PosLookSendInterval;
+        }
+
+        // Disconnect from a multiplayer server, tearing down the socket
+        // and dropping the world replica. Caller is responsible for the
+        // next state (return to menu, start a new SP world, etc).
+        public void DisconnectFromServer(string reason)
+        {
+            if (_netClient == null) return;
+            _netClient.Disconnect(reason);
+            _netClient = null;
+        }
+
+        // Per-frame multiplayer pump. Called by the host's render loop
+        // BEFORE world simulation so any inbound state updates (chunks,
+        // future block changes, future entity moves) are visible to the
+        // frame's input handling. No-op if not net-driven.
+        //
+        // Three responsibilities:
+        //   1. Drain inbound packet queue, applying each by switching on
+        //      its packet ID. Phase 2 handles ChunkLoad and KeepAlive;
+        //      later phases extend the switch.
+        //   2. Throttled outbound PlayerPosLook (~20 Hz) so the server
+        //      can keep its view of this client's chunk window current.
+        //   3. Application keepalive — if no other outbound packet has
+        //      shipped recently, send a bare KeepAlive so a half-open
+        //      socket gets surfaced via TCP RST inside seconds rather
+        //      than the OS keepalive's default ~2 hours.
+        public void DrainNetwork(float dt)
+        {
+            if (_netClient == null) return;
+
+            if (!_netClient.IsConnected)
+            {
+                // The session died (peer hangup, IO error, protocol
+                // violation). Surface it as a clean disconnect on our
+                // side so subsequent frames see IsNetClient==false and
+                // stop trying to send. The host UI will eventually
+                // notice and route the user back to the menu — Phase 3
+                // wires that error-surface event.
+                _netClient = null;
+                return;
+            }
+
+            while (_netClient.TryDequeue(out var pkt))
+            {
+                ApplyInboundPacket(pkt);
+            }
+
+            _netClient.MaybeSendKeepAlive();
+
+            // Throttle player pos broadcast. Reset to interval rather
+            // than to zero so the FIRST emission after a connect is
+            // immediate (see ConnectToServer where we prime the timer).
+            _posLookSendTimer += dt;
+            if (_posLookSendTimer >= PosLookSendInterval)
+            {
+                _posLookSendTimer = 0f;
+                _netClient.SendPosLook(
+                    Player.Position.X, Player.Position.Y, Player.Position.Z,
+                    Camera.Yaw, Camera.Pitch,
+                    Player.OnGround);
+            }
+        }
+
+        private void ApplyInboundPacket(VStudioCraft.Net.InboundPacket pkt)
+        {
+            switch (pkt.Id)
+            {
+                case VStudioCraft.Net.PacketIds.KeepAlive:
+                    // Server's heartbeat — nothing to apply, but a polite
+                    // peer would echo. Our MaybeSendKeepAlive already
+                    // sends our own on a timer, so we don't double up.
+                    break;
+
+                case VStudioCraft.Net.PacketIds.ChunkLoad:
+                    ApplyChunkLoad(pkt.ChunkLoad);
+                    break;
+
+                case VStudioCraft.Net.PacketIds.Disconnect:
+                    // Server-initiated hangup. Tear our side down so the
+                    // next DrainNetwork sees IsNetClient false and stops
+                    // touching the dead session.
+                    DisconnectFromServer($"server: {pkt.Disconnect.Reason}");
+                    break;
+
+                // Phases 3+ add: BlockChange, MultiBlockChange, ChunkUnload,
+                // EntitySpawn, EntityRelMove, EntityLook, EntityRelMoveLook,
+                // EntityTeleport, EntityDespawn, EntityHealth, OpenWindow,
+                // InventoryUpdate, TileEntityData, PlayerPosLookCorrect.
+                default:
+                    // Unknown / not-yet-handled packet — silently drop.
+                    // NetSession.ReadLoop already rejects truly unknown IDs
+                    // at parse time, so reaching here means a forward-
+                    // compat ID we just don't have handling for yet.
+                    break;
+            }
+        }
+
+        private void ApplyChunkLoad(VStudioCraft.Net.ChunkLoadPacket pkt)
+        {
+            if (_world == null) return;
+
+            // Decompress the gzipped block payload back to a 32 KiB raw
+            // byte array. We don't trust the wire-side size to match
+            // exactly, but we do require the post-decompression length
+            // equals the chunk's expected block count — anything else
+            // means a corrupt or hostile packet, and we drop it without
+            // installing.
+            const int expected = Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ;
+            var raw = new byte[expected];
+            int read = 0;
+            try
+            {
+                using (var ms = new System.IO.MemoryStream(pkt.CompressedBlocks))
+                using (var gz = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionMode.Decompress))
+                {
+                    int n;
+                    while (read < expected && (n = gz.Read(raw, read, expected - read)) > 0) read += n;
+                }
+            }
+            catch
+            {
+                // Bad gzip stream — drop the chunk. The renderer logs
+                // nothing here because it can be hit from a perfectly
+                // benign mid-flight disconnect (peer half-closes during
+                // payload transmission); the user-visible signal is the
+                // missing chunk in the world, which the server will
+                // re-send on the next sync pass once we're Phase 3+.
+                return;
+            }
+            if (read != expected) return;
+
+            var chunk = new Chunk(pkt.ChunkX, pkt.ChunkZ);
+            // Fully qualify — GameRenderer imports both OpenTK.Graphics.OpenGL
+            // (which has its own `Buffer` enum-ish type) and System, so an
+            // unqualified `Buffer.BlockCopy` is CS0104 ambiguous.
+            System.Buffer.BlockCopy(raw, 0, chunk.RawBlocks, 0, expected);
+
+            // Light is recomputed locally — see Net\Packets.cs comment on
+            // ChunkLoadPacket for why we don't ship light over the wire.
+            // Sub-millisecond per chunk; happens once per chunk as it
+            // arrives, never re-runs unless the chunk is replaced.
+            LightCalculator.RecomputeChunk(chunk);
+
+            // InstallGeneratedChunk returns false if the slot already
+            // holds a chunk (e.g. after a reconnect that re-streams the
+            // window we already have). For Phase 2 that's a benign
+            // "ignore"; Phase 3 will add an UnloadChunk + Install path
+            // for legitimate authoritative chunk replacement.
+            _world.InstallGeneratedChunk(chunk);
+        }
+
         public void StartNewWorld(int seed)
         {
+            // Make sure any active multiplayer session is torn down before
+            // we replace the world — otherwise the renderer would have
+            // both a live socket AND a freshly-generated SP world fighting
+            // for the same World reference.
+            DisconnectFromServer("starting new singleplayer world");
             SetWorld(World.Generate(seed));
             // Spawn above origin chunk; gravity drops player onto terrain on the first ticks.
             int spawnY = TerrainGenerator.BaseHeight + TerrainGenerator.HeightAmplitude + 2;
@@ -949,6 +1177,9 @@ void main()
 
         public void LoadFromFile(string path)
         {
+            // Same rationale as StartNewWorld — clear the multiplayer
+            // socket before we swap the World out from under it.
+            DisconnectFromServer("loading singleplayer world");
             var (header, world) = WorldSaveFormat.Load(path);
             SetWorld(world);
             // header.CameraPos is now the saved player feet position (format v2).
@@ -1601,6 +1832,12 @@ void main()
         public bool TryBreak()
         {
             if (_world == null) return false;
+            // Phase 2c — net-driven mode: a real implementation will land
+            // in Phase 3 as a PlayerDigStart/Stop intent packet round-trip
+            // (server simulates the break, sends BlockChange back). For
+            // now, swallow the click so the client doesn't desync the
+            // world by mutating local state behind the server's back.
+            if (_netClient != null) return false;
             // Swing the arm even if the click misses — matches Alpha 1.1.2
             // where every LMB tap animates the held tool/hand regardless
             // of whether anything was hit. Click-and-hold cycles get a
@@ -1976,6 +2213,11 @@ void main()
         public bool TryInteract()
         {
             if (_world == null) return false;
+            // Phase 2c — net-driven mode: RMB interactions (door toggle,
+            // chest open, snowball throw, etc.) become PlayerUseItem /
+            // PlayerPlace intent packets in Phase 3. Swallowed here so
+            // they don't mutate the local replica.
+            if (_netClient != null) return false;
 
             // Tier 4 #20 — Snowball / Egg throw runs BEFORE the raycast
             // gate. Throws fire into open air (over a cliff, into the
@@ -2649,6 +2891,10 @@ void main()
         public bool TryPlace(BlockType t)
         {
             if (_world == null) return false;
+            // Phase 2c — same rationale as TryBreak. Phase 3 turns this
+            // into a PlayerPlace intent packet; for now swallow it so the
+            // local replica stays in sync with the server.
+            if (_netClient != null) return false;
             // Tools and items can't be placed — RMB on either is a
             // no-op. Guard runs before the survival check so creative-
             // mode RMB on a tool / stick / ingot also does nothing
@@ -4799,6 +5045,24 @@ void main()
                     if (shift)            inv.HandleShiftClickSlot(hotSlot);
                     else if (button == 2) inv.HandleRightClickSlot(hotSlot);
                     else                  inv.HandleLeftClickSlot(hotSlot);
+                    return;
+                }
+
+                // Tier 4 #19 — Armor column is a real slot in creative
+                // too: the player still needs to equip pieces grabbed
+                // from the catalog into the four armor slots. Without
+                // this pass the slots looked dead in creative mode (the
+                // click fell through to the cursor-toss branch). The
+                // per-slot type gate inside HandleLeftClickSlot /
+                // HandleRightClickSlot still rejects mismatched pieces,
+                // so a Diamond Helmet in cursor + click on Boots slot
+                // is a no-op exactly as it is in survival.
+                int armorSlot = InventoryScreen.HitTestArmor(screenW, screenH, mx, my, /*creative*/true);
+                if (armorSlot >= 0)
+                {
+                    if (shift)            inv.HandleShiftClickSlot(armorSlot);
+                    else if (button == 2) inv.HandleRightClickSlot(armorSlot);
+                    else                  inv.HandleLeftClickSlot(armorSlot);
                     return;
                 }
 

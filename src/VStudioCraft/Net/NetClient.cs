@@ -1,0 +1,186 @@
+using System;
+using System.Net.Sockets;
+using System.Threading;
+
+namespace VStudioCraft.Net
+{
+    // Client-side network handle. Wraps a NetSession and adds the
+    // login-handshake helper that GameRenderer.ConnectToServer drives:
+    // synchronous Connect + handshake (so the caller can early-fail with
+    // a friendly message), then transitions to async streaming where
+    // the render loop drains inbound packets once per frame.
+    //
+    // This is intentionally NOT a peer to NetSession + ServerHub on the
+    // client side. NetSession already does the read/write threading; the
+    // client only needs:
+    //   - Connect / handshake glue that returns the LoginResponse
+    //   - Per-frame TryDequeueInbound for the renderer to drain
+    //   - Convenience Send wrappers for the handful of outbound packets
+    //     the client cares about (PlayerPosLook, KeepAlive, Disconnect)
+    //
+    // Lifetimes: created by GameRenderer.ConnectToServer on the render
+    // thread, owned by GameRenderer until either the user disconnects or
+    // the underlying session dies. On Dispose / disconnect the underlying
+    // socket is closed which terminates the read thread; we don't bother
+    // joining it (background thread, host process is the owner of last
+    // resort).
+    internal sealed class NetClient : IDisposable
+    {
+        private readonly TcpClient _tcp;
+        private readonly NetSession _session;
+        private LoginResponsePacket _loginResponse;
+        private bool _loggedIn;
+        private DateTime _lastKeepAliveSent = DateTime.UtcNow;
+
+        // Application keepalive interval, mirrors ServerHub. Below the
+        // ~30 s NAT idle cutoff, well above the per-frame cadence — one
+        // packet every ~10 s is essentially free bandwidth.
+        private static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(10);
+
+        public NetSession Session => _session;
+        public LoginResponsePacket LoginResponse => _loginResponse;
+        public bool IsConnected => !_session.IsDead;
+        public string DisconnectReason => _session.DeadReason;
+
+        private NetClient(TcpClient tcp, NetSession session)
+        {
+            _tcp = tcp;
+            _session = session;
+        }
+
+        // Synchronous connect-and-handshake. Returns a ready-to-use
+        // NetClient with .LoginResponse populated, or throws on failure
+        // (connection refused, protocol mismatch, server-side reject).
+        // Phase 7 will wire a non-blocking variant for the integrated
+        // server path; today's blocking call is fine because the
+        // standalone Connect button can show a "Connecting…" spinner
+        // and tolerate a few hundred ms.
+        public static NetClient Connect(string host, int port, string username, TimeSpan? timeout = null)
+        {
+            if (string.IsNullOrEmpty(host)) throw new ArgumentException("host required", nameof(host));
+            if (string.IsNullOrEmpty(username)) throw new ArgumentException("username required", nameof(username));
+
+            var tcp = new TcpClient();
+            try
+            {
+                // Async connect with timeout. TcpClient.Connect's default
+                // timeout is OS-dependent (often 20+ seconds), which is
+                // far too long for a live UI. 5 s is enough to cover
+                // realistic wide-area connect time without leaving the
+                // user staring at a frozen menu.
+                var to = timeout ?? TimeSpan.FromSeconds(5);
+                var ar = tcp.BeginConnect(host, port, null, null);
+                if (!ar.AsyncWaitHandle.WaitOne(to, exitContext: false))
+                {
+                    try { tcp.Close(); } catch { /* ignored */ }
+                    throw new TimeoutException($"timed out connecting to {host}:{port}");
+                }
+                tcp.EndConnect(ar);
+            }
+            catch
+            {
+                try { tcp.Close(); } catch { /* ignored */ }
+                throw;
+            }
+
+            var session = new NetSession(tcp) { Label = $"{host}:{port}" };
+            session.Start();
+            var client = new NetClient(tcp, session);
+            client.PerformHandshake(username);
+            return client;
+        }
+
+        private void PerformHandshake(string username)
+        {
+            // Send LoginRequest. The server replies with LoginResponse OR
+            // Disconnect. We block here on the read thread's queue with a
+            // short deadline because the rest of the client code assumes
+            // .LoginResponse is populated by the time Connect returns.
+            _session.Send(PacketIds.LoginRequest, w => new LoginRequestPacket
+            {
+                ProtocolVersion = PacketIds.ProtocolVersion,
+                Username        = username,
+            }.Write(w));
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (_session.IsDead)
+                    throw new InvalidOperationException($"server hung up during handshake: {_session.DeadReason}");
+
+                if (_session.TryDequeueInbound(out var pkt))
+                {
+                    switch (pkt.Id)
+                    {
+                        case PacketIds.LoginResponse:
+                            _loginResponse = pkt.LoginResponse;
+                            _loggedIn = true;
+                            return;
+                        case PacketIds.Disconnect:
+                            throw new InvalidOperationException($"server rejected login: {pkt.Disconnect.Reason}");
+                        case PacketIds.KeepAlive:
+                            // Some servers send keepalives during the
+                            // login window; absorb and keep waiting.
+                            continue;
+                        default:
+                            throw new InvalidOperationException($"unexpected packet 0x{pkt.Id:X2} during handshake (expected LoginResponse)");
+                    }
+                }
+                Thread.Sleep(5); // tiny yield; the read thread fills the queue
+            }
+
+            // Tear the session down before throwing — otherwise the
+            // half-open socket leaks until GC.
+            _session.Disconnect("handshake timeout");
+            throw new TimeoutException("server didn't reply with LoginResponse within 5 s");
+        }
+
+        // Per-frame drain. The renderer calls this each frame; each call
+        // pops one packet (returns false when queue is empty) so the
+        // caller can interleave with rendering / input on the same thread
+        // without ever blocking. Packets are returned by value so the
+        // queue's struct semantics keep this allocation-free.
+        public bool TryDequeue(out InboundPacket packet) => _session.TryDequeueInbound(out packet);
+
+        // Periodic outbound. Called every render-frame by GameRenderer;
+        // sends only when the gap exceeds KeepAliveInterval so the wire
+        // doesn't fill with spam. Mirrors ServerHub's own keepalive loop.
+        public void MaybeSendKeepAlive()
+        {
+            if (!_loggedIn) return;
+            if (DateTime.UtcNow - _lastKeepAliveSent < KeepAliveInterval) return;
+            _session.Send(PacketIds.KeepAlive);
+            _lastKeepAliveSent = DateTime.UtcNow;
+        }
+
+        // Send the local player's position+look upstream. GameRenderer
+        // throttles this to ~20 Hz (matching the server tick) — sending
+        // every render frame at 1500 fps would drown the wire and the
+        // server's input queue.
+        public void SendPosLook(double x, double y, double z, float yaw, float pitch, bool onGround)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.PlayerPosLook, w => new PlayerPosLookPacket
+            {
+                X = x, Y = y, Z = z,
+                Yaw = yaw, Pitch = pitch,
+                OnGround = onGround,
+            }.Write(w));
+        }
+
+        public void Disconnect(string reason)
+        {
+            // Best-effort orderly hangup so the server logs a clean exit
+            // before the socket actually closes. If the session is
+            // already dead, Send is a no-op.
+            _session.Send(PacketIds.Disconnect, w => new DisconnectPacket { Reason = reason ?? "" }.Write(w));
+            _session.Disconnect(reason ?? "client disconnect");
+        }
+
+        public void Dispose()
+        {
+            _session.Disconnect("client disposed");
+            try { _tcp.Close(); } catch { /* ignored */ }
+        }
+    }
+}

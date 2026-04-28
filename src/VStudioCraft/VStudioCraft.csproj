@@ -136,6 +136,19 @@
       <DependentUpon>GameHostControl.xaml</DependentUpon>
     </Compile>
     <Compile Include="VStudioCraftPackage.cs" />
+    <!-- Network protocol sources. Phase 2 of the multiplayer feature lives
+         here; both the standalone client and the dedicated server link
+         these same files via <Link> so the wire format has exactly one
+         canonical implementation. The VSIX project itself doesn't ship
+         networking yet (no "Connect" UI inside Visual Studio) but compiles
+         the sources so GameRenderer can reference NetClient unconditionally
+         without conditional compilation. -->
+    <Compile Include="Net\NetClient.cs" />
+    <Compile Include="Net\NetSession.cs" />
+    <Compile Include="Net\PacketIds.cs" />
+    <Compile Include="Net\PacketReader.cs" />
+    <Compile Include="Net\Packets.cs" />
+    <Compile Include="Net\PacketWriter.cs" />
   </ItemGroup>
   <ItemGroup>
     <Page Include="UI\GameHostControl.xaml">

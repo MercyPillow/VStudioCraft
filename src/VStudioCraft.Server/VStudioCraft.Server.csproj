@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>VStudioCraft.Server</RootNamespace>
+    <AssemblyName>VStudioCraft.Server</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Prefer32Bit>false</Prefer32Bit>
+    <!-- WindowsDesktop SDK is the same one Standalone uses. We're a console
+         app (OutputType=Exe), but we need UseWindowsForms because InputState.cs
+         in Game\ depends on System.Windows.Forms.Keys. The form types are
+         never actually instantiated server-side; the reference just lets
+         the file COMPILE so we can keep one canonical Game\ source tree
+         shared with the VSIX and Standalone projects.
+         Same story for System.Drawing (used by BlockTextures.cs for atlas
+         construction) — it's a transitive reference brought in by
+         UseWindowsForms / WindowsDesktop, so we don't need to add it
+         explicitly. -->
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OpenTK 3.3.3 bundles OpenTK.Graphics, OpenTK.Audio, OpenTK.Input.
+         The Game\ files import all three; the server never actually creates
+         a GL context, an OpenAL context, or a real audio source — those
+         only initialise inside GameRenderer.Init / AudioEngine.Initialize,
+         which Program.cs never calls. -->
+    <PackageReference Include="OpenTK" Version="3.3.3" />
+    <PackageReference Include="OpenTK.GLControl" Version="3.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Link the simulation sources from the VSIX project. Same <Link>
+         pattern Standalone uses (see VStudioCraft.Standalone.csproj line 24)
+         so there's exactly one canonical copy of every Game\*.cs file.
+         The renderer / audio / input files come along for the ride; they
+         compile fine because OpenTK + WinForms references are present, and
+         they're inert at runtime because nothing in Program.cs touches
+         GameRenderer / GameHostControl / AudioEngine. -->
+    <Compile Include="..\VStudioCraft\Game\*.cs">
+      <Link>Game\%(Filename)%(Extension)</Link>
+    </Compile>
+
+    <!-- Network protocol sources. Canonical home is the VSIX project's Net\
+         folder so all three consumers (Server, Standalone, VSIX) share one
+         copy. Same <Link> idiom as Game\ above. -->
+    <Compile Include="..\VStudioCraft\Net\*.cs">
+      <Link>Net\%(Filename)%(Extension)</Link>
+    </Compile>
+  </ItemGroup>
+
+</Project>

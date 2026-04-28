@@ -89,6 +89,15 @@ namespace VStudioCraft.Game
             _noise = new Noise(seed);
         }
 
+        // Construct a World with no chunks. Used by the multiplayer client
+        // path: after handshake the client knows the seed but has no terrain
+        // until ChunkLoad packets arrive. Same Noise initialisation as
+        // Generate(seed) so any client-side code that consults World.Noise
+        // (currently the visible-bedrock checker) gives the same answers
+        // the server's noise gives. The list of chunks stays empty until
+        // ApplyChunkLoad starts installing replicated chunks.
+        public static World CreateEmpty(int seed) => new World(seed);
+
         public static World Generate(int seed)
         {
             var w = new World(seed);

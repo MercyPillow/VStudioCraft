@@ -353,6 +353,25 @@ namespace VStudioCraft.Game
             return -1;
         }
 
+        // Tier 4 #19 — Hit-test the armor column. Returns the absolute
+        // slot index in Inventory.Slots (ArmorStart..ArmorStart+ArmorCount-1)
+        // or -1 if (mx,my) isn't on an armor cell. Used by the creative
+        // click router so the player can equip armor in the GUI without
+        // dropping into survival mode — without this pass the four armor
+        // slots fell through to the "outside everything" cursor-toss
+        // branch and looked broken.
+        public static int HitTestArmor(int screenW, int screenH, int mx, int my, bool creative)
+        {
+            int armorStart = MainSlotCount + HotbarSlotCount;
+            int armorEnd   = armorStart + ArmorSlotCount;
+            for (int i = armorStart; i < armorEnd; i++)
+            {
+                GetSlotRect(i, screenW, screenH, creative, out int sx, out int sy, out int sw, out int sh);
+                if (mx >= sx && mx < sx + sw && my >= sy && my < sy + sh) return i;
+            }
+            return -1;
+        }
+
         // Hit-test the search bar (returns true if (mx,my) is inside it).
         public static bool HitTestSearchBar(int screenW, int screenH, int mx, int my)
         {

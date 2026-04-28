@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VStudioCraft", "src\VStudio
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VStudioCraft.Standalone", "src\VStudioCraft.Standalone\VStudioCraft.Standalone.csproj", "{B1D2E3F4-4321-6789-ABCD-EF0123456789}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VStudioCraft.Server", "src\VStudioCraft.Server\VStudioCraft.Server.csproj", "{C2E3F4A5-1234-5678-9ABC-DEF012345678}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{B1E686B0-286F-4B68-BDE0-5132638BE740}"
 	ProjectSection(SolutionItems) = preProject
 		features.md = features.md
@@ -25,6 +27,10 @@ Global
 		{B1D2E3F4-4321-6789-ABCD-EF0123456789}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B1D2E3F4-4321-6789-ABCD-EF0123456789}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B1D2E3F4-4321-6789-ABCD-EF0123456789}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C2E3F4A5-1234-5678-9ABC-DEF012345678}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C2E3F4A5-1234-5678-9ABC-DEF012345678}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C2E3F4A5-1234-5678-9ABC-DEF012345678}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C2E3F4A5-1234-5678-9ABC-DEF012345678}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

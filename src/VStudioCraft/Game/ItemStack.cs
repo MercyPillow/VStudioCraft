@@ -67,6 +67,22 @@ namespace VStudioCraft.Game
         public static int MaxStackSizeFor(BlockType type)
         {
             if (BlockData.IsTool(type)) return 1;
+            // Armor never stacks — same Alpha rule as tools (one piece
+            // per slot so partially-damaged pieces stay distinct, and
+            // the four equipped slots only ever hold one anyway).
+            // BlockData.IsArmor covers the 20-id armor slice
+            // (LeatherHelmet..GoldBoots) introduced in Tier 4 #19.
+            if (BlockData.IsArmor(type)) return 1;
+            // Tier 3 #10 — Bow is a hostile-mob-drop weapon, not a
+            // tool (it lives in the item id range past Egg, not in
+            // the [WoodSword..GoldAxe] tool slice IsTool checks), so
+            // it doesn't pick up the unstackable rule from IsTool.
+            // Pin it to 1 explicitly — Alpha 1.1.2_01 caps bows at
+            // one-per-slot the same way tools are capped (the bow
+            // carries its own draw-charge state when used, and even
+            // without that, two bows never sat in the same Alpha
+            // slot). Arrows stay at 64.
+            if (type == BlockType.Bow) return 1;
             // Tier 4 #20 — Snowball stacks to 16 in Alpha 1.1.2_01
             // (vs the default 64). Eggs also cap at 16 in canonical
             // Alpha — included here so the stack-cap surface stays

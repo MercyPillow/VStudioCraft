@@ -25,6 +25,13 @@
       <Link>Game\%(Filename)%(Extension)</Link>
     </Compile>
 
+    <!-- Network protocol sources. Same canonical-in-VSIX-project, linked-
+         everywhere idiom as Game\ above. Standalone needs Net\ so the
+         "Connect to Server" menu path can construct a NetClient. -->
+    <Compile Include="..\VStudioCraft\Net\*.cs">
+      <Link>Net\%(Filename)%(Extension)</Link>
+    </Compile>
+
     <!-- GL viewport user control: XAML + code-behind, also linked. -->
     <Page Include="..\VStudioCraft\UI\GameHostControl.xaml">
       <Generator>MSBuild:Compile</Generator>

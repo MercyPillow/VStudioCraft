@@ -163,6 +163,61 @@ namespace VStudioCraft.UI
             });
         }
 
+        // Phase 2c — connect the host to a dedicated VStudioCraft server.
+        // Mirrors StartNewWorld / LoadFromFile: the connect (which blocks
+        // for the login handshake — typically <100 ms on loopback, up to
+        // 5 s on WAN) is enqueued onto the render thread so it doesn't
+        // race with GL setup or contend for the World reference.
+        //
+        // The host caller — Standalone's "Connect" menu item, the VS
+        // extension's future remote-world action — is responsible for
+        // showing a "Connecting…" UI and reacting to the optional
+        // ConnectFailed event we raise on the UI thread when the
+        // handshake throws.
+        public event Action<Exception> ConnectFailed;
+
+        public void ConnectToServer(string host, int port, string username)
+        {
+            // Stash the args so we can re-issue once GL is ready, just
+            // like StartNewWorld does for a pre-_glReady call.
+            if (!_glReady)
+            {
+                _pendingConnectHost = host;
+                _pendingConnectPort = port;
+                _pendingConnectUser = username;
+                _pendingIsConnect = true;
+                return;
+            }
+            _renderQueue.Enqueue(() =>
+            {
+                try
+                {
+                    _renderer.ConnectToServer(host, port, username);
+                    Dispatcher.BeginInvoke(new Action(UpdateStatus));
+                }
+                catch (Exception ex)
+                {
+                    // The handshake failed (refused, timeout, protocol
+                    // mismatch, etc). Bubble it up to the UI thread so
+                    // the host can show a dialog. We DELIBERATELY don't
+                    // crash the render thread for a connect failure —
+                    // the user might want to fix the address and try
+                    // again without losing their GL context.
+                    Dispatcher.BeginInvoke(new Action(() => ConnectFailed?.Invoke(ex)));
+                }
+            });
+        }
+
+        // Bookkeeping for a connect requested before GL was ready (e.g.
+        // user passes --connect on the command line and we hit the OnLoad
+        // path before the GLControl finishes init). Drained inside
+        // OnGlReady alongside the existing _pendingLoadPath / _pendingSeed
+        // hand-off.
+        private string _pendingConnectHost;
+        private int _pendingConnectPort;
+        private string _pendingConnectUser;
+        private bool _pendingIsConnect;
+
         public void SaveToFile(string path)
         {
             _worldPath = path;
@@ -231,7 +286,23 @@ namespace VStudioCraft.UI
             _glRenderer = GL.GetString(StringName.Renderer) ?? "unknown";
             _glVendor = GL.GetString(StringName.Vendor) ?? "unknown";
 
-            if (_pendingIsLoad && !string.IsNullOrEmpty(_pendingLoadPath))
+            if (_pendingIsConnect && !string.IsNullOrEmpty(_pendingConnectHost))
+            {
+                // Connect was requested before GL was ready — issue it now.
+                // Failure surfaces via ConnectFailed and falls back to a
+                // fresh SP world so the user isn't staring at a black
+                // viewport with no error indication.
+                try
+                {
+                    _renderer.ConnectToServer(_pendingConnectHost, _pendingConnectPort, _pendingConnectUser);
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.BeginInvoke(new Action(() => ConnectFailed?.Invoke(ex)));
+                    _renderer.StartNewWorld((int)(DateTime.Now.Ticks & 0x7FFFFFFF));
+                }
+            }
+            else if (_pendingIsLoad && !string.IsNullOrEmpty(_pendingLoadPath))
             {
                 _renderer.LoadFromFile(_pendingLoadPath);
             }
@@ -284,6 +355,24 @@ namespace VStudioCraft.UI
                     while (_renderQueue.TryDequeue(out var work))
                     {
                         try { work(); } catch { /* swallow; next frame still draws */ }
+                    }
+
+                    // Phase 2c — multiplayer pump. Pulls inbound packets
+                    // from the network thread's queue and applies them
+                    // (chunk loads today, block changes / entity moves
+                    // in later phases). Sends the throttled outbound
+                    // PlayerPosLook + keepalive. No-op in singleplayer.
+                    // Run BEFORE the input handling block below so any
+                    // chunk that just arrived is visible to this frame's
+                    // raycast.
+                    {
+                        double netNow = _clock.Elapsed.TotalSeconds;
+                        float netDt = (float)Math.Min(0.1, netNow - lastSeconds);
+                        // Note: we DON'T advance lastSeconds here — the
+                        // existing code below recomputes dt itself for
+                        // game-logic purposes. We just want a net-only dt
+                        // for throttling the outbound pos-look stream.
+                        _renderer.DrainNetwork(netDt);
                     }
 
                     // GetPhysicalSize is a Win32 GetClientRect p/invoke. The
@@ -497,16 +586,29 @@ namespace VStudioCraft.UI
                     // time instead of teleporting onto the floor the
                     // moment the panel closes. The pause menu still
                     // freezes drops fully (it's a true pause).
+                    // Chunk streaming/meshing is local to the client even
+                    // in net-driven mode (the GPU upload + mesher live
+                    // here, not on the server) so these always run.
                     _renderer.UpdateStreaming();
                     _renderer.ProcessDirtyChunks(3);
+                    // Server-authoritative ticks: skip in net-driven mode
+                    // so the client doesn't fight the server's view of
+                    // entities/fluids/mobs. The local player's input-
+                    // driven physics still runs (UpdatePlayer below) so
+                    // movement feels responsive; Phase 4+ will validate
+                    // it server-side and snap on PlayerPosLookCorrect.
+                    bool netDriven = _renderer.IsNetClient;
                     if (!paused)
                     {
                         _renderer.AdvanceTime(dt);
                         UpdatePlayer(dt);
-                        _renderer.TickDrops(dt);
-                        _renderer.TickPassives(dt);
-                        _renderer.TickHostiles(dt);
-                        _renderer.TickMobSpawns(dt);
+                        if (!netDriven)
+                        {
+                            _renderer.TickDrops(dt);
+                            _renderer.TickPassives(dt);
+                            _renderer.TickHostiles(dt);
+                            _renderer.TickMobSpawns(dt);
+                        }
                         _renderer.TickFurnacesIfDue(dt);
                         // Tier 4 #17 — Bow/arrow hooks. TickBowCharge
                         // accumulates RMB-held draw time and fires on
@@ -514,17 +616,20 @@ namespace VStudioCraft.UI
                         // and collision for in-flight arrows. Both
                         // freeze under pause / inventory like drops.
                         _renderer.TickBowCharge(dt);
-                        _renderer.TickArrows(dt);
-                        // Tier 4 #20 — Snowball / egg projectile
-                        // physics. Same gating as TickArrows (frozen
-                        // under pause / inventory).
-                        _renderer.TickThrown(dt);
-                        // Tier 4 #23 — Fishing bobber timers (catch +
-                        // auto-despawn). No physics — same gating as
-                        // TickArrows so a paused world doesn't have
-                        // bobbers silently catching fish in the
-                        // background.
-                        _renderer.TickBobbers(dt);
+                        if (!netDriven)
+                        {
+                            _renderer.TickArrows(dt);
+                            // Tier 4 #20 — Snowball / egg projectile
+                            // physics. Same gating as TickArrows (frozen
+                            // under pause / inventory).
+                            _renderer.TickThrown(dt);
+                            // Tier 4 #23 — Fishing bobber timers (catch +
+                            // auto-despawn). No physics — same gating as
+                            // TickArrows so a paused world doesn't have
+                            // bobbers silently catching fish in the
+                            // background.
+                            _renderer.TickBobbers(dt);
+                        }
                     }
                     else if (!_renderer.IsPaused)
                     {
@@ -532,8 +637,9 @@ namespace VStudioCraft.UI
                         // screen) — keep drops physics-ticking so a Q-toss
                         // still flies, and keep furnaces smelting so a
                         // player parked at the furnace screen sees real-
-                        // time progress (Alpha behaviour).
-                        _renderer.TickDrops(dt);
+                        // time progress (Alpha behaviour). Net-driven
+                        // mode delegates these to the server.
+                        if (!netDriven) _renderer.TickDrops(dt);
                         _renderer.TickFurnacesIfDue(dt);
                     }
 
