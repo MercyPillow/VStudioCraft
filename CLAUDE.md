@@ -34,10 +34,21 @@ at runtime because Server.Program never instantiates GameRenderer or calls
 
 # Just the headless server (faster iteration)
 & "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" src\VStudioCraft.Server\VStudioCraft.Server.csproj /t:Build /v:minimal /nologo
-
-# Server smoke test (loopback handshake + 5 chunks)
-src\VStudioCraft.Server\bin\Debug\net472\VStudioCraft.Server.exe --selftest
 ```
+
+## Server smoke tests
+
+```powershell
+# Phase 2/3 — single-client login, chunk burst, place + dig roundtrip
+src\VStudioCraft.Server\bin\Debug\net472\VStudioCraft.Server.exe --selftest
+
+# Phase 4 — two-client entity replication: spawn, move, despawn
+src\VStudioCraft.Server\bin\Debug\net472\VStudioCraft.Server.exe --selftest-mp
+```
+
+Both run a server in-process, perform their loopback exercises, then
+shut the server down and exit. Non-zero exit code = failure (see
+`Environment.ExitCode` assignments in `Program.RunSelfTest*`).
 
 ## End-to-end multiplayer demo
 
@@ -60,7 +71,7 @@ defaults to 25566 (one above Notch's 25565); username defaults to
 - [x] **Phase 2b** — TcpListener + NetSession + login handshake + chunk burst
 - [x] **Phase 2c** — Client-side NetClient + GameRenderer net-driven mode
 - [x] **Phase 3** — Funnel block mutations through `World.SetBlock`; dig/place intent packets; `BlockChange` broadcast; per-player chunk-window slide + `ChunkUnload`
-- [ ] **Phase 4** — Entity replication (spawn/despawn/move/look) + remote-player render with 100 ms render-behind interp
+- [x] **Phase 4** — Entity replication (spawn/despawn/relmove/look/relmovelook/teleport) + `RemotePlayer` snapshot interpolation (100 ms render-behind buffer) + Steve rig rendering for remote players
 - [ ] **Phase 5** — Mob/drop/projectile replication
 - [ ] **Phase 6** — Inventory click protocol + server-side recipes + tile-entity sync
 - [ ] **Phase 7** — Integrated server for SP (in-process loopback)
@@ -95,25 +106,28 @@ time is one-shot, join lag affects every player.
 **When to do it**: Phase 3 (touching server-side world streaming anyway)
 or as a small PR before Phase 4. Not blocking.
 
-### KI-2 — Server-side player physics validation still missing (Phase 4)
+### KI-2 — Server-side player physics validation still missing (now Phase 5+)
 
-**Symptom (Phase 2)**: Server records last-reported position but doesn't
-follow with chunk window or validate movement.
+**Symptom**: Server trusts client-reported position. A modified client
+could send positions implying flight, noclip, or arbitrary teleportation
+and the server would accept all of it (within the 6-block reach
+tolerance for dig/place but otherwise unrestricted).
 
-**Phase 3 update**: chunk-window streaming now follows the reported
-position (`SlideChunkWindow` in ServerHub). The server sends `ChunkLoad`
-for new chunks and `ChunkUnload` for chunks that scrolled off the back.
+**Phase 3 update**: chunk-window streaming follows reported position.
 
-**Still missing**: actual physics validation. Server trusts the client's
-self-reported `LastReportedX/Y/Z` for reach checks (with a 6-block
-tolerance). A trivially modified client could send positions implying
-flight or noclip and the server would accept all of it.
+**Phase 4 update**: entity replication now broadcasts the trusted
+position to other clients. Position is still purely client-claimed —
+only chunk-window streaming and reach-checked dig/place gate on it.
 
-**Fix**: Phase 4 introduces a server-side `Player` entity per
-`ServerClient` with the same AABB-vs-block integrator the standalone
-uses (`Entity.IntegrateMotion`). Inbound `PlayerPosLook` is checked
-against last-tick + max walk speed (~5 m/s) + jump height; outliers
-get snapped back via `PlayerPosLookCorrect`.
+**Still missing**: actual rate-check / AABB physics validation against
+last-tick. The MP demo works fine for cooperative play (the originally
+chosen design point); this is an anti-cheat polish item, not a blocker.
+
+**Fix (deferred to Phase 5+)**: introduce a server-side `Player`
+entity per `ServerClient` with the same AABB-vs-block integrator the
+standalone uses (`Entity.IntegrateMotion`). Compare inbound positions
+against `last + maxStep`, snap back via a new `PlayerPosLookCorrect`
+packet (0x11, already reserved in PacketIds) on outliers.
 
 ### KI-3 — TryInteract still a no-op in net-driven mode (Phase 5)
 

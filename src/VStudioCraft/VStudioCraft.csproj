@@ -21,6 +21,14 @@
     <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
     <CopyOutputSymbolsToOutputDirectory>true</CopyOutputSymbolsToOutputDirectory>
     <UseCodebase>true</UseCodebase>
+    <!-- Match Standalone + Server, both of which set LangVersion=latest.
+         Default for net472 is C# 7.3, which has stricter local-function
+         scoping rules than the rest of the codebase relies on (e.g. a
+         local function parameter named `row` colliding with an outer-
+         scope counter named `row`). All three projects compile the same
+         linked Game\*.cs sources, so they need to agree on the language
+         version they're parsed under. -->
+    <LangVersion>latest</LangVersion>
     <StartAction>Program</StartAction>
     <StartProgram Condition="'$(DevEnvDir)' != ''">$(DevEnvDir)devenv.exe</StartProgram>
     <StartArguments>/rootsuffix Exp</StartArguments>
@@ -121,6 +129,7 @@
     <Compile Include="Game\DeathScreen.cs" />
     <Compile Include="Game\PauseMenu.cs" />
     <Compile Include="Game\Player.cs" />
+    <Compile Include="Game\RemotePlayer.cs" />
     <Compile Include="Game\Raycast.cs" />
     <Compile Include="Game\Shader.cs" />
     <Compile Include="Game\SkyRenderer.cs" />

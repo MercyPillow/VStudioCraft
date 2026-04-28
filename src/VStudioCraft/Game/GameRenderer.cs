@@ -623,6 +623,19 @@ void main()
         // and the server's input queue.
         private float _posLookSendTimer;
         private const float PosLookSendInterval = 0.05f; // 20 Hz
+
+        // Phase 4 — other-player replicas. Keyed on server-assigned
+        // EntityId; populated by EntitySpawn, drained by EntityDespawn,
+        // updated by Entity{Tele,RelMove,Look,RelMoveLook} packets.
+        // Each entry holds two snapshots and lerps between them in
+        // RemotePlayer.Tick — see that file for the interp design.
+        private readonly Dictionary<int, RemotePlayer> _remotePlayers = new Dictionary<int, RemotePlayer>();
+        public IReadOnlyDictionary<int, RemotePlayer> RemotePlayers => _remotePlayers;
+        // Wall-clock used to time-stamp remote-player snapshots and feed
+        // RemotePlayer.Tick. Driven by the host's render-loop dt; the
+        // absolute origin doesn't matter, only the delta between samples.
+        private double _netClock;
+
         private readonly Dictionary<(int x, int z), Mesh> _chunkMeshes = new Dictionary<(int x, int z), Mesh>();
         private bool _initialized;
 
@@ -1038,6 +1051,10 @@ void main()
             if (_netClient == null) return;
             _netClient.Disconnect(reason);
             _netClient = null;
+            // Drop every remote-player replica — they're meaningless
+            // without a live session, and the next connect will get a
+            // fresh batch of EntitySpawn packets to repopulate.
+            _remotePlayers.Clear();
         }
 
         // Per-frame multiplayer pump. Called by the host's render loop
@@ -1058,6 +1075,12 @@ void main()
         public void DrainNetwork(float dt)
         {
             if (_netClient == null) return;
+
+            // Advance the host's network-side wall clock so RemotePlayer
+            // snapshot times come from a single monotonic source. Driven
+            // by the host's frame dt — we don't care about the absolute
+            // origin, only that subsequent calls are strictly increasing.
+            _netClock += dt;
 
             if (!_netClient.IsConnected)
             {
@@ -1090,6 +1113,15 @@ void main()
                     Camera.Yaw, Camera.Pitch,
                     Player.OnGround);
             }
+
+            // Phase 4 — advance every remote-player replica's
+            // interpolation. Runs at frame rate (cheap: just lerp + walk-
+            // cycle integration per entity), so the bodies look smooth
+            // even while inbound packets only arrive at 20 Hz.
+            foreach (var kv in _remotePlayers)
+            {
+                kv.Value.Tick(_netClock, dt);
+            }
         }
 
         private void ApplyInboundPacket(VStudioCraft.Net.InboundPacket pkt)
@@ -1113,6 +1145,53 @@ void main()
                 case VStudioCraft.Net.PacketIds.BlockChange:
                     ApplyBlockChange(pkt.BlockChange);
                     break;
+
+                case VStudioCraft.Net.PacketIds.EntitySpawn:
+                {
+                    var s = pkt.EntitySpawn;
+                    // Phase 4 only ships Player entities (EntityType=0);
+                    // ignore other types until Phase 5 wires their
+                    // client-side renderable kinds.
+                    if (s.EntityType != VStudioCraft.Net.EntityType.Player) break;
+                    _remotePlayers[s.EntityId] = new RemotePlayer(
+                        s.EntityId, s.DisplayName,
+                        new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                        s.Yaw, s.Pitch, _netClock);
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.EntityRelMove:
+                {
+                    var m = pkt.EntityRelMove;
+                    if (_remotePlayers.TryGetValue(m.EntityId, out var rp))
+                        rp.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.EntityLook:
+                {
+                    var l = pkt.EntityLook;
+                    if (_remotePlayers.TryGetValue(l.EntityId, out var rp))
+                        rp.ApplyLook(l.Yaw, l.Pitch, _netClock);
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.EntityRelMoveLook:
+                {
+                    var ml = pkt.EntityRelMoveLook;
+                    if (_remotePlayers.TryGetValue(ml.EntityId, out var rp))
+                        rp.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), ml.Yaw, ml.Pitch, _netClock);
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.EntityTeleport:
+                {
+                    var t = pkt.EntityTeleport;
+                    if (_remotePlayers.TryGetValue(t.EntityId, out var rp))
+                        rp.ApplyTeleport(new Vector3((float)t.X, (float)t.Y, (float)t.Z), t.Yaw, t.Pitch, _netClock);
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.EntityDespawn:
+                {
+                    _remotePlayers.Remove(pkt.EntityDespawn.EntityId);
+                    break;
+                }
 
                 case VStudioCraft.Net.PacketIds.Disconnect:
                     // Server-initiated hangup. Tear our side down so the
@@ -6409,6 +6488,11 @@ void main()
             // overlay the player rig naturally; only renders when F5 is
             // toggled, so first-person frames pay nothing for it.
             if (ThirdPersonMode) RenderPlayer(width, height);
+            // Phase 4 — other-player replicas. Drawn with the same
+            // Steve rig; pose, yaw, pitch, walk phase come from each
+            // RemotePlayer's interpolated snapshot. Cheap (no rendering
+            // when the dictionary is empty, which it always is in SP).
+            if (_remotePlayers.Count > 0) RenderRemotePlayers(width, height);
             // Passive mob bodies (Tier 3 #9 + #12 — Pig / Cow / Sheep /
             // Chicken). Layered after drops so a passive walking past a
             // drop occludes it correctly via depth testing, and before
@@ -7326,33 +7410,6 @@ void main()
         // mouth are tiny dark cuboids on the front face for character.
         private void RenderPlayer(int width, int height)
         {
-            var vp = _frameVp;
-
-            _overlayShader.Use();
-            _overlayShader.SetFloat("uAlpha", 1f);
-
-            // Hurt flash off Player.HurtTimer (refreshed by TakeDamage,
-            // decremented in Player.Update — same pattern as the mob rigs).
-            float hurt = Player.HurtTimer > 0f
-                ? Player.HurtTimer / Player.HurtFlashSeconds
-                : 0f;
-            var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
-
-            // Rig yaw: align the rig's local +Z (front face) with
-            // Camera.Forward so the camera always looks at the player's
-            // back. Camera convention is Forward = (sin Yaw, *, -cos Yaw)
-            // (Yaw=0 → -Z, +Yaw rotates toward +X). The rig's +Z rotated by
-            // Matrix4.CreateRotationY(a) lands at (sin a, *, cos a). For
-            // those to match we need sin(a)=sin(Yaw) and cos(a)=-cos(Yaw),
-            // which gives a = π - Camera.Yaw. The earlier "Camera.Yaw + π"
-            // happened to work only at Yaw=0; it spun the rig the WRONG
-            // way around the Y axis at every other heading, so the body
-            // looked frozen relative to the camera.
-            float rigYaw = (float)Math.PI - Camera.Yaw;
-            var rot = Matrix4.CreateRotationY(rigYaw);
-            var trans = Matrix4.CreateTranslation(Player.Position);
-            var rigToWorld = rot * trans;
-
             // Walk-cycle scale by horizontal speed. SwingTimer adds an
             // extra arm sway when the player has just attacked / broken,
             // boosting the right arm's amplitude briefly so the player
@@ -7362,9 +7419,6 @@ void main()
                 Player.Velocity.Z * Player.Velocity.Z);
             float walkFrac = horizSpeed / Player.WalkSpeed;
             if (walkFrac > 1f) walkFrac = 1f;
-            const float WalkAmplitude = 0.55f;     // radians at full stride
-            float legSwing = (float)Math.Sin(_walkCyclePhase) * WalkAmplitude * walkFrac;
-            float armSwing = -legSwing;             // arms counter-swing legs
             // Right arm gets an extra forward-arc when the swing timer is
             // active — peak hits at swing-start, decays to 0 at end.
             float swingArc = 0f;
@@ -7372,10 +7426,74 @@ void main()
             {
                 float t = Player.SwingTimer / Player.SwingDurationSeconds;
                 if (t > 1f) t = 1f;
-                // Map t (1 → 0 over the swing) to a forward arc that
-                // peaks early and fades. -t²·π/2 gives a forward chop.
                 swingArc = -(float)Math.Sin(t * Math.PI) * 1.20f;
             }
+            float hurt = Player.HurtTimer > 0f ? Player.HurtTimer / Player.HurtFlashSeconds : 0f;
+            DrawSteveRig(Player.Position, Camera.Yaw, Camera.Pitch,
+                _walkCyclePhase, walkFrac, swingArc, hurt);
+        }
+
+        // Phase 4 — render every replicated remote player. Each entry
+        // pulls its interpolated pose from RemotePlayer.RenderedPos /
+        // RenderedYaw / RenderedPitch, computed once per frame inside
+        // the DrainNetwork tick loop. The walk-cycle phase is driven
+        // by RemotePlayer's own integrator (matched to the local
+        // third-person stride rate). Swing animation isn't replicated
+        // yet (Phase 5 ships it alongside the Animation packet); for
+        // now remote players never swing.
+        private void RenderRemotePlayers(int width, int height)
+        {
+            foreach (var kv in _remotePlayers)
+            {
+                var rp = kv.Value;
+                // Speed is recovered from snapshot delta inside
+                // RemotePlayer.Tick; we don't have it on this end as a
+                // velocity, so derive walk fraction from the per-tick
+                // displacement implicit in the phase rate. Using a
+                // saturated full-stride amplitude when the phase is
+                // moving keeps the visual close to the local rig
+                // without round-tripping speed across the wire.
+                float walkFrac = rp.WalkCyclePhase > 0.01f ? 1f : 0f;
+                DrawSteveRig(rp.RenderedPos, rp.RenderedYaw, rp.RenderedPitch,
+                    rp.WalkCyclePhase, walkFrac, swingArc: 0f, hurt: 0f);
+            }
+        }
+
+        // Shared draw logic for the third-person Steve body. Used by
+        // RenderPlayer (local F5 view) and RenderRemotePlayers (Phase 4
+        // replica draw). All pose state arrives via parameters so neither
+        // caller needs to mutate global state to share this code path.
+        //
+        //   pos          — feet position in world space
+        //   cameraYaw    — yaw the rig's front face should align with
+        //                  (camera convention: 0 = -Z, +yaw rotates +X)
+        //   cameraPitch  — head-only pitch (body stays upright)
+        //   walkPhase    — running phase angle, integrated from speed
+        //   walkFrac     — 0..1 amplitude scale for legs/arms
+        //   swingArc     — extra forward sweep on the right arm (attack)
+        //   hurt         — 0..1 red-tint blend (TakeDamage flash)
+        private void DrawSteveRig(Vector3 pos, float cameraYaw, float cameraPitch,
+            float walkPhase, float walkFrac, float swingArc, float hurt)
+        {
+            var vp = _frameVp;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
+
+            // Rig yaw: align the rig's local +Z (front face) with
+            // Camera.Forward so the camera always looks at the player's
+            // back. See the long original derivation comment in the git
+            // history — short version: a = π - cameraYaw.
+            float rigYaw = (float)Math.PI - cameraYaw;
+            var rot = Matrix4.CreateRotationY(rigYaw);
+            var trans = Matrix4.CreateTranslation(pos);
+            var rigToWorld = rot * trans;
+
+            const float WalkAmplitude = 0.55f;
+            float legSwing = (float)Math.Sin(walkPhase) * WalkAmplitude * walkFrac;
+            float armSwing = -legSwing;
 
             // Steve palette. Skin a warm tan, hair brown, shirt cyan,
             // pants indigo, eyes near-black, mouth a brick red.
@@ -7433,7 +7551,7 @@ void main()
             // up/down" without tipping the whole body. DrawHeadCuboid
             // uses a fixed neck pivot at (0, 1.35, 0) so the whole face
             // package rotates as one unit.
-            float headPitch = -Camera.Pitch * 0.8f;   // dampened so the head doesn't snap fully vertical
+            float headPitch = -cameraPitch * 0.8f;   // dampened so the head doesn't snap fully vertical
             var headSize = new Vector3(0.45f, 0.45f, 0.45f);
             DrawHeadCuboid(new Vector3(0f, 1.575f, 0f), headSize, headPitch, rigToWorld, vp, skin);
             // Hair — a thin slab embedded in the top 5 cm of the head

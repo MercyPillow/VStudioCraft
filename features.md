@@ -502,10 +502,6 @@ order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
 	
-### Tier 5 — Controls + UX parity — **COMPLETE**
-
-All five Controls+UX features shipped: middle-click pick-block (raycasts the same hit TryBreak/TryPlace use, creative conjures into the first empty hotbar, survival selects the matching slot or swaps from main grid), Shift sneak with AABB edge-stop (canonical Alpha 1.295 m/s — paired with a per-axis "any-corner-over-solid" probe so you can't walk off a 1-block lip while holding shift), Ctrl sprint, right-click drag-spread (was already wired — verified the initial-slot deposit lands via the standard RMB single-click path before MouseMove takes over), F3 debug overlay (XYZ / FPS / chunk count / sky+block light / cardinal facing / mode / time-of-day; toggled with the canonical Minecraft binding, game-mode toggle moved to F8), transient hotbar item-name popup with 0.5s alpha fade-out (re-armed by a HotbarIndex-changed poll on the render thread), and the YOU DIED death modal with Respawn + Title Screen buttons (mirrors PauseMenu's hit-test/render pattern; Title Screen routes through the existing QuitRequested pipeline). Game-mode toggle: Shift→sprint replaced with Shift→sneak / Ctrl→sprint (sneak wins when both held — the safety modifier).
-
 ### Tier 6 — World-gen variety
 
 31. **Extend World height to 128 - land height starts at around y=64 so there is a larger underground area**

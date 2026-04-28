@@ -103,6 +103,22 @@ namespace VStudioCraft.Server
                 selfTestThread.Start();
             }
 
+            // Phase 4 — multiplayer-specific smoke test. Opens TWO
+            // TcpClients on loopback (alice + bob), drives both through
+            // login + a few PlayerPosLook ticks, then confirms alice's
+            // inbound stream contains an EntitySpawn for bob followed
+            // by at least one EntityRelMove / RelMoveLook / Teleport
+            // matching the position bob is sending.
+            if (HasFlag(args, "--selftest-mp"))
+            {
+                var t = new Thread(() => RunSelfTestMp(hub.Port))
+                {
+                    IsBackground = true,
+                    Name = "SelfTestMp",
+                };
+                t.Start();
+            }
+
             try
             {
                 RunTickLoop(world, hub);
@@ -308,6 +324,185 @@ namespace VStudioCraft.Server
             {
                 Console.Error.WriteLine($"[selftest] FAIL: {ex.GetType().Name}: {ex.Message}");
                 Environment.ExitCode = 4;
+            }
+            finally
+            {
+                _stopRequested = true;
+            }
+        }
+
+        // Open a TcpClient + perform login, returning a (tcp, reader, writer,
+        // entityId) tuple. Helper for --selftest-mp; not used elsewhere.
+        private static (TcpClient tcp, PacketReader r, PacketWriter w, int eid) ConnectAndLogin(int port, string user)
+        {
+            var tcp = new TcpClient();
+            tcp.Connect("127.0.0.1", port);
+            tcp.NoDelay = true;
+            var s = tcp.GetStream();
+            var w = new PacketWriter(s);
+            var r = new PacketReader(s);
+            w.WriteByte(PacketIds.LoginRequest);
+            new LoginRequestPacket { ProtocolVersion = PacketIds.ProtocolVersion, Username = user }.Write(w);
+            int eid = -1;
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                byte id = r.ReadByte();
+                switch (id)
+                {
+                    case PacketIds.LoginResponse:
+                        var lr = LoginResponsePacket.Read(r);
+                        eid = lr.EntityId;
+                        return (tcp, r, w, eid);
+                    case PacketIds.KeepAlive: break;
+                    case PacketIds.Disconnect:
+                        var d = DisconnectPacket.Read(r);
+                        throw new IOException($"login refused: {d.Reason}");
+                    default:
+                        throw new InvalidDataException($"unexpected packet 0x{id:X2} during login");
+                }
+            }
+            throw new TimeoutException("login timeout");
+        }
+
+        // Drain inbound packets without acting on them, returning when
+        // we either see the predicate match or the deadline expires.
+        // Returns the matched packet info via out.
+        private static bool DrainUntil(PacketReader r, DateTime deadline, Func<byte, bool> predicate, out byte matchedId)
+        {
+            matchedId = 0;
+            while (DateTime.UtcNow < deadline)
+            {
+                byte id = r.ReadByte();
+                bool match = predicate(id);
+                // Always consume the payload so the stream stays aligned.
+                switch (id)
+                {
+                    case PacketIds.KeepAlive: break;
+                    case PacketIds.ChunkLoad: ChunkLoadPacket.Read(r); break;
+                    case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(r); break;
+                    case PacketIds.BlockChange: BlockChangePacket.Read(r); break;
+                    case PacketIds.EntitySpawn: EntitySpawnPacket.Read(r); break;
+                    case PacketIds.EntityRelMove: EntityRelMovePacket.Read(r); break;
+                    case PacketIds.EntityLook: EntityLookPacket.Read(r); break;
+                    case PacketIds.EntityRelMoveLook: EntityRelMoveLookPacket.Read(r); break;
+                    case PacketIds.EntityTeleport: EntityTeleportPacket.Read(r); break;
+                    case PacketIds.EntityDespawn: EntityDespawnPacket.Read(r); break;
+                    case PacketIds.Disconnect:
+                        var d = DisconnectPacket.Read(r);
+                        throw new IOException($"server disconnected: {d.Reason}");
+                    default:
+                        throw new InvalidDataException($"unexpected packet 0x{id:X2}");
+                }
+                if (match)
+                {
+                    matchedId = id;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static void RunSelfTestMp(int port)
+        {
+            try
+            {
+                Thread.Sleep(200);
+                Console.WriteLine($"[selftest-mp] connecting alice + bob to 127.0.0.1:{port}");
+                var (atcp, ar, aw, aeid) = ConnectAndLogin(port, "alice");
+                using (atcp)
+                {
+                    var (btcp, br, bw, beid) = ConnectAndLogin(port, "bob");
+                    using (btcp)
+                    {
+                        Console.WriteLine($"[selftest-mp] alice eid={aeid}, bob eid={beid}");
+
+                        // Both players ship a PlayerPosLook so the server
+                        // marks them past AwaitingLogin (HasReportedPos=true)
+                        // and starts considering them for entity broadcast.
+                        // We use slightly different positions so each is in
+                        // the other's chunk window from the get-go.
+                        for (int i = 0; i < 5; i++)
+                        {
+                            aw.WriteByte(PacketIds.PlayerPosLook);
+                            new PlayerPosLookPacket { X = 0.5,  Y = 80, Z = 0.5,  Yaw = 0,  Pitch = 0, OnGround = true }.Write(aw);
+                            bw.WriteByte(PacketIds.PlayerPosLook);
+                            new PlayerPosLookPacket { X = 4.5,  Y = 80, Z = 4.5,  Yaw = 90, Pitch = 0, OnGround = true }.Write(bw);
+                            Thread.Sleep(60); // > 1 server tick so packets land between ticks
+                        }
+
+                        // Verify alice received an EntitySpawn for bob.
+                        // We flood-drain alice's inbound stream up to a 3 s
+                        // deadline looking for the spawn id.
+                        int seenSpawnFor = -1;
+                        var deadline = DateTime.UtcNow.AddSeconds(3);
+                        while (DateTime.UtcNow < deadline && seenSpawnFor != beid)
+                        {
+                            byte id = ar.ReadByte();
+                            switch (id)
+                            {
+                                case PacketIds.KeepAlive: break;
+                                case PacketIds.ChunkLoad: ChunkLoadPacket.Read(ar); break;
+                                case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(ar); break;
+                                case PacketIds.BlockChange: BlockChangePacket.Read(ar); break;
+                                case PacketIds.EntitySpawn:
+                                    var es = EntitySpawnPacket.Read(ar);
+                                    if (es.EntityId == beid && es.DisplayName == "bob") seenSpawnFor = es.EntityId;
+                                    break;
+                                case PacketIds.EntityRelMove: EntityRelMovePacket.Read(ar); break;
+                                case PacketIds.EntityLook: EntityLookPacket.Read(ar); break;
+                                case PacketIds.EntityRelMoveLook: EntityRelMoveLookPacket.Read(ar); break;
+                                case PacketIds.EntityTeleport: EntityTeleportPacket.Read(ar); break;
+                                case PacketIds.EntityDespawn: EntityDespawnPacket.Read(ar); break;
+                                default: throw new InvalidDataException($"unexpected 0x{id:X2}");
+                            }
+                        }
+                        if (seenSpawnFor != beid)
+                            throw new InvalidDataException($"alice never received EntitySpawn for bob (eid={beid})");
+                        Console.WriteLine($"[selftest-mp] alice sees EntitySpawn for bob (eid={beid})");
+
+                        // Now move bob and verify alice gets a corresponding
+                        // entity-update packet.
+                        for (int i = 0; i < 10; i++)
+                        {
+                            bw.WriteByte(PacketIds.PlayerPosLook);
+                            new PlayerPosLookPacket
+                            {
+                                X = 4.5 + i * 0.3, Y = 80, Z = 4.5,
+                                Yaw = 90 + i * 5, Pitch = 0, OnGround = true,
+                            }.Write(bw);
+                            Thread.Sleep(60);
+                        }
+
+                        bool sawMove = DrainUntil(ar, DateTime.UtcNow.AddSeconds(3),
+                            id => id == PacketIds.EntityRelMove
+                               || id == PacketIds.EntityRelMoveLook
+                               || id == PacketIds.EntityTeleport
+                               || id == PacketIds.EntityLook,
+                            out var movId);
+                        if (!sawMove) throw new InvalidDataException("alice never received an entity-update packet for bob's motion");
+                        Console.WriteLine($"[selftest-mp] alice sees entity update (id=0x{movId:X2}) for bob's move");
+
+                        // Disconnect bob and verify alice gets EntityDespawn.
+                        bw.WriteByte(PacketIds.Disconnect);
+                        new DisconnectPacket { Reason = "selftest-mp bob done" }.Write(bw);
+                        bool sawDespawn = DrainUntil(ar, DateTime.UtcNow.AddSeconds(3),
+                            id => id == PacketIds.EntityDespawn,
+                            out _);
+                        if (!sawDespawn) throw new InvalidDataException("alice never received EntityDespawn after bob disconnected");
+                        Console.WriteLine($"[selftest-mp] alice sees EntityDespawn for bob");
+
+                        Console.WriteLine($"[selftest-mp] OK: spawn + move + despawn replication");
+
+                        aw.WriteByte(PacketIds.Disconnect);
+                        new DisconnectPacket { Reason = "selftest-mp alice done" }.Write(aw);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[selftest-mp] FAIL: {ex.GetType().Name}: {ex.Message}");
+                Environment.ExitCode = 5;
             }
             finally
             {

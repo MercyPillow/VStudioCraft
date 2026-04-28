@@ -218,6 +218,24 @@ namespace VStudioCraft.Net
                 case PacketIds.PlayerPlace:
                     return new InboundPacket { Id = id, PlayerPlace = PlayerPlacePacket.Read(_reader) };
 
+                case PacketIds.EntitySpawn:
+                    return new InboundPacket { Id = id, EntitySpawn = EntitySpawnPacket.Read(_reader) };
+
+                case PacketIds.EntityRelMove:
+                    return new InboundPacket { Id = id, EntityRelMove = EntityRelMovePacket.Read(_reader) };
+
+                case PacketIds.EntityLook:
+                    return new InboundPacket { Id = id, EntityLook = EntityLookPacket.Read(_reader) };
+
+                case PacketIds.EntityRelMoveLook:
+                    return new InboundPacket { Id = id, EntityRelMoveLook = EntityRelMoveLookPacket.Read(_reader) };
+
+                case PacketIds.EntityTeleport:
+                    return new InboundPacket { Id = id, EntityTeleport = EntityTeleportPacket.Read(_reader) };
+
+                case PacketIds.EntityDespawn:
+                    return new InboundPacket { Id = id, EntityDespawn = EntityDespawnPacket.Read(_reader) };
+
                 default:
                     throw new InvalidDataException($"Unknown packet id 0x{id:X2}");
             }
@@ -232,14 +250,20 @@ namespace VStudioCraft.Net
     internal struct InboundPacket
     {
         public byte Id;
-        public LoginRequestPacket  Login;
-        public LoginResponsePacket LoginResponse;
-        public DisconnectPacket    Disconnect;
-        public PlayerPosLookPacket PlayerPosLook;
-        public ChunkLoadPacket     ChunkLoad;
-        public ChunkUnloadPacket   ChunkUnload;
-        public BlockChangePacket   BlockChange;
-        public PlayerDigPacket     PlayerDig;
-        public PlayerPlacePacket   PlayerPlace;
+        public LoginRequestPacket    Login;
+        public LoginResponsePacket   LoginResponse;
+        public DisconnectPacket      Disconnect;
+        public PlayerPosLookPacket   PlayerPosLook;
+        public ChunkLoadPacket       ChunkLoad;
+        public ChunkUnloadPacket     ChunkUnload;
+        public BlockChangePacket     BlockChange;
+        public PlayerDigPacket       PlayerDig;
+        public PlayerPlacePacket     PlayerPlace;
+        public EntitySpawnPacket     EntitySpawn;
+        public EntityRelMovePacket   EntityRelMove;
+        public EntityLookPacket      EntityLook;
+        public EntityRelMoveLookPacket EntityRelMoveLook;
+        public EntityTeleportPacket  EntityTeleport;
+        public EntityDespawnPacket   EntityDespawn;
     }
 }

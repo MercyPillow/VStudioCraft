@@ -133,6 +133,223 @@ namespace VStudioCraft.Net
         };
     }
 
+    // ===========================================================================
+    // 0x2_ — entity replication (Phase 4)
+    //
+    // The server tells clients about other entities — for now just other
+    // players (EntityType.Player). Phase 5 reuses the same packet shapes
+    // for mobs / drops / projectiles by widening EntityType.
+    //
+    // Position encoding choice: full doubles for absolute (Spawn,
+    // Teleport), full floats for deltas (RelMove, Look, RelMoveLook).
+    // Alpha used 1/32-block fixed-point bytes for deltas to fit four
+    // entity moves into a 64-byte MTU; we don't care — local-area MP
+    // is the design target, bandwidth is plentiful, and the simpler
+    // wire format is easier to debug. ~17 bytes per moving entity per
+    // tick × 20 Hz × 8 players = ~3 KiB/s aggregate, trivial.
+    //
+    // EntityRelMove is emitted for the common case (small position
+    // change since last broadcast). When the delta exceeds the float
+    // precision the renderer uses for interpolation OR when the server
+    // hasn't broadcast for ≥ 20 ticks (drift-correction window),
+    // EntityTeleport is sent instead and resets the client's last-seen
+    // anchor. EntityLook is the rarer "rotated in place" case.
+    // ===========================================================================
+
+    // Entity-type tag carried in EntitySpawn. Single byte so future types
+    // (mobs, drops, projectiles) just claim a value without disturbing
+    // the on-wire layout. Player=0 because it's the only one that lands
+    // in Phase 4; Phase 5 wires Pig/Cow/Sheep/Chicken/Zombie/Skeleton/
+    // Spider/Creeper next.
+    internal static class EntityType
+    {
+        public const byte Player = 0;
+        // Reserved (Phase 5+):
+        // public const byte Pig          = 1;
+        // public const byte Cow          = 2;
+        // public const byte Sheep        = 3;
+        // public const byte Chicken      = 4;
+        // public const byte Zombie       = 16;
+        // public const byte Skeleton     = 17;
+        // public const byte Spider       = 18;
+        // public const byte Creeper      = 19;
+        // public const byte DroppedItem  = 32;
+        // public const byte Arrow        = 48;
+        // public const byte Snowball     = 49;
+        // public const byte Egg          = 50;
+        // public const byte Bobber       = 51;
+    }
+
+    // 0x20 — a new entity entered this client's awareness. The server
+    // sends one to a client when:
+    //   - Another player joined, and we already have the (cx,cz) the
+    //     joiner spawned in.
+    //   - We just joined ourselves; the server enumerates all currently-
+    //     in-range entities and sends a spawn for each.
+    // The DisplayName is included for player nametags and admin logs;
+    // for non-Player types it can be empty string.
+    internal struct EntitySpawnPacket
+    {
+        public int EntityId;
+        public byte EntityType;
+        public double X, Y, Z;
+        public float Yaw, Pitch;
+        public string DisplayName;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(EntityId);
+            w.WriteByte(EntityType);
+            w.WriteDouble(X);
+            w.WriteDouble(Y);
+            w.WriteDouble(Z);
+            w.WriteFloat(Yaw);
+            w.WriteFloat(Pitch);
+            w.WriteString(DisplayName ?? string.Empty);
+        }
+
+        public static EntitySpawnPacket Read(PacketReader r) => new EntitySpawnPacket
+        {
+            EntityId    = r.ReadInt(),
+            EntityType  = r.ReadByte(),
+            X           = r.ReadDouble(),
+            Y           = r.ReadDouble(),
+            Z           = r.ReadDouble(),
+            Yaw         = r.ReadFloat(),
+            Pitch       = r.ReadFloat(),
+            DisplayName = r.ReadString(),
+        };
+    }
+
+    // 0x21 — entity moved by (dx, dy, dz) from its last broadcast
+    // anchor. Client adds this to the buffered "previous" snapshot
+    // and uses (now, anchor+delta) as the new "current" snapshot
+    // for interpolation.
+    internal struct EntityRelMovePacket
+    {
+        public int EntityId;
+        public float Dx, Dy, Dz;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(EntityId);
+            w.WriteFloat(Dx);
+            w.WriteFloat(Dy);
+            w.WriteFloat(Dz);
+        }
+
+        public static EntityRelMovePacket Read(PacketReader r) => new EntityRelMovePacket
+        {
+            EntityId = r.ReadInt(),
+            Dx       = r.ReadFloat(),
+            Dy       = r.ReadFloat(),
+            Dz       = r.ReadFloat(),
+        };
+    }
+
+    // 0x22 — entity rotated in place. Pos didn't move enough to be
+    // worth a delta packet, but yaw/pitch changed (player turning to
+    // look at something while standing still).
+    internal struct EntityLookPacket
+    {
+        public int EntityId;
+        public float Yaw, Pitch;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(EntityId);
+            w.WriteFloat(Yaw);
+            w.WriteFloat(Pitch);
+        }
+
+        public static EntityLookPacket Read(PacketReader r) => new EntityLookPacket
+        {
+            EntityId = r.ReadInt(),
+            Yaw      = r.ReadFloat(),
+            Pitch    = r.ReadFloat(),
+        };
+    }
+
+    // 0x23 — common case: entity moved AND rotated in the same tick.
+    // Combined to halve the per-tick packet count for active players.
+    internal struct EntityRelMoveLookPacket
+    {
+        public int EntityId;
+        public float Dx, Dy, Dz;
+        public float Yaw, Pitch;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(EntityId);
+            w.WriteFloat(Dx);
+            w.WriteFloat(Dy);
+            w.WriteFloat(Dz);
+            w.WriteFloat(Yaw);
+            w.WriteFloat(Pitch);
+        }
+
+        public static EntityRelMoveLookPacket Read(PacketReader r) => new EntityRelMoveLookPacket
+        {
+            EntityId = r.ReadInt(),
+            Dx       = r.ReadFloat(),
+            Dy       = r.ReadFloat(),
+            Dz       = r.ReadFloat(),
+            Yaw      = r.ReadFloat(),
+            Pitch    = r.ReadFloat(),
+        };
+    }
+
+    // 0x24 — absolute reposition. Sent for:
+    //   - First broadcast after EntitySpawn (so the client gets a clean
+    //     anchor regardless of what it did with the spawn position).
+    //   - Drift correction every ~20 ticks (1 s) so accumulated rounding
+    //     in chained EntityRelMove deltas can't slowly walk the
+    //     replica off the server's authoritative position.
+    //   - Long-distance movement (teleport, login spawn, fall through
+    //     the void) where a single delta would exceed the precision
+    //     of the renderer's interpolator.
+    internal struct EntityTeleportPacket
+    {
+        public int EntityId;
+        public double X, Y, Z;
+        public float Yaw, Pitch;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(EntityId);
+            w.WriteDouble(X);
+            w.WriteDouble(Y);
+            w.WriteDouble(Z);
+            w.WriteFloat(Yaw);
+            w.WriteFloat(Pitch);
+        }
+
+        public static EntityTeleportPacket Read(PacketReader r) => new EntityTeleportPacket
+        {
+            EntityId = r.ReadInt(),
+            X        = r.ReadDouble(),
+            Y        = r.ReadDouble(),
+            Z        = r.ReadDouble(),
+            Yaw      = r.ReadFloat(),
+            Pitch    = r.ReadFloat(),
+        };
+    }
+
+    // 0x25 — entity left this client's awareness. Reasons:
+    //   - Owning player disconnected.
+    //   - Entity moved out of this client's view radius (their tracked-
+    //     entities set drops it).
+    //   - Mob died (Phase 5).
+    // Client deletes its replica; future packets referencing this
+    // EntityId are ignored until a fresh EntitySpawn re-introduces it.
+    internal struct EntityDespawnPacket
+    {
+        public int EntityId;
+
+        public void Write(PacketWriter w) => w.WriteInt(EntityId);
+        public static EntityDespawnPacket Read(PacketReader r) => new EntityDespawnPacket { EntityId = r.ReadInt() };
+    }
+
     // 0x32 — server→client single-block change. Sent when any cell in the
     // world flips type. The server batches these inside a tick (one
     // packet per dirtied cell at the end of the tick) and only sends to

@@ -42,6 +42,24 @@ namespace VStudioCraft.Server
         // via constructor for tests / multi-server hosting.
         public const int DefaultPort = 25566;
 
+        // Phase 4 — drift-correction cadence. Every N ticks each tracked
+        // entity gets a full EntityTeleport instead of a delta packet so
+        // accumulated float-rounding can't slowly walk replicas off the
+        // authoritative position. 20 ticks = 1 s; matches the cadence
+        // Alpha used.
+        private const int EntityTeleportEveryTicks = 20;
+
+        // Threshold below which we don't bother emitting a move packet
+        // at all. 1 mm — well below visible motion at any rendering
+        // distance, sized to suppress jitter from the network round-
+        // tripping a player who's standing still while WASD-pressing
+        // into a wall.
+        private const float MoveEpsilon = 0.001f;
+        // Minimum yaw/pitch change in degrees that earns a Look broadcast.
+        // 0.5° is roughly one screen pixel of arc at typical FOV; smaller
+        // changes are imperceptible.
+        private const float LookEpsilon = 0.5f;
+
         // How many chunks to send per tick during the initial join burst.
         // 5 keeps the per-tick byte volume under ~30 KiB (gzipped) which
         // a 1 Mbps client can drain in a single 50 ms tick. Above this
@@ -147,11 +165,36 @@ namespace VStudioCraft.Server
             //    ChunkLoad to that area will carry the new bytes.
             BroadcastPendingBlockChanges();
 
+            // 5. Phase 4 — per-pair entity replication. For every (a, b)
+            //    pair of in-game clients, ensure b knows about a's
+            //    current position via the cheapest packet that conveys
+            //    the change since b's last anchor for a.
+            BroadcastEntityUpdates();
+
             for (int i = _clients.Count - 1; i >= 0; i--)
             {
                 if (_clients[i].Session.IsDead)
                 {
-                    Console.WriteLine($"[server] {_clients[i].Label} disconnected: {_clients[i].Session.DeadReason}");
+                    var dead = _clients[i];
+                    Console.WriteLine($"[server] {dead.Label} disconnected: {dead.Session.DeadReason}");
+                    // Phase 4 — tell every other client to remove the
+                    // departing player's entity replica. Cheap broadcast;
+                    // the client filters silently if it never tracked this
+                    // EntityId (e.g. another disconnect arrived before
+                    // they ever entered each other's view).
+                    for (int j = 0; j < _clients.Count; j++)
+                    {
+                        if (j == i) continue;
+                        var other = _clients[j];
+                        if (other.Session.IsDead) continue;
+                        if (other.TrackedEntities.Remove(dead.EntityId))
+                        {
+                            other.Session.Send(PacketIds.EntityDespawn, w => new EntityDespawnPacket
+                            {
+                                EntityId = dead.EntityId,
+                            }.Write(w));
+                        }
+                    }
                     _clients.RemoveAt(i);
                 }
             }
@@ -508,6 +551,228 @@ namespace VStudioCraft.Server
 
         // ---- broadcast --------------------------------------------------
 
+        // Phase 4 — entity replication. For each pair (viewer, target) of
+        // in-game clients (target != viewer), ensure the viewer knows
+        // about the target's current position. Three sub-cases:
+        //
+        //   1. viewer hasn't seen target yet → EntitySpawn + EntityTeleport
+        //      (the Spawn carries an absolute position, but we also send
+        //      a Teleport on the immediately following tick so any
+        //      delta-packet reuses a fresh anchor).
+        //   2. viewer already tracks target, drift-correction is due,
+        //      OR the position changed by more than the renderer's
+        //      delta-precision → EntityTeleport (resets the anchor).
+        //   3. position changed by a small amount → EntityRelMove or
+        //      EntityRelMoveLook (cheaper packet, half the bytes).
+        //
+        // The sub-cases use a per-target ANCHOR shared across all viewers:
+        // we don't need a per-(viewer, target) anchor because every viewer
+        // sees the same broadcast, so they all reach the same end state.
+        // Saves N^2 anchor storage and keeps the loop O(viewers × targets).
+        private void BroadcastEntityUpdates()
+        {
+            // Step 1: each in-game client computes whether its anchor
+            // moved this tick. We do this once per target before iterating
+            // viewers so we know which packet shape (none / Look /
+            // RelMove / RelMoveLook / Teleport) applies.
+            for (int t = 0; t < _clients.Count; t++)
+            {
+                var target = _clients[t];
+                if (target.Session.IsDead) continue;
+                if (target.Phase == ClientPhase.AwaitingLogin) continue;
+                if (!target.HasReportedPos) continue;
+
+                target.TicksSinceTeleport++;
+
+                if (!target.AnchorValid)
+                {
+                    // First broadcast for this target since spawn — ANCHOR
+                    // to whatever position they last reported (the spawn
+                    // position from LoginResponse, or whatever PlayerPosLook
+                    // they sent first). The actual EntitySpawn for new
+                    // viewers is shipped inside Step 2 below; this just
+                    // primes the per-target anchor so deltas have a base.
+                    target.AnchorX = target.LastReportedX;
+                    target.AnchorY = target.LastReportedY;
+                    target.AnchorZ = target.LastReportedZ;
+                    target.AnchorYaw = target.LastReportedYaw;
+                    target.AnchorPitch = target.LastReportedPitch;
+                    target.AnchorValid = true;
+                    target.TicksSinceTeleport = 0;
+                }
+            }
+
+            // Step 2: pair-wise. For each viewer, ensure they have spawn
+            // packets for every target whose chunk is in their tracked
+            // window, and emit the per-target move/look/teleport packet.
+            for (int v = 0; v < _clients.Count; v++)
+            {
+                var viewer = _clients[v];
+                if (viewer.Session.IsDead) continue;
+                if (viewer.Phase == ClientPhase.AwaitingLogin) continue;
+
+                for (int t = 0; t < _clients.Count; t++)
+                {
+                    if (t == v) continue;
+                    var target = _clients[t];
+                    if (target.Session.IsDead) continue;
+                    if (target.Phase == ClientPhase.AwaitingLogin) continue;
+                    if (!target.HasReportedPos) continue;
+
+                    int targetCx = (int)Math.Floor(target.LastReportedX / Chunk.SizeX);
+                    int targetCz = (int)Math.Floor(target.LastReportedZ / Chunk.SizeZ);
+                    bool targetInView = viewer.TrackedChunks.Contains((targetCx, targetCz));
+
+                    bool alreadyTracked = viewer.TrackedEntities.Contains(target.EntityId);
+
+                    // Out of view: if we previously tracked them, drop them
+                    // now via Despawn (player walked far enough that the
+                    // other player should disappear). Either way, no
+                    // further packets to emit this pair.
+                    if (!targetInView)
+                    {
+                        if (alreadyTracked)
+                        {
+                            viewer.TrackedEntities.Remove(target.EntityId);
+                            viewer.Session.Send(PacketIds.EntityDespawn, w => new EntityDespawnPacket
+                            {
+                                EntityId = target.EntityId,
+                            }.Write(w));
+                        }
+                        continue;
+                    }
+
+                    // In view, not yet tracked: emit EntitySpawn followed
+                    // by an immediate Teleport so the client has a clean
+                    // absolute anchor before any deltas can arrive.
+                    if (!alreadyTracked)
+                    {
+                        viewer.TrackedEntities.Add(target.EntityId);
+                        var snap = target;
+                        viewer.Session.Send(PacketIds.EntitySpawn, w => new EntitySpawnPacket
+                        {
+                            EntityId    = snap.EntityId,
+                            EntityType  = EntityType.Player,
+                            X           = snap.LastReportedX,
+                            Y           = snap.LastReportedY,
+                            Z           = snap.LastReportedZ,
+                            Yaw         = snap.LastReportedYaw,
+                            Pitch       = snap.LastReportedPitch,
+                            DisplayName = snap.Username ?? "?",
+                        }.Write(w));
+                        // Skip the move-packet selection below for THIS
+                        // pair this tick — Spawn carried the absolute,
+                        // and the next tick will pick up where it left
+                        // off with deltas relative to this position.
+                        continue;
+                    }
+
+                    // Already tracked: emit the cheapest applicable update.
+                    // We use the TARGET's per-tick anchor delta — same for
+                    // every viewer — to decide which packet to send.
+                    double dx = target.LastReportedX - target.AnchorX;
+                    double dy = target.LastReportedY - target.AnchorY;
+                    double dz = target.LastReportedZ - target.AnchorZ;
+                    float dyaw = NormalizeDegrees(target.LastReportedYaw - target.AnchorYaw);
+                    float dpitch = target.LastReportedPitch - target.AnchorPitch;
+
+                    bool moveSig = Math.Abs(dx) > MoveEpsilon || Math.Abs(dy) > MoveEpsilon || Math.Abs(dz) > MoveEpsilon;
+                    bool lookSig = Math.Abs(dyaw) > LookEpsilon || Math.Abs(dpitch) > LookEpsilon;
+                    bool teleportDue = target.TicksSinceTeleport >= EntityTeleportEveryTicks;
+                    // Float deltas overflow precision past ~16 blocks
+                    // — beyond that we must Teleport regardless of the
+                    // tick counter to avoid a single delta drifting the
+                    // replica wildly off-position.
+                    bool teleportFar = Math.Abs(dx) > 16 || Math.Abs(dy) > 16 || Math.Abs(dz) > 16;
+
+                    if (teleportDue || teleportFar)
+                    {
+                        var snap = target;
+                        viewer.Session.Send(PacketIds.EntityTeleport, w => new EntityTeleportPacket
+                        {
+                            EntityId = snap.EntityId,
+                            X        = snap.LastReportedX,
+                            Y        = snap.LastReportedY,
+                            Z        = snap.LastReportedZ,
+                            Yaw      = snap.LastReportedYaw,
+                            Pitch    = snap.LastReportedPitch,
+                        }.Write(w));
+                    }
+                    else if (moveSig && lookSig)
+                    {
+                        var snap = target;
+                        float fdx = (float)dx, fdy = (float)dy, fdz = (float)dz;
+                        viewer.Session.Send(PacketIds.EntityRelMoveLook, w => new EntityRelMoveLookPacket
+                        {
+                            EntityId = snap.EntityId,
+                            Dx       = fdx,
+                            Dy       = fdy,
+                            Dz       = fdz,
+                            Yaw      = snap.LastReportedYaw,
+                            Pitch    = snap.LastReportedPitch,
+                        }.Write(w));
+                    }
+                    else if (moveSig)
+                    {
+                        var snap = target;
+                        float fdx = (float)dx, fdy = (float)dy, fdz = (float)dz;
+                        viewer.Session.Send(PacketIds.EntityRelMove, w => new EntityRelMovePacket
+                        {
+                            EntityId = snap.EntityId,
+                            Dx       = fdx,
+                            Dy       = fdy,
+                            Dz       = fdz,
+                        }.Write(w));
+                    }
+                    else if (lookSig)
+                    {
+                        var snap = target;
+                        viewer.Session.Send(PacketIds.EntityLook, w => new EntityLookPacket
+                        {
+                            EntityId = snap.EntityId,
+                            Yaw      = snap.LastReportedYaw,
+                            Pitch    = snap.LastReportedPitch,
+                        }.Write(w));
+                    }
+                    // Else: nothing significant changed — silent.
+                }
+            }
+
+            // Step 3: bake new anchors. Only happens once per tick across
+            // all viewer pairs above so each delta packet was relative to
+            // a stable per-target anchor. After baking, any teleport this
+            // tick also resets the per-target tick counter.
+            for (int t = 0; t < _clients.Count; t++)
+            {
+                var target = _clients[t];
+                if (target.Session.IsDead) continue;
+                if (!target.AnchorValid) continue;
+
+                bool teleportedThisTick =
+                    target.TicksSinceTeleport >= EntityTeleportEveryTicks
+                    || Math.Abs(target.LastReportedX - target.AnchorX) > 16
+                    || Math.Abs(target.LastReportedY - target.AnchorY) > 16
+                    || Math.Abs(target.LastReportedZ - target.AnchorZ) > 16;
+
+                target.AnchorX = target.LastReportedX;
+                target.AnchorY = target.LastReportedY;
+                target.AnchorZ = target.LastReportedZ;
+                target.AnchorYaw = target.LastReportedYaw;
+                target.AnchorPitch = target.LastReportedPitch;
+
+                if (teleportedThisTick) target.TicksSinceTeleport = 0;
+            }
+        }
+
+        // Wrap a yaw delta into [-180, 180] so a 359° → 1° change is
+        // detected as +2°, not -358°.
+        private static float NormalizeDegrees(float d)
+        {
+            while (d >  180f) d -= 360f;
+            while (d < -180f) d += 360f;
+            return d;
+        }
+
         private void BroadcastPendingBlockChanges()
         {
             var changes = _world.PendingBlockChanges;
@@ -649,6 +914,30 @@ namespace VStudioCraft.Server
         // BroadcastPendingBlockChanges to filter "is this edit in their
         // view?" and by SlideChunkWindow itself to compute the diff.
         public HashSet<(int cx, int cz)> TrackedChunks = new HashSet<(int, int)>();
+
+        // Phase 4 — what other-player EntityIds is this client currently
+        // tracking? Populated by EntitySpawn, drained by EntityDespawn.
+        // Per-tick entity broadcast iterates every (a, b) pair of
+        // currently-connected clients and uses this set to decide whether
+        // (a) needs an EntitySpawn for (b), or already-tracked (b) needs
+        // an EntityRelMove / RelMoveLook / Teleport.
+        public HashSet<int> TrackedEntities = new HashSet<int>();
+
+        // Phase 4 — last position+look this client was told about for
+        // ITS OWN entity (i.e. the values we last broadcast to OTHER
+        // clients about us). Compared each tick against the new
+        // LastReportedX/Y/Z to decide whether to emit a delta packet
+        // and what kind. Distinct from LastReportedX/Y/Z which is the
+        // raw client-side claim — we accept that into LastReported
+        // immediately on receive but only ANCHOR (and broadcast) once
+        // per tick.
+        public double AnchorX, AnchorY, AnchorZ;
+        public float AnchorYaw, AnchorPitch;
+        public bool AnchorValid;
+        // Tick counter since last full EntityTeleport. Once it crosses
+        // EntityTeleportEveryTicks we send a fresh Teleport regardless
+        // of delta size to defeat any accumulated rounding.
+        public int TicksSinceTeleport;
 
         // Last chunk coords we computed a window around. Compared each
         // tick against the player's current chunk; differing values
