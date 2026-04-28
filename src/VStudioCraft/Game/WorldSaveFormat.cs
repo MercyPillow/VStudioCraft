@@ -67,7 +67,44 @@ namespace VStudioCraft.Game
         //       saves load with the renderer's default (noon), so a
         //       round-trip on a legacy world simply resets the clock,
         //       same behaviour those saves had before this version.
-        private const byte CurrentVersion = 12;
+        // v13 = Phase 8 multiplayer player table. Trailing block appended
+        //       after the v12 time-of-day float so a v12 reader stops at
+        //       EOF without seeing the new section. Layout:
+        //
+        //         int  playerCount
+        //         per player:
+        //           string username (length-prefixed UTF-8 — BinaryWriter's
+        //                            7-bit-encoded length is fine here
+        //                            since this matches BinaryReader.ReadString)
+        //           double X, Y, Z
+        //           float  Yaw, Pitch
+        //           int    Health
+        //           int    selectedHotbarSlot (0..8)
+        //           49 ItemStacks (Inventory.TotalSlots) using WriteStack
+        //
+        //       Pre-v13 saves load with an empty player table — the
+        //       single-player Header is still authoritative for the
+        //       primary user (their CameraPos / Health / inventory load
+        //       through the existing v9 path). MP-aware code (ServerHub
+        //       login) consults the v13 table by username; missing
+        //       entries spawn fresh.
+        private const byte CurrentVersion = 13;
+
+        // Phase 8 — one entry per known player in the v13 multiplayer
+        // player table. Captured at save time from `ServerHub` (or the
+        // host's renderer for the loopback host); on load the server's
+        // login handler looks up the username to restore inventory +
+        // position. Pre-v13 worlds have an empty table — fresh logins
+        // get default spawn / empty inventory in that case.
+        public struct PersistedPlayer
+        {
+            public string Username;
+            public double X, Y, Z;
+            public float Yaw, Pitch;
+            public int Health;
+            public int HeldSlot;        // 0..8 hotbar selection
+            public ItemStack[] Inventory; // length == Inventory.TotalSlots (49)
+        }
 
         public struct Header
         {
@@ -91,7 +128,14 @@ namespace VStudioCraft.Game
             public float TimeOfDay;
         }
 
+        // Singleplayer overload — keeps every existing call site working
+        // without forcing them to think about the multiplayer player
+        // table. Calls through to the MP-aware overload with a null
+        // player list, which writes a 0-count v13 block.
         public static void Save(string path, Header header, World world)
+            => Save(path, header, world, null);
+
+        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players)
         {
             var tmp = path + ".tmp";
             using (var fs = File.Create(tmp))
@@ -238,6 +282,49 @@ namespace VStudioCraft.Game
                 // (0.25 = noon). Pre-v12 readers stop after the
                 // jukebox block above and never see this byte.
                 w.Write(header.TimeOfDay);
+
+                // v13: Phase 8 — multiplayer player table. Always
+                // written in v13+ — single-player saves get a 0-count
+                // block, which costs 4 bytes. Per-player payload is
+                // ~370 bytes (49 stacks × 7 bytes + ~50 bytes for
+                // pose/username), so 8 friends = ~3 KiB on disk —
+                // negligible compared to the chunk byte cost.
+                int playerCount = players?.Count ?? 0;
+                w.Write(playerCount);
+                if (players != null)
+                {
+                    for (int i = 0; i < players.Count; i++)
+                    {
+                        var p = players[i];
+                        // BinaryWriter.Write(string) emits a 7-bit-encoded
+                        // length prefix that BinaryReader.ReadString reads
+                        // symmetrically — same as every other string in
+                        // this format. Empty username is rejected at the
+                        // call site (Server's login handler), but we
+                        // write defensively in case a hand-edited save
+                        // ends up here.
+                        w.Write(p.Username ?? string.Empty);
+                        w.Write(p.X);
+                        w.Write(p.Y);
+                        w.Write(p.Z);
+                        w.Write(p.Yaw);
+                        w.Write(p.Pitch);
+                        w.Write(p.Health);
+                        w.Write(p.HeldSlot);
+                        // Inventory length is fixed at TotalSlots; we
+                        // rewrite that constant here so a future bump
+                        // (e.g. extra armor or off-hand) automatically
+                        // propagates without an on-disk format change
+                        // per-row. If TotalSlots ever grows, bump
+                        // CurrentVersion and add a per-row
+                        // backwards-compat decode in Load.
+                        var inv = p.Inventory ?? Array.Empty<ItemStack>();
+                        for (int s = 0; s < Inventory.TotalSlots; s++)
+                        {
+                            WriteStack(w, s < inv.Length ? inv[s] : ItemStack.Empty);
+                        }
+                    }
+                }
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
@@ -363,7 +450,16 @@ namespace VStudioCraft.Game
             }
         }
 
+        // Singleplayer overload — discards the v13 multiplayer player
+        // table. Existing call sites (`var (header, world) =
+        // WorldSaveFormat.Load(path)`) keep working without churn.
         public static (Header header, World world) Load(string path)
+        {
+            var (h, w, _) = LoadWithPlayers(path);
+            return (h, w);
+        }
+
+        public static (Header header, World world, Dictionary<string, PersistedPlayer> players) LoadWithPlayers(string path)
         {
             using (var fs = File.OpenRead(path))
             using (var gz = new GZipStream(fs, CompressionMode.Decompress))
