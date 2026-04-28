@@ -681,6 +681,16 @@ void main()
         // are sibling, not parent/child. The packet handler tries one
         // dict then the other before giving up on the lookup.
         private readonly Dictionary<int, HostileMob> _replicatedHostilesById = new Dictionary<int, HostileMob>();
+
+        // Phase 5f — snapshot-pair interpolators for replicated mobs.
+        // mob.Position is overwritten each frame from the Lerped value
+        // here so the existing RenderPassives / RenderHostiles paths
+        // see smooth motion despite the underlying packet stream
+        // arriving at 20 Hz. Keyed on NetworkId for O(1) packet match;
+        // one dict shared across passive + hostile because the interp
+        // logic doesn't care about mob class.
+        private readonly Dictionary<int, EntityInterpState> _mobInterpById = new Dictionary<int, EntityInterpState>();
+
         // Wall-clock used to time-stamp remote-player snapshots and feed
         // RemotePlayer.Tick. Driven by the host's render-loop dt; the
         // absolute origin doesn't matter, only the delta between samples.
@@ -1112,6 +1122,7 @@ void main()
             // out of MP.
             _replicatedPassivesById.Clear();
             _replicatedHostilesById.Clear();
+            _mobInterpById.Clear();
         }
 
         // Per-frame multiplayer pump. Called by the host's render loop
@@ -1179,6 +1190,29 @@ void main()
             {
                 kv.Value.Tick(_netClock, dt);
             }
+
+            // Phase 5f — same for replicated mobs. We tick the interp
+            // state (lerp prev/curr to a sample point inside the
+            // 100 ms render-behind window) and write the result back
+            // to the underlying mob's Position / Yaw so the existing
+            // RenderPassives / RenderHostiles paths see smooth motion
+            // without any change to their code.
+            foreach (var kv in _mobInterpById)
+            {
+                int eid = kv.Key;
+                var state = kv.Value;
+                state.Tick(_netClock);
+                if (_replicatedPassivesById.TryGetValue(eid, out var pmob))
+                {
+                    pmob.Position = state.RenderedPos;
+                    pmob.Yaw = state.RenderedYawRadians;
+                }
+                else if (_replicatedHostilesById.TryGetValue(eid, out var hmob))
+                {
+                    hmob.Position = state.RenderedPos;
+                    hmob.Yaw = state.RenderedYawRadians;
+                }
+            }
         }
 
         private void ApplyInboundPacket(VStudioCraft.Net.InboundPacket pkt)
@@ -1224,6 +1258,8 @@ void main()
                         {
                             _world.Passives.Add(mob);
                             _replicatedPassivesById[s.EntityId] = mob;
+                            _mobInterpById[s.EntityId] = new EntityInterpState(
+                                mob.Position, mob.Yaw, _netClock);
                         }
                     }
                     else if (s.EntityType >= VStudioCraft.Net.EntityType.Zombie
@@ -1237,6 +1273,8 @@ void main()
                         {
                             _world.Hostiles.Add(mob);
                             _replicatedHostilesById[s.EntityId] = mob;
+                            _mobInterpById[s.EntityId] = new EntityInterpState(
+                                mob.Position, mob.Yaw, _netClock);
                         }
                     }
                     // Other types (drops, projectiles) — fall through; not
@@ -1248,10 +1286,8 @@ void main()
                     var m = pkt.EntityRelMove;
                     if (_remotePlayers.TryGetValue(m.EntityId, out var rp))
                         rp.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
-                    else if (_replicatedPassivesById.TryGetValue(m.EntityId, out var pmob))
-                        pmob.Position += new Vector3(m.Dx, m.Dy, m.Dz);
-                    else if (_replicatedHostilesById.TryGetValue(m.EntityId, out var hmob))
-                        hmob.Position += new Vector3(m.Dx, m.Dy, m.Dz);
+                    else if (_mobInterpById.TryGetValue(m.EntityId, out var st))
+                        st.ApplyRelMove(new Vector3(m.Dx, m.Dy, m.Dz), _netClock);
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityLook:
@@ -1260,10 +1296,8 @@ void main()
                     float yawRad = l.Yaw * (float)Math.PI / 180f;
                     if (_remotePlayers.TryGetValue(l.EntityId, out var rp))
                         rp.ApplyLook(l.Yaw, l.Pitch, _netClock);
-                    else if (_replicatedPassivesById.TryGetValue(l.EntityId, out var pmob))
-                        pmob.Yaw = yawRad;
-                    else if (_replicatedHostilesById.TryGetValue(l.EntityId, out var hmob))
-                        hmob.Yaw = yawRad;
+                    else if (_mobInterpById.TryGetValue(l.EntityId, out var st))
+                        st.ApplyLook(yawRad, _netClock);
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityRelMoveLook:
@@ -1272,16 +1306,8 @@ void main()
                     float yawRad = ml.Yaw * (float)Math.PI / 180f;
                     if (_remotePlayers.TryGetValue(ml.EntityId, out var rp))
                         rp.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), ml.Yaw, ml.Pitch, _netClock);
-                    else if (_replicatedPassivesById.TryGetValue(ml.EntityId, out var pmob))
-                    {
-                        pmob.Position += new Vector3(ml.Dx, ml.Dy, ml.Dz);
-                        pmob.Yaw = yawRad;
-                    }
-                    else if (_replicatedHostilesById.TryGetValue(ml.EntityId, out var hmob))
-                    {
-                        hmob.Position += new Vector3(ml.Dx, ml.Dy, ml.Dz);
-                        hmob.Yaw = yawRad;
-                    }
+                    else if (_mobInterpById.TryGetValue(ml.EntityId, out var st))
+                        st.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), yawRad, _netClock);
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityTeleport:
@@ -1291,16 +1317,8 @@ void main()
                     float yawRad = t.Yaw * (float)Math.PI / 180f;
                     if (_remotePlayers.TryGetValue(t.EntityId, out var rp))
                         rp.ApplyTeleport(newPos, t.Yaw, t.Pitch, _netClock);
-                    else if (_replicatedPassivesById.TryGetValue(t.EntityId, out var pmob))
-                    {
-                        pmob.Position = newPos;
-                        pmob.Yaw = yawRad;
-                    }
-                    else if (_replicatedHostilesById.TryGetValue(t.EntityId, out var hmob))
-                    {
-                        hmob.Position = newPos;
-                        hmob.Yaw = yawRad;
-                    }
+                    else if (_mobInterpById.TryGetValue(t.EntityId, out var st))
+                        st.ApplyTeleport(newPos, yawRad, _netClock);
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.EntityDespawn:
@@ -1311,12 +1329,14 @@ void main()
                     {
                         _world?.Passives.Remove(pmob);
                         _replicatedPassivesById.Remove(eid);
+                        _mobInterpById.Remove(eid);
                         break;
                     }
                     if (_replicatedHostilesById.TryGetValue(eid, out var hmob))
                     {
                         _world?.Hostiles.Remove(hmob);
                         _replicatedHostilesById.Remove(eid);
+                        _mobInterpById.Remove(eid);
                     }
                     break;
                 }

@@ -85,33 +85,6 @@ defaults to 25566 (one above Notch's 25565); username defaults to
 
 ## Known issues / follow-ups
 
-### KI-1 — Tick lag spike on first connect
-
-**Symptom**: When the first client joins a fresh server, the server logs
-`Tick lag 1021 ms — resetting pacer.` immediately after, and `sim_max`
-spikes to ~120 ms for two ticks.
-
-**Cause**: Server boots with only the InitialRadiusChunks (5×5 = 25)
-chunks generated. A new client needs the 13×13 spawn-view-radius window
-(169 chunks). The 144 missing chunks are generated on-demand inside
-`ServerHub.SendChunk` via `TerrainGenerator.Generate +
-LightCalculator.RecomputeChunk`, which is ~10–20 ms per chunk. Combined
-with the 5-chunks-per-tick send pace, the first ~10 ticks each pay the
-full per-chunk gen cost.
-
-**Fix options**:
-1. Pre-generate the spawn 13×13 ring at server boot (during `World
-   .Generate`). Adds ~1.5 s to startup, removes the join spike entirely.
-2. Move chunk gen onto a worker thread (mirror the client's
-   `ChunkJobSystem`). Sends start delayed by ~50 ms but tick stays at
-   20 Hz throughout.
-
-**Ranking**: option 1 is simpler and the right choice for now — startup
-time is one-shot, join lag affects every player.
-
-**When to do it**: Phase 3 (touching server-side world streaming anyway)
-or as a small PR before Phase 4. Not blocking.
-
 ### KI-2 — Server-side player physics validation still missing (now Phase 5+)
 
 **Symptom**: Server trusts client-reported position. A modified client
@@ -152,26 +125,6 @@ toggle is a small extra variant.
 (Phase 3 update — 2026-04-28 — break/place no longer no-ops; they ship
 `PlayerDigStart` and `PlayerPlace` and roundtrip a `BlockChange`.)
 
-### KI-7 — Mob replicas snap-to-position (no interpolation)
-
-**Symptom (Phase 5a/b)**: Replicated passive + hostile mobs visibly
-stutter at the server tick boundary (every 50 ms). Walk cycle still
-runs because PassiveMob.Update is called on the client too — wait, no
-it isn't. Check.
-
-**Cause**: client's `EntityRelMove` handler writes `mob.Position +=
-delta` directly. With ticks at 20 Hz and rendering at 1500+ fps, the
-mob teleports by ~5cm every 50ms instead of moving smoothly.
-Compare to `RemotePlayer` which lerps over a snapshot pair.
-
-**Fix (Phase 5f)**: factor out the `RemotePlayer` snapshot/interp
-machinery into a generic helper that can wrap a `PassiveMob` /
-`HostileMob`. Either store snapshot pairs sidecar-style in a
-`Dictionary<int, EntityInterpState>` on `GameRenderer`, or thread
-prev/curr fields directly through `Entity`. Sidecar is less invasive
-and matches the way `RemotePlayer` already lives separately from
-the player class.
-
 ### KI-4 — No reconnect / error UX on broken socket
 
 **Symptom**: If the server drops mid-session (process kill, network blip),
@@ -196,9 +149,10 @@ streams could double-generate the same chunk.
 **Cause**: No "chunk generation in flight" guard server-side.
 
 **Fix**: Track in-flight chunk gens in a `HashSet<(int,int)>` keyed on
-chunk coords; `SendChunk` becomes idempotent. Folds naturally into
-KI-1's worker-thread fix if we go that route. Address before Phase 4
-when multiple clients stream concurrently.
+chunk coords; `SendChunk` becomes idempotent. Risk is reduced now that
+spawn pre-gen at boot fills the common-case window before any client
+connects — the on-demand path only fires when a player walks past the
+13×13 spawn ring. Still address before mass-multiplayer testing.
 
 ### KI-6 — `--connect` can't reach a private LAN host without explicit IP
 

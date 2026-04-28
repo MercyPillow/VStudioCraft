@@ -134,6 +134,7 @@
     <Compile Include="Game\WorldSelectScreen.cs" />
     <Compile Include="Game\Player.cs" />
     <Compile Include="Game\RemotePlayer.cs" />
+    <Compile Include="Game\EntityInterpState.cs" />
     <Compile Include="Game\Raycast.cs" />
     <Compile Include="Game\Shader.cs" />
     <Compile Include="Game\SkyRenderer.cs" />

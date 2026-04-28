@@ -219,6 +219,18 @@ namespace VStudioCraft.Server
                             // during the burst — drain harmlessly.
                             case PacketIds.BlockChange: BlockChangePacket.Read(r); break;
                             case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(r); break;
+                            // Phase 5 — once mobs replicate from the
+                            // pre-generated spawn area, entity packets
+                            // can arrive during the chunk burst. Drain
+                            // them harmlessly; this selftest validates
+                            // the chunk path, not the entity path
+                            // (--selftest-mp is the entity-path test).
+                            case PacketIds.EntitySpawn: EntitySpawnPacket.Read(r); break;
+                            case PacketIds.EntityRelMove: EntityRelMovePacket.Read(r); break;
+                            case PacketIds.EntityLook: EntityLookPacket.Read(r); break;
+                            case PacketIds.EntityRelMoveLook: EntityRelMoveLookPacket.Read(r); break;
+                            case PacketIds.EntityTeleport: EntityTeleportPacket.Read(r); break;
+                            case PacketIds.EntityDespawn: EntityDespawnPacket.Read(r); break;
                             default:
                                 throw new InvalidDataException($"unexpected packet id 0x{id:X2}");
                         }
@@ -268,6 +280,12 @@ namespace VStudioCraft.Server
                             case PacketIds.KeepAlive: break;
                             case PacketIds.ChunkLoad: ChunkLoadPacket.Read(r); break;
                             case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(r); break;
+                            case PacketIds.EntitySpawn: EntitySpawnPacket.Read(r); break;
+                            case PacketIds.EntityRelMove: EntityRelMovePacket.Read(r); break;
+                            case PacketIds.EntityLook: EntityLookPacket.Read(r); break;
+                            case PacketIds.EntityRelMoveLook: EntityRelMoveLookPacket.Read(r); break;
+                            case PacketIds.EntityTeleport: EntityTeleportPacket.Read(r); break;
+                            case PacketIds.EntityDespawn: EntityDespawnPacket.Read(r); break;
                             case PacketIds.BlockChange:
                                 var bc = BlockChangePacket.Read(r);
                                 if (bc.X == wx && bc.Y == placeTargetY && bc.Z == wz && bc.BlockType == StoneType) sawPlace = true;
@@ -299,6 +317,12 @@ namespace VStudioCraft.Server
                             case PacketIds.KeepAlive: break;
                             case PacketIds.ChunkLoad: ChunkLoadPacket.Read(r); break;
                             case PacketIds.ChunkUnload: ChunkUnloadPacket.Read(r); break;
+                            case PacketIds.EntitySpawn: EntitySpawnPacket.Read(r); break;
+                            case PacketIds.EntityRelMove: EntityRelMovePacket.Read(r); break;
+                            case PacketIds.EntityLook: EntityLookPacket.Read(r); break;
+                            case PacketIds.EntityRelMoveLook: EntityRelMoveLookPacket.Read(r); break;
+                            case PacketIds.EntityTeleport: EntityTeleportPacket.Read(r); break;
+                            case PacketIds.EntityDespawn: EntityDespawnPacket.Read(r); break;
                             case PacketIds.BlockChange:
                                 var bc2 = BlockChangePacket.Read(r);
                                 if (bc2.X == wx && bc2.Y == placeTargetY && bc2.Z == wz && bc2.BlockType == 0) sawDig = true;

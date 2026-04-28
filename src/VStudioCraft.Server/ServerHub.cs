@@ -94,6 +94,22 @@ namespace VStudioCraft.Server
         public ServerHub(World world, int port = DefaultPort)
         {
             _world = world ?? throw new ArgumentNullException(nameof(world));
+
+            // KI-1 fix — pre-generate the spawn view-radius window
+            // (13×13 = 169 chunks at ServerViewRadius=6) at boot so the
+            // first connecting client doesn't trigger 144 chunks of
+            // on-demand gen inside its first ~10 ticks. Without this,
+            // a fresh server logs 1 s of tick lag on every cold join
+            // because TerrainGenerator.Generate + LightCalculator are
+            // ~10–20 ms each at 5 chunks/tick.
+            //
+            // Cost: ~1.5–2 s added to server startup, paid ONCE at boot.
+            // Subsequent joins reuse the already-generated chunks; the
+            // sliding chunk window also re-uses them when other players
+            // walk away then back. A clean trade — startup is one-shot,
+            // join lag affects every player.
+            PregenerateSpawnArea();
+
             _listener = new TcpListener(IPAddress.Any, port);
             _listener.Start();
             _acceptThread = new Thread(AcceptLoop)
@@ -101,6 +117,35 @@ namespace VStudioCraft.Server
                 IsBackground = true,
                 Name = "NetServer-Accept",
             };
+        }
+
+        // Generate every chunk in the spawn view-radius window so the
+        // first client to join finds them already present. Spawn is at
+        // (0, _, 0); we generate the same 13×13 ring SlideChunkWindow
+        // would request anyway on first PlayerPosLook, just up-front.
+        private void PregenerateSpawnArea()
+        {
+            int spawnCx = 0;
+            int spawnCz = 0;
+            int generated = 0;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int dz = -ServerViewRadius; dz <= ServerViewRadius; dz++)
+            for (int dx = -ServerViewRadius; dx <= ServerViewRadius; dx++)
+            {
+                int cx = spawnCx + dx;
+                int cz = spawnCz + dz;
+                if (_world.HasChunk(cx, cz)) continue;
+                var chunk = new Chunk(cx, cz);
+                TerrainGenerator.Generate(chunk, _world.Noise);
+                LightCalculator.RecomputeChunk(chunk);
+                _world.InstallGeneratedChunk(chunk);
+                generated++;
+            }
+            sw.Stop();
+            if (generated > 0)
+            {
+                Console.WriteLine($"[server] pre-generated {generated} spawn chunks in {sw.ElapsedMilliseconds} ms");
+            }
         }
 
         public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
