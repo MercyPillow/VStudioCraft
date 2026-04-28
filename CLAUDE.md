@@ -80,7 +80,7 @@ defaults to 25566 (one above Notch's 25565); username defaults to
   - [ ] **5e** — Damage delivery: `EntityHealth` packet, server-side `Player` health tracking, hurt-flash sync
   - [ ] **5f** — Mob/drop interpolation polish (currently snap-to-position; want lerp like RemotePlayer)
 - [ ] **Phase 6** — Inventory click protocol + server-side recipes + tile-entity sync
-- [ ] **Phase 7** — Integrated server for SP (in-process loopback)
+- [ ] **Phase 7** — "Open to LAN" — host an in-process server alongside running SP world (see [Feature: Open to LAN](#feature-open-to-lan) below for the full design)
 - [ ] **Phase 8** — Persistence v10 (per-username state) + admin console + autosave
 
 ## Known issues / follow-ups
