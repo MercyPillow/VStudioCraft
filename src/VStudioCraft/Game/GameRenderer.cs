@@ -443,7 +443,19 @@ void main()
         public bool IsInventoryOpen
         {
             get => _isInventoryOpen;
-            set => _isInventoryOpen = value;
+            set
+            {
+                // Tier 6 #32 — On close, dump anything left in the
+                // 2×2 player craft grid back to the player (TryAdd)
+                // and spill leftovers into the world. Mirrors the
+                // 3×3 CraftingScreen close behaviour so a player
+                // who closes mid-craft doesn't lose ingredients.
+                if (_isInventoryOpen && !value)
+                {
+                    DumpPlayerCraft2x2();
+                }
+                _isInventoryOpen = value;
+            }
         }
 
         // True while the Options sub-menu (opened from the pause menu) is
@@ -478,6 +490,39 @@ void main()
         // outside of the take-from-output path.
         private readonly ItemStack[] _craftingGrid = new ItemStack[CraftingScreen.GridSlotCount];
         private ItemStack _craftingOutput;
+
+        // Tier 6 #32 — Player 2×2 crafting grid + output, available
+        // whenever the survival inventory is open. Rebuilt on every
+        // grid mutation via CraftingRecipes.Match (the 2×2 is wrapped
+        // in a 9-slot scratch array with the upper-left occupied so
+        // the existing 3×3 matcher accepts it; recipes that need
+        // anything outside the upper-left 2×2 — e.g. chest, furnace,
+        // bookshelf — won't match here, mirroring Alpha 1.1.2_01).
+        // Held on the renderer (not Inventory) because the slots
+        // aren't persistent storage; on inventory close, anything
+        // left in the grid + the cursor stack is dumped back to the
+        // player or world like the 3×3 CraftingScreen does.
+        private readonly ItemStack[] _playerCraftGrid = new ItemStack[InventoryScreen.PlayerCraftGridCount];
+        private ItemStack _playerCraftOutput;
+        private readonly ItemStack[] _playerCraftMatchScratch = new ItemStack[CraftingScreen.GridSlotCount];
+
+        // Wrap the 2×2 grid (upper-left of a 3×3 scratch buffer) and
+        // run CraftingRecipes.Match. Returns ItemStack.Empty for any
+        // recipe that doesn't fit in 2×2 (chest, furnace, bookshelf,
+        // bow, etc.) — players have to use a CraftingTable for those.
+        private ItemStack MatchPlayerCraft2x2()
+        {
+            for (int i = 0; i < _playerCraftMatchScratch.Length; i++)
+                _playerCraftMatchScratch[i] = ItemStack.Empty;
+            // Upper-left 2×2 of the 3×3 scratch:
+            //   playerCraftGrid[0..3] (row-major in 2×2) →
+            //     scratch[0]=tl, scratch[1]=tr, scratch[3]=bl, scratch[4]=br
+            _playerCraftMatchScratch[0] = _playerCraftGrid[0];
+            _playerCraftMatchScratch[1] = _playerCraftGrid[1];
+            _playerCraftMatchScratch[3] = _playerCraftGrid[2];
+            _playerCraftMatchScratch[4] = _playerCraftGrid[3];
+            return CraftingRecipes.Match(_playerCraftMatchScratch);
+        }
 
         // True while the furnace screen is open (RMB on a Furnace or
         // LitFurnace block). World-halt semantics match the crafting
@@ -3103,6 +3148,13 @@ void main()
                     // mobs were already considered for it the first time.
                     if (freshlyInstalled && !r.Chunk.IsModified)
                     {
+                        // Tier 6 #32 — Dungeon gen runs main-thread-only
+                        // (it mutates _chestEntities which isn't safe
+                        // to touch from the worker). Re-light the chunk
+                        // after dungeons carve the cobble interior so
+                        // sky-light propagates into the new air space.
+                        _world.GenerateDungeonsInChunk(r.Chunk);
+                        LightCalculator.RecomputeChunk(r.Chunk);
                         _world.SpawnPassivesInChunk(r.Chunk);
                         _world.SpawnHostilesInChunk(r.Chunk);
                     }
@@ -6608,6 +6660,82 @@ void main()
 
             // Survival: full slot exchange against main + hotbar.
             int slot = InventoryScreen.HitTest(screenW, screenH, mx, my);
+
+            // Tier 6 #32 — 2×2 player crafting grid (49..52) + output
+            // (53). Mirrors the 3×3 CraftingScreen click rules: grid
+            // slots exchange with the cursor, output is read-only and
+            // consumes one of every input on click. Recipe match is
+            // re-run after every grid mutation.
+            if (slot >= InventoryScreen.PlayerCraftGridStart
+                && slot < InventoryScreen.PlayerCraftOutputSlot)
+            {
+                int gi = slot - InventoryScreen.PlayerCraftGridStart;
+                if (shift)
+                {
+                    var leftover = inv.TryAdd(_playerCraftGrid[gi]);
+                    _playerCraftGrid[gi] = leftover;
+                }
+                else if (button == 2)
+                {
+                    HandleRightClickSlotRef(ref _playerCraftGrid[gi], inv);
+                }
+                else
+                {
+                    HandleLeftClickSlotRef(ref _playerCraftGrid[gi], inv);
+                }
+                _playerCraftOutput = MatchPlayerCraft2x2();
+                return;
+            }
+            if (slot == InventoryScreen.PlayerCraftOutputSlot)
+            {
+                if (_playerCraftOutput.IsEmpty) return;
+                if (shift)
+                {
+                    // Repeat-craft until either the recipe stops
+                    // matching or the inventory can't fit more.
+                    while (!_playerCraftOutput.IsEmpty)
+                    {
+                        var leftover = inv.TryAdd(_playerCraftOutput);
+                        if (!leftover.IsEmpty)
+                        {
+                            // Inventory full — put the unused result
+                            // back via TryAdd; if it can't fit, drop
+                            // it into the world.
+                            if (inv.TryAdd(leftover).IsEmpty == false)
+                                SpawnSingleDrop((int)Player.Position.X, (int)Player.Position.Y + 1, (int)Player.Position.Z, leftover);
+                            break;
+                        }
+                        ConsumePlayerCraft2x2Inputs();
+                        _playerCraftOutput = MatchPlayerCraft2x2();
+                    }
+                }
+                else
+                {
+                    // Single craft — pick up the output (or top up the
+                    // cursor if it already holds the same item).
+                    if (inv.Cursor.IsEmpty)
+                    {
+                        inv.Cursor = _playerCraftOutput;
+                    }
+                    else if (inv.Cursor.Type == _playerCraftOutput.Type
+                          && inv.Cursor.Count + _playerCraftOutput.Count <= ItemStack.MaxStackSizeFor(inv.Cursor.Type))
+                    {
+                        inv.Cursor = new ItemStack(inv.Cursor.Type,
+                            inv.Cursor.Count + _playerCraftOutput.Count);
+                    }
+                    else
+                    {
+                        // Cursor already holds something else — single
+                        // craft can't fit. Refuse the click silently
+                        // (matches the 3×3 behaviour).
+                        return;
+                    }
+                    ConsumePlayerCraft2x2Inputs();
+                    _playerCraftOutput = MatchPlayerCraft2x2();
+                }
+                return;
+            }
+
             if (slot >= 0)
             {
                 // LMB = full pick / drop / swap / merge.
@@ -6628,6 +6756,46 @@ void main()
             }
         }
 
+        // Tier 6 #32 — Consume one of each input in the 2×2 player
+        // craft grid. Called after a successful output click. Empty
+        // cells stay empty.
+        private void ConsumePlayerCraft2x2Inputs()
+        {
+            for (int i = 0; i < _playerCraftGrid.Length; i++)
+            {
+                if (_playerCraftGrid[i].IsEmpty) continue;
+                int newCount = _playerCraftGrid[i].Count - 1;
+                if (newCount <= 0)
+                    _playerCraftGrid[i] = ItemStack.Empty;
+                else
+                    _playerCraftGrid[i] = new ItemStack(_playerCraftGrid[i].Type,
+                        newCount, _playerCraftGrid[i].Durability);
+            }
+        }
+
+        // Tier 6 #32 — Dump the 2×2 grid contents back to the player
+        // (TryAdd) on inventory close; spill leftovers into the world.
+        // Called from CloseInventory paths so a player who left a
+        // half-laid recipe doesn't lose those items.
+        private void DumpPlayerCraft2x2()
+        {
+            if (Input == null) return;
+            var inv = Input.Inventory;
+            for (int i = 0; i < _playerCraftGrid.Length; i++)
+            {
+                if (_playerCraftGrid[i].IsEmpty) continue;
+                var leftover = inv.TryAdd(_playerCraftGrid[i]);
+                if (!leftover.IsEmpty && _world != null)
+                {
+                    SpawnSingleDrop((int)Player.Position.X,
+                        (int)Player.Position.Y + 1,
+                        (int)Player.Position.Z, leftover);
+                }
+                _playerCraftGrid[i] = ItemStack.Empty;
+            }
+            _playerCraftOutput = ItemStack.Empty;
+        }
+
         // RMB-drag deposit into an inventory slot. Drops one item from
         // the cursor stack if the destination is empty or holds the
         // same kind; foreign-type slots are skipped (no swap during
@@ -6641,6 +6809,18 @@ void main()
             if (Input == null) return;
             var inv = Input.Inventory;
             if (inv.Cursor.IsEmpty) return;
+            // Tier 6 #32 — Player 2×2 grid drag deposit: drop one
+            // into the matching grid slot + recompute the output.
+            if (slotIndex >= InventoryScreen.PlayerCraftGridStart
+                && slotIndex < InventoryScreen.PlayerCraftOutputSlot)
+            {
+                int gi = slotIndex - InventoryScreen.PlayerCraftGridStart;
+                DepositOneFromCursor(ref _playerCraftGrid[gi], inv);
+                _playerCraftOutput = MatchPlayerCraft2x2();
+                return;
+            }
+            // Output is read-only — drag-deposit on it is a no-op.
+            if (slotIndex == InventoryScreen.PlayerCraftOutputSlot) return;
             if (slotIndex < 0 || slotIndex >= Inventory.TotalSlots) return;
             DepositOneFromCursor(ref inv.Slots[slotIndex], inv);
         }
@@ -11905,15 +12085,92 @@ void main()
                 }
             }
 
+            // ---- 2×2 player crafting grid + output -----------------------
+            // Tier 6 #32 — Wells + icons + counts + the arrow between
+            // grid and output. Output stack is rebuilt on every grid
+            // mutation (in the click router) — render reads it as-is.
+            for (int gi = 0; gi < InventoryScreen.PlayerCraftGridCount; gi++)
+            {
+                int slotIdx = InventoryScreen.PlayerCraftGridStart + gi;
+                InventoryScreen.GetSlotRect(slotIdx, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+                var stack = _playerCraftGrid[gi];
+                if (!stack.IsEmpty)
+                {
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                    if (stack.Count > 1) DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
+            }
+            // Output slot well + icon.
+            {
+                InventoryScreen.GetSlotRect(InventoryScreen.PlayerCraftOutputSlot,
+                    width, height, out int sx, out int sy, out int sw, out int sh);
+                DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+                if (!_playerCraftOutput.IsEmpty)
+                {
+                    DrawSlotIcon(_playerCraftOutput.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                    if (_playerCraftOutput.Count > 1)
+                        DrawStackCount(_playerCraftOutput.Count, sx, sy, sw, sh, ortho);
+                }
+            }
+            // Arrow between the 2×2 grid and the output. Two
+            // overlapping rectangles forming a chunky →. Painted
+            // manually with DrawSolidQuad since we don't have a
+            // dedicated arrow sprite.
+            {
+                InventoryScreen.GetSlotRect(InventoryScreen.PlayerCraftGridStart + 1,
+                    width, height, out int gx, out int gy, out int gw, out int gh);
+                InventoryScreen.GetSlotRect(InventoryScreen.PlayerCraftOutputSlot,
+                    width, height, out int ox, out int oy, out _, out _);
+                int arrowLeft = gx + gw + UiScale.S(6, width, height);
+                int arrowRight = ox - UiScale.S(6, width, height);
+                int arrowMidY = gy + gh; // between the two rows of the 2×2 (bottom of top row)
+                int shaftH = UiScale.S(3, width, height);
+                int shaftY = arrowMidY - shaftH / 2;
+                var arrowC = new Vector3(0.78f, 0.82f, 0.88f);
+                DrawSolidQuad(arrowLeft, shaftY, arrowRight - arrowLeft, shaftH, arrowC, 1f, ortho);
+                int headW = UiScale.S(8, width, height);
+                int headH = UiScale.S(10, width, height);
+                DrawSolidQuad(arrowRight - headW, arrowMidY - headH / 2, headW, headH, arrowC, 1f, ortho);
+            }
+
             // ---- hover tooltip ------------------------------------------
             // Cursor-following popout matching the creative catalog
-            // tooltip — same chrome, same logic. Hovers all 49 slots
-            // (main + hotbar + armor) so the player can confirm what's
-            // in any well at a glance.
+            // tooltip — same chrome, same logic. Hovers all 49 inv
+            // slots + the 5 player-craft slots so the player can
+            // confirm what's in any well at a glance.
             int mxh = Input?.MenuMouseX ?? -1;
             int myh = Input?.MenuMouseY ?? -1;
             string hover = GetHoveredSlotLabel(0, InventoryScreen.TotalSlots,
                 mxh, myh, width, height, /*creative*/false);
+            if (hover == null && mxh >= 0)
+            {
+                // 2×2 grid hover (slots 49..52) — read from
+                // _playerCraftGrid; output (53) reads _playerCraftOutput.
+                for (int gi = 0; gi < InventoryScreen.PlayerCraftGridCount; gi++)
+                {
+                    InventoryScreen.GetSlotRect(InventoryScreen.PlayerCraftGridStart + gi,
+                        width, height, out int sx, out int sy, out int sw, out int sh);
+                    if (mxh >= sx && mxh < sx + sw && myh >= sy && myh < sy + sh
+                        && !_playerCraftGrid[gi].IsEmpty)
+                    {
+                        hover = FriendlyName(_playerCraftGrid[gi].Type);
+                        break;
+                    }
+                }
+                if (hover == null)
+                {
+                    InventoryScreen.GetSlotRect(InventoryScreen.PlayerCraftOutputSlot,
+                        width, height, out int sx, out int sy, out int sw, out int sh);
+                    if (mxh >= sx && mxh < sx + sw && myh >= sy && myh < sy + sh
+                        && !_playerCraftOutput.IsEmpty)
+                    {
+                        hover = FriendlyName(_playerCraftOutput.Type);
+                    }
+                }
+            }
             if (hover != null)
                 DrawHoverTooltip(hover, mxh, myh, width, height, ortho);
         }

@@ -169,6 +169,12 @@ namespace VStudioCraft.Game
             {
                 var c = new Chunk(cx, cz);
                 TerrainGenerator.Generate(c, w._noise);
+                // Tier 6 #32 — Dungeons run after terrain (so caves
+                // exist and we can be selective about which chunks
+                // get them) but before LightCalculator (so the
+                // dungeon's interior is included in the initial
+                // sky-light propagation).
+                w.GenerateDungeonsInChunk(c);
                 LightCalculator.RecomputeChunk(c);
                 w._chunks[(cx, cz)] = c;
                 // Initial spawn pass uses the same per-chunk hashed RNG
@@ -194,6 +200,152 @@ namespace VStudioCraft.Game
         // Species mix mirrors Alpha 1.1.2_01's overworld passive spawn
         // weights: 30% Pig, 30% Cow, 25% Sheep, 15% Chicken — pig and
         // cow are the most common, chickens the rarest.
+        // Tier 6 #32 — Dungeon generation. Runs once per chunk after
+        // TerrainGenerator (so caves/ores have already cut the stone),
+        // before SpawnPassives (so a fresh dungeon's chest counts
+        // against any nearby loot table). Each chunk rolls 8 attempts
+        // at a random underground position; if it hits a clean 5×4×5
+        // stone box, a cobble dungeon goes there. The spawner block
+        // is decorative for now — gameplay tick is a follow-up.
+        //
+        // Deterministic per-chunk RNG (seed + chunk coords) so a
+        // given seed always generates dungeons in the same places,
+        // matching how passive-spawn + flora gen stay reproducible.
+        public void GenerateDungeonsInChunk(Chunk c)
+        {
+            int hash = (int)((uint)Seed * 1103515245u + (uint)(c.ChunkX * 0x68b1f6) + (uint)(c.ChunkZ * 0x6f1c43));
+            var rng = new Random(hash);
+            const int Attempts = 8;
+            for (int i = 0; i < Attempts; i++)
+            {
+                // Position: leave a 1-block margin from chunk edges so
+                // the 5×4×5 box fits without crossing into a neighbour.
+                // Y range biases toward the lower-half of the cave-
+                // eligible band (matches Alpha — dungeons are deep).
+                int lx = 1 + rng.Next(Chunk.SizeX - 6);
+                int lz = 1 + rng.Next(Chunk.SizeZ - 6);
+                int ly = 8 + rng.Next(System.Math.Max(1, TerrainGenerator.SeaLevel - 14));
+
+                if (TryPlaceDungeon(c, lx, ly, lz, rng))
+                {
+                    // One dungeon per chunk is plenty — Alpha lets two
+                    // overlap occasionally but the result is messy.
+                    return;
+                }
+            }
+        }
+
+        // Attempt to place a 5-wide × 4-tall × 5-deep cobble dungeon
+        // at chunk-local (lx, ly, lz). The box's footprint is the
+        // outer cobble shell (5×5 floor + 5×5 ceiling + 4 1-block-
+        // tall walls); the interior 3×2×3 is hollowed to air.
+        // Returns true if placement succeeded.
+        private bool TryPlaceDungeon(Chunk c, int lx, int ly, int lz, Random rng)
+        {
+            // Bounds check (defensive; caller already left margin).
+            if (lx < 0 || ly < 0 || lz < 0) return false;
+            if (lx + 5 > Chunk.SizeX) return false;
+            if (lz + 5 > Chunk.SizeZ) return false;
+            if (ly + 4 > Chunk.SizeY) return false;
+
+            // Eligibility: at least 80 % of the box's volume must
+            // currently be solid stone-or-dirt-or-gravel (i.e. we're
+            // carving into the underground, not floating in the air).
+            // Empty cells are tolerated up to 20 % so a dungeon that
+            // pokes into an existing cave still spawns — that's how
+            // the player typically discovers them.
+            int solidCount = 0;
+            int totalCells = 5 * 4 * 5;
+            for (int dx = 0; dx < 5; dx++)
+            for (int dy = 0; dy < 4; dy++)
+            for (int dz = 0; dz < 5; dz++)
+            {
+                var t = c.Get(lx + dx, ly + dy, lz + dz);
+                if (t == BlockType.Stone || t == BlockType.Dirt
+                    || t == BlockType.Gravel || t == BlockType.Cobblestone
+                    || t == BlockType.MossyCobblestone)
+                {
+                    solidCount++;
+                }
+            }
+            if (solidCount < (totalCells * 80) / 100) return false;
+
+            // Pass 1 — wall cells: cobblestone with ~25% mossy.
+            // Pass 2 — interior cells (dx 1..3, dy 1..2, dz 1..3): air.
+            for (int dx = 0; dx < 5; dx++)
+            for (int dy = 0; dy < 4; dy++)
+            for (int dz = 0; dz < 5; dz++)
+            {
+                bool isInterior = dx >= 1 && dx <= 3 && dy >= 1 && dy <= 2 && dz >= 1 && dz <= 3;
+                if (isInterior)
+                {
+                    c.Set(lx + dx, ly + dy, lz + dz, BlockType.Air);
+                }
+                else
+                {
+                    bool mossy = rng.Next(4) == 0;
+                    c.Set(lx + dx, ly + dy, lz + dz,
+                        mossy ? BlockType.MossyCobblestone : BlockType.Cobblestone);
+                }
+            }
+
+            // Spawner at the centre of the floor + 1 (so it sits on
+            // the floor block, with the cage block at floor+1).
+            int spX = lx + 2;
+            int spY = ly + 1;
+            int spZ = lz + 2;
+            c.Set(spX, spY, spZ, BlockType.MobSpawner);
+
+            // Chest at a random wall corner (interior side). Pick from
+            // the 4 corners of the bottom-row interior.
+            var corners = new (int, int)[]
+            {
+                (lx + 1, lz + 1),
+                (lx + 3, lz + 1),
+                (lx + 1, lz + 3),
+                (lx + 3, lz + 3),
+            };
+            var (chestX, chestZ) = corners[rng.Next(corners.Length)];
+            int chestY = ly + 1;
+            c.Set(chestX, chestY, chestZ, BlockType.Chest);
+            // Tile-entity registration uses world coords. Chest gets
+            // a deterministic-per-position random loot fill; chunk-
+            // local (chestX, chestZ) → world (worldChestX, worldChestZ)
+            // via chunk origin.
+            int worldChestX = c.ChunkX * Chunk.SizeX + chestX;
+            int worldChestZ = c.ChunkZ * Chunk.SizeZ + chestZ;
+            var ce = GetOrCreateChestEntity(worldChestX, chestY, worldChestZ);
+            FillDungeonChestLoot(ce, rng);
+            return true;
+        }
+
+        // Tier 6 #32 — Dungeon chest loot. Random selection of the
+        // common Alpha 1.1.2_01 dungeon-chest items (bread, wheat,
+        // sticks, gunpowder, string, iron ingot, bucket, saddle).
+        // Chest has 27 slots; we fill 4..7 random ones with random
+        // counts. Saddle + bucket are weighted rare to match Alpha.
+        private static void FillDungeonChestLoot(ChestTileEntity ce, Random rng)
+        {
+            int slotCount = 4 + rng.Next(4); // 4..7
+            for (int s = 0; s < slotCount; s++)
+            {
+                int slotIdx = rng.Next(ce.Slots.Length);
+                if (!ce.Slots[slotIdx].IsEmpty) continue;
+                int roll = rng.Next(100);
+                BlockType item;
+                int count;
+                if (roll < 20)      { item = BlockType.Bread;      count = 1 + rng.Next(3); }
+                else if (roll < 40) { item = BlockType.WheatItem;  count = 1 + rng.Next(4); }
+                else if (roll < 60) { item = BlockType.Stick;      count = 1 + rng.Next(8); }
+                else if (roll < 75) { item = BlockType.Gunpowder;  count = 1 + rng.Next(4); }
+                else if (roll < 88) { item = BlockType.String;     count = 1 + rng.Next(4); }
+                else if (roll < 96) { item = BlockType.IronIngot;  count = 1 + rng.Next(3); }
+                else if (roll < 99) { item = BlockType.BucketEmpty; count = 1; }
+                else                { item = BlockType.Saddle;     count = 1; }
+                ce.Slots[slotIdx] = new ItemStack(item, count);
+            }
+        }
+
         public void SpawnPassivesInChunk(Chunk c)
         {
             const int RareDenominator = 720; // ~1 chance per 720 grass cells (¼ of the original 180)
@@ -857,6 +1009,11 @@ namespace VStudioCraft.Game
             {
                 c = new Chunk(cx, cz);
                 TerrainGenerator.Generate(c, _noise);
+                // Tier 6 #32 — Dungeon gen between terrain + light.
+                // Same threading rules as the streaming path's main-
+                // thread install — caller is on the main thread when
+                // calling AddChunk so mutating _chestEntities is safe.
+                GenerateDungeonsInChunk(c);
                 LightCalculator.RecomputeChunk(c);
             }
             _chunks[(cx, cz)] = c;
