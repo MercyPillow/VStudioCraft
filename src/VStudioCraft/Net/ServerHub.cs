@@ -764,6 +764,18 @@ namespace VStudioCraft.Net
                         HandleInventoryClick(client, pkt.InventoryClick);
                         break;
 
+                    case PacketIds.PlayerInteractBlock:
+                        HandleInteractBlock(client, pkt.PlayerInteractBlock);
+                        break;
+
+                    case PacketIds.WindowClick:
+                        HandleWindowClick(client, pkt.WindowClick);
+                        break;
+
+                    case PacketIds.CloseWindow:
+                        HandleCloseWindow(client, pkt.CloseWindow);
+                        break;
+
                     case PacketIds.Disconnect:
                         client.Session.Disconnect($"client said: {pkt.Disconnect.Reason}");
                         break;
@@ -1171,6 +1183,398 @@ namespace VStudioCraft.Net
             }
 
             // Bandwidth note above — full burst, not a delta.
+            SendFullInventory(client);
+        }
+
+        // ---- Phase 6c: window open / close / click --------------------
+
+        private void HandleInteractBlock(ServerClient client, PlayerInteractBlockPacket pkt)
+        {
+            if (client.Phase == ClientPhase.AwaitingLogin) return;
+            if (!IsWithinReach(client, pkt.X, pkt.Y, pkt.Z)) return;
+
+            var cell = _world.GetBlock(pkt.X, pkt.Y, pkt.Z);
+            switch (cell)
+            {
+                case BlockType.Chest:
+                {
+                    var chest = _world.GetOrCreateChestEntity(pkt.X, pkt.Y, pkt.Z);
+                    OpenWindow(client, WindowKind.Chest, pkt.X, pkt.Y, pkt.Z,
+                        slotCount: ChestTileEntity.SlotCount,
+                        chestRef: chest, furnaceRef: null,
+                        backingSlots: chest.Slots);
+                    break;
+                }
+                case BlockType.Furnace:
+                case BlockType.LitFurnace:
+                {
+                    var furnace = _world.GetOrCreateFurnaceEntity(pkt.X, pkt.Y, pkt.Z);
+                    // Furnace stores three named slots (Input, Fuel,
+                    // Output) — flatten into a 3-element array for
+                    // window indexing. Writes go back through a
+                    // dedicated WindowSlotToFurnace helper at click
+                    // time because the named-fields layout doesn't
+                    // expose a settable array.
+                    OpenWindow(client, WindowKind.Furnace, pkt.X, pkt.Y, pkt.Z,
+                        slotCount: 3,
+                        chestRef: null, furnaceRef: furnace,
+                        backingSlots: BuildFurnaceWindowSnapshot(furnace));
+                    break;
+                }
+                case BlockType.CraftingTable:
+                {
+                    // Crafting has no persistent tile entity — the
+                    // 9 input slots + 1 output live on the OpenWindowState
+                    // itself. Close-time commit returns leftovers to the
+                    // player.
+                    OpenWindow(client, WindowKind.CraftingTable, pkt.X, pkt.Y, pkt.Z,
+                        slotCount: 10,
+                        chestRef: null, furnaceRef: null,
+                        backingSlots: new ItemStack[10]);
+                    break;
+                }
+                default:
+                    // Block isn't a window-bearing type — silent no-op.
+                    // Friends can still get RMB-place behaviour through
+                    // the existing PlayerPlace path which fires
+                    // alongside this packet.
+                    return;
+            }
+        }
+
+        private static ItemStack[] BuildFurnaceWindowSnapshot(FurnaceTileEntity f) => new[]
+        {
+            f.Input, f.Fuel, f.Output,
+        };
+
+        private void OpenWindow(ServerClient client, byte kind, int x, int y, int z,
+            int slotCount, ChestTileEntity chestRef, FurnaceTileEntity furnaceRef, ItemStack[] backingSlots)
+        {
+            byte id = client.NextWindowId++;
+            // Wrap to skip 0 (player inventory) on overflow.
+            if (id == 0) { client.NextWindowId = 2; id = 1; }
+
+            var state = new OpenWindowState
+            {
+                WindowId = id,
+                Kind = kind,
+                CellX = x, CellY = y, CellZ = z,
+                Slots = backingSlots,
+                ChestRef = chestRef,
+                FurnaceRef = furnaceRef,
+            };
+            client.OpenWindows[id] = state;
+
+            client.Session.Send(PacketIds.OpenWindow, w => new OpenWindowPacket
+            {
+                WindowId = id,
+                Kind = kind,
+                SlotCount = (byte)slotCount,
+                X = x, Y = y, Z = z,
+            }.Write(w));
+
+            SendTileEntityData(client, state);
+        }
+
+        private void SendTileEntityData(ServerClient client, OpenWindowState st)
+        {
+            if (client.Session.IsDead || client.Session.IsLoopback) return;
+            byte slotCount = (byte)(st.Slots?.Length ?? 0);
+            byte kind = st.Kind;
+            byte windowId = st.WindowId;
+            ItemStack[] slotsCopy = (ItemStack[])(st.Slots?.Clone() ?? new ItemStack[0]);
+
+            int burnTime = 0, maxBurn = 0, cookProgress = 0;
+            if (kind == WindowKind.Furnace && st.FurnaceRef != null)
+            {
+                burnTime = st.FurnaceRef.BurnTimeTicks;
+                maxBurn = st.FurnaceRef.MaxBurnTimeTicks;
+                cookProgress = st.FurnaceRef.CookProgressTicks;
+            }
+
+            client.Session.Send(PacketIds.TileEntityData, w => new TileEntityDataPacket
+            {
+                WindowId = windowId,
+                Kind = kind,
+                SlotCount = slotCount,
+                Slots = slotsCopy,
+                FurnaceBurnTime = burnTime,
+                FurnaceMaxBurnTime = maxBurn,
+                FurnaceCookProgress = cookProgress,
+            }.Write(w));
+        }
+
+        private void HandleWindowClick(ServerClient client, WindowClickPacket pkt)
+        {
+            if (client.Phase == ClientPhase.AwaitingLogin) return;
+            if (!client.OpenWindows.TryGetValue(pkt.WindowId, out var st)) return;
+            if (pkt.Slot >= st.Slots.Length) return;
+
+            // Build a temporary Inventory-like wrapper so we can reuse
+            // the existing HandleLeft/Right/Shift methods. Since
+            // Inventory's click logic operates on its `Slots[]` array
+            // directly, we can hijack it by routing through a fresh
+            // Inventory instance whose Slots reference our window
+            // backing — except Inventory.Slots is `readonly`.
+            //
+            // Simpler: replicate the click semantics inline. The chest
+            // / crafting / furnace surface is small enough that
+            // rolling our own (LMB pickup/drop, RMB split/place-one,
+            // shift-click transfer) is faster than reworking
+            // Inventory's class shape.
+            var inv = client.ServerInventory;
+            ref ItemStack slot = ref st.Slots[pkt.Slot];
+            if (pkt.Shift != 0)
+            {
+                // Shift-click: move stack between window and player
+                // inventory. Direction is "FROM the slot you clicked
+                // TO the other side."
+                if (st.Kind == WindowKind.CraftingTable && pkt.Slot == 9)
+                {
+                    // Shift-click on crafting output — Phase 6c.4
+                    // adds repeat-craft-while-possible. Single-craft
+                    // for now: pretend it's a regular pickup.
+                    DoCraftPickup(client, st, ref slot, intoCursor: false, intoInv: true);
+                }
+                else
+                {
+                    // Try to merge `slot` into the player inventory.
+                    var moving = slot;
+                    slot = ItemStack.Empty;
+                    var remainder = inv.TryAdd(moving);
+                    if (!remainder.IsEmpty)
+                    {
+                        // Couldn't fit it all — leftover goes back into
+                        // the slot.
+                        slot = remainder;
+                    }
+                }
+            }
+            else if (pkt.Button == 1) // RMB
+            {
+                if (st.Kind == WindowKind.CraftingTable && pkt.Slot == 9)
+                {
+                    DoCraftPickup(client, st, ref slot, intoCursor: true, intoInv: false);
+                }
+                else
+                {
+                    HandleWindowSlotRMB(ref slot, ref inv.Cursor);
+                }
+            }
+            else // LMB
+            {
+                if (st.Kind == WindowKind.CraftingTable && pkt.Slot == 9)
+                {
+                    DoCraftPickup(client, st, ref slot, intoCursor: true, intoInv: false);
+                }
+                else
+                {
+                    HandleWindowSlotLMB(ref slot, ref inv.Cursor);
+                }
+            }
+
+            // Crafting input slot mutated → recompute output. Output
+            // slot itself is index 9; inputs are 0..8.
+            if (st.Kind == WindowKind.CraftingTable && pkt.Slot < 9)
+            {
+                RecomputeCraftOutput(st);
+            }
+
+            // Furnace slots mutated → write back to the persistent
+            // tile entity. The 3-slot snapshot we built at open time
+            // is a copy, so writes need to flow through here.
+            if (st.Kind == WindowKind.Furnace && st.FurnaceRef != null && pkt.Slot < 3)
+            {
+                if (pkt.Slot == 0) st.FurnaceRef.Input = st.Slots[0];
+                else if (pkt.Slot == 1) st.FurnaceRef.Fuel = st.Slots[1];
+                else if (pkt.Slot == 2) st.FurnaceRef.Output = st.Slots[2];
+            }
+            // Chest slots aliased the entity's array directly so
+            // there's nothing to write back.
+
+            // Reply: the window's slots + the player's inventory and
+            // cursor (in case the click moved an item between the
+            // two).
+            SendTileEntityData(client, st);
+            SendFullInventory(client);
+        }
+
+        // LMB on a window slot. Mirror of Inventory.HandleLeftClickSlot
+        // but operating on a (slot, cursor) pair rather than the
+        // player's full inventory.
+        private static void HandleWindowSlotLMB(ref ItemStack slot, ref ItemStack cursor)
+        {
+            if (cursor.IsEmpty)
+            {
+                // Pick up entire slot.
+                cursor = slot;
+                slot = ItemStack.Empty;
+            }
+            else if (slot.IsEmpty)
+            {
+                // Drop entire cursor into empty slot.
+                slot = cursor;
+                cursor = ItemStack.Empty;
+            }
+            else if (slot.Type == cursor.Type)
+            {
+                // Same type — merge cursor into slot up to the cap.
+                int cap = ItemStack.MaxStackSizeFor(slot.Type);
+                int room = cap - slot.Count;
+                int xfer = System.Math.Min(room, cursor.Count);
+                if (xfer > 0)
+                {
+                    slot = new ItemStack(slot.Type, slot.Count + xfer);
+                    int leftover = cursor.Count - xfer;
+                    cursor = leftover > 0 ? new ItemStack(cursor.Type, leftover) : ItemStack.Empty;
+                }
+            }
+            else
+            {
+                // Different types — swap.
+                var tmp = slot;
+                slot = cursor;
+                cursor = tmp;
+            }
+        }
+
+        // RMB on a window slot. Pick-up-half on empty cursor; place-one
+        // on non-empty cursor; swap on type mismatch.
+        private static void HandleWindowSlotRMB(ref ItemStack slot, ref ItemStack cursor)
+        {
+            if (cursor.IsEmpty)
+            {
+                // Pick up half the slot, rounded up.
+                if (slot.IsEmpty) return;
+                int half = (slot.Count + 1) / 2;
+                cursor = new ItemStack(slot.Type, half);
+                int remaining = slot.Count - half;
+                slot = remaining > 0 ? new ItemStack(slot.Type, remaining) : ItemStack.Empty;
+            }
+            else if (slot.IsEmpty || (slot.Type == cursor.Type && slot.Count < ItemStack.MaxStackSizeFor(slot.Type)))
+            {
+                // Place one item from cursor into slot.
+                if (slot.IsEmpty) slot = new ItemStack(cursor.Type, 1);
+                else slot = new ItemStack(slot.Type, slot.Count + 1);
+                int leftover = cursor.Count - 1;
+                cursor = leftover > 0 ? new ItemStack(cursor.Type, leftover) : ItemStack.Empty;
+            }
+            else if (slot.Type != cursor.Type)
+            {
+                // Different types — swap (RMB swap matches LMB swap;
+                // Alpha treats this as a no-op but the cleaner behaviour
+                // is symmetry with LMB).
+                var tmp = slot;
+                slot = cursor;
+                cursor = tmp;
+            }
+        }
+
+        // Crafting helpers ------------------------------------------
+
+        private static void RecomputeCraftOutput(OpenWindowState st)
+        {
+            // CraftingRecipes operates on a 9-element ItemStack input.
+            // Match returns the resulting ItemStack or empty if no
+            // recipe matches; we copy the inputs into a temp array
+            // because Match might rotate / shift the grid internally.
+            var input = new ItemStack[9];
+            System.Array.Copy(st.Slots, 0, input, 0, 9);
+            st.Slots[9] = CraftingRecipes.Match(input);
+        }
+
+        // Output-slot click. intoCursor=true picks the result into the
+        // player's cursor (LMB / RMB on output); intoInv=true shift-
+        // clicks into the player inventory. Either way, the inputs
+        // are decremented by one each.
+        private void DoCraftPickup(ServerClient client, OpenWindowState st, ref ItemStack outSlot, bool intoCursor, bool intoInv)
+        {
+            if (outSlot.IsEmpty) return;
+            var inv = client.ServerInventory;
+
+            if (intoCursor)
+            {
+                if (inv.Cursor.IsEmpty)
+                {
+                    inv.Cursor = outSlot;
+                }
+                else if (inv.Cursor.Type == outSlot.Type)
+                {
+                    int cap = ItemStack.MaxStackSizeFor(inv.Cursor.Type);
+                    int room = cap - inv.Cursor.Count;
+                    if (room < outSlot.Count) return; // can't take all of it
+                    inv.Cursor = new ItemStack(inv.Cursor.Type, inv.Cursor.Count + outSlot.Count);
+                }
+                else
+                {
+                    return; // mismatched cursor type — Alpha refuses
+                }
+            }
+            else if (intoInv)
+            {
+                var leftover = inv.TryAdd(outSlot);
+                if (!leftover.IsEmpty)
+                {
+                    // No room — abort the craft.
+                    return;
+                }
+            }
+
+            // Decrement each input by one.
+            for (int i = 0; i < 9; i++)
+            {
+                if (st.Slots[i].IsEmpty) continue;
+                int newCount = st.Slots[i].Count - 1;
+                st.Slots[i] = newCount > 0
+                    ? new ItemStack(st.Slots[i].Type, newCount)
+                    : ItemStack.Empty;
+            }
+            // Rerun the match — same grid pattern with one fewer of
+            // each ingredient might still yield the same recipe (e.g.
+            // 4 planks, only one consumed leaves 3 — no crafting
+            // table is on a 2×2 recipe, but a 3-plank stack of slabs
+            // could still match if the recipe is tolerant; the
+            // recompute handles all cases uniformly).
+            RecomputeCraftOutput(st);
+        }
+
+        private void HandleCloseWindow(ServerClient client, CloseWindowPacket pkt)
+        {
+            if (!client.OpenWindows.TryGetValue(pkt.WindowId, out var st)) return;
+            client.OpenWindows.Remove(pkt.WindowId);
+
+            // Crafting close: dump leftover inputs into player or onto
+            // the floor. Cursor stack from any open window goes onto
+            // the player (or to the floor if inventory is full).
+            if (st.Kind == WindowKind.CraftingTable)
+            {
+                for (int i = 0; i < 9; i++)
+                {
+                    if (st.Slots[i].IsEmpty) continue;
+                    var leftover = client.ServerInventory.TryAdd(st.Slots[i]);
+                    if (!leftover.IsEmpty && SpawnDropHook != null && client.HasReportedPos)
+                    {
+                        SpawnDropHook(
+                            new OpenTK.Vector3((float)client.LastReportedX, (float)(client.LastReportedY + 1.0), (float)client.LastReportedZ),
+                            OpenTK.Vector3.Zero, leftover);
+                    }
+                }
+            }
+
+            // Cursor commit (any window kind). Tries to add to player
+            // inventory; if no room, tossed at the player's feet.
+            if (!client.ServerInventory.Cursor.IsEmpty)
+            {
+                var leftover = client.ServerInventory.TryAdd(client.ServerInventory.Cursor);
+                client.ServerInventory.Cursor = ItemStack.Empty;
+                if (!leftover.IsEmpty && SpawnDropHook != null && client.HasReportedPos)
+                {
+                    SpawnDropHook(
+                        new OpenTK.Vector3((float)client.LastReportedX, (float)(client.LastReportedY + 1.0), (float)client.LastReportedZ),
+                        OpenTK.Vector3.Zero, leftover);
+                }
+            }
+
             SendFullInventory(client);
         }
 
@@ -2173,6 +2577,27 @@ namespace VStudioCraft.Net
         InGame,        // chunks done streaming; client sending PlayerPosLook
     }
 
+    // Phase 6c — per-client open-window state. The Cell* coords let
+    // close-time commit go to the right tile entity (chests / furnaces
+    // back to World; crafting table input goes to the player or the
+    // world floor). Slots is the BACKING storage:
+    //   - Chest: aliases ChestTileEntity.Slots so writes land on the
+    //     persisted entity; close is a no-op (state was always live).
+    //   - Furnace: aliases FurnaceTileEntity slots [Input, Fuel, Output];
+    //     close is a no-op.
+    //   - CraftingTable: a fresh ItemStack[10] (9 input + 1 output)
+    //     created at open time; close commits leftovers back to the
+    //     player or drops them at the player's feet.
+    internal sealed class OpenWindowState
+    {
+        public byte WindowId;
+        public byte Kind;
+        public int CellX, CellY, CellZ;
+        public ItemStack[] Slots;        // window-local backing array
+        public ChestTileEntity ChestRef; // null unless Kind == Chest
+        public FurnaceTileEntity FurnaceRef; // null unless Kind == Furnace
+    }
+
     // Per-connection server state. Holds NetSession + the bookkeeping the
     // hub needs (entity id, username, login phase, pending chunk queue,
     // last reported pos for telemetry). Owned exclusively by the tick
@@ -2239,6 +2664,15 @@ namespace VStudioCraft.Net
         // still has a sensible "selected slot" the server can reason
         // about.
         public byte HeldSlot;
+
+        // Phase 6c — currently-open windows on this client (chest /
+        // furnace / crafting table). Keyed on the per-client windowId
+        // so a quick close+reopen gets a fresh slot. Multiple windows
+        // open simultaneously isn't really supported by the friend's
+        // UI but the server tolerates it (each click carries its
+        // windowId, so the server can disambiguate).
+        public Dictionary<byte, OpenWindowState> OpenWindows = new Dictionary<byte, OpenWindowState>();
+        public byte NextWindowId = 1;
 
         // Phase 6a — server-authoritative inventory for this client. The
         // friend's local Player.Inventory mirrors this via InventoryUpdate

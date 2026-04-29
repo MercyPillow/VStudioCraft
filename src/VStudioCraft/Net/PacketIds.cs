@@ -78,12 +78,27 @@ namespace VStudioCraft.Net
         // at the friend's position with the host's standard toss
         // velocity, mirroring what the host's local Q-drop path does.
         public const byte PlayerDropItem      = 0x45; // C->S
+        // Phase 6c — friend RMB on a tile-entity-bearing block (chest /
+        // furnace / crafting table / jukebox). Distinct from
+        // PlayerUseItem (which acts on the held item) because this
+        // intent identifies the world cell the player wants to open.
+        public const byte PlayerInteractBlock = 0x46; // C->S
 
         // 0x5_ — window / inventory (Phase 6) ------------------------------
         public const byte InventoryClick      = 0x50; // C->S  — Phase 6b
         public const byte InventoryUpdate     = 0x51; // S->C  — Phase 6a (single-slot updates from server-authoritative inventory)
+        // Phase 6c — windowed inventories (chest / furnace / crafting).
+        // Window 0 is the implicit player inventory and is never
+        // explicitly opened/closed; windowIds 1..255 are per-client
+        // allocations for tile-entity sessions.
         public const byte OpenWindow          = 0x52; // S->C
         public const byte CloseWindow         = 0x53; // both
+        // Phase 6c — click on a slot inside an open window. Distinct
+        // from InventoryClick because the slot-space differs (chest
+        // window has its own 0..26 slots) and the server-side handler
+        // routes against the window's backing Inventory rather than
+        // ServerInventory directly.
+        public const byte WindowClick         = 0x54; // C->S
 
         // 0x6_ — tile entity blobs (Phase 6) -------------------------------
         public const byte TileEntityData      = 0x60; // S->C

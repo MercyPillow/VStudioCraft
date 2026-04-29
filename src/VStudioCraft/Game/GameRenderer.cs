@@ -723,6 +723,17 @@ void main()
         private readonly Dictionary<int, ThrownProjectile> _replicatedThrownById = new Dictionary<int, ThrownProjectile>();
         private readonly Dictionary<int, Bobber> _replicatedBobbersById = new Dictionary<int, Bobber>();
 
+        // Phase 6c — currently-open net window (chest / furnace /
+        // crafting). Window 0 = no window open. The friend's existing
+        // inventory panel UI (IsChestOpen / IsFurnaceOpen /
+        // IsCraftingOpen) keys on these for rendering, and click
+        // dispatch routes to WindowClick when this is non-zero.
+        private byte _currentNetWindowId;
+        private byte _currentNetWindowKind;
+        private (int x, int y, int z) _currentNetWindowCell;
+        public bool IsNetWindowOpen => _currentNetWindowId != 0;
+        public byte CurrentNetWindowId => _currentNetWindowId;
+
         // Phase 5f — snapshot-pair interpolators for ALL replicated
         // entities (mobs, drops, arrows, thrown projectiles, bobbers).
         // Position (and Yaw, when meaningful) is overwritten each frame
@@ -1918,6 +1929,84 @@ void main()
                     // 1500 fps stutters at every server tick boundary.
                     _entityInterpById[s.EntityId] = new EntityInterpState(
                         d.Position, /*yaw*/ 0f, _netClock);
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.OpenWindow:
+                {
+                    var ow = pkt.OpenWindow;
+                    _currentNetWindowId = ow.WindowId;
+                    _currentNetWindowKind = ow.Kind;
+                    _currentNetWindowCell = (ow.X, ow.Y, ow.Z);
+                    // Open the appropriate UI panel. The TileEntityData
+                    // packet that follows immediately populates the slot
+                    // contents; for now we just put the panel on screen.
+                    if (ow.Kind == VStudioCraft.Net.WindowKind.Chest)
+                    {
+                        // Need a local chest entity for the existing
+                        // RenderChest to read. Server's snapshot
+                        // arrives in the next TileEntityData; create
+                        // an empty entity here and fill it then.
+                        if (_world != null)
+                        {
+                            _world.GetOrCreateChestEntity(ow.X, ow.Y, ow.Z);
+                        }
+                        _isChestOpen = true;
+                        _chestPos = (ow.X, ow.Y, ow.Z);
+                    }
+                    else if (ow.Kind == VStudioCraft.Net.WindowKind.Furnace)
+                    {
+                        if (_world != null)
+                        {
+                            _world.GetOrCreateFurnaceEntity(ow.X, ow.Y, ow.Z);
+                        }
+                        _isFurnaceOpen = true;
+                        _furnacePos = (ow.X, ow.Y, ow.Z);
+                    }
+                    else if (ow.Kind == VStudioCraft.Net.WindowKind.CraftingTable)
+                    {
+                        _isCraftingOpen = true;
+                    }
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.CloseWindow:
+                {
+                    var cw = pkt.CloseWindow;
+                    if (cw.WindowId == _currentNetWindowId || _currentNetWindowId == 0)
+                    {
+                        _currentNetWindowId = 0;
+                        _isChestOpen = false;
+                        _isFurnaceOpen = false;
+                        _isCraftingOpen = false;
+                    }
+                    break;
+                }
+                case VStudioCraft.Net.PacketIds.TileEntityData:
+                {
+                    var td = pkt.TileEntityData;
+                    if (td.WindowId != _currentNetWindowId) break;
+                    if (td.Kind == VStudioCraft.Net.WindowKind.Chest && _world != null)
+                    {
+                        var ce = _world.GetOrCreateChestEntity(
+                            _currentNetWindowCell.x, _currentNetWindowCell.y, _currentNetWindowCell.z);
+                        int n = System.Math.Min((int)td.SlotCount, ChestTileEntity.SlotCount);
+                        for (int i = 0; i < n; i++) ce.Slots[i] = td.Slots[i];
+                    }
+                    else if (td.Kind == VStudioCraft.Net.WindowKind.Furnace && _world != null)
+                    {
+                        var fe = _world.GetOrCreateFurnaceEntity(
+                            _currentNetWindowCell.x, _currentNetWindowCell.y, _currentNetWindowCell.z);
+                        if (td.SlotCount >= 1) fe.Input = td.Slots[0];
+                        if (td.SlotCount >= 2) fe.Fuel = td.Slots[1];
+                        if (td.SlotCount >= 3) fe.Output = td.Slots[2];
+                        fe.BurnTimeTicks = td.FurnaceBurnTime;
+                        fe.MaxBurnTimeTicks = td.FurnaceMaxBurnTime;
+                        fe.CookProgressTicks = td.FurnaceCookProgress;
+                    }
+                    // CraftingTable kind: slots live ephemeral on the
+                    // server's window state record. Friend-side render
+                    // path needs a parallel buffer; deferred — friends
+                    // can OPEN a crafting table now (panel appears) but
+                    // can't yet click into it.
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.InventoryUpdate:
@@ -3412,15 +3501,29 @@ void main()
         public bool TryInteract()
         {
             if (_world == null) return false;
-            // Phase 6b — net-driven mode: ship a PlayerUseItem intent.
-            // Server resolves the held hotbar slot's content and
-            // decides what to do (snowball/egg throw shipped; door
-            // toggle / chest-open / bucket / fishing rod cast still
-            // deferred — those return as Phase 6c). Always returns
-            // false so the caller's RMB-place fallback runs (the
-            // existing TryPlace path is already net-aware via Phase 3).
+            // Phase 6b/6c — net-driven mode: ship intents.
+            //   - For chest / furnace / crafting block under the
+            //     reticle: PlayerInteractBlock (Phase 6c) so the
+            //     server opens a window for us.
+            //   - Otherwise: PlayerUseItem (Phase 6b) so the server
+            //     resolves the held hotbar item (snowball/egg/etc).
+            // Always returns false so the caller's RMB-place fallback
+            // runs (the existing TryPlace path is already net-aware
+            // via Phase 3).
             if (_netClient != null)
             {
+                if (Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hitNet))
+                {
+                    var hitType = _world.GetBlock(hitNet.X, hitNet.Y, hitNet.Z);
+                    if (hitType == BlockType.Chest
+                     || hitType == BlockType.Furnace
+                     || hitType == BlockType.LitFurnace
+                     || hitType == BlockType.CraftingTable)
+                    {
+                        _netClient.SendInteractBlock(hitNet.X, hitNet.Y, hitNet.Z);
+                        return false;
+                    }
+                }
                 _netClient.SendUseItem();
                 return false;
             }
@@ -6771,10 +6874,40 @@ void main()
             if (Input == null) return;
             if (_world == null) return;
             var inv = Input.Inventory;
-            var fe = _world.TryGetFurnaceEntity(_furnacePos.x, _furnacePos.y, _furnacePos.z);
-            if (fe == null) return; // safety: entity vanished mid-screen — caller should also reject
 
             int slot = FurnaceScreen.HitTest(screenW, screenH, mx, my);
+            // Phase 6c — net mode: same forward pattern as chest.
+            // Furnace slots 0..2 → WindowClick(slot=0..2); player slots
+            // 3+ → InventoryClick. Outside-with-cursor → 0xFF.
+            if (_netClient != null && _currentNetWindowId != 0)
+            {
+                if (slot < 0)
+                {
+                    if (!inv.Cursor.IsEmpty)
+                        _netClient.SendInventoryClick(0xFF, (byte)(button == 2 ? 1 : 0), shift);
+                    return;
+                }
+                if (slot < 3)
+                {
+                    _netClient.SendWindowClick(_currentNetWindowId, (byte)slot,
+                        (byte)(button == 2 ? 1 : 0), shift);
+                    return;
+                }
+                // FurnaceScreen lays out main grid at slots 3..38 →
+                // Inventory.Slots[0..35]; hotbar at 39..47 →
+                // Inventory.Slots[36..44]. Subtract 3 to land on
+                // Inventory's flat 0..44 index.
+                int netInvIdx2 = slot - 3;
+                if (netInvIdx2 >= 0 && netInvIdx2 < Inventory.TotalSlots)
+                {
+                    _netClient.SendInventoryClick((byte)netInvIdx2,
+                        (byte)(button == 2 ? 1 : 0), shift);
+                }
+                return;
+            }
+
+            var fe = _world.TryGetFurnaceEntity(_furnacePos.x, _furnacePos.y, _furnacePos.z);
+            if (fe == null) return; // safety: entity vanished mid-screen — caller should also reject
             if (slot < 0)
             {
                 // Click outside the panel — toss cursor like inventory does.
@@ -6929,6 +7062,14 @@ void main()
         // so the player doesn't strand a held stack on the next panel.
         public void CloseFurnace()
         {
+            // Phase 6c — net mode: see CloseChest for rationale.
+            if (_netClient != null && _currentNetWindowId != 0)
+            {
+                _netClient.SendCloseWindow(_currentNetWindowId);
+                _currentNetWindowId = 0;
+                _isFurnaceOpen = false;
+                return;
+            }
             if (Input == null)
             {
                 _isFurnaceOpen = false;
@@ -6956,10 +7097,40 @@ void main()
             if (Input == null) return;
             if (_world == null) return;
             var inv = Input.Inventory;
-            var ce = _world.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
-            if (ce == null) return; // safety: entity vanished mid-screen — caller should also reject
 
             int slot = ChestScreen.HitTest(screenW, screenH, mx, my);
+            // Phase 6c — net mode: intercept and forward. Chest slots
+            // (0..26) → WindowClick targeting the open window. Player
+            // inventory slots (27..71) → InventoryClick targeting the
+            // player's ServerInventory. Outside-click with cursor →
+            // InventoryClick(0xFF) which tosses the cursor server-side.
+            if (_netClient != null && _currentNetWindowId != 0)
+            {
+                if (slot < 0)
+                {
+                    if (!inv.Cursor.IsEmpty)
+                        _netClient.SendInventoryClick(0xFF, (byte)(button == 2 ? 1 : 0), shift);
+                    return;
+                }
+                int netChestIdx = ChestScreen.ChestIndexFor(slot);
+                if (netChestIdx >= 0)
+                {
+                    _netClient.SendWindowClick(_currentNetWindowId, (byte)netChestIdx,
+                        (byte)(button == 2 ? 1 : 0), shift);
+                    return;
+                }
+                int netInvIdx = ChestScreen.InventoryIndexFor(slot);
+                if (netInvIdx >= 0 && netInvIdx < Inventory.TotalSlots)
+                {
+                    _netClient.SendInventoryClick((byte)netInvIdx,
+                        (byte)(button == 2 ? 1 : 0), shift);
+                    return;
+                }
+                return;
+            }
+
+            var ce = _world.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            if (ce == null) return; // safety: entity vanished mid-screen — caller should also reject
             if (slot < 0)
             {
                 if (!inv.Cursor.IsEmpty) TossCursorStack();
@@ -7049,6 +7220,20 @@ void main()
         // panel.
         public void CloseChest()
         {
+            // Phase 6c — net mode: tell the server we're closing the
+            // window so it commits cursor + window state. Server's
+            // close handler tosses leftover cursor at the player's
+            // feet via SpawnDropHook. Local UI flag is cleared here
+            // proactively (server's confirming CloseWindow packet
+            // would also clear it, but the friend should see the panel
+            // disappear immediately on Esc).
+            if (_netClient != null && _currentNetWindowId != 0)
+            {
+                _netClient.SendCloseWindow(_currentNetWindowId);
+                _currentNetWindowId = 0;
+                _isChestOpen = false;
+                return;
+            }
             if (Input == null)
             {
                 _isChestOpen = false;
@@ -7073,6 +7258,16 @@ void main()
         // strand it on the next-opened panel.
         public void CloseCrafting()
         {
+            // Phase 6c — net mode: server commits the crafting input
+            // grid back to the player's ServerInventory (or drops at
+            // feet if full). Local close clears the panel flag.
+            if (_netClient != null && _currentNetWindowId != 0)
+            {
+                _netClient.SendCloseWindow(_currentNetWindowId);
+                _currentNetWindowId = 0;
+                _isCraftingOpen = false;
+                return;
+            }
             if (Input == null)
             {
                 _isCraftingOpen = false;

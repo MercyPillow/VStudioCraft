@@ -234,6 +234,45 @@ namespace VStudioCraft.Net
             }.Write(w));
         }
 
+        // Phase 6c — friend RMB on a tile-entity-bearing block. Server
+        // validates the cell and the block kind, allocates a windowId,
+        // and replies with OpenWindow + TileEntityData.
+        public void SendInteractBlock(int x, int y, int z)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.PlayerInteractBlock, w => new PlayerInteractBlockPacket
+            {
+                X = x, Y = y, Z = z,
+            }.Write(w));
+        }
+
+        // Phase 6c — friend clicked a slot inside an open window
+        // (chest / furnace / crafting). Distinct from
+        // SendInventoryClick which targets the player's own inventory.
+        public void SendWindowClick(byte windowId, byte slot, byte button, bool shift)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.WindowClick, w => new WindowClickPacket
+            {
+                WindowId = windowId,
+                Slot = slot,
+                Button = button,
+                Shift = (byte)(shift ? 1 : 0),
+            }.Write(w));
+        }
+
+        // Phase 6c — friend hit Esc / clicked away → close the window.
+        // Server commits the cursor stack into the player's main grid
+        // (or drops at feet) and removes the window state record.
+        public void SendCloseWindow(byte windowId)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.CloseWindow, w => new CloseWindowPacket
+            {
+                WindowId = windowId,
+            }.Write(w));
+        }
+
         // Phase 6b — friend RMB intent. Server uses the friend's last-
         // known position + held hotbar slot to decide what to do
         // (snowball / egg throw shipped; bow / bucket / fishing rod

@@ -272,6 +272,21 @@ namespace VStudioCraft.Net
                 case PacketIds.InventoryClick:
                     return new InboundPacket { Id = id, InventoryClick = InventoryClickPacket.Read(_reader) };
 
+                case PacketIds.PlayerInteractBlock:
+                    return new InboundPacket { Id = id, PlayerInteractBlock = PlayerInteractBlockPacket.Read(_reader) };
+
+                case PacketIds.OpenWindow:
+                    return new InboundPacket { Id = id, OpenWindow = OpenWindowPacket.Read(_reader) };
+
+                case PacketIds.CloseWindow:
+                    return new InboundPacket { Id = id, CloseWindow = CloseWindowPacket.Read(_reader) };
+
+                case PacketIds.WindowClick:
+                    return new InboundPacket { Id = id, WindowClick = WindowClickPacket.Read(_reader) };
+
+                case PacketIds.TileEntityData:
+                    return new InboundPacket { Id = id, TileEntityData = TileEntityDataPacket.Read(_reader) };
+
                 case PacketIds.EntitySpawn:
                     return new InboundPacket { Id = id, EntitySpawn = EntitySpawnPacket.Read(_reader) };
 
@@ -329,6 +344,11 @@ namespace VStudioCraft.Net
         public PlayerUseItemPacket   PlayerUseItem;
         public PlayerDropItemPacket  PlayerDropItem;
         public InventoryClickPacket  InventoryClick;
+        public PlayerInteractBlockPacket PlayerInteractBlock;
+        public OpenWindowPacket      OpenWindow;
+        public CloseWindowPacket     CloseWindow;
+        public WindowClickPacket     WindowClick;
+        public TileEntityDataPacket  TileEntityData;
         public EntitySpawnPacket     EntitySpawn;
         public EntityRelMovePacket   EntityRelMove;
         public EntityLookPacket      EntityLook;

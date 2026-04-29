@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using VStudioCraft.Game; // ItemStack, BlockType — ItemSpawnPacket / TileEntityDataPacket carry these
 
 namespace VStudioCraft.Net
 {
@@ -488,6 +489,219 @@ namespace VStudioCraft.Net
         {
             Mode = r.ReadByte(),
         };
+    }
+
+    // ===========================================================================
+    // 0x4_ / 0x5_ / 0x6_ — windowed inventories (Phase 6c)
+    //
+    // The "window" abstraction handles every UI panel that's NOT the
+    // player's persistent inventory: chest, furnace, crafting table.
+    // Each open window is identified by a per-client `byte windowId`
+    // (1..255 — id 0 is the implicit player inventory, never sent
+    // through these packets). Friend interaction:
+    //
+    //   1. Friend right-clicks a chest/furnace/crafting block
+    //      → ships PlayerInteractBlockPacket(x,y,z) (0x46)
+    //   2. Server validates the block, allocates windowId, opens a
+    //      window state record holding the backing tile entity
+    //      (chest entity, furnace entity, ephemeral crafting grid).
+    //      Sends OpenWindowPacket(0x52, windowId, kind, slotCount, x,y,z)
+    //      then TileEntityDataPacket(0x60, windowId, slots[, kind tail]).
+    //   3. Friend clicks a slot inside the window
+    //      → ships WindowClickPacket(0x54, windowId, slot, button, shift)
+    //   4. Server applies via Inventory.Handle*ClickSlot on the window's
+    //      backing inventory + replies with TileEntityDataPacket for the
+    //      window's slots and InventoryUpdatePacket for any cursor / main
+    //      inventory changes.
+    //   5. Friend closes the window (Esc / outside-click)
+    //      → ships CloseWindowPacket(0x53, windowId).
+    //   6. Server commits any cursor stack to the player's main grid,
+    //      drops leftover crafting input at the player's feet, removes
+    //      the window state record.
+    // ===========================================================================
+
+    // Window kinds — one byte per OpenWindow / TileEntityData. Not the
+    // same enum as EntityType; windows live in a different namespace
+    // (block-attached, not entity-attached).
+    internal static class WindowKind
+    {
+        public const byte PlayerInventory = 0; // implicit; never sent
+        public const byte Chest           = 1; // 27 slots
+        public const byte Furnace         = 2; // 3 slots + cook progress + burn time tail
+        public const byte CraftingTable   = 3; // 9 input + 1 output (output not networked separately — server
+                                               // recomputes from inputs each click)
+    }
+
+    // 0x46 — friend→server "I right-clicked the cell at (x,y,z) and
+    // it's a tile-entity-bearing block I want to open the UI for."
+    // Server validates: cell exists, block is a recognised
+    // window-bearing type (Chest, Furnace, LitFurnace, CraftingTable),
+    // friend is within 6-block reach (same tolerance as dig/place).
+    // On success, server allocates a windowId and ships OpenWindow +
+    // TileEntityData. On failure, silent — friend's local UI doesn't
+    // open and they can try again.
+    internal struct PlayerInteractBlockPacket
+    {
+        public int X, Y, Z;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(X);
+            w.WriteInt(Y);
+            w.WriteInt(Z);
+        }
+
+        public static PlayerInteractBlockPacket Read(PacketReader r) => new PlayerInteractBlockPacket
+        {
+            X = r.ReadInt(), Y = r.ReadInt(), Z = r.ReadInt(),
+        };
+    }
+
+    // 0x52 — server→client "I'm opening window <id> of kind <kind>
+    // for you, the cell at (x,y,z) is its backing tile entity, and
+    // it has <slotCount> slots". Slot population follows in a
+    // separate TileEntityDataPacket so the client can pre-allocate
+    // its slot array before the data arrives.
+    internal struct OpenWindowPacket
+    {
+        public byte WindowId;
+        public byte Kind;
+        public byte SlotCount;
+        public int X, Y, Z;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteByte(WindowId);
+            w.WriteByte(Kind);
+            w.WriteByte(SlotCount);
+            w.WriteInt(X);
+            w.WriteInt(Y);
+            w.WriteInt(Z);
+        }
+
+        public static OpenWindowPacket Read(PacketReader r) => new OpenWindowPacket
+        {
+            WindowId = r.ReadByte(),
+            Kind = r.ReadByte(),
+            SlotCount = r.ReadByte(),
+            X = r.ReadInt(), Y = r.ReadInt(), Z = r.ReadInt(),
+        };
+    }
+
+    // 0x53 — close-window. Sent both directions:
+    //   - Server → client: server forced the window closed (e.g. block
+    //     was broken while open).
+    //   - Client → server: friend hit Esc or clicked away. Server
+    //     commits the window state and removes the record.
+    internal struct CloseWindowPacket
+    {
+        public byte WindowId;
+
+        public void Write(PacketWriter w) => w.WriteByte(WindowId);
+        public static CloseWindowPacket Read(PacketReader r) => new CloseWindowPacket
+        {
+            WindowId = r.ReadByte(),
+        };
+    }
+
+    // 0x54 — friend→server slot click inside an open window. Slot
+    // indexing is window-local (chest 0..26, furnace 0..2, crafting
+    // 0..8 input + slot 9 = output). Buttons + shift match
+    // InventoryClickPacket.
+    internal struct WindowClickPacket
+    {
+        public byte WindowId;
+        public byte Slot;
+        public byte Button;   // 0=LMB, 1=RMB
+        public byte Shift;    // 0/1
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteByte(WindowId);
+            w.WriteByte(Slot);
+            w.WriteByte(Button);
+            w.WriteByte(Shift);
+        }
+
+        public static WindowClickPacket Read(PacketReader r) => new WindowClickPacket
+        {
+            WindowId = r.ReadByte(),
+            Slot = r.ReadByte(),
+            Button = r.ReadByte(),
+            Shift = r.ReadByte(),
+        };
+    }
+
+    // 0x60 — server→client "here's the current state of window <id>".
+    // SlotCount × ItemStack covers the window's full slot array;
+    // furnace adds 8 bytes of tail (BurnTime + MaxBurnTime + CookProgress
+    // packed as int+int+int, but we use 2 ints here for simplicity —
+    // matches the v5+ save format encoding).
+    //
+    // Sent at OpenWindow time and on every server-side mutation of the
+    // window (other-player click on the same chest, server-side
+    // crafting recipe match, server-side furnace cook tick).
+    internal struct TileEntityDataPacket
+    {
+        public byte WindowId;
+        public byte Kind;       // copy of OpenWindowPacket.Kind for self-validation
+        public byte SlotCount;
+        public ItemStack[] Slots;
+        // Furnace-only tail (kind == WindowKind.Furnace):
+        public int FurnaceBurnTime;
+        public int FurnaceMaxBurnTime;
+        public int FurnaceCookProgress;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteByte(WindowId);
+            w.WriteByte(Kind);
+            w.WriteByte(SlotCount);
+            for (int i = 0; i < SlotCount && i < (Slots?.Length ?? 0); i++)
+            {
+                var s = Slots[i];
+                w.WriteByte((byte)s.Type);
+                w.WriteByte((byte)(s.IsEmpty ? 0 : s.Count));
+            }
+            // Pad if Slots is shorter than declared count (defensive —
+            // shouldn't happen on the write side but lets us send a
+            // partial array without breaking the wire framing).
+            for (int i = (Slots?.Length ?? 0); i < SlotCount; i++)
+            {
+                w.WriteByte(0);
+                w.WriteByte(0);
+            }
+            if (Kind == WindowKind.Furnace)
+            {
+                w.WriteInt(FurnaceBurnTime);
+                w.WriteInt(FurnaceMaxBurnTime);
+                w.WriteInt(FurnaceCookProgress);
+            }
+        }
+
+        public static TileEntityDataPacket Read(PacketReader r)
+        {
+            var p = new TileEntityDataPacket
+            {
+                WindowId = r.ReadByte(),
+                Kind = r.ReadByte(),
+                SlotCount = r.ReadByte(),
+            };
+            p.Slots = new ItemStack[p.SlotCount];
+            for (int i = 0; i < p.SlotCount; i++)
+            {
+                byte type = r.ReadByte();
+                byte count = r.ReadByte();
+                p.Slots[i] = count == 0 ? ItemStack.Empty : new ItemStack((BlockType)type, count);
+            }
+            if (p.Kind == WindowKind.Furnace)
+            {
+                p.FurnaceBurnTime = r.ReadInt();
+                p.FurnaceMaxBurnTime = r.ReadInt();
+                p.FurnaceCookProgress = r.ReadInt();
+            }
+            return p;
+        }
     }
 
     // 0x50 — friend→server "I clicked slot N with button B (with/without
