@@ -504,7 +504,7 @@ multiple subsystems at once.
 	
 ### Tier 6 — World-gen variety
 
-31. **Extend World height to 128 - land height starts at around y=64 so there is a larger underground area**
+31. **Extend World height to 128 - land height starts at around y=64 so there is a larger underground area** — DONE. `TerrainGenerator.BaseHeight` 24→64, `HeightAmplitude` 14→20. SeaLevel + BeachHeight + CaveMaxY all derived so they auto-scale to 62 / 63 / 58 respectively. New worlds generate with ~60 blocks of underground room (caves, ores, dungeons) below the surface; pre-existing saves load their stored block data unchanged but new chunks streamed afterwards use the new constants.
 32. **Ravines + dungeons (cobble rooms with spawner + chest)** — Two scripted features added to the existing chunk-feature pipeline.
 33. **Surface lava lakes + underground pools + cliff-face springs**.
 34. **Fire propagation block** — Block, spread/die tick. Flint and Steel (Tier 4 #17) lights it; pairs with Tier 8 TNT priming.

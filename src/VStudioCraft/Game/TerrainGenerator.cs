@@ -4,8 +4,20 @@ namespace VStudioCraft.Game
 {
     internal static class TerrainGenerator
     {
-        public const int BaseHeight = 24;
-        public const int HeightAmplitude = 14;
+        // Tier 6 #31 — Surface height bumped from 24 → 64 so the
+        // 128-tall world has a meaningful underground (~60 blocks
+        // beneath the surface for caves / ores / dungeons) instead
+        // of the previous ~20-block sliver. Amplitude bumped 14 → 20
+        // so the larger headroom isn't wasted on flat plains. New
+        // worlds generate at the new constants; existing saves load
+        // their pre-existing block data unchanged (chunks are stored
+        // as block ids, not regenerated from the noise function), so
+        // the only legacy-world quirk is that chunks streamed in
+        // AFTER world creation use the new constants — the
+        // discontinuity sits at the edge of the original explored
+        // area and is treated as accepted dev-time churn.
+        public const int BaseHeight = 64;
+        public const int HeightAmplitude = 20;
         // Ocean surface. Air between the terrain height and SeaLevel becomes water.
         public const int SeaLevel = BaseHeight - 2;
         // Columns whose top block sits at SeaLevel or one above get a sandy crown:
