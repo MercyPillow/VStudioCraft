@@ -251,6 +251,25 @@ void main()
 }
 ";
 
+        // Tier 6 — Passthrough fragment shader for the animated GIF
+        // background. Like SpriteArrayFragmentSrc but without the
+        // alpha-discard or faux-3D shading the icon variant applies
+        // — those are wrong for a fullscreen background (a
+        // transparent pixel should show through, not be discarded;
+        // a top-bright/bottom-dim shading mangles the actual frame).
+        private const string BackgroundArrayFragmentSrc = @"#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2DArray uAtlas;
+uniform float uLayer;
+uniform vec4 uTint;
+void main()
+{
+    vec4 t = texture(uAtlas, vec3(vUV, uLayer));
+    FragColor = t * uTint;
+}
+";
+
         private const float ReachDistance = 8f;
         public const int ViewDistanceChunks = 6;   // ~13x13 kept loaded around the player
         public const int UnloadDistanceChunks = 9; // 3 chunks of hysteresis beyond view distance
@@ -277,6 +296,7 @@ void main()
         private Shader _overlayShader;
         private Shader _spriteShader;
         private Shader _spriteArrayShader; // sampler2DArray variant for block-atlas icons
+        private Shader _backgroundShader;  // passthrough sampler2DArray for animated-GIF background — no discard, no shading
         private Shader _crackShader;       // pos+uv -> sampler2DArray for break overlay
         private Shader _multiFaceCubeShader; // pos+uv -> per-face sampler2DArray (drops + iso icons)
         private OverlayMesh _crosshairMesh;
@@ -977,6 +997,7 @@ void main()
             _overlayShader = new Shader(OverlayVertexSrc, OverlayFragmentSrc);
             _spriteShader = new Shader(SpriteVertexSrc, SpriteFragmentSrc);
             _spriteArrayShader = new Shader(SpriteVertexSrc, SpriteArrayFragmentSrc);
+            _backgroundShader  = new Shader(SpriteVertexSrc, BackgroundArrayFragmentSrc);
             _crackShader = new Shader(CrackVertexSrc, CrackFragmentSrc);
             _multiFaceCubeShader = new Shader(MultiFaceCubeVertexSrc, MultiFaceCubeFragmentSrc);
             _crosshairMesh = BuildCrosshairMesh();
@@ -10293,19 +10314,19 @@ void main()
             // Skipped when the resource didn't decode at startup.
             if (_titleBackground != null && _titleBackground.Loaded)
             {
-                var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+                var orthoBg = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
                 GL.Disable(EnableCap.Blend);
                 GL.Disable(EnableCap.DepthTest);
                 GL.Disable(EnableCap.CullFace);
-                _spriteArrayShader.Use();
-                _spriteArrayShader.SetInt("uAtlas", 0);
-                _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
-                _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
-                _spriteArrayShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
-                _spriteArrayShader.SetFloat("uLayer", _titleBackground.CurrentLayer);
+                _backgroundShader.Use();
+                _backgroundShader.SetInt("uAtlas", 0);
+                _backgroundShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+                _backgroundShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
+                _backgroundShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
+                _backgroundShader.SetFloat("uLayer", _titleBackground.CurrentLayer);
                 GL.ActiveTexture(TextureUnit.Texture0);
                 GL.BindTexture(TextureTarget.Texture2DArray, _titleBackground.Texture);
-                DrawSpriteQuadFor(_spriteArrayShader, 0, 0, width, height, ortho);
+                DrawSpriteQuadFor(_backgroundShader, 0, 0, width, height, orthoBg);
             }
 
             switch (_titleState)
