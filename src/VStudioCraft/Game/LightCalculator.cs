@@ -319,8 +319,15 @@ namespace VStudioCraft.Game
         //      go into addQ for re-flood.
         //   3. If the new block emits, seed the cell at its emission and add
         //      to addQ.
-        //   4. Add-BFS to re-flood from independent sources and the new
-        //      emitter (if any).
+        //   4. If the cell BECAME transparent (opaque block removed), also
+        //      seed every bright neighbour into addQ so their light can
+        //      flow into the new air space. Without this seed the new air
+        //      cell stays at blockLight=0 even when surrounded by torch-
+        //      lit neighbours — was the source of "broken block stays
+        //      dark in a lit corridor" bug. Mirrors the equivalent
+        //      seeding path on the sky-light side.
+        //   5. Add-BFS to re-flood from independent sources, the new
+        //      emitter (if any), and the bright-neighbour seeds.
         private static void UpdateBlockLightAtEdit(World world, int wx, int wy, int wz,
             int oldEmit, int newEmit, bool newTrans, HashSet<(int cx, int cz)> dirty)
         {
@@ -346,7 +353,27 @@ namespace VStudioCraft.Game
                 addQ.Enqueue((wx, wy, wz));
             }
 
+            // If the cell just became transparent, seed neighbour light
+            // sources so block-light flows into the new air space.
+            // GetBlockLightW > 1 ensures the neighbour has enough headroom
+            // (light - 1) to actually propagate into us.
+            if (newTrans)
+            {
+                TryEnqueueAddSeedBlock(world, wx - 1, wy, wz, addQ);
+                TryEnqueueAddSeedBlock(world, wx + 1, wy, wz, addQ);
+                TryEnqueueAddSeedBlock(world, wx, wy - 1, wz, addQ);
+                TryEnqueueAddSeedBlock(world, wx, wy + 1, wz, addQ);
+                TryEnqueueAddSeedBlock(world, wx, wy, wz - 1, addQ);
+                TryEnqueueAddSeedBlock(world, wx, wy, wz + 1, addQ);
+            }
+
             ProcessAddBlock(world, addQ, dirty);
+        }
+
+        private static void TryEnqueueAddSeedBlock(World w, int wx, int wy, int wz, Queue<(int, int, int)> addQ)
+        {
+            if (wy < 0 || wy >= Chunk.SizeY) return;
+            if (GetBlockLightW(w, wx, wy, wz) > 1) addQ.Enqueue((wx, wy, wz));
         }
 
         // Sky-light incremental update at a single edit cell.
