@@ -506,7 +506,7 @@ multiple subsystems at once.
 
 31. **Extend World height to 128 - land height starts at around y=64 so there is a larger underground area** — DONE. `TerrainGenerator.BaseHeight` 24→64, `HeightAmplitude` 14→20. SeaLevel + BeachHeight + CaveMaxY all derived so they auto-scale to 62 / 63 / 58 respectively. New worlds generate with ~60 blocks of underground room (caves, ores, dungeons) below the surface; pre-existing saves load their stored block data unchanged but new chunks streamed afterwards use the new constants.
 32. **Ravines + dungeons (cobble rooms with spawner + chest)** — Two scripted features added to the existing chunk-feature pipeline.
-33. **Surface lava lakes + underground pools + cliff-face springs**.
+33. **Surface lava lakes + underground pools + cliff-face springs** — DONE. New `TerrainGenerator.GenerateFluidFeatures` pass slots between ores and trees: ~1/16 chunks rolls a surface lava lake (radius-2-or-3 disc on flat dry land above sea level, skips beach sand), 0..2 underground pools per chunk (water if y >= 16, lava deeper — pools find a flat cave floor with air ceiling and patch any drainage holes with stone), and ~1/8 chunks tries to place a cliff-face spring (stone cell with horizontal air exposure and solid stone above/below — replaced with a water source so FluidTick handles the cascade).
 34. **Fire propagation block** — Block, spread/die tick. Flint and Steel (Tier 4 #17) lights it; pairs with Tier 8 TNT priming.
 35. **Falling sand / gravel physics** — Block-update tick converts unsupported sand/gravel into a falling-block entity.
 36. **Water-meets-lava → cobblestone / stone / obsidian** — Source-vs-source contact rule in the fluid tick.

@@ -40,6 +40,14 @@ namespace VStudioCraft.Game
             GenerateCaves(chunk, noise);
             GenerateWater(chunk);
             GenerateOresAndPatches(chunk, noise);
+            // Tier 6 #33 — Surface lava lakes + underground water/lava
+            // pools + cliff-face springs. Runs AFTER water flooding so
+            // surface lava sits on top of land instead of being
+            // washed away by the sea pass; AFTER ores so a vein
+            // doesn't get clobbered by a randomly-placed lake; BEFORE
+            // flora so trees / flowers don't grow inside lake water
+            // or on top of lava.
+            GenerateFluidFeatures(chunk, noise);
             GenerateTrees(chunk, noise);
             GenerateFlora(chunk, noise);
             // Newly-generated chunks start "active" so the first fluid tick
@@ -329,6 +337,192 @@ namespace VStudioCraft.Game
                     else               cz--;
                 }
             }
+        }
+
+        // ---------- Pass 3.5: fluid features (lakes, pools, springs). ----------
+        //
+        // Tier 6 #33 — Three flavors of decorative fluid:
+        //   * Surface lava lakes — rare disc-shaped pools of lava
+        //     placed on top of land far from the sea. Visible from
+        //     a distance; gives the overworld dramatic landmarks.
+        //   * Underground pools — water OR lava pockets sitting on
+        //     cave floors. Common; adds atmosphere to spelunking
+        //     and gates risky paths with hazard fluid.
+        //   * Cliff-face springs — single source water blocks
+        //     embedded in stone walls so the existing FluidTick
+        //     spreads them into visible cascades down a cliff.
+        //
+        // All three deterministic per (seed, chunk coords) so the
+        // same world generates the same features every time. Fluid
+        // sources are placed as source blocks (Water / Lava); the
+        // FluidTick handles flow, evaporation, and water-meets-lava
+        // contact (Tier 6 #36 — separate ship).
+        private static void GenerateFluidFeatures(Chunk chunk, Noise noise)
+        {
+            // Surface lava lakes — ~1 in 16 chunks rolls a lake.
+            var lakeRng = ChunkRng(noise.Seed, chunk.ChunkX, chunk.ChunkZ, 0x7AC9);
+            if (lakeRng.Next(16) == 0)
+                PlaceSurfaceLavaLake(chunk, lakeRng);
+
+            // Underground pools — 0..2 attempts per chunk; each
+            // looks for a flat cave floor and pools water or lava.
+            var poolRng = ChunkRng(noise.Seed, chunk.ChunkX, chunk.ChunkZ, 0x9001);
+            int poolAttempts = poolRng.Next(3);
+            for (int i = 0; i < poolAttempts; i++)
+                TryPlaceUndergroundPool(chunk, poolRng);
+
+            // Cliff-face springs — ~1 in 8 chunks tries to place one
+            // (subject to finding a valid wall cell). Springs are
+            // small visual flourishes; the fluid tick handles the
+            // cascade.
+            var springRng = ChunkRng(noise.Seed, chunk.ChunkX, chunk.ChunkZ, 0xCF12);
+            if (springRng.Next(8) == 0)
+                TryPlaceCliffSpring(chunk, springRng);
+        }
+
+        // Surface lava lake — pick a random column, find its surface,
+        // scoop a shallow disc (radius 2-3, depth 2 below surface) out
+        // of the dirt/grass/stone there, then fill the disc + surface
+        // with lava source blocks. Skip if the surface is sandy
+        // (beach) or already in water — lakes look weird half-flooded.
+        private static void PlaceSurfaceLavaLake(Chunk chunk, Random rng)
+        {
+            // Inset 4 cells from the chunk edge so the disc fits
+            // without crossing into a neighbour chunk. Lakes that
+            // span chunk boundaries would need cross-chunk gen
+            // coordination; keeping them chunk-local is simpler and
+            // visually fine.
+            int cx = 4 + rng.Next(Chunk.SizeX - 8);
+            int cz = 4 + rng.Next(Chunk.SizeZ - 8);
+            int surfaceY = -1;
+            for (int y = Chunk.SizeY - 1; y >= 0; y--)
+            {
+                var t = (BlockType)chunk.RawBlocks[Chunk.Index(cx, y, cz)];
+                if (t == BlockType.Air || t == BlockType.Water || t == BlockType.FlowingWater) continue;
+                surfaceY = y;
+                break;
+            }
+            if (surfaceY < 0) return;
+            // Reject under-water surfaces (lake bed) and beach sand —
+            // both produce ugly half-fluid blobs.
+            var topT = (BlockType)chunk.RawBlocks[Chunk.Index(cx, surfaceY, cz)];
+            if (topT == BlockType.Sand) return;
+            if (surfaceY < SeaLevel + 1) return;
+
+            int radius = 2 + rng.Next(2);  // 2..3
+            // Replace cells inside the disc, in 3 layers (surface, -1, -2)
+            // and fill the surface with lava sources.
+            for (int dz = -radius; dz <= radius; dz++)
+            for (int dx = -radius; dx <= radius; dx++)
+            {
+                if (dx * dx + dz * dz > radius * radius) continue;
+                int x = cx + dx, z = cz + dz;
+                if ((uint)x >= Chunk.SizeX || (uint)z >= Chunk.SizeZ) continue;
+                // Top cell becomes lava source.
+                chunk.RawBlocks[Chunk.Index(x, surfaceY, z)] = (byte)BlockType.Lava;
+                // Carve up to 1 block below into stone bed (so the
+                // pool reads as having depth, not just a surface
+                // sheet). Keep the bed solid so the lava doesn't
+                // drain through.
+                int bedY = surfaceY - 1;
+                if (bedY >= 0)
+                {
+                    var bed = (BlockType)chunk.RawBlocks[Chunk.Index(x, bedY, z)];
+                    if (bed == BlockType.Grass || bed == BlockType.Dirt)
+                        chunk.RawBlocks[Chunk.Index(x, bedY, z)] = (byte)BlockType.Stone;
+                }
+            }
+        }
+
+        // Underground pool — pick a random Y in the cave-eligible
+        // band, find an air cell with a stone floor, scoop a small
+        // bowl, fill with water (shallower) or lava (deeper). Skips
+        // gracefully when the random spot doesn't satisfy the floor +
+        // air-above check, which is most of the time.
+        private static void TryPlaceUndergroundPool(Chunk chunk, Random rng)
+        {
+            int x = 2 + rng.Next(Chunk.SizeX - 4);
+            int z = 2 + rng.Next(Chunk.SizeZ - 4);
+            int y = 6 + rng.Next(Math.Max(1, SeaLevel - 8));
+            // Need: cell at (x,y,z) air, floor at (x,y-1,z) stone,
+            // ceiling at (x,y+1,z) air (so the player can see it).
+            if (y <= 0 || y >= Chunk.SizeY - 1) return;
+            var hereT = (BlockType)chunk.RawBlocks[Chunk.Index(x, y, z)];
+            if (hereT != BlockType.Air) return;
+            var floorT = (BlockType)chunk.RawBlocks[Chunk.Index(x, y - 1, z)];
+            if (floorT != BlockType.Stone) return;
+            var ceilT = (BlockType)chunk.RawBlocks[Chunk.Index(x, y + 1, z)];
+            if (ceilT != BlockType.Air) return;
+
+            // Lava if we're deep (Y < 16); water if shallower.
+            // Matches Alpha 1.1.2_01 — lava lakes deep, water pools
+            // closer to the surface.
+            BlockType fluid = y < 16 ? BlockType.Lava : BlockType.Water;
+            int radius = 1 + rng.Next(2); // 1..2
+            for (int dz = -radius; dz <= radius; dz++)
+            for (int dx = -radius; dx <= radius; dx++)
+            {
+                if (dx * dx + dz * dz > radius * radius) continue;
+                int px = x + dx, pz = z + dz;
+                if ((uint)px >= Chunk.SizeX || (uint)pz >= Chunk.SizeZ) continue;
+                int idx = Chunk.Index(px, y, pz);
+                // Only fill cells that are currently air; don't
+                // overwrite cave walls or stone the cave gen left.
+                if (chunk.RawBlocks[idx] != (byte)BlockType.Air) continue;
+                // Floor under each pool cell needs to be solid so the
+                // fluid doesn't drain through. Patch holes with stone.
+                int floorIdx = Chunk.Index(px, y - 1, pz);
+                var below = (BlockType)chunk.RawBlocks[floorIdx];
+                if (below != BlockType.Stone && below != BlockType.Cobblestone
+                    && below != BlockType.MossyCobblestone && below != BlockType.Dirt
+                    && below != BlockType.Gravel)
+                {
+                    chunk.RawBlocks[floorIdx] = (byte)BlockType.Stone;
+                }
+                chunk.RawBlocks[idx] = (byte)fluid;
+            }
+        }
+
+        // Cliff-face spring — find a stone cell at the chunk's edge
+        // exposure (a stone block with at least one horizontal
+        // face open to air, AND solid stone above + below so the
+        // spring sticks out from a wall rather than the top of a
+        // hill). Replace the stone with a water source; FluidTick
+        // will spread it into a visible cascade.
+        private static void TryPlaceCliffSpring(Chunk chunk, Random rng)
+        {
+            // Try up to 12 random positions; bail if none qualify.
+            for (int attempt = 0; attempt < 12; attempt++)
+            {
+                int x = 1 + rng.Next(Chunk.SizeX - 2);
+                int z = 1 + rng.Next(Chunk.SizeZ - 2);
+                // Y range: above sea level but well below max (need
+                // exposed stone on a hillside).
+                int y = SeaLevel + 4 + rng.Next(Math.Max(1, BaseHeight + HeightAmplitude - SeaLevel - 6));
+                if (y <= 0 || y >= Chunk.SizeY - 1) continue;
+                var hereT = (BlockType)chunk.RawBlocks[Chunk.Index(x, y, z)];
+                if (hereT != BlockType.Stone) continue;
+                var aboveT = (BlockType)chunk.RawBlocks[Chunk.Index(x, y + 1, z)];
+                if (aboveT != BlockType.Stone && aboveT != BlockType.Dirt && aboveT != BlockType.Grass) continue;
+                var belowT = (BlockType)chunk.RawBlocks[Chunk.Index(x, y - 1, z)];
+                if (belowT != BlockType.Stone) continue;
+                // Need at least one horizontal face exposed to air.
+                bool exposed =
+                       IsAirAt(chunk, x - 1, y, z)
+                    || IsAirAt(chunk, x + 1, y, z)
+                    || IsAirAt(chunk, x, y, z - 1)
+                    || IsAirAt(chunk, x, y, z + 1);
+                if (!exposed) continue;
+                chunk.RawBlocks[Chunk.Index(x, y, z)] = (byte)BlockType.Water;
+                return;
+            }
+        }
+
+        private static bool IsAirAt(Chunk chunk, int x, int y, int z)
+        {
+            if ((uint)x >= Chunk.SizeX || (uint)z >= Chunk.SizeZ) return false;
+            if (y < 0 || y >= Chunk.SizeY) return false;
+            return chunk.RawBlocks[Chunk.Index(x, y, z)] == (byte)BlockType.Air;
         }
 
         // ---------- Pass 4: oak trees, seeded deterministically per world column. ----------
