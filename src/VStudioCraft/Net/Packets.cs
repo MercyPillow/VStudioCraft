@@ -824,27 +824,27 @@ namespace VStudioCraft.Net
     }
 
     // 0x32 — server→client single-block change. Sent when any cell in the
-    // world flips type. The server batches these inside a tick (one
-    // packet per dirtied cell at the end of the tick) and only sends to
-    // clients whose tracked-chunks set contains the cell's chunk —
-    // a client that hasn't been streamed (cx, cz) yet doesn't need to
-    // know about edits there. Phase 3+ uses this for player-driven dig/
-    // place; Phase 5+ also uses it for fluid spread, sugar-cane growth,
-    // and door toggle.
+    // world flips type or metadata. The server batches these inside a
+    // tick (one packet per dirtied cell at the end of the tick) and
+    // only sends to clients whose tracked-chunks set contains the
+    // cell's chunk — a client that hasn't been streamed (cx, cz) yet
+    // doesn't need to know about edits there. Used for player-driven
+    // dig/place, future fluid spread / sugar-cane growth, and door
+    // toggle (which mutates Meta but not BlockType — KI-3).
     //
     // Coordinates are absolute world coords. The cell's chunk is
     // computed as (X >> 4, Z >> 4) on receive, mirroring World.SetBlock.
-    // Block type is a byte (matches BlockType enum width) — meta is
-    // separate from type and not yet on this packet because Phase 3
-    // doesn't carry meta-bearing edits (door state, wheat stage). When
-    // those arrive the packet will gain a 1-byte meta field; bumping
-    // ProtocolVersion at that point gates old clients out cleanly.
+    //
+    // v2 (current): Meta byte appended after BlockType. v1 → v2 is a
+    // hard wire-format break, so ProtocolVersion was bumped to 2; a
+    // v1 client gets a clean Disconnect at login.
     internal struct BlockChangePacket
     {
         public int X;
         public int Y;
         public int Z;
         public byte BlockType;
+        public byte Meta;
 
         public void Write(PacketWriter w)
         {
@@ -855,6 +855,7 @@ namespace VStudioCraft.Net
             w.WriteInt(Y);
             w.WriteInt(Z);
             w.WriteByte(BlockType);
+            w.WriteByte(Meta);
         }
 
         public static BlockChangePacket Read(PacketReader r) => new BlockChangePacket
@@ -863,6 +864,7 @@ namespace VStudioCraft.Net
             Y = r.ReadInt(),
             Z = r.ReadInt(),
             BlockType = r.ReadByte(),
+            Meta = r.ReadByte(),
         };
     }
 

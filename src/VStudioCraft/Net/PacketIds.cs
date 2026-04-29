@@ -108,6 +108,12 @@ namespace VStudioCraft.Net
         // bytes mid-session. Incremented every time the wire format breaks
         // backward compatibility (NOT every time a new packet is added —
         // additive changes leave existing clients alone).
-        public const int ProtocolVersion = 1;
+        // v1: initial Phase 2 wire shape.
+        // v2: BlockChangePacket gains a `byte Meta` field for door
+        //     toggle (KI-3 fix). All v1 packets unchanged on the wire,
+        //     so a v2 server replying to a v1 client would mis-frame
+        //     the next packet — bumping the version cuts that off
+        //     with a clean Disconnect at login.
+        public const int ProtocolVersion = 2;
     }
 }

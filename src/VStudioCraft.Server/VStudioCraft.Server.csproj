@@ -19,6 +19,15 @@
          UseWindowsForms / WindowsDesktop, so we don't need to add it
          explicitly. -->
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- WPF references compile-only (no actual WPF objects are
+         instantiated server-side): GameRenderer references
+         AnimatedBackground, which pulls in System.Windows.Media for
+         BitmapFrame to decode the title-screen GIF. The server never
+         calls into AnimatedBackground at runtime, but the compiler
+         still needs the WPF types to resolve. Toggling UseWPF=true
+         on the WindowsDesktop SDK adds the references with no
+         runtime cost. -->
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>

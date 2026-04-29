@@ -12,10 +12,16 @@ namespace VStudioCraft.Game
     {
         public int X, Y, Z;
         public BlockType NewType;
+        // Phase 8+ — KI-3 closure. Doors flip the open bit on the per-
+        // cell metadata byte without changing the BlockType, so the
+        // change journal carries Meta alongside Type. Non-door changes
+        // store the cell's current Meta (0 for most blocks) so the
+        // wire packet always has a consistent shape.
+        public byte Meta;
 
-        public BlockChangeRecord(int x, int y, int z, BlockType t)
+        public BlockChangeRecord(int x, int y, int z, BlockType t, byte meta)
         {
-            X = x; Y = y; Z = z; NewType = t;
+            X = x; Y = y; Z = z; NewType = t; Meta = meta;
         }
     }
 
@@ -118,6 +124,27 @@ namespace VStudioCraft.Game
 
         public IReadOnlyList<BlockChangeRecord> PendingBlockChanges => _pendingBlockChanges;
         public void ClearPendingBlockChanges() => _pendingBlockChanges.Clear();
+
+        // Record a BlockChange for a cell whose META mutated but whose
+        // TYPE stayed the same — door toggle is the canonical case.
+        // SetBlock's "if (oldT == t) return false; // no-op" early-out
+        // would skip the journal append in this scenario, so callers
+        // that mutated meta directly via Chunk.SetMeta poke the
+        // journal manually here. Reads the cell's current type +
+        // meta so the broadcast carries the live values.
+        public void RecordMetaChange(int wx, int wy, int wz)
+        {
+            if (wy < 0 || wy >= Chunk.SizeY) return;
+            int cx = (int)Math.Floor(wx / (float)Chunk.SizeX);
+            int cz = (int)Math.Floor(wz / (float)Chunk.SizeZ);
+            int lx = wx - cx * Chunk.SizeX;
+            int lz = wz - cz * Chunk.SizeZ;
+            var c = GetChunk(cx, cz);
+            if (c == null) return;
+            var t = c.Get(lx, wy, lz);
+            byte meta = c.GetMeta(lx, wy, lz);
+            _pendingBlockChanges.Add(new BlockChangeRecord(wx, wy, wz, t, meta));
+        }
 
         private World(int seed)
         {
@@ -931,7 +958,13 @@ namespace VStudioCraft.Game
             c.IsModified = true;
             if (record)
             {
-                _pendingBlockChanges.Add(new BlockChangeRecord(wx, wy, wz, t));
+                // Sample the cell's META alongside its new TYPE so the
+                // wire packet has both. For most edits Meta is 0; door
+                // halves at placement time stamp facing+open into Meta
+                // before SetBlock returns, so reading post-Set is the
+                // right moment to capture the final value.
+                byte meta = c.GetMeta(lx, wy, lz);
+                _pendingBlockChanges.Add(new BlockChangeRecord(wx, wy, wz, t, meta));
             }
 
             // Incremental light update — touches only the cells whose sky

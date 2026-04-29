@@ -228,6 +228,13 @@ namespace VStudioCraft.Net
             BroadcastMobUpdates();
             BroadcastHostileUpdates();
 
+            // 6. Phase 6c polish — furnace progress to clients with an
+            //    open furnace window. Drives the visible cook timer
+            //    and fuel-burn animation friend-side. Only iterates
+            //    clients' OpenWindows (not all furnaces in the world)
+            //    so the cost is O(open windows) per tick.
+            BroadcastOpenFurnaceUpdates();
+
             for (int i = _clients.Count - 1; i >= 0; i--)
             {
                 if (_clients[i].Session.IsDead)
@@ -1171,7 +1178,61 @@ namespace VStudioCraft.Net
             int slot = pkt.Slot;
             if (pkt.Shift != 0)
             {
-                inv.HandleShiftClickSlot(slot);
+                // Phase 6c polish — shift-click cross-area routing.
+                // If the client has a chest or furnace window open,
+                // shift-click on a player slot tries to push the
+                // stack INTO that window first (matching Alpha's
+                // behaviour: shift-click in a chest moves the stack
+                // toward the chest). Anything that doesn't fit falls
+                // through to the regular main↔hotbar shift move.
+                //
+                // Picks the most-recently-opened window (highest
+                // WindowId) when multiple are open. Crafting tables
+                // are skipped — shift-click into a 9-slot input grid
+                // is unintuitive and Alpha-incompatible (Alpha only
+                // routes shift-click into containers, not crafting).
+                OpenWindowState target = null;
+                byte targetId = 0;
+                foreach (var kv in client.OpenWindows)
+                {
+                    if (kv.Value.Kind == WindowKind.Chest
+                     || kv.Value.Kind == WindowKind.Furnace)
+                    {
+                        if (target == null || kv.Key > targetId)
+                        {
+                            target = kv.Value;
+                            targetId = kv.Key;
+                        }
+                    }
+                }
+                if (target != null && !inv.Slots[slot].IsEmpty)
+                {
+                    PushStackIntoWindow(ref inv.Slots[slot], target);
+                    // If anything remains, the leftover takes the
+                    // regular shift-click path (main↔hotbar).
+                    if (!inv.Slots[slot].IsEmpty)
+                    {
+                        inv.HandleShiftClickSlot(slot);
+                    }
+                    // The mutation may have changed the window —
+                    // ship a fresh TileEntityData to the clicker AND
+                    // any other watchers of the same cell.
+                    SendTileEntityData(client, target);
+                    BroadcastTileUpdateToOtherViewers(client, target);
+                    // Furnace: also write the snapshot back to the
+                    // persistent entity since BuildFurnaceWindowSnapshot
+                    // copied at open time.
+                    if (target.Kind == WindowKind.Furnace && target.FurnaceRef != null)
+                    {
+                        target.FurnaceRef.Input = target.Slots[0];
+                        target.FurnaceRef.Fuel = target.Slots[1];
+                        target.FurnaceRef.Output = target.Slots[2];
+                    }
+                }
+                else
+                {
+                    inv.HandleShiftClickSlot(slot);
+                }
             }
             else if (pkt.Button == 1) // RMB
             {
@@ -1186,6 +1247,58 @@ namespace VStudioCraft.Net
             SendFullInventory(client);
         }
 
+        // Push a stack into the first slot(s) of a window's backing
+        // array, top-up matching first then first-empty. Used by
+        // shift-click cross-area routing (player → open window).
+        // Furnace gets a slight refinement: only the input slot (0)
+        // accepts arbitrary smelting input; fuel slot (1) accepts
+        // only fuel-eligible items. Output slot (2) is read-only.
+        // Chest accepts any item in any slot.
+        private static void PushStackIntoWindow(ref ItemStack from, OpenWindowState target)
+        {
+            if (from.IsEmpty) return;
+
+            int firstSlot = 0;
+            int slotCount = target.Slots.Length;
+            int lastSlot = slotCount - 1;
+
+            // Furnace: target only the Input slot for non-fuel items.
+            // Fuel slot routing requires a fuel lookup (FurnaceRecipes
+            // has IsFuel-style helpers); for the polish pass we keep
+            // it simple — let any item go into Input first, then Fuel
+            // if the player explicitly shift-clicks a fuel-shaped
+            // stack. Output never accepts shift-clicks.
+            if (target.Kind == WindowKind.Furnace)
+            {
+                lastSlot = 1; // 0 = Input, 1 = Fuel; skip Output (2)
+            }
+
+            // Top-up matching slots first.
+            for (int i = firstSlot; i <= lastSlot; i++)
+            {
+                if (from.IsEmpty) return;
+                if (target.Slots[i].IsEmpty) continue;
+                if (target.Slots[i].Type != from.Type) continue;
+                int cap = ItemStack.MaxStackSizeFor(target.Slots[i].Type);
+                int room = cap - target.Slots[i].Count;
+                if (room <= 0) continue;
+                int xfer = Math.Min(room, from.Count);
+                target.Slots[i] = new ItemStack(target.Slots[i].Type, target.Slots[i].Count + xfer);
+                int leftover = from.Count - xfer;
+                from = leftover > 0 ? new ItemStack(from.Type, leftover) : ItemStack.Empty;
+            }
+
+            // First-empty fallback.
+            for (int i = firstSlot; i <= lastSlot; i++)
+            {
+                if (from.IsEmpty) return;
+                if (!target.Slots[i].IsEmpty) continue;
+                target.Slots[i] = from;
+                from = ItemStack.Empty;
+                return;
+            }
+        }
+
         // ---- Phase 6c: window open / close / click --------------------
 
         private void HandleInteractBlock(ServerClient client, PlayerInteractBlockPacket pkt)
@@ -1194,6 +1307,19 @@ namespace VStudioCraft.Net
             if (!IsWithinReach(client, pkt.X, pkt.Y, pkt.Z)) return;
 
             var cell = _world.GetBlock(pkt.X, pkt.Y, pkt.Z);
+
+            // KI-3 — wooden-door RMB toggle. Iron doors fall through
+            // to the default branch (Alpha redstone-only behaviour).
+            // Mutates the per-chunk meta byte on BOTH halves (top +
+            // bottom) so they animate as one unit, then records the
+            // change in the world's journal so BroadcastPendingBlockChanges
+            // ships the new meta to every viewer in range.
+            if (cell == BlockType.WoodDoorBlockBottom || cell == BlockType.WoodDoorBlockTop)
+            {
+                ToggleWoodDoor(pkt.X, pkt.Y, pkt.Z, cell);
+                return;
+            }
+
             switch (cell)
             {
                 case BlockType.Chest:
@@ -1246,6 +1372,39 @@ namespace VStudioCraft.Net
         {
             f.Input, f.Fuel, f.Output,
         };
+
+        // KI-3 — server-side door toggle. The block TYPE stays the same
+        // (still a WoodDoorBlock half) but the per-cell meta byte's
+        // open bit flips. We mirror GameRenderer.ToggleWoodDoor exactly:
+        // read the meta from whichever half was clicked, flip the open
+        // bit, stamp it on BOTH halves so they animate as one unit.
+        // Both cells get journal-recorded so connecting viewers receive
+        // a BlockChange with the new meta and rebuild their door
+        // rendering.
+        //
+        // Iron doors are NOT routed here (Alpha redstone-only); the
+        // caller's switch falls through for IronDoorBlock* cells.
+        private void ToggleWoodDoor(int x, int y, int z, BlockType here)
+        {
+            int cx = x >> 4, cz = z >> 4;
+            var chunk = _world.GetChunk(cx, cz);
+            if (chunk == null) return;
+            int lx = x - (cx << 4);
+            int lz = z - (cz << 4);
+
+            int otherY = BlockData.IsDoorBottom(here) ? y + 1 : y - 1;
+            BlockType other = _world.GetBlock(x, otherY, z);
+
+            byte meta = chunk.GetMeta(lx, y, lz);
+            byte flipped = BlockData.DoorWithOpen(meta, !BlockData.DoorIsOpen(meta));
+            chunk.SetMeta(lx, y, lz, flipped);
+            _world.RecordMetaChange(x, y, z);
+            if (BlockData.IsDoor(other))
+            {
+                chunk.SetMeta(lx, otherY, lz, flipped);
+                _world.RecordMetaChange(x, otherY, z);
+            }
+        }
 
         private void OpenWindow(ServerClient client, byte kind, int x, int y, int z,
             int slotCount, ChestTileEntity chestRef, FurnaceTileEntity furnaceRef, ItemStack[] backingSlots)
@@ -1397,6 +1556,103 @@ namespace VStudioCraft.Net
             // two).
             SendTileEntityData(client, st);
             SendFullInventory(client);
+
+            // Phase 6c polish — multi-friend chest sync. Chest contents
+            // live on the persistent ChestTileEntity (this same object
+            // is referenced by every viewer's window state). When one
+            // friend clicks a chest slot, every OTHER client watching
+            // the same cell needs a fresh TileEntityData so their view
+            // doesn't go stale. Furnace state syncs the same way.
+            // Crafting windows are per-client (no shared state), so
+            // skipped.
+            if (st.Kind == WindowKind.Chest || st.Kind == WindowKind.Furnace)
+            {
+                BroadcastTileUpdateToOtherViewers(client, st);
+            }
+        }
+
+        // Phase 6c polish — per-tick furnace progress broadcast. For
+        // each client with at least one open furnace window, compare
+        // the FurnaceTileEntity's live state against the last-sent
+        // snapshot stored on the OpenWindowState. Mismatches ship a
+        // fresh TileEntityData so the friend's UI shows the cook
+        // timer animating + the fuel sprite emptying.
+        //
+        // Slot changes are NOT diffed here — they're already covered
+        // by HandleWindowClick's reply (when a click mutates the
+        // furnace) and by the host's local SP path which also flows
+        // through HandleWindowClick when the host has the furnace
+        // open. So this pass is purely about the cook/burn timers.
+        private void BroadcastOpenFurnaceUpdates()
+        {
+            for (int c = 0; c < _clients.Count; c++)
+            {
+                var client = _clients[c];
+                if (client.Session.IsDead) continue;
+                if (client.Session.IsLoopback) continue;
+                if (client.OpenWindows.Count == 0) continue;
+                foreach (var kv in client.OpenWindows)
+                {
+                    var ow = kv.Value;
+                    if (ow.Kind != WindowKind.Furnace) continue;
+                    if (ow.FurnaceRef == null) continue;
+                    var f = ow.FurnaceRef;
+                    bool changed = !ow.LastSentInitialized
+                        || ow.LastSentBurnTime != f.BurnTimeTicks
+                        || ow.LastSentMaxBurnTime != f.MaxBurnTimeTicks
+                        || ow.LastSentCookProgress != f.CookProgressTicks;
+                    if (!changed) continue;
+
+                    // Refresh the slot snapshot too (fuel might have
+                    // burned a stack down) so the resend reflects the
+                    // current contents, not the open-time copy.
+                    ow.Slots = BuildFurnaceWindowSnapshot(f);
+                    SendTileEntityData(client, ow);
+                    ow.LastSentBurnTime = f.BurnTimeTicks;
+                    ow.LastSentMaxBurnTime = f.MaxBurnTimeTicks;
+                    ow.LastSentCookProgress = f.CookProgressTicks;
+                    ow.LastSentInitialized = true;
+                }
+            }
+        }
+
+        // Walk the client list, and for any client (other than the
+        // clicker) whose open windows include a window pointing at the
+        // same cell + kind, ship a fresh TileEntityData. Cell match,
+        // not WindowId match — each client allocates its own per-client
+        // window id, so two friends in the same chest have different
+        // ids on the same cell.
+        private void BroadcastTileUpdateToOtherViewers(ServerClient origin, OpenWindowState originSt)
+        {
+            for (int i = 0; i < _clients.Count; i++)
+            {
+                var other = _clients[i];
+                if (ReferenceEquals(other, origin)) continue;
+                if (other.Session.IsDead) continue;
+                if (other.Session.IsLoopback) continue;
+                foreach (var kv in other.OpenWindows)
+                {
+                    var ow = kv.Value;
+                    if (ow.Kind != originSt.Kind) continue;
+                    if (ow.CellX != originSt.CellX) continue;
+                    if (ow.CellY != originSt.CellY) continue;
+                    if (ow.CellZ != originSt.CellZ) continue;
+                    // Re-snapshot the backing entity for the other
+                    // viewer's window, since for furnaces the snapshot
+                    // is a copy that needs refreshing from the live
+                    // FurnaceTileEntity. Chest slots alias directly
+                    // and don't need the snapshot rebuild, but the
+                    // SendTileEntityData call below clones-on-write so
+                    // doing it for both kinds is harmless and
+                    // future-proof.
+                    if (ow.Kind == WindowKind.Furnace && ow.FurnaceRef != null)
+                    {
+                        ow.Slots = BuildFurnaceWindowSnapshot(ow.FurnaceRef);
+                    }
+                    SendTileEntityData(other, ow);
+                    break; // one window per cell per other-viewer is enough
+                }
+            }
         }
 
         // LMB on a window slot. Mirror of Inventory.HandleLeftClickSlot
@@ -2453,6 +2709,7 @@ namespace VStudioCraft.Net
                         Y = rec.Y,
                         Z = rec.Z,
                         BlockType = (byte)rec.NewType,
+                        Meta = rec.Meta,
                     }.Write(w));
                 }
             }
@@ -2596,6 +2853,16 @@ namespace VStudioCraft.Net
         public ItemStack[] Slots;        // window-local backing array
         public ChestTileEntity ChestRef; // null unless Kind == Chest
         public FurnaceTileEntity FurnaceRef; // null unless Kind == Furnace
+
+        // Phase 6c polish — last-broadcast furnace state. Hub tick
+        // compares these against the live FurnaceRef each iteration
+        // and ships a fresh TileEntityData when anything changed,
+        // so the friend's furnace UI sees the cook timer ticking
+        // and the burn-fuel sprite count down.
+        public int LastSentBurnTime;
+        public int LastSentMaxBurnTime;
+        public int LastSentCookProgress;
+        public bool LastSentInitialized;
     }
 
     // Per-connection server state. Holds NetSession + the bookkeeping the

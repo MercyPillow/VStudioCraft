@@ -65,6 +65,9 @@
     <EmbeddedResource Include="..\VStudioCraft\Assets\Day_Night.gif">
       <LogicalName>VStudioCraft.Assets.Day_Night.gif</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="..\VStudioCraft\Assets\Day_Night_first.png">
+      <LogicalName>VStudioCraft.Assets.Day_Night_first.png</LogicalName>
+    </EmbeddedResource>
 
     <!-- App icon as a WPF Resource so the pack URI in MainWindow.xaml
          resolves to it. ApplicationIcon (set in PropertyGroup above)

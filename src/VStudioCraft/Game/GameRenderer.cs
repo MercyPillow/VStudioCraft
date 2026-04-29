@@ -1036,16 +1036,27 @@ void main()
             _sky = new SkyRenderer();
             _sky.Initialize();
 
-            // Tier 6 — Title-screen animated background. Loaded once
-            // here so subsequent OpenTitleScreen calls get an instant
-            // first paint. Decode failure leaves _titleBackground null
-            // and RenderTitleScreen falls back to its sky-blue fill.
+            // Tier 6 — Title-screen animated background. Decode runs
+            // on a background thread so app startup isn't halted by
+            // the multi-second WPF GIF decode + composite loop. The
+            // GPU upload happens lazily when the title-screen render
+            // path calls PollAndUpload (next frame after decode
+            // completes). Cached raw frames go to %APPDATA%\VStudio
+            // Craft\bg_cache\Day_Night.bin so subsequent runs skip
+            // the GIF decode entirely (file read + memcpy → GPU,
+            // ~tens of ms vs multi-second decode).
             _titleBackground = new AnimatedBackground();
-            if (!_titleBackground.TryLoadFromManifestResource("VStudioCraft.Assets.Day_Night.gif"))
-            {
-                _titleBackground.Dispose();
-                _titleBackground = null;
-            }
+            // First-frame static placeholder — loads synchronously on
+            // the render thread (~ms; single PNG decode + one upload),
+            // so the title screen shows a meaningful background from
+            // the very first frame instead of sky-blue while the
+            // async GIF decode is in flight.
+            _titleBackground.LoadPlaceholderFromManifest("VStudioCraft.Assets.Day_Night_first.png");
+            string bgCachePath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "VStudioCraft", "bg_cache", "Day_Night.bin");
+            _titleBackground.BeginAsyncLoadFromManifest(
+                "VStudioCraft.Assets.Day_Night.gif", bgCachePath);
 
             _initialized = true;
         }
@@ -2086,11 +2097,22 @@ void main()
                         fe.MaxBurnTimeTicks = td.FurnaceMaxBurnTime;
                         fe.CookProgressTicks = td.FurnaceCookProgress;
                     }
-                    // CraftingTable kind: slots live ephemeral on the
-                    // server's window state record. Friend-side render
-                    // path needs a parallel buffer; deferred — friends
-                    // can OPEN a crafting table now (panel appears) but
-                    // can't yet click into it.
+                    else if (td.Kind == VStudioCraft.Net.WindowKind.CraftingTable)
+                    {
+                        // Server's crafting window has 9 input slots
+                        // followed by the output slot at index 9.
+                        // Map straight into _craftingGrid + _craftingOutput
+                        // so the existing RenderCrafting path draws them.
+                        if (td.SlotCount >= 9)
+                        {
+                            for (int i = 0; i < 9 && i < _craftingGrid.Length; i++)
+                                _craftingGrid[i] = td.Slots[i];
+                        }
+                        if (td.SlotCount >= 10)
+                        {
+                            _craftingOutput = td.Slots[9];
+                        }
+                    }
                     break;
                 }
                 case VStudioCraft.Net.PacketIds.InventoryUpdate:
@@ -2232,7 +2254,27 @@ void main()
             // World.SetBlock dirties the chunk + recomputes incremental
             // light, so the next ProcessDirtyChunks pass remeshes the
             // affected region. No additional client work needed.
+            //
+            // SetBlock returns false (no-op) when the type is unchanged
+            // — this is the door-toggle case (KI-3): the cell's type
+            // stays a WoodDoorBlock half but the meta byte's open bit
+            // flipped. We always stamp the meta separately so meta-only
+            // changes propagate correctly. For type changes, SetBlock
+            // already cleared the meta to 0 by default; the explicit
+            // SetMeta below restores the broadcast value (e.g. door
+            // place-time meta carrying facing+open state).
             _world.SetBlock(pkt.X, pkt.Y, pkt.Z, (BlockType)pkt.BlockType, record: false);
+            int cx = pkt.X >> 4, cz = pkt.Z >> 4;
+            var chunk = _world.GetChunk(cx, cz);
+            if (chunk != null)
+            {
+                int lx = pkt.X - (cx << 4);
+                int lz = pkt.Z - (cz << 4);
+                chunk.SetMeta(lx, pkt.Y, lz, pkt.Meta);
+                // SetMeta marks the chunk dirty internally so the next
+                // ProcessDirtyChunks remeshes the door open/closed
+                // animation correctly.
+            }
         }
 
         // Construct the right PassiveMob subclass for a wire entity-type
@@ -3602,8 +3644,18 @@ void main()
                     if (hitType == BlockType.Chest
                      || hitType == BlockType.Furnace
                      || hitType == BlockType.LitFurnace
-                     || hitType == BlockType.CraftingTable)
+                     || hitType == BlockType.CraftingTable
+                     || hitType == BlockType.WoodDoorBlockBottom
+                     || hitType == BlockType.WoodDoorBlockTop)
                     {
+                        // KI-3 — wood-door RMB toggle in net mode.
+                        // Server flips the open bit on both halves
+                        // and broadcasts a BlockChange (with meta).
+                        // Iron doors are deliberately NOT routed here
+                        // (Alpha redstone-only behaviour); they fall
+                        // through to the PlayerUseItem path below
+                        // where the server's no-op-for-non-throwables
+                        // gate ignores them.
                         _netClient.SendInteractBlock(hitNet.X, hitNet.Y, hitNet.Z);
                         return false;
                     }
@@ -6712,6 +6764,35 @@ void main()
             var inv = Input.Inventory;
 
             int slot = CraftingScreen.HitTest(screenW, screenH, mx, my);
+            // Phase 6c — net mode: same forward pattern as chest /
+            // furnace. Slots 0..9 (3×3 input + output) → WindowClick;
+            // player slots (10..54 in CraftingScreen index) → existing
+            // InventoryClick targeting ServerInventory directly.
+            // Outside-with-cursor → 0xFF inventory-click toss.
+            if (_netClient != null && _currentNetWindowId != 0)
+            {
+                if (slot < 0)
+                {
+                    if (!inv.Cursor.IsEmpty)
+                        _netClient.SendInventoryClick(0xFF, (byte)(button == 2 ? 1 : 0), shift);
+                    return;
+                }
+                // 0..8 = input grid, 9 = output → window slots 0..9.
+                if (slot < CraftingScreen.InvMainStart)
+                {
+                    _netClient.SendWindowClick(_currentNetWindowId, (byte)slot,
+                        (byte)(button == 2 ? 1 : 0), shift);
+                    return;
+                }
+                int netInvIdx = CraftingScreen.InventoryIndexFor(slot);
+                if (netInvIdx >= 0 && netInvIdx < Inventory.TotalSlots)
+                {
+                    _netClient.SendInventoryClick((byte)netInvIdx,
+                        (byte)(button == 2 ? 1 : 0), shift);
+                }
+                return;
+            }
+
             if (slot < 0)
             {
                 // Click outside the panel: same toss-cursor behaviour as
@@ -10311,8 +10392,22 @@ void main()
             // Texture2DArray's CurrentLayer; wall-clock timing inside
             // AnimatedBackground walks the per-frame delay table so
             // the day/night cycle plays at the GIF's authored cadence.
-            // Skipped when the resource didn't decode at startup.
-            if (_titleBackground != null && _titleBackground.Loaded)
+            // Poll the async decoder for a pending payload and upload
+            // it to the GPU before sampling. PollAndUpload is cheap
+            // when nothing's pending (single field read + null check)
+            // and runs the actual GL allocation + uploads on the
+            // first frame after the background thread completes.
+            if (_titleBackground != null) _titleBackground.PollAndUpload();
+
+            // Three states:
+            //   1. Animated GIF loaded → render via Texture array at CurrentLayer
+            //   2. Async decode still in flight → render the static
+            //      first-frame placeholder (1-layer Texture2DArray
+            //      via the same _backgroundShader path; just a
+            //      different texture handle + uLayer = 0)
+            //   3. Neither → sky-blue fallback (the GL.ClearColor
+            //      already painted that)
+            if (_titleBackground != null && (_titleBackground.Loaded || _titleBackground.PlaceholderLoaded))
             {
                 var orthoBg = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
                 GL.Disable(EnableCap.Blend);
@@ -10323,9 +10418,21 @@ void main()
                 _backgroundShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
                 _backgroundShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
                 _backgroundShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
-                _backgroundShader.SetFloat("uLayer", _titleBackground.CurrentLayer);
+                int useTex;
+                float useLayer;
+                if (_titleBackground.Loaded)
+                {
+                    useTex = _titleBackground.Texture;
+                    useLayer = _titleBackground.CurrentLayer;
+                }
+                else
+                {
+                    useTex = _titleBackground.PlaceholderTexture;
+                    useLayer = 0f;
+                }
+                _backgroundShader.SetFloat("uLayer", useLayer);
                 GL.ActiveTexture(TextureUnit.Texture0);
-                GL.BindTexture(TextureTarget.Texture2DArray, _titleBackground.Texture);
+                GL.BindTexture(TextureTarget.Texture2DArray, useTex);
                 DrawSpriteQuadFor(_backgroundShader, 0, 0, width, height, orthoBg);
             }
 
@@ -10566,18 +10673,32 @@ void main()
                 Input != null && Input.FocusedField == InputState.TextField.ServerUsername,
                 width, height, ortho);
 
-            // Error line — drawn in red so it's distinguishable from
-            // labels. Empty string means "no error to surface", which
-            // skips the draw entirely.
+            // Error line — drawn in red when populated. Empty string
+            // means "no error to surface", in which case we render a
+            // grey format-hint line in the same slot so users see
+            // example values for the server-address field. KI-6 fix:
+            // the hint calls out IP fallback because hostname lookup
+            // fails on networks without resolvable machine names
+            // (.local mDNS, hosts file gaps, etc.) and the IP form
+            // always works.
             string err = Input != null ? Input.MultiplayerErrorText : string.Empty;
+            var er = MultiplayerConnectScreen.GetErrorLineRect(width, height);
             if (!string.IsNullOrEmpty(err))
             {
-                var er = MultiplayerConnectScreen.GetErrorLineRect(width, height);
                 int errTotal = err.Length * HotbarTextures.GlyphCellW * labelScale;
                 DrawString(err, labelScale,
                     er.x + errTotal / 2,
                     er.y,
                     new Vector4(1f, 0.45f, 0.45f, 1f), ortho);
+            }
+            else
+            {
+                const string hint = "EXAMPLES: LOCALHOST  -  192.168.1.5:25566";
+                int hintTotal = hint.Length * HotbarTextures.GlyphCellW * labelScale;
+                DrawString(hint, labelScale,
+                    er.x + er.w / 2,
+                    er.y,
+                    new Vector4(0.65f, 0.65f, 0.70f, 1f), ortho);
             }
 
             // Footer.

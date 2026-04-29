@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/src/VStudioCraft/Assets/Day_Night_2.gif
+/src/VStudioCraft/Assets/Day_Night_first.png
+/src/VStudioCraft/Assets/Day_Night_x.gif

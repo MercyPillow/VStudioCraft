@@ -185,6 +185,9 @@
     <EmbeddedResource Include="Assets\Day_Night.gif">
       <LogicalName>VStudioCraft.Assets.Day_Night.gif</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Assets\Day_Night_first.png">
+      <LogicalName>VStudioCraft.Assets.Day_Night_first.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
     <!-- Tier 6 — App icon assets. The .ico is the canonical Windows

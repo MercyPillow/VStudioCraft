@@ -77,6 +77,36 @@ namespace VStudioCraft.Net
                 }
                 tcp.EndConnect(ar);
             }
+            catch (System.Net.Sockets.SocketException ex)
+            {
+                try { tcp.Close(); } catch { /* ignored */ }
+                // KI-6 — specific message for hostname-resolution
+                // failure. Bare SocketException leaks "No such host
+                // is known" / native errnos that read as gibberish in
+                // a UI dialog. Translate the well-known error codes
+                // into action-oriented phrasing pointing at the IP
+                // fallback (the right answer 95% of the time).
+                //
+                // SocketError.HostNotFound = 11001
+                // SocketError.NoData       = 11004 (DNS responded with no record)
+                // SocketError.TryAgain     = 11002 (transient DNS)
+                // ConnectionRefused        = 10061 (server isn't there)
+                if (ex.SocketErrorCode == System.Net.Sockets.SocketError.HostNotFound
+                    || ex.SocketErrorCode == System.Net.Sockets.SocketError.NoData
+                    || ex.SocketErrorCode == System.Net.Sockets.SocketError.TryAgain)
+                {
+                    throw new System.IO.IOException(
+                        $"can't find host '{host}'. Try the host's IP address (e.g. 192.168.1.5) instead of its name.",
+                        ex);
+                }
+                if (ex.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused)
+                {
+                    throw new System.IO.IOException(
+                        $"connection refused at {host}:{port}. Is the server running and listening on that port?",
+                        ex);
+                }
+                throw;
+            }
             catch
             {
                 try { tcp.Close(); } catch { /* ignored */ }
