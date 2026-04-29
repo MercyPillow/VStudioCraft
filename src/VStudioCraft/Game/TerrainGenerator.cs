@@ -38,6 +38,18 @@ namespace VStudioCraft.Game
             // insurance). Before ores so veins can seed in the fresh cave
             // walls rather than vanishing when we carve over them.
             GenerateCaves(chunk, noise);
+            // Tier 6 #32 — Ravines. Long surface-piercing fissures
+            // that span 3-5 chunks at a consistent angle. Seeded
+            // from a coarse 96-block feature grid (every cell rolls
+            // for "is there a ravine starting here? in what
+            // direction?"); chunks query the small set of cells whose
+            // ravines could reach into them and carve the slice that
+            // falls in their bounds. Cross-chunk continuity is
+            // automatic because every chunk sees the same grid + the
+            // same seeded RNG. Runs after caves so caves intersect
+            // ravines naturally; before water so ravines that pierce
+            // sea level fill correctly during the water pass.
+            GenerateRavines(chunk, noise);
             GenerateWater(chunk);
             GenerateOresAndPatches(chunk, noise);
             // Tier 6 #33 — Surface lava lakes + underground water/lava
@@ -290,6 +302,158 @@ namespace VStudioCraft.Game
                 // Early-out if the worm has wandered out of sensible Y range.
                 if (y < 3 || y > CaveMaxY + 2) break;
             }
+        }
+
+        // ---------- Pass 2.5: ravines (cross-chunk via feature grid). ----------
+        //
+        // Tier 6 #32 — Long surface-piercing fissures. Cross-chunk
+        // continuity is the key challenge: a single ravine spans
+        // multiple chunks, but terrain generation is per-chunk, and
+        // chunks may generate in any order (initial radius vs.
+        // streaming). Solution is a coarse "feature grid" — quantize
+        // world space into RavineCellSize-sided cells, deterministically
+        // seed each cell with `(seed, gx, gz)`, and have every chunk
+        // query the small set of cells whose ravines could reach it.
+        // Each cell's ravine has stable parameters (origin, angle,
+        // length) so the same ravine appears identically regardless
+        // of which chunk first triggered the carve.
+        private const int RavineCellSize = 96;
+        private const int RavineMaxLen = 110;
+        private const int RavineMaxHalfWidth = 4;
+        // 1 in N feature cells contains a ravine. Higher = rarer.
+        private const int RavineSpawnDenominator = 8;
+
+        private static void GenerateRavines(Chunk chunk, Noise noise)
+        {
+            int chunkBaseX = chunk.ChunkX * Chunk.SizeX;
+            int chunkBaseZ = chunk.ChunkZ * Chunk.SizeZ;
+
+            // The set of feature cells whose ravines could reach into
+            // this chunk: any cell within (MaxLen + MaxHalfWidth + a
+            // small safety margin) of the chunk's bounds. Floor-divide
+            // for negative coords so the grid stays aligned across
+            // the world origin.
+            int reach = RavineMaxLen + RavineMaxHalfWidth + 2;
+            int gxMin = FloorDiv(chunkBaseX - reach, RavineCellSize);
+            int gxMax = FloorDiv(chunkBaseX + Chunk.SizeX + reach, RavineCellSize);
+            int gzMin = FloorDiv(chunkBaseZ - reach, RavineCellSize);
+            int gzMax = FloorDiv(chunkBaseZ + Chunk.SizeZ + reach, RavineCellSize);
+
+            for (int gz = gzMin; gz <= gzMax; gz++)
+            for (int gx = gxMin; gx <= gxMax; gx++)
+            {
+                // Per-cell deterministic RNG. Mix the world seed with
+                // the cell's grid coords so neighbouring cells'
+                // ravines aren't correlated; same seed always produces
+                // the same ravines.
+                int hash = unchecked(noise.Seed
+                    + gx * (int)0x9E3779B1
+                    + gz * (int)0x85EBCA77
+                    + (int)0xC2B2AE35);
+                var rng = new Random(hash);
+                if (rng.Next(RavineSpawnDenominator) != 0) continue;
+
+                // Ravine parameters — origin inside the cell, random
+                // direction, random length within bounds.
+                double startX = gx * RavineCellSize + rng.Next(RavineCellSize);
+                double startZ = gz * RavineCellSize + rng.Next(RavineCellSize);
+                double angle = rng.NextDouble() * Math.PI * 2.0;
+                int length = 60 + rng.Next(RavineMaxLen - 60);  // 60..MaxLen-1
+                int halfWidthMax = 2 + rng.Next(RavineMaxHalfWidth - 1); // 2..MaxHalfWidth
+                int floorY = 8 + rng.Next(5);   // 8..12 — bedrock buffer
+                // Ceiling above the highest possible surface so the
+                // ravine actually pierces the surface from above
+                // rather than ending just below it.
+                int ceilY = BaseHeight + HeightAmplitude + 2;
+
+                CarveRavineSlice(chunk, chunkBaseX, chunkBaseZ,
+                    startX, startZ, angle, length, halfWidthMax, floorY, ceilY);
+            }
+        }
+
+        // Walk the ravine's centerline at unit-step intervals, carving
+        // the elliptical cross-section at each step. Width tapers
+        // toward both ends via a sin(πt) profile so the ravine reads
+        // as a fissure with rounded ends rather than a hard rectangle.
+        private static void CarveRavineSlice(Chunk chunk,
+            int chunkBaseX, int chunkBaseZ,
+            double startX, double startZ,
+            double angle, int length, int halfWidthMax,
+            int floorY, int ceilY)
+        {
+            double dx = Math.Cos(angle);
+            double dz = Math.Sin(angle);
+            for (int s = 0; s <= length; s++)
+            {
+                double cx = startX + s * dx;
+                double cz = startZ + s * dz;
+
+                // Width tapers via sin(πt) — 0 at ends, 1 at midpoint.
+                double t = (double)s / length;
+                double widthFactor = Math.Sin(t * Math.PI);
+                int halfWidth = (int)Math.Round(halfWidthMax * widthFactor);
+                if (halfWidth < 1) continue;
+
+                // Cull steps outside the chunk's reach early — saves
+                // the per-cell carve loop on the >90% of steps that
+                // don't intersect this chunk.
+                int boxLeft = (int)Math.Floor(cx) - halfWidth;
+                int boxRight = (int)Math.Floor(cx) + halfWidth;
+                int boxTop = (int)Math.Floor(cz) - halfWidth;
+                int boxBottom = (int)Math.Floor(cz) + halfWidth;
+                if (boxRight < chunkBaseX || boxLeft >= chunkBaseX + Chunk.SizeX) continue;
+                if (boxBottom < chunkBaseZ || boxTop >= chunkBaseZ + Chunk.SizeZ) continue;
+
+                // Elliptical disc carve. Iterate world coords; map to
+                // chunk-local; skip cells outside this chunk's bounds.
+                int hwSqr = halfWidth * halfWidth;
+                for (int wz = boxTop; wz <= boxBottom; wz++)
+                for (int wx = boxLeft; wx <= boxRight; wx++)
+                {
+                    int ddx = wx - (int)Math.Floor(cx);
+                    int ddz = wz - (int)Math.Floor(cz);
+                    if (ddx * ddx + ddz * ddz > hwSqr) continue;
+
+                    int lx = wx - chunkBaseX;
+                    int lz = wz - chunkBaseZ;
+                    if ((uint)lx >= Chunk.SizeX || (uint)lz >= Chunk.SizeZ) continue;
+
+                    for (int y = floorY; y <= ceilY && y < Chunk.SizeY; y++)
+                    {
+                        int idx = Chunk.Index(lx, y, lz);
+                        byte b = chunk.RawBlocks[idx];
+                        // Carve only through natural rock-family
+                        // blocks. Skip bedrock (safety), already-air,
+                        // and water (don't drain the sea into the
+                        // ravine — water pass handles flooding any
+                        // sub-sea-level air).
+                        if (b == (byte)BlockType.Stone ||
+                            b == (byte)BlockType.Dirt ||
+                            b == (byte)BlockType.Gravel ||
+                            b == (byte)BlockType.Grass ||
+                            b == (byte)BlockType.Sand ||
+                            b == (byte)BlockType.CoalOre ||
+                            b == (byte)BlockType.IronOre ||
+                            b == (byte)BlockType.GoldOre ||
+                            b == (byte)BlockType.RedstoneOre ||
+                            b == (byte)BlockType.DiamondOre)
+                        {
+                            chunk.RawBlocks[idx] = (byte)BlockType.Air;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Floor division that handles negative numerators correctly.
+        // C#'s `/` truncates toward zero, so e.g. -33 / 96 == 0 —
+        // wrong for grid alignment across the world origin. We need
+        // FloorDiv(-33, 96) == -1.
+        private static int FloorDiv(int a, int b)
+        {
+            int q = a / b;
+            if ((a ^ b) < 0 && q * b != a) q -= 1;
+            return q;
         }
 
         // ---------- Pass 3: dirt/gravel patches + ore veins inside stone. ----------
