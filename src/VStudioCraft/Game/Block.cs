@@ -418,6 +418,15 @@ namespace VStudioCraft.Game
         GoldChestplate     = 136, // Alpha 315
         GoldLeggings       = 137, // Alpha 316
         GoldBoots          = 138, // Alpha 317
+
+        // Tier 6 #32 — Mob spawner block. Placed by the dungeon
+        // generator at the centre of each cobble room. Alpha 1.1.2
+        // numeric id is 52. Append-only past GoldBoots=138 keeps
+        // existing v8..v13 saves byte-stable. Functional spawning
+        // behaviour is a follow-up; the block currently sits as a
+        // decorative cage cube the player can break (drops nothing —
+        // matches Alpha — and is not obtainable from the catalog).
+        MobSpawner         = 139, // Alpha 52
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -1310,6 +1319,13 @@ namespace VStudioCraft.Game
                 case BlockType.Bricks:
                 case BlockType.Furnace:
                 case BlockType.LitFurnace:
+                // Tier 6 #32 — MobSpawner shares cobble hardness (5
+                // in canonical Alpha; we use 1.5 for the same break-
+                // feel as cobble since dungeon mining is the only
+                // use case and Alpha's 5 felt slow). Block drops
+                // nothing — IsSolid + IsRaycastTarget get default
+                // true via the cube branch below.
+                case BlockType.MobSpawner:
                     return 1.5f;
                 case BlockType.WoodLog:
                 case BlockType.Planks:
@@ -1482,6 +1498,8 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileChestFront;
                 case BlockType.MossyCobblestone:
                     return BlockTextures.TileMossyCobblestone;
+                case BlockType.MobSpawner:
+                    return BlockTextures.TileMobSpawner;
                 case BlockType.Obsidian:
                     return BlockTextures.TileObsidian;
                 case BlockType.Sponge:

@@ -187,7 +187,15 @@ namespace VStudioCraft.Game
         // rectangle, leggings=H-shape, boots=two small squares.
         public const int FirstTailArmorLayer = FirstTailJukeboxLayer + TailJukeboxLayerCount; // 135
         public const int TailArmorLayerCount = 20;
-        public const int LayerCount = FirstTailArmorLayer + TailArmorLayerCount;              // 155
+        // Tier 6 #32 — Mob spawner block tile. Single appended layer
+        // past the armor pack so existing v8..v13 atlas slot indices
+        // stay byte-stable. Always procedural — alpha_terrain.png
+        // does carry a cage tile at (1, 4) but we draw our own dark
+        // grid since the spawner is more recognisable that way at
+        // hotbar zoom and in unfamiliar dungeon lighting.
+        public const int FirstTailSpawnerLayer = FirstTailArmorLayer + TailArmorLayerCount; // 155
+        public const int TailSpawnerLayerCount = 1;
+        public const int LayerCount = FirstTailSpawnerLayer + TailSpawnerLayerCount;        // 156
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -357,6 +365,10 @@ namespace VStudioCraft.Game
         public const int TileGoldChestplate      = 152;
         public const int TileGoldLeggings        = 153;
         public const int TileGoldBoots           = 154;
+        // Tier 6 #32 — Mob spawner cage tile. Procedural dark cage on
+        // a stone-grey background; same tile drawn on all six faces
+        // (no orientation, matching Alpha's spawner block).
+        public const int TileMobSpawner          = 155;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -616,6 +628,10 @@ namespace VStudioCraft.Game
             // generated silhouettes read at-a-glance even without the
             // canonical art.
             GenerateProceduralArmorLayers(layerPixels);
+
+            // Tier 6 #32 — Mob spawner cage tile. Single layer
+            // appended past the armor pack.
+            UploadLayer(layerPixels, TileMobSpawner, GenerateMobSpawner);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -3489,6 +3505,11 @@ namespace VStudioCraft.Game
             /* TileGoldChestplate      */ (4, 1),
             /* TileGoldLeggings        */ (4, 2),
             /* TileGoldBoots           */ (4, 3),
+            // Tier 6 #32 — MobSpawner cage. Procedural-only; sentinel
+            // (-1,-1) keeps the alpha-textures slicer skipping it
+            // and the GenerateProceduralSpawner overlay paints the
+            // dark cage in both atlas modes.
+            /* TileMobSpawner          */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3670,6 +3691,9 @@ namespace VStudioCraft.Game
             // 5×4 grid (rows 0..3, cols 0..4) so the icons match the
             // rest of the alpha-textures atlas.
             GenerateProceduralArmorLayers(layerPixels);
+
+            // Tier 6 #32 — Mob spawner cage. Procedural-only.
+            UploadLayer(layerPixels, TileMobSpawner, GenerateMobSpawner);
 
             // Tier 4 — Overlay alpha_tools.png coords for ALL tail items
             // past the door pack: door inventory icons, flint+steel,
@@ -5500,6 +5524,46 @@ namespace VStudioCraft.Game
                 p => PaintArmorLeggings(p, gold, goldHi, goldLo));
             UploadItem(layerPixels, TileGoldBoots,
                 p => PaintArmorBoots(p, gold, goldHi, goldLo));
+        }
+
+        // Tier 6 #32 — Mob spawner cage tile. Dark stone-grey
+        // background with a 4×4 grid of black "bars" forming a cage
+        // pattern. Same tile drawn on all six faces (no orientation,
+        // matching Alpha's spawner block). The dungeon-room generator
+        // places one of these in the centre of every cobble dungeon.
+        private static void GenerateMobSpawner(byte[] pixels)
+        {
+            // Stone-grey base, slightly darker than cobblestone so the
+            // cage reads as recessed.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                byte v = (byte)(48 + ((x + y) & 1) * 6);
+                SetPixel(pixels, x, y, v, v, v);
+            }
+            // Cage bars — vertical + horizontal lines forming a 4×4
+            // grid. Each bar is 1 pixel wide; spacing 4 px so the
+            // pattern reads cleanly at 16×16.
+            for (int g = 0; g < TileSize; g += 4)
+            {
+                for (int p = 0; p < TileSize; p++)
+                {
+                    SetPixel(pixels, g, p, 14, 14, 14);   // vertical bar
+                    SetPixel(pixels, p, g, 14, 14, 14);   // horizontal bar
+                }
+            }
+            // Slight inner-cage shading: highlight along the top + left
+            // edges of each cage cell so the bars read as having depth.
+            for (int g = 0; g < TileSize; g += 4)
+            {
+                for (int p = 0; p < TileSize; p++)
+                {
+                    int hx = g + 1;
+                    int hy = g + 1;
+                    if (hx < TileSize) SetPixel(pixels, hx, p, 80, 80, 80);
+                    if (hy < TileSize) SetPixel(pixels, p, hy, 80, 80, 80);
+                }
+            }
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

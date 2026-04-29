@@ -67,7 +67,26 @@ namespace VStudioCraft.Game
         // Slot indices match Inventory.ArmorStart..ArmorStart+3 so a
         // hit-test or render rect translates directly via Slots[i].
         public const int ArmorSlotCount = 4;
+        // Total INVENTORY-BACKED slots — the count of cells that
+        // index directly into Inventory.Slots[]. The 2×2 player
+        // crafting grid + output (slot indices 49..53) are NOT
+        // inventory-backed — they're transient state on GameRenderer
+        // — so iterators over inv.Slots stay bounded by this count.
         public const int TotalSlots = MainSlotCount + HotbarSlotCount + ArmorSlotCount; // 49
+        // Tier 6 #32 — Player 2×2 crafting grid + output. Lives in
+        // the top-right of the survival inventory panel above the
+        // main grid (matches Alpha 1.1.2_01 — lets the player craft
+        // a CraftingTable / sticks / planks etc. without standing at
+        // a workbench). Slot indices 49..52 are the 2×2 grid (row-
+        // major, top-left=49); 53 is the read-only output slot.
+        // These are NOT backed by Inventory.Slots — they're transient
+        // state held on GameRenderer (_playerCraftGrid[]). Hit-test
+        // + render handle them via dedicated branches; the existing
+        // inventory-backed loops stop at TotalSlots above.
+        public const int PlayerCraftGridStart = TotalSlots;       // 49
+        public const int PlayerCraftGridCount = 4;
+        public const int PlayerCraftOutputSlot = PlayerCraftGridStart + PlayerCraftGridCount; // 53
+        public const int TotalSlotsWithCraft = PlayerCraftOutputSlot + 1;                     // 54
         public const int CatalogRows = MainRows;                 // catalog covers main-grid region
 
         // Tier 4 #19 — Horizontal gap between the armor column and the
@@ -77,6 +96,18 @@ namespace VStudioCraft.Game
         // reads as broken). Scales with the rest of the panel via
         // UiScale.
         private const int ArmorGapBase = 12;
+
+        // Tier 6 #32 — Top block height for the 2×2 player crafting
+        // grid + output. Sits above the main grid in survival mode;
+        // creative mode skips it (catalog takes the main-grid space
+        // and there's no player-crafting in creative anyway). Height
+        // = 2 slot heights so the 2×2 grid lands cleanly; gap below
+        // it pushes the main grid (and the armor column, which
+        // tracks gridY0) down by exactly this amount.
+        private const int TopBlockGapBase = 12;
+        // Horizontal gap between the 2×2 grid and the output slot,
+        // matching the existing 3×3 CraftingScreen feel.
+        private const int CraftArrowZoneBase = 56;
 
         public const string Title = "INVENTORY";
 
@@ -94,6 +125,14 @@ namespace VStudioCraft.Game
         public static int SearchBarHeight(int viewW, int viewH) => UiScale.S(SearchBarHeightBase, viewW, viewH);
         public static int SearchBarGap(int viewW, int viewH)  => UiScale.S(SearchBarGapBase, viewW, viewH);
         public static int ArmorGap(int viewW, int viewH)      => UiScale.S(ArmorGapBase, viewW, viewH);
+        public static int TopBlockGap(int viewW, int viewH)   => UiScale.S(TopBlockGapBase, viewW, viewH);
+        public static int CraftArrowZone(int viewW, int viewH) => UiScale.S(CraftArrowZoneBase, viewW, viewH);
+        // Tier 6 #32 — Total reserved height above the main grid for
+        // the 2×2 + output block in survival mode. 2 slot heights for
+        // the 2×2 grid (the output slot fits within those rows since
+        // it sits to the right) + a gap below before the main grid.
+        public static int TopBlockHeight(int viewW, int viewH, bool creative)
+            => creative ? 0 : (SlotPx(viewW, viewH) * 2 + TopBlockGap(viewW, viewH));
         // Tier 4 #19 — Total horizontal extent of the armor column
         // including its gap to the main grid (one slot wide + the
         // gap). Returned as a single helper so the panel-width and
@@ -167,6 +206,8 @@ namespace VStudioCraft.Game
                   + GridHeightPx(viewW, viewH) + PanelPadY(viewW, viewH);
             if (creative)
                 h += SearchBarHeight(viewW, viewH) + SearchBarGap(viewW, viewH);
+            else
+                h += TopBlockHeight(viewW, viewH, creative);
             return h;
         }
 
@@ -244,7 +285,14 @@ namespace VStudioCraft.Game
             // two grids don't collide.
             int armorX = px + padX;
             int gridX0 = armorX + ArmorColumnWidthPx(screenW, screenH);
+            // Tier 6 #32 — Survival mode reserves a TopBlockHeight zone
+            // above the main grid for the 2×2 player crafting grid +
+            // output. Push gridY0 (and the armor column, which tracks
+            // gridY0) down by that amount so the existing layout shifts
+            // cleanly without breaking. Creative mode keeps the
+            // unchanged origin since it has no player-crafting.
             int gridY0 = py + padY + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
+            if (!creative) gridY0 += TopBlockHeight(screenW, screenH, creative);
 
             int col = slotIndex % Cols;
             if (slotIndex < MainSlotCount)
@@ -260,26 +308,56 @@ namespace VStudioCraft.Game
                 if (creative) hotbarY += SearchBarHeight(screenW, screenH) + SearchBarGap(screenW, screenH);
                 y = hotbarY;
             }
-            else
+            else if (slotIndex < TotalSlots)
             {
-                // Tier 4 #19 — Armor slot. Index 0..3 maps to the
-                // four-tall column at the panel's left edge, top-down
-                // in the canonical Helmet→Chestplate→Leggings→Boots
-                // order. Vertically aligned with the main grid's
-                // first four rows so the column reads as a "doll"
-                // silhouette flanking the grid.
-                //
-                // Creative variant: the catalog grid sits below the
-                // search bar (search bar replaces the first "row"
-                // visually), so the armor column needs the same
-                // search-bar offset to keep its top slot aligned with
-                // the catalog's first row instead of floating up next
-                // to the search bar.
+                // Armor — same position rules as before, but now
+                // tracks the (potentially pushed-down) gridY0.
                 int armorIndex = slotIndex - MainSlotCount - HotbarSlotCount;
                 x = armorX;
                 int armorY0 = gridY0;
                 if (creative) armorY0 += SearchBarHeight(screenW, screenH) + SearchBarGap(screenW, screenH);
                 y = armorY0 + armorIndex * slot;
+            }
+            else if (slotIndex >= PlayerCraftGridStart && slotIndex < PlayerCraftOutputSlot)
+            {
+                // 2×2 player crafting grid. Top-right of the main-grid
+                // area, sitting in the TopBlockHeight zone the panel
+                // reserves above gridY0. Row-major: top-left = 49,
+                // top-right = 50, bottom-left = 51, bottom-right = 52.
+                int gi = slotIndex - PlayerCraftGridStart;
+                int gridCol = gi % 2;
+                int gridRow = gi / 2;
+                // X: right side of the panel above the main grid, with
+                // ArrowZone + output slot to the right of the 2×2.
+                int outputW = slot;
+                int arrowW = CraftArrowZone(screenW, screenH);
+                // The 2×2 sits flush-right inside the main-grid area
+                // minus the output + arrow zone.
+                int mainGridRight = gridX0 + GridWidthPx(screenW, screenH);
+                int craftRight = mainGridRight - outputW - arrowW;
+                int craftLeft = craftRight - 2 * slot;
+                int craftTop = py + padY + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
+                x = craftLeft + gridCol * slot;
+                y = craftTop + gridRow * slot;
+            }
+            else if (slotIndex == PlayerCraftOutputSlot)
+            {
+                // Output slot — to the right of the 2×2, vertically
+                // centred between the two rows.
+                int outputW = slot;
+                int mainGridRight = gridX0 + GridWidthPx(screenW, screenH);
+                int outputX = mainGridRight - outputW;
+                int craftTop = py + padY + TitleHeight(screenW, screenH) + TitleGap(screenW, screenH);
+                int outputY = craftTop + slot / 2;
+                x = outputX;
+                y = outputY;
+            }
+            else
+            {
+                // Out-of-range — return a degenerate rect off-screen so
+                // hit-tests can't accidentally match.
+                x = -1;
+                y = -1;
             }
             w = slot;
             h = slot;
@@ -297,7 +375,10 @@ namespace VStudioCraft.Game
         // Return the slot index under (mx, my), or -1 if none.
         public static int HitTest(int screenW, int screenH, int mx, int my)
         {
-            for (int i = 0; i < TotalSlots; i++)
+            // Walk through TotalSlotsWithCraft so the 2×2 grid + output
+            // slot indices (49..53) are testable too. Inventory-backed
+            // iterators that read inv.Slots[i] still bound at TotalSlots.
+            for (int i = 0; i < TotalSlotsWithCraft; i++)
             {
                 GetSlotRect(i, screenW, screenH, out int sx, out int sy, out int sw, out int sh);
                 if (mx >= sx && mx < sx + sw && my >= sy && my < sy + sh) return i;
