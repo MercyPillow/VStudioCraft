@@ -530,7 +530,52 @@ void main()
         // OR themselves in here and the rest of the loop gates on this
         // single flag. Options doesn't add to this list because it only
         // ever opens on top of the pause menu (which is already halted).
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None;
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None || _isLoadingWorld;
+
+        // Tier 6 — Loading-screen state. Set when a world transition
+        // begins (StartNewWorld / LoadFromFile / ConnectToServer);
+        // cleared by the readiness poll in Render() once the world
+        // is fit to display. The actual blocking work runs out of
+        // _pendingLoadWork on the frame AFTER the loading screen
+        // first paints — without that one-frame gap the work blocks
+        // the render thread before the loading screen ever draws,
+        // and the user sees the old title frame frozen instead of
+        // the loading wash.
+        private volatile bool _isLoadingWorld;
+        public bool IsLoadingWorld => _isLoadingWorld;
+        private string _loadingTitle    = "LOADING WORLD";
+        private string _loadingSubtitle = string.Empty;
+        private float  _loadingProgress = -1f;  // <0 = indeterminate; 0..1 = bar fraction
+        private System.Action _pendingLoadWork;
+        private bool _loadScreenDrawnOnce;
+
+        // UI-thread safe — volatile bool + atomic Action assignment.
+        // Caller flips the flag, then stages the actual blocking
+        // load via StagePendingLoadWork; the render-loop tail runs
+        // it after the first loading-screen frame paints.
+        public void OpenLoadingScreen(string title, string subtitle = "")
+        {
+            _loadingTitle = string.IsNullOrEmpty(title) ? "LOADING WORLD" : title;
+            _loadingSubtitle = subtitle ?? string.Empty;
+            _loadingProgress = -1f;
+            _loadScreenDrawnOnce = false;
+            _isLoadingWorld = true;
+        }
+
+        public void StagePendingLoadWork(System.Action work) => _pendingLoadWork = work;
+
+        public void SetLoadingProgress(string subtitle, float progress)
+        {
+            _loadingSubtitle = subtitle ?? string.Empty;
+            _loadingProgress = progress;
+        }
+
+        private void CloseLoadingScreen()
+        {
+            _isLoadingWorld = false;
+            _pendingLoadWork = null;
+            _loadScreenDrawnOnce = false;
+        }
 
         // Tier 6 #47 — Title-screen state machine. None = world is live
         // (renderer paints the world + HUD as today). The four other
@@ -969,8 +1014,26 @@ void main()
             _fontTexture = HotbarTextures.CreateFontTexture();
             _sky = new SkyRenderer();
             _sky.Initialize();
+
+            // Tier 6 — Title-screen animated background. Loaded once
+            // here so subsequent OpenTitleScreen calls get an instant
+            // first paint. Decode failure leaves _titleBackground null
+            // and RenderTitleScreen falls back to its sky-blue fill.
+            _titleBackground = new AnimatedBackground();
+            if (!_titleBackground.TryLoadFromManifestResource("VStudioCraft.Assets.Day_Night.gif"))
+            {
+                _titleBackground.Dispose();
+                _titleBackground = null;
+            }
+
             _initialized = true;
         }
+
+        // Tier 6 — Title-screen animated background. Loaded once at
+        // graphics init; null when the GIF resource is missing or
+        // failed to decode (fallback path renders the previous sky-
+        // blue fill in that case).
+        private AnimatedBackground _titleBackground;
 
         private static OverlayMesh BuildUnitQuadMesh()
         {
@@ -7544,6 +7607,21 @@ void main()
                 return;
             }
 
+            // Tier 6 — Loading-screen short-circuit. Drawn on every
+            // frame the loading flag is set; the render-tail logic
+            // below runs the actual blocking load work AFTER the
+            // first paint so the user sees the loading wash before
+            // World.Generate / Load / Connect freezes the render
+            // thread. Polls a "world ready" predicate on subsequent
+            // frames to dismiss once chunks have meshed.
+            if (_isLoadingWorld)
+            {
+                RenderLoadingScreen(width, height);
+                _loadScreenDrawnOnce = true;
+                RunLoadingTail();
+                return;
+            }
+
             var sun = ComputeSunDirection();
             var sky = ComputeSkyColor(sun);
             var sunColor = ComputeSunColor(sun);
@@ -10018,13 +10096,217 @@ void main()
         // so Settings is reachable from any title state via the
         // Title Root's Settings button + the existing _isOptionsOpen
         // path.
+        // Tier 6 — Loading-screen render. Tiled-dirt background +
+        // dim wash + title + subtitle + optional progress bar.
+        // Dirt tiles sample the existing block-atlas Texture2DArray
+        // (already wrap=Repeat, so per-cell quads each render the
+        // full TileDirt face); the dim wash on top keeps text
+        // readable against the busy texture. Progress bar reuses the
+        // recessed-track + filled-foreground chrome the death/pause
+        // buttons use, so the loading screen reads as part of the
+        // same modal family.
+        private void RenderLoadingScreen(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            // Dirt-brown clear so any sub-pixel gaps between tile
+            // cells (rounding) blend rather than show black.
+            GL.ClearColor(0.55f, 0.45f, 0.30f, 1.0f);
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Tiled dirt. tilePx = LoadingScreen-controlled cell size,
+            // scaled with viewport so the pattern reads similarly at
+            // 720p and 4K.
+            int tilePx = LoadingScreen.TilePixelSize(width, height);
+            DrawDirtTiledBackground(width, height, tilePx, ortho);
+
+            // Dim wash so title text reads against the busy dirt.
+            DrawSolidQuad(0, 0, width, height, new Vector3(0f, 0f, 0f), 0.45f, ortho);
+
+            int titleScale = LoadingScreen.TitleFontScale(width, height);
+            int titleY = LoadingScreen.TitleY(width, height);
+            DrawString(_loadingTitle, titleScale, width / 2, titleY,
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            if (!string.IsNullOrEmpty(_loadingSubtitle))
+            {
+                int subScale = LoadingScreen.SubtitleFontScale(width, height);
+                int subY = LoadingScreen.SubtitleY(width, height);
+                DrawString(_loadingSubtitle, subScale, width / 2, subY,
+                    new Vector4(0.85f, 0.88f, 0.92f, 1f), ortho);
+            }
+
+            if (_loadingProgress >= 0f)
+            {
+                var (bx, by, bw, bh) = LoadingScreen.ProgressRect(width, height);
+                DrawSolidQuad(bx, by, bw, bh, new Vector3(0.10f, 0.10f, 0.12f), 0.95f, ortho);
+                int border = System.Math.Max(1, UiScale.S(1, width, height));
+                var borderC = new Vector3(0.55f, 0.58f, 0.66f);
+                DrawSolidQuad(bx, by, bw, border, borderC, 1f, ortho);
+                DrawSolidQuad(bx, by + bh - border, bw, border, borderC, 1f, ortho);
+                DrawSolidQuad(bx, by, border, bh, borderC, 1f, ortho);
+                DrawSolidQuad(bx + bw - border, by, border, bh, borderC, 1f, ortho);
+                float p = System.Math.Max(0f, System.Math.Min(1f, _loadingProgress));
+                int innerW = bw - border * 2;
+                int fillW = (int)(innerW * p);
+                if (fillW > 0)
+                {
+                    DrawSolidQuad(bx + border, by + border, fillW, bh - border * 2,
+                        new Vector3(0.42f, 0.65f, 0.45f), 1f, ortho);
+                }
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        // Tier 6 — Tiled-dirt background helper. Walks a grid of
+        // tilePx-sized cells across the viewport, emitting one
+        // textured quad per cell sampling layer = TileDirt from the
+        // bound block atlas. Reuses DrawFlatSpriteIcon's shader path
+        // (sprite-array shader + atlas Texture2DArray + uLayer
+        // uniform) — but inlined here so we set the layer once and
+        // emit many quads, instead of paying the per-call shader+
+        // texture rebind. Cell count at 1080p × 32 px ≈ 60 × 34 =
+        // ~2k quads; well within fast-path budget.
+        private void DrawDirtTiledBackground(int width, int height, int tilePx, Matrix4 ortho)
+        {
+            if (tilePx < 4) tilePx = 4;
+            _spriteArrayShader.Use();
+            _spriteArrayShader.SetInt("uAtlas", 0);
+            _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
+            _spriteArrayShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
+            _spriteArrayShader.SetFloat("uLayer", BlockTextures.TileDirt);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+
+            int cols = (width  + tilePx - 1) / tilePx;
+            int rows = (height + tilePx - 1) / tilePx;
+            for (int r = 0; r < rows; r++)
+            {
+                int y = r * tilePx;
+                int h = System.Math.Min(tilePx, height - y);
+                for (int c = 0; c < cols; c++)
+                {
+                    int x = c * tilePx;
+                    int w = System.Math.Min(tilePx, width - x);
+                    DrawSpriteQuadFor(_spriteArrayShader, x, y, w, h, ortho);
+                }
+            }
+        }
+
+        // Tier 6 — Render-frame tail for the loading screen. After the
+        // loading-screen frame has actually been rendered at least
+        // once (_loadScreenDrawnOnce), run any pending blocking work
+        // (World.Generate / Load / Connect). Subsequent frames poll
+        // for world readiness — when the dirty queue + in-flight
+        // mesh queue both drain, the world is meshable enough to
+        // display and the flag clears.
+        private void RunLoadingTail()
+        {
+            if (_pendingLoadWork != null && _loadScreenDrawnOnce)
+            {
+                var work = _pendingLoadWork;
+                _pendingLoadWork = null;
+                try
+                {
+                    work();
+                }
+                catch (System.Exception ex)
+                {
+                    // SP load failure (corrupt save, missing chunk
+                    // data, etc.). MP connect failures already route
+                    // through ConnectFailed → ShowMultiplayerConnectError
+                    // in the host, so this branch is mostly the SP
+                    // path. Show the error in the loading-screen
+                    // subtitle and bounce back to the title so the
+                    // user has a recovery path.
+                    _loadingSubtitle = ex.Message ?? "LOAD FAILED";
+                    CloseLoadingScreen();
+                    OpenTitleScreen();
+                }
+                return;
+            }
+
+            // No pending work — we're past the blocking phase, just
+            // waiting for chunks to mesh. Poll readiness; until then,
+            // refresh the progress bar from mesh-queue counters.
+            if (_pendingLoadWork == null && _world != null)
+            {
+                if (IsWorldReadyForDisplay()) CloseLoadingScreen();
+                else                          UpdateLoadingProgressFromMesh();
+            }
+        }
+
+        // True once the queued initial-mesh work has fully drained.
+        // DirtyChunks.Count covers chunks waiting in the queue;
+        // MeshInFlight covers chunks currently being processed by a
+        // worker. Both must be zero for the world to render without
+        // obvious "popping in" gaps. Empty world (ChunkCount == 0)
+        // means we're still waiting on a server's chunk burst, so
+        // don't declare ready.
+        private bool IsWorldReadyForDisplay()
+        {
+            if (_world == null) return false;
+            if (_world.ChunkCount == 0) return false;
+            if (_world.DirtyChunks.Count > 0) return false;
+            if (_jobs != null && _jobs.MeshInFlight > 0) return false;
+            return true;
+        }
+
+        // Refresh the loading-screen subtitle + progress bar from the
+        // mesh-queue counters. Called per frame while the loading
+        // flag is set and no blocking work is pending.
+        private void UpdateLoadingProgressFromMesh()
+        {
+            int total = _world.ChunkCount;
+            int dirty = _world.DirtyChunks.Count;
+            int inFlight = _jobs != null ? _jobs.MeshInFlight : 0;
+            int done = System.Math.Max(0, total - dirty - inFlight);
+            float frac = total > 0 ? (float)done / total : 0f;
+            _loadingProgress = frac;
+            _loadingSubtitle = $"BUILDING TERRAIN... {done} / {total}";
+        }
+
         private void RenderTitleScreen(int width, int height)
         {
             // Sky-blue full fill so the menu doesn't sit over a
-            // black void. Same hue family as the in-game daytime
-            // sky so transitions don't jar the eye.
+            // black void if the GIF background failed to decode.
+            // The animated background paints on top below; when
+            // present it covers the whole viewport so this is just
+            // a safety underlay.
             GL.ClearColor(0.45f, 0.65f, 0.95f, 1.0f);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            // Tier 6 — Animated background. Renders the current GIF
+            // frame as a fullscreen quad sampling the AnimatedBackground
+            // Texture2DArray's CurrentLayer; wall-clock timing inside
+            // AnimatedBackground walks the per-frame delay table so
+            // the day/night cycle plays at the GIF's authored cadence.
+            // Skipped when the resource didn't decode at startup.
+            if (_titleBackground != null && _titleBackground.Loaded)
+            {
+                var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+                GL.Disable(EnableCap.Blend);
+                GL.Disable(EnableCap.DepthTest);
+                GL.Disable(EnableCap.CullFace);
+                _spriteArrayShader.Use();
+                _spriteArrayShader.SetInt("uAtlas", 0);
+                _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+                _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
+                _spriteArrayShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
+                _spriteArrayShader.SetFloat("uLayer", _titleBackground.CurrentLayer);
+                GL.ActiveTexture(TextureUnit.Texture0);
+                GL.BindTexture(TextureTarget.Texture2DArray, _titleBackground.Texture);
+                DrawSpriteQuadFor(_spriteArrayShader, 0, 0, width, height, ortho);
+            }
 
             switch (_titleState)
             {

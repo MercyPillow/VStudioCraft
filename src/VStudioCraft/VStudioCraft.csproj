@@ -78,6 +78,7 @@
     <Compile Include="Editor\WorldEditorPane.cs" />
     <Compile Include="Game\AlphaTerrainData.cs" />
     <Compile Include="Game\AlphaToolsData.cs" />
+    <Compile Include="Game\AnimatedBackground.cs" />
     <Compile Include="Game\Block.cs" />
     <Compile Include="Game\BlockTextures.cs" />
     <Compile Include="Game\Camera.cs" />
@@ -127,6 +128,7 @@
     <Compile Include="Game\OverlayMesh.cs" />
     <Compile Include="Game\Settings.cs" />
     <Compile Include="Game\DeathScreen.cs" />
+    <Compile Include="Game\LoadingScreen.cs" />
     <Compile Include="Game\MultiplayerConnectScreen.cs" />
     <Compile Include="Game\PauseMenu.cs" />
     <Compile Include="Game\TitleScreen.cs" />
@@ -180,6 +182,22 @@
     <EmbeddedResource Include="Assets\alpha_terrain.png">
       <LogicalName>VStudioCraft.Assets.alpha_terrain.png</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Assets\Day_Night.gif">
+      <LogicalName>VStudioCraft.Assets.Day_Night.gif</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Tier 6 — App icon assets. The .ico is the canonical Windows
+         icon (used by Standalone's ApplicationIcon + WPF Window.Icon
+         pack URI). The 90×90 PNG is the VSIX manifest icon shown in
+         the VS extension manager. Both kept under Assets\ for parity
+         with the other shipped art. -->
+    <Content Include="Assets\app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\app_icon_90.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <VSCTCompile Include="VStudioCraftPackage.vsct">

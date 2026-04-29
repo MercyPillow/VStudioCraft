@@ -10,6 +10,12 @@
     <LangVersion>latest</LangVersion>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <Prefer32Bit>false</Prefer32Bit>
+    <!-- Tier 6 — App icon. Embedded in the EXE so Windows Explorer,
+         Task Manager, taskbar (when the WPF window doesn't override
+         it) and Alt-Tab all pick it up from the same source. The .ico
+         lives in the linked-VSIX Assets folder so both build outputs
+         share the same canonical asset file. -->
+    <ApplicationIcon>..\VStudioCraft\Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -52,6 +58,22 @@
       <Link>Native\openal32.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+
+    <!-- Animated title-screen background. Same logical-name convention
+         the VSIX project uses for alpha_terrain.png so the loader's
+         GetManifestResourceStream call sees it from either build. -->
+    <EmbeddedResource Include="..\VStudioCraft\Assets\Day_Night.gif">
+      <LogicalName>VStudioCraft.Assets.Day_Night.gif</LogicalName>
+    </EmbeddedResource>
+
+    <!-- App icon as a WPF Resource so the pack URI in MainWindow.xaml
+         resolves to it. ApplicationIcon (set in PropertyGroup above)
+         embeds the .ico into the EXE for Explorer / taskbar / Task
+         Manager; this Resource entry duplicates it as a WPF resource
+         so the runtime Window.Icon property can load it via pack URI. -->
+    <Resource Include="..\VStudioCraft\Assets\app.ico">
+      <Link>Assets\app.ico</Link>
+    </Resource>
   </ItemGroup>
 
 </Project>

@@ -151,10 +151,22 @@ namespace VStudioCraft.UI
                 _pendingLoadPath = path;
                 return;
             }
+            // Tier 6 — Two-step deferred load. Frame 1 enqueues an
+            // action that flips the loading flag + stages the actual
+            // blocking work; the renderer's render-tail runs that
+            // staged work on a LATER frame, after the loading screen
+            // has painted at least once. Without that gap the work
+            // blocks the render thread before the loading screen ever
+            // gets to draw.
             _renderQueue.Enqueue(() =>
             {
-                _renderer.LoadFromFile(path);
-                Dispatcher.BeginInvoke(new Action(UpdateStatus));
+                _renderer.OpenLoadingScreen("LOADING WORLD",
+                    "READING " + System.IO.Path.GetFileNameWithoutExtension(path).ToUpperInvariant());
+                _renderer.StagePendingLoadWork(() =>
+                {
+                    _renderer.LoadFromFile(path);
+                    Dispatcher.BeginInvoke(new Action(UpdateStatus));
+                });
             });
         }
 
@@ -168,8 +180,12 @@ namespace VStudioCraft.UI
             }
             _renderQueue.Enqueue(() =>
             {
-                _renderer.StartNewWorld(seed);
-                Dispatcher.BeginInvoke(new Action(UpdateStatus));
+                _renderer.OpenLoadingScreen("LOADING WORLD", "GENERATING TERRAIN...");
+                _renderer.StagePendingLoadWork(() =>
+                {
+                    _renderer.StartNewWorld(seed);
+                    Dispatcher.BeginInvoke(new Action(UpdateStatus));
+                });
             });
         }
 
@@ -284,21 +300,26 @@ namespace VStudioCraft.UI
             }
             _renderQueue.Enqueue(() =>
             {
-                try
+                _renderer.OpenLoadingScreen("CONNECTING", $"{host}:{port}");
+                _renderer.StagePendingLoadWork(() =>
                 {
-                    _renderer.ConnectToServer(host, port, username);
-                    Dispatcher.BeginInvoke(new Action(UpdateStatus));
-                }
-                catch (Exception ex)
-                {
-                    // The handshake failed (refused, timeout, protocol
-                    // mismatch, etc). Bubble it up to the UI thread so
-                    // the host can show a dialog. We DELIBERATELY don't
-                    // crash the render thread for a connect failure —
-                    // the user might want to fix the address and try
-                    // again without losing their GL context.
-                    Dispatcher.BeginInvoke(new Action(() => ConnectFailed?.Invoke(ex)));
-                }
+                    try
+                    {
+                        _renderer.ConnectToServer(host, port, username);
+                        Dispatcher.BeginInvoke(new Action(UpdateStatus));
+                    }
+                    catch (Exception ex)
+                    {
+                        // The handshake failed (refused, timeout,
+                        // protocol mismatch, etc). Bubble it up to
+                        // the UI thread so the host can show a dialog.
+                        // We DELIBERATELY don't crash the render
+                        // thread for a connect failure — the user
+                        // might want to fix the address and try again
+                        // without losing their GL context.
+                        Dispatcher.BeginInvoke(new Action(() => ConnectFailed?.Invoke(ex)));
+                    }
+                });
             });
         }
 
@@ -479,38 +500,53 @@ namespace VStudioCraft.UI
             _glRenderer = GL.GetString(StringName.Renderer) ?? "unknown";
             _glVendor = GL.GetString(StringName.Vendor) ?? "unknown";
 
+            // Tier 6 — Wrap the pending-load drains in the same
+            // OpenLoadingScreen + StagePendingLoadWork two-step the
+            // post-GL APIs use, so a `--connect=host:port` CLI launch
+            // (or any other pre-GL load) shows the loading screen
+            // during the handshake / generation instead of a black
+            // viewport.
             if (_pendingIsConnect && !string.IsNullOrEmpty(_pendingConnectHost))
             {
-                // Connect was requested before GL was ready — issue it now.
-                // Failure surfaces via ConnectFailed and falls back to a
-                // fresh SP world so the user isn't staring at a black
-                // viewport with no error indication.
-                try
+                string h = _pendingConnectHost;
+                int p = _pendingConnectPort;
+                string u = _pendingConnectUser;
+                _renderer.OpenLoadingScreen("CONNECTING", $"{h}:{p}");
+                _renderer.StagePendingLoadWork(() =>
                 {
-                    _renderer.ConnectToServer(_pendingConnectHost, _pendingConnectPort, _pendingConnectUser);
-                }
-                catch (Exception ex)
-                {
-                    Dispatcher.BeginInvoke(new Action(() => ConnectFailed?.Invoke(ex)));
-                    _renderer.StartNewWorld((int)(DateTime.Now.Ticks & 0x7FFFFFFF));
-                }
+                    try
+                    {
+                        _renderer.ConnectToServer(h, p, u);
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.BeginInvoke(new Action(() => ConnectFailed?.Invoke(ex)));
+                        _renderer.StartNewWorld((int)(DateTime.Now.Ticks & 0x7FFFFFFF));
+                    }
+                });
             }
             else if (_pendingIsLoad && !string.IsNullOrEmpty(_pendingLoadPath))
             {
-                _renderer.LoadFromFile(_pendingLoadPath);
+                string lp = _pendingLoadPath;
+                _renderer.OpenLoadingScreen("LOADING WORLD",
+                    "READING " + System.IO.Path.GetFileNameWithoutExtension(lp).ToUpperInvariant());
+                _renderer.StagePendingLoadWork(() => _renderer.LoadFromFile(lp));
             }
             else if (_pendingShowTitle)
             {
                 // Tier 6 #47 — Standalone main menu path. No world is
                 // loaded; flip the renderer into TitleRoot so the menu
                 // is the first thing the player sees instead of an
-                // auto-generated world.
+                // auto-generated world. Title screen has no blocking
+                // work so it doesn't go through the loading-screen
+                // two-step.
                 _renderer.OpenTitleScreen();
             }
             else
             {
                 int seed = _pendingSeed != 0 ? _pendingSeed : (int)(DateTime.Now.Ticks & 0x7FFFFFFF);
-                _renderer.StartNewWorld(seed);
+                _renderer.OpenLoadingScreen("LOADING WORLD", "GENERATING TERRAIN...");
+                _renderer.StagePendingLoadWork(() => _renderer.StartNewWorld(seed));
             }
 
             // Release GL context from the UI thread so the render thread can claim it.

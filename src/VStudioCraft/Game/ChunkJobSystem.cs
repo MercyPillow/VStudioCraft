@@ -55,6 +55,14 @@ namespace VStudioCraft.Game
         private readonly ConcurrentDictionary<(int x, int z), byte> _genInFlight = new ConcurrentDictionary<(int x, int z), byte>();
         private readonly ConcurrentDictionary<(int x, int z), byte> _meshInFlight = new ConcurrentDictionary<(int x, int z), byte>();
 
+        // Tier 6 — Read-only count for the loading-screen readiness
+        // poll. ConcurrentDictionary.Count is approximate but cheap;
+        // approximate is fine here because we're checking a "drain
+        // settled" condition that reads "0 == 0" once the queue is
+        // empty (any momentary count drift between Count and reality
+        // resolves on the next frame's poll).
+        public int MeshInFlight => _meshInFlight.Count;
+
         private readonly Thread[] _workers;
         private volatile bool _disposed;
 
