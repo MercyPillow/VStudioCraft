@@ -1104,6 +1104,22 @@ namespace VStudioCraft.Game
             {
                 case BlockType.SnowBlock:
                     return (0f, 0f, 0f, 1f, 1f / 8f, 1f);
+                // Tier 6 #37 Phase 4 — Cross-sprite flora hitboxes.
+                // Flowers and mushrooms render as crossed quads
+                // through the cell centre but only take up a fraction
+                // of the cell visually. The selection wireframe + the
+                // click ray now match what the player actually sees:
+                // a slim 0.4-wide tower at the cell base, 0.6 tall
+                // for flowers (taller stem) and 0.5 tall for the
+                // shorter mushrooms. IsSolid stays false for these so
+                // the player walks straight through — only the
+                // raycast / outline use this AABB.
+                case BlockType.Dandelion:
+                case BlockType.Rose:
+                    return (0.3f, 0f, 0.3f, 0.7f, 0.6f, 0.7f);
+                case BlockType.BrownMushroom:
+                case BlockType.RedMushroom:
+                    return (0.3f, 0f, 0.3f, 0.7f, 0.5f, 0.7f);
                 default:
                     return (0f, 0f, 0f, 1f, 1f, 1f);
             }
