@@ -902,6 +902,38 @@ void main()
         // amount every half-second while they are below the kill plane.
         private float _voidTimer;
 
+        // Tier 6 #34 — Fire-contact damage accumulator. Counts seconds
+        // the player has been overlapping a Fire block; ticks 1 HP per
+        // half-second so a misstep singes but isn't instantly fatal.
+        // Resets whenever the player steps out of fire.
+        private float _fireDamageTimer;
+
+        // Tier 6 #34 — True if any of the 8 corner samples of the
+        // player's AABB lands on a Fire block. Cheap per-frame check
+        // — the AABB is 0.6 × 1.8 m, sampled at the 8 corners is
+        // enough resolution for a 1×1×1 fire block.
+        private bool PlayerInFire()
+        {
+            if (_world == null || Player == null) return false;
+            float pad = 0.05f;
+            float x0 = Player.Position.X - Player.HalfWidth + pad;
+            float x1 = Player.Position.X + Player.HalfWidth - pad;
+            float y0 = Player.Position.Y + pad;
+            float y1 = Player.Position.Y + Player.Height - pad;
+            float z0 = Player.Position.Z - Player.HalfWidth + pad;
+            float z1 = Player.Position.Z + Player.HalfWidth - pad;
+            for (int yi = 0; yi < 2; yi++)
+            for (int xi = 0; xi < 2; xi++)
+            for (int zi = 0; zi < 2; zi++)
+            {
+                int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
+                int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
+                int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
+                if (_world.GetBlock(wx, wy, wz) == BlockType.Fire) return true;
+            }
+            return false;
+        }
+
         // Previous-frame "feet in water" snapshot — diffed against the
         // current frame's Player.WasInWater to fire a single splash SFX
         // on the surface-entry transition (not every frame the player is
@@ -2846,6 +2878,25 @@ void main()
                 _voidTimer = 0f;
             }
 
+            // Tier 6 #34 — Fire damage. Whenever any cell of the player's
+            // AABB overlaps a Fire block, accumulate dt; tick 1 HP per
+            // half-second of contact. Cheap per-frame: 8 cell sample
+            // points (the AABB's corners) — anything more is wasted on
+            // a 0.6×1.8 m player against 1×1×1 blocks.
+            if (PlayerInFire())
+            {
+                _fireDamageTimer += dt;
+                while (_fireDamageTimer >= 0.5f)
+                {
+                    _fireDamageTimer -= 0.5f;
+                    Player.TakeDamage(1);
+                }
+            }
+            else
+            {
+                _fireDamageTimer = 0f;
+            }
+
             // Drowning. WasHeadInWater is refreshed inside Player.Update
             // every tick, so we just consume it here. Air decays in 2-point
             // steps so the bubble row's "10 slots × 2 each" matches the
@@ -4108,10 +4159,28 @@ void main()
                 // didn't suppress block interactions.
                 else if (held == BlockType.FlintAndSteel)
                 {
-                    // Intentional no-op — see comment above. Fall
-                    // through to the target switch so RMB on a
-                    // workbench / furnace / chest / door still
-                    // routes to the normal interact handlers.
+                    // Tier 6 #34 — Light fire on the targeted face.
+                    // Place a Fire block at the cell adjacent to the
+                    // hit block on the hit face's normal direction;
+                    // the targeted block must be solid + flammable
+                    // (or simply solid for now — full flammability
+                    // gating is a polish pass). Bail silently if
+                    // the adjacent cell isn't air or the hit cell
+                    // is non-solid (clicking flint-and-steel into
+                    // empty space).
+                    int fx = hit.X + hit.Nx;
+                    int fy = hit.Y + hit.Ny;
+                    int fz = hit.Z + hit.Nz;
+                    var hitT = _world.GetBlock(hit.X, hit.Y, hit.Z);
+                    var fireT = _world.GetBlock(fx, fy, fz);
+                    if (BlockData.IsSolid(hitT) && fireT == BlockType.Air)
+                    {
+                        _world.SetBlock(fx, fy, fz, BlockType.Fire);
+                        return true;
+                    }
+                    // Otherwise fall through to the target switch
+                    // (RMB on a workbench / furnace / chest / door
+                    // still routes to the normal interact handlers).
                 }
                 // Tier 4 #15 — Empty bucket RMB on a fluid SOURCE
                 // cell scoops the source out and swaps the held
@@ -6485,6 +6554,10 @@ void main()
             // when the host modals open). World internally rate-limits
             // to one pass per CropTickInterval so per-frame is cheap.
             _world.TickRandomCrops(dt);
+            // Tier 6 #34 — Fire spread / die tick. Same cadence as
+            // crops; rate-limited inside World.TickFire to keep the
+            // per-frame cost negligible.
+            _world.TickFire(dt);
         }
 
         // IPlayerDamageSink: HostileMob calls this to inflict melee

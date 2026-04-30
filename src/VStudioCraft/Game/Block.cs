@@ -427,6 +427,15 @@ namespace VStudioCraft.Game
         // decorative cage cube the player can break (drops nothing —
         // matches Alpha — and is not obtainable from the catalog).
         MobSpawner         = 139, // Alpha 52
+
+        // Tier 6 #34 — Fire block. Placed by Flint and Steel; lives
+        // in air cells above flammable blocks. Cross-sprite render
+        // (like flowers), non-solid, instant-break, emits light=14.
+        // Spreads via a per-tick random walk to neighbouring flammable
+        // cells; eventually goes out unless adjacent to lava (which
+        // re-ignites it). Damages the player on contact (cosmetic
+        // damage tick — handled in ApplySurvivalDamage).
+        Fire               = 140, // Alpha 51
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -802,6 +811,11 @@ namespace VStudioCraft.Game
                 // vertically (each cell of the stack is independently
                 // walk-through).
                 case BlockType.SugarCane:
+                // Tier 6 #34 — Fire is non-solid; the player walks
+                // straight through it (taking damage via the
+                // per-tick fluid-contact check pattern rather than
+                // collision).
+                case BlockType.Fire:
                     return false;
                 default:
                     return true;
@@ -1077,6 +1091,10 @@ namespace VStudioCraft.Game
                 // Mesher routes it through EmitCrossSprite via the
                 // standard non-cube path (same as flowers/wheat).
                 case BlockType.SugarCane:
+                // Tier 6 #34 — Fire renders as a cross-sprite (two
+                // crossed quads showing the flame from any angle),
+                // same path as flowers / wheat / sugar cane.
+                case BlockType.Fire:
                     return false;
                 // Tier 4 #16 — Door halves are a thin slab (3/16-deep
                 // quad against the wall face), not a full 1×1×1 cube.
@@ -1238,6 +1256,11 @@ namespace VStudioCraft.Game
                 case BlockType.WoodDoorBlockTop:
                 case BlockType.IronDoorBlockBottom:
                 case BlockType.IronDoorBlockTop:
+                // Tier 6 #34 — Fire is a cross-sprite emitter — the
+                // sub-cell volume is mostly air, and the flame is
+                // ITSELF the light source. Light has to pass through
+                // the cell so the emission propagates to neighbours.
+                case BlockType.Fire:
                     return true;
                 default:
                     return false;
@@ -1275,6 +1298,11 @@ namespace VStudioCraft.Game
                 // tick whenever there's fuel burning.
                 case BlockType.LitFurnace:
                     return 13;
+                // Tier 6 #34 — Fire emits 14, same as a torch. Brightly
+                // illuminates the area around it so a player walking
+                // through a corridor sees flames visibly cast light.
+                case BlockType.Fire:
+                    return 14;
                 default:
                     return 0;
             }
@@ -1380,6 +1408,9 @@ namespace VStudioCraft.Game
                 // SpawnBreakDrop — stage-7 drops 1 wheat + 0..3 seeds,
                 // earlier stages drop a single seed.
                 case BlockType.Wheat:
+                // Tier 6 #34 — Fire breaks instantly with bare hands
+                // (matches Alpha — punch out a fire to put it out).
+                case BlockType.Fire:
                 // Tier 4 #26 — Sugar cane breaks instantly bare-handed
                 // (Alpha hardness 0). Drop is one SugarCaneItem per
                 // cell broken; if the BOTTOM cell of a 2/3-tall stack
@@ -1500,6 +1531,8 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileMossyCobblestone;
                 case BlockType.MobSpawner:
                     return BlockTextures.TileMobSpawner;
+                case BlockType.Fire:
+                    return BlockTextures.TileFire;
                 case BlockType.Obsidian:
                     return BlockTextures.TileObsidian;
                 case BlockType.Sponge:

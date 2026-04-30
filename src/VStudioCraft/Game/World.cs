@@ -684,6 +684,22 @@ namespace VStudioCraft.Game
         private float _cropTimer;
         private readonly Random _cropRng = new Random(0xCB07);
         public const float CropTickInterval = 5.0f;
+
+        // Tier 6 #34 — Fire propagation state. Same rate-limiter shape
+        // as the crop tick — every ~1s we sample a small set of loaded
+        // chunks, walk a few random cells in each, and for every Fire
+        // block found we roll for spread to a flammable neighbour and
+        // a die-out chance. Spread targets must be Air with a flammable
+        // (wood/planks/leaves/wool/tallgrass) block adjacent. Fire over
+        // a non-flammable surface (e.g. cobble) eventually dies out;
+        // Fire over a flammable surface persists much longer (Alpha
+        // rule — netherrack-style "eternal fire" is netherrack-only,
+        // which we don't have, so all fire is mortal here).
+        private float _fireTimer;
+        private readonly Random _fireRng = new Random(0xF1AE);
+        public const float FireTickInterval = 1.0f;
+        private const int FireChunksPerTick = 6;
+        private const int FireCellsPerChunk = 8;
         // Per-tick: 4 chunks, 6 cells each = 24 sample chances. With
         // ~1/12 promotion probability per sampled wheat cell, a single
         // wheat block walks through stages 0..7 in ~6 minutes of real
@@ -963,6 +979,116 @@ namespace VStudioCraft.Game
                     _dirty.Add(key);
                 }
             }
+        }
+
+        // Tier 6 #34 — Fire propagation tick. Walks a small random set
+        // of loaded chunks; in each, samples random cells for Fire
+        // blocks. For every Fire found, rolls for spread to one
+        // adjacent air cell that has a flammable neighbour (so it
+        // doesn't spread into open air), and rolls for die-out (the
+        // probability is biased by whether the block beneath is
+        // flammable — Fire over Planks lasts longer than Fire over
+        // Cobble, matching Alpha's "fire on flammable" rule).
+        public void TickFire(float dt)
+        {
+            _fireTimer -= dt;
+            if (_fireTimer > 0f) return;
+            _fireTimer = FireTickInterval;
+
+            var keys = new List<(int x, int z)>(_chunks.Count);
+            foreach (var k in _chunks.Keys) keys.Add(k);
+            if (keys.Count == 0) return;
+
+            int chunksToSample = Math.Min(FireChunksPerTick, keys.Count);
+            for (int c = 0; c < chunksToSample; c++)
+            {
+                var key = keys[_fireRng.Next(keys.Count)];
+                if (!_chunks.TryGetValue(key, out var chunk)) continue;
+
+                for (int s = 0; s < FireCellsPerChunk; s++)
+                {
+                    int lx = _fireRng.Next(Chunk.SizeX);
+                    int lz = _fireRng.Next(Chunk.SizeZ);
+                    int ly = _fireRng.Next(Chunk.SizeY);
+                    int idx = Chunk.Index(lx, ly, lz);
+                    if (chunk.RawBlocks[idx] != (byte)BlockType.Fire) continue;
+
+                    int wx = key.x * Chunk.SizeX + lx;
+                    int wy = ly;
+                    int wz = key.z * Chunk.SizeZ + lz;
+
+                    // Die-out roll. Fire on a flammable substrate gets
+                    // a low extinguish chance; fire on non-flammable
+                    // (or air below) gets a higher one. Without rain /
+                    // age tracking we just stochastically sunset.
+                    var below = ly > 0
+                        ? (BlockType)chunk.RawBlocks[Chunk.Index(lx, ly - 1, lz)]
+                        : BlockType.Air;
+                    bool standsOnFlammable = IsFlammable(below);
+                    int dieDenom = standsOnFlammable ? 40 : 8;
+                    if (_fireRng.Next(dieDenom) == 0)
+                    {
+                        SetBlock(wx, wy, wz, BlockType.Air);
+                        continue;
+                    }
+
+                    // Spread roll. Pick one of the 6 axis-aligned
+                    // neighbours; if it's air AND has at least one
+                    // flammable neighbour itself (so fire doesn't
+                    // travel through empty space), set it on fire.
+                    if (_fireRng.Next(3) != 0) continue;
+                    int dir = _fireRng.Next(6);
+                    int nx = wx, ny = wy, nz = wz;
+                    switch (dir)
+                    {
+                        case 0: nx -= 1; break;
+                        case 1: nx += 1; break;
+                        case 2: ny -= 1; break;
+                        case 3: ny += 1; break;
+                        case 4: nz -= 1; break;
+                        case 5: nz += 1; break;
+                    }
+                    if (ny < 0 || ny >= Chunk.SizeY) continue;
+                    if (GetBlock(nx, ny, nz) != BlockType.Air) continue;
+                    if (!HasFlammableNeighbour(nx, ny, nz)) continue;
+                    SetBlock(nx, ny, nz, BlockType.Fire);
+                }
+            }
+        }
+
+        // Flammability table — matches Alpha's set: wood, planks,
+        // leaves, wool, tallgrass, bookshelf. Cane and flowers count
+        // too (they're plant matter, instant-break already, fire
+        // burning them is purely cosmetic). Doors/fences NOT included
+        // because their hitboxes complicate visuals; Alpha treats
+        // those as flammable but we keep the rule simple.
+        private static bool IsFlammable(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.WoodLog:
+                case BlockType.Planks:
+                case BlockType.Leaves:
+                case BlockType.Wool:
+                case BlockType.Bookshelf:
+                case BlockType.SugarCane:
+                case BlockType.Dandelion:
+                case BlockType.Rose:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private bool HasFlammableNeighbour(int wx, int wy, int wz)
+        {
+            if (wy > 0 && IsFlammable(GetBlock(wx, wy - 1, wz))) return true;
+            if (wy + 1 < Chunk.SizeY && IsFlammable(GetBlock(wx, wy + 1, wz))) return true;
+            if (IsFlammable(GetBlock(wx - 1, wy, wz))) return true;
+            if (IsFlammable(GetBlock(wx + 1, wy, wz))) return true;
+            if (IsFlammable(GetBlock(wx, wy, wz - 1))) return true;
+            if (IsFlammable(GetBlock(wx, wy, wz + 1))) return true;
+            return false;
         }
 
         // Despawn far mobs. Alpha 1.1.2 instant-despawns mobs > 128 blocks

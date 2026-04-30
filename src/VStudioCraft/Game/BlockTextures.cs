@@ -195,7 +195,14 @@ namespace VStudioCraft.Game
         // hotbar zoom and in unfamiliar dungeon lighting.
         public const int FirstTailSpawnerLayer = FirstTailArmorLayer + TailArmorLayerCount; // 155
         public const int TailSpawnerLayerCount = 1;
-        public const int LayerCount = FirstTailSpawnerLayer + TailSpawnerLayerCount;        // 156
+        // Tier 6 #34 — Fire block tile. Procedural orange-yellow
+        // flame painted on transparent background; mesher renders
+        // fire as a cross-sprite (like Dandelion/Rose) so the
+        // sprite-style alpha works fine. Append-only past the
+        // spawner layer.
+        public const int FirstTailFireBlockLayer = FirstTailSpawnerLayer + TailSpawnerLayerCount; // 156
+        public const int TailFireBlockLayerCount = 1;
+        public const int LayerCount = FirstTailFireBlockLayer + TailFireBlockLayerCount;          // 157
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -369,6 +376,8 @@ namespace VStudioCraft.Game
         // a stone-grey background; same tile drawn on all six faces
         // (no orientation, matching Alpha's spawner block).
         public const int TileMobSpawner          = 155;
+        // Tier 6 #34 — Fire block sprite tile.
+        public const int TileFire                = 156;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -632,6 +641,12 @@ namespace VStudioCraft.Game
             // Tier 6 #32 — Mob spawner cage tile. Single layer
             // appended past the armor pack.
             UploadLayer(layerPixels, TileMobSpawner, GenerateMobSpawner);
+
+            // Tier 6 #34 — Fire sprite. Single layer past the spawner
+            // tile. Cross-sprite render in the mesher means the alpha
+            // channel matters — we author the flame on transparent
+            // background.
+            UploadLayer(layerPixels, TileFire, GenerateFire);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -3510,6 +3525,9 @@ namespace VStudioCraft.Game
             // and the GenerateProceduralSpawner overlay paints the
             // dark cage in both atlas modes.
             /* TileMobSpawner          */ (-1, -1),
+            // Tier 6 #34 — Fire sprite. Procedural-only; the sentinel
+            // keeps it out of the alpha-textures slicer.
+            /* TileFire                */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3694,6 +3712,9 @@ namespace VStudioCraft.Game
 
             // Tier 6 #32 — Mob spawner cage. Procedural-only.
             UploadLayer(layerPixels, TileMobSpawner, GenerateMobSpawner);
+
+            // Tier 6 #34 — Fire sprite. Procedural-only.
+            UploadLayer(layerPixels, TileFire, GenerateFire);
 
             // Tier 4 — Overlay alpha_tools.png coords for ALL tail items
             // past the door pack: door inventory icons, flint+steel,
@@ -5562,6 +5583,72 @@ namespace VStudioCraft.Game
                     int hy = g + 1;
                     if (hx < TileSize) SetPixel(pixels, hx, p, 80, 80, 80);
                     if (hy < TileSize) SetPixel(pixels, p, hy, 80, 80, 80);
+                }
+            }
+        }
+
+        // Tier 6 #34 — Fire sprite tile. Triangular flame painted
+        // on transparent background; mesher draws as a cross-sprite
+        // (two crossed quads, like flowers) so the cutout reads from
+        // any angle. Three colour bands top-down: bright yellow tip,
+        // orange middle, deep red base, with the base widest. RNG
+        // jitters individual pixels for a flickery look.
+        private static void GenerateFire(byte[] pixels)
+        {
+            // Clear to transparent.
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            var rng = new Random(0xF1A4); // "fia4" → "fire"
+            // Triangle profile: widest at the bottom, tapering to the
+            // tip. half-width(y) = (TileSize-1 - y) * 0.5 + 1, capped
+            // at TileSize/2. We sweep y from bottom to top.
+            for (int y = 1; y < TileSize - 1; y++)
+            {
+                int dist = y;                                      // 0 = bottom row
+                int halfWidth = System.Math.Min(TileSize / 2 - 1,  // capped width
+                    1 + (TileSize - 2 - dist) / 2);
+                int cx = TileSize / 2;
+                for (int x = cx - halfWidth; x <= cx + halfWidth; x++)
+                {
+                    if (x < 0 || x >= TileSize) continue;
+                    // Random sub-pixel cutouts so the flame edges
+                    // shimmer rather than read as a solid triangle.
+                    if (rng.Next(8) == 0) continue;
+
+                    // Vertical colour gradient: red base → orange mid
+                    // → yellow tip.
+                    float t = dist / (float)(TileSize - 2);
+                    byte r, g, b;
+                    if (t < 0.4f)
+                    {
+                        // Bottom 40 % — deep red.
+                        float k = t / 0.4f;
+                        r = (byte)(180 + 40 * k);
+                        g = (byte)(20 + 60 * k);
+                        b = 10;
+                    }
+                    else if (t < 0.75f)
+                    {
+                        // Middle 35 % — orange.
+                        float k = (t - 0.4f) / 0.35f;
+                        r = 230;
+                        g = (byte)(80 + 100 * k);
+                        b = (byte)(10 + 10 * k);
+                    }
+                    else
+                    {
+                        // Top 25 % — yellow.
+                        float k = (t - 0.75f) / 0.25f;
+                        r = 255;
+                        g = (byte)(200 + 50 * k);
+                        b = (byte)(20 + 50 * k);
+                    }
+                    SetPixel(pixels, x, y, r, g, b, 235);
                 }
             }
         }

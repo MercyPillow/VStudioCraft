@@ -523,10 +523,13 @@ namespace VStudioCraft.Game
         // contact (Tier 6 #36 — separate ship).
         private static void GenerateFluidFeatures(Chunk chunk, Noise noise)
         {
-            // Surface lava lakes — ~1 in 16 chunks rolls a lake.
-            var lakeRng = ChunkRng(noise.Seed, chunk.ChunkX, chunk.ChunkZ, 0x7AC9);
-            if (lakeRng.Next(16) == 0)
-                PlaceSurfaceLavaLake(chunk, lakeRng);
+            // Surface lava lakes were removed — even with the windowed
+            // flatness probe the cost of finding a flat enough patch
+            // showed up as a ~300-FPS dip during chunk-stream-in. The
+            // visual payoff (occasional surface lava blob) wasn't
+            // worth the spike. Underground pools cover the "lava
+            // somewhere on the map" itch and run cheaply because
+            // their pre-checks are O(1) cell reads.
 
             // Underground pools — 0..2 attempts per chunk; each
             // looks for a flat cave floor and pools water or lava.
@@ -542,60 +545,6 @@ namespace VStudioCraft.Game
             var springRng = ChunkRng(noise.Seed, chunk.ChunkX, chunk.ChunkZ, 0xCF12);
             if (springRng.Next(8) == 0)
                 TryPlaceCliffSpring(chunk, springRng);
-        }
-
-        // Surface lava lake — pick a random column, find its surface,
-        // scoop a shallow disc (radius 2-3, depth 2 below surface) out
-        // of the dirt/grass/stone there, then fill the disc + surface
-        // with lava source blocks. Skip if the surface is sandy
-        // (beach) or already in water — lakes look weird half-flooded.
-        private static void PlaceSurfaceLavaLake(Chunk chunk, Random rng)
-        {
-            // Inset 4 cells from the chunk edge so the disc fits
-            // without crossing into a neighbour chunk. Lakes that
-            // span chunk boundaries would need cross-chunk gen
-            // coordination; keeping them chunk-local is simpler and
-            // visually fine.
-            int cx = 4 + rng.Next(Chunk.SizeX - 8);
-            int cz = 4 + rng.Next(Chunk.SizeZ - 8);
-            int surfaceY = -1;
-            for (int y = Chunk.SizeY - 1; y >= 0; y--)
-            {
-                var t = (BlockType)chunk.RawBlocks[Chunk.Index(cx, y, cz)];
-                if (t == BlockType.Air || t == BlockType.Water || t == BlockType.FlowingWater) continue;
-                surfaceY = y;
-                break;
-            }
-            if (surfaceY < 0) return;
-            // Reject under-water surfaces (lake bed) and beach sand —
-            // both produce ugly half-fluid blobs.
-            var topT = (BlockType)chunk.RawBlocks[Chunk.Index(cx, surfaceY, cz)];
-            if (topT == BlockType.Sand) return;
-            if (surfaceY < SeaLevel + 1) return;
-
-            int radius = 2 + rng.Next(2);  // 2..3
-            // Replace cells inside the disc, in 3 layers (surface, -1, -2)
-            // and fill the surface with lava sources.
-            for (int dz = -radius; dz <= radius; dz++)
-            for (int dx = -radius; dx <= radius; dx++)
-            {
-                if (dx * dx + dz * dz > radius * radius) continue;
-                int x = cx + dx, z = cz + dz;
-                if ((uint)x >= Chunk.SizeX || (uint)z >= Chunk.SizeZ) continue;
-                // Top cell becomes lava source.
-                chunk.RawBlocks[Chunk.Index(x, surfaceY, z)] = (byte)BlockType.Lava;
-                // Carve up to 1 block below into stone bed (so the
-                // pool reads as having depth, not just a surface
-                // sheet). Keep the bed solid so the lava doesn't
-                // drain through.
-                int bedY = surfaceY - 1;
-                if (bedY >= 0)
-                {
-                    var bed = (BlockType)chunk.RawBlocks[Chunk.Index(x, bedY, z)];
-                    if (bed == BlockType.Grass || bed == BlockType.Dirt)
-                        chunk.RawBlocks[Chunk.Index(x, bedY, z)] = (byte)BlockType.Stone;
-                }
-            }
         }
 
         // Underground pool — pick a random Y in the cave-eligible
