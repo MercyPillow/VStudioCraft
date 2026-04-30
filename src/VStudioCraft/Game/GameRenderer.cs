@@ -6558,6 +6558,17 @@ void main()
             // crops; rate-limited inside World.TickFire to keep the
             // per-frame cost negligible.
             _world.TickFire(dt);
+            // Tier 6 #35 — Sand / gravel fall physics. Two steps:
+            // (a) TickFallingPhysics scans the pending-checks queue
+            //     every FallStepInterval (0.10s) and spawns a
+            //     FallingBlockEntity for any unsupported sand/gravel.
+            //     Rate-limited because the queue only changes on
+            //     SetBlock — no need to scan more often.
+            // (b) UpdateFallingBlocks integrates the live entities
+            //     every frame for smooth animation. Cheap when no
+            //     entities are airborne (early-out on empty list).
+            _world.TickFallingPhysics(dt);
+            _world.UpdateFallingBlocks(dt);
         }
 
         // IPlayerDamageSink: HostileMob calls this to inflict melee
@@ -8120,6 +8131,13 @@ void main()
             // white cuboid; the line from the rod tip back to the
             // bobber is a polish TODO (see RenderBobbers).
             RenderBobbers(width, height);
+            // Tier 6 #35 — Animated sand/gravel between cells. Each
+            // entity renders as a flat-coloured cube via the same
+            // overlay-shader path the projectile / bobber renderers
+            // use — no new shader work, no atlas sampling at the
+            // entity level (the cube is sand-tan or gravel-grey).
+            // Cheap, no-op when nothing's falling.
+            RenderFallingBlocks(width, height);
             // Tier 3 #12 third-person Steve. Drawn first in the entity
             // layer so passives + hostiles + particles can occlude /
             // overlay the player rig naturally; only renders when F5 is
@@ -8708,6 +8726,39 @@ void main()
                     drawPos.Y += wiggle;
                 }
                 var trans = Matrix4.CreateTranslation(drawPos);
+                var model = localCentre * sizeScale * trans;
+                var mvp = model * vp;
+                _overlayShader.SetMatrix4("uMVP", mvp);
+                _breakCubeMesh.Draw();
+            }
+        }
+
+        // Tier 6 #35 — In-flight sand / gravel between cell-grid
+        // commits. Mirrors RenderThrown / RenderBobbers exactly —
+        // overlay shader, _breakCubeMesh as the unit cube, per-
+        // entity tint via FallingBlockEntity.GetRenderColor(). Scale
+        // is RenderScale (0.95) so the falling cube sits a hair
+        // inside the cell it'd land in, avoiding a 1-frame z-fight
+        // with the grid block that replaces it on landing.
+        private void RenderFallingBlocks(int width, int height)
+        {
+            if (_world == null) return;
+            var falling = _world.FallingBlocks;
+            if (falling == null || falling.Count == 0) return;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            var vp = _frameVp;
+
+            var localCentre = Matrix4.CreateTranslation(0f, 0f, 0f);
+            var sizeScale   = Matrix4.CreateScale(FallingBlockEntity.RenderScale);
+
+            for (int i = 0; i < falling.Count; i++)
+            {
+                var fb = falling[i];
+                _overlayShader.SetVector3("uColor", fb.GetRenderColor());
+                var trans = Matrix4.CreateTranslation(fb.RenderPosition);
                 var model = localCentre * sizeScale * trans;
                 var mvp = model * vp;
                 _overlayShader.SetMatrix4("uMVP", mvp);

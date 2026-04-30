@@ -700,6 +700,31 @@ namespace VStudioCraft.Game
         public const float FireTickInterval = 1.0f;
         private const int FireChunksPerTick = 6;
         private const int FireCellsPerChunk = 8;
+
+        // Tier 6 #35 — Falling sand / gravel physics. Edit-driven
+        // queue: SetBlock enqueues affected coordinates when the new
+        // block is sand/gravel (might fall) or when the new block
+        // exposes a cell beneath sand/gravel (the cell above might
+        // now fall). TickFallingPhysics drains the queue every
+        // FallStepInterval seconds, swapping unsupported sand/gravel
+        // down one cell. After a successful fall the new lower
+        // coordinate is re-enqueued so the block keeps falling. We
+        // skip the entity-based "FallingSand entity 70" approach
+        // Alpha shipped — the cell-swap reads identically to the
+        // player at 10 cells/sec and avoids spawning short-lived
+        // entities that we'd then have to net-replicate.
+        private readonly HashSet<(int x, int y, int z)> _pendingFallChecks = new HashSet<(int, int, int)>();
+        private float _fallStepTimer;
+        public const float FallStepInterval = 0.10f;  // candidate-scan cadence; the entity itself moves continuously
+
+        // Live falling-block entities — spawned by TickFallingPhysics
+        // when an unsupported sand/gravel is detected, despawned by
+        // UpdateFallingBlocks when the entity reaches a solid floor.
+        // Kept as a readonly list reference so GameRenderer can
+        // iterate without copying. Mutations happen on the same
+        // thread (host SP / server tick loop) — no concurrent access.
+        private readonly List<FallingBlockEntity> _fallingBlocks = new List<FallingBlockEntity>();
+        public IReadOnlyList<FallingBlockEntity> FallingBlocks => _fallingBlocks;
         // Per-tick: 4 chunks, 6 cells each = 24 sample chances. With
         // ~1/12 promotion probability per sampled wheat cell, a single
         // wheat block walks through stages 0..7 in ~6 minutes of real
@@ -1091,6 +1116,76 @@ namespace VStudioCraft.Game
             return false;
         }
 
+        // Tier 6 #35 — Falling-physics tick. Drains the pending-fall
+        // queue every FallStepInterval seconds and spawns a
+        // FallingBlockEntity for each unsupported sand/gravel cell.
+        // The entity itself does the smooth descent (UpdateFallingBlocks
+        // runs every frame); this method just decides "should this
+        // cell be falling right now?". Spawn-cadence rate-limit
+        // means cascaded stacks (5 sand on dirt, dig dirt) start
+        // their falls 100ms apart instead of all at once — visually
+        // pleasing trickle rather than a synchronised plummet.
+        public void TickFallingPhysics(float dt)
+        {
+            _fallStepTimer -= dt;
+            if (_fallStepTimer > 0f) return;
+            _fallStepTimer = FallStepInterval;
+
+            if (_pendingFallChecks.Count == 0) return;
+
+            var batch = new List<(int x, int y, int z)>(_pendingFallChecks);
+            _pendingFallChecks.Clear();
+
+            foreach (var (wx, wy, wz) in batch)
+            {
+                if (wy <= 0) continue;
+                var here = GetBlock(wx, wy, wz);
+                if (here != BlockType.Sand && here != BlockType.Gravel) continue;
+
+                var below = GetBlock(wx, wy - 1, wz);
+                if (below != BlockType.Air) continue;
+
+                // Convert the cell to a flying entity. SetBlock(Air)
+                // re-fires the hook, which checks the cell ABOVE this
+                // one — so a column of sand naturally peels itself off
+                // 100ms at a time as each one's support disappears.
+                SetBlock(wx, wy, wz, BlockType.Air);
+                _fallingBlocks.Add(new FallingBlockEntity
+                {
+                    X = wx, Z = wz, Y = wy, VelY = 0f, Type = here,
+                });
+            }
+        }
+
+        // Per-frame integration step for live falling entities.
+        // Walks the list back-to-front so the in-place removal of a
+        // landed entity doesn't shift indices we're still going to
+        // iterate. On landing, SetBlock at the landing Y does the
+        // commit AND re-fires the chain — if another sand was queued
+        // on top of this column it'll be detected by next tick's
+        // TickFallingPhysics through the standard pending-checks
+        // path.
+        public void UpdateFallingBlocks(float dt)
+        {
+            if (_fallingBlocks.Count == 0) return;
+            for (int i = _fallingBlocks.Count - 1; i >= 0; i--)
+            {
+                var fb = _fallingBlocks[i];
+                if (fb.Update(this, dt) == FallingBlockEntity.StepResult.LandAt)
+                {
+                    // Commit at the landing Y. If the destination is
+                    // already non-air (someone placed a block in the
+                    // landing cell while we were mid-fall) we drop
+                    // the falling block silently — match Alpha, where
+                    // a falling-sand entity that lands inside a solid
+                    // is just lost.
+                    if (GetBlock(fb.X, fb.LandedY, fb.Z) == BlockType.Air)
+                        SetBlock(fb.X, fb.LandedY, fb.Z, fb.Type);
+                    _fallingBlocks.RemoveAt(i);
+                }
+            }
+        }
+
         // Despawn far mobs. Alpha 1.1.2 instant-despawns mobs > 128 blocks
         // from the player and stochastically despawns at 32..128. We mirror
         // both rules: the >128 cull runs every spawn tick, and a 5% per-tick
@@ -1276,6 +1371,22 @@ namespace VStudioCraft.Game
             // etc.) needs to flip the flag back on or the next tick will
             // skip the chunk entirely.
             FluidTick.MarkActiveAroundEdit(this, cx, cz);
+
+            // Tier 6 #35 — Falling-physics enqueue. Two cases trigger
+            // a fall check: (a) the new block IS sand/gravel and might
+            // need to fall if its support is missing; (b) the new
+            // block opens up a cell beneath an existing sand/gravel,
+            // which now needs to fall. Case (b) covers digging out
+            // the support pillar from under a sand column. Case (a)
+            // covers placing sand mid-air or restoring a save.
+            if (t == BlockType.Sand || t == BlockType.Gravel)
+                _pendingFallChecks.Add((wx, wy, wz));
+            if (t == BlockType.Air && wy + 1 < Chunk.SizeY)
+            {
+                var above = (BlockType)c.RawBlocks[Chunk.Index(lx, wy + 1, lz)];
+                if (above == BlockType.Sand || above == BlockType.Gravel)
+                    _pendingFallChecks.Add((wx, wy + 1, wz));
+            }
             return true;
         }
 
