@@ -897,11 +897,36 @@ namespace VStudioCraft.Game
                 if (placeY >= Chunk.SizeY) continue;
                 int placeIdx = Chunk.Index(x, placeY, z);
                 int groundIdx = Chunk.Index(x, surface - 1, z);
-                // Only on bare grass / dirt; skip if a tree / flora
-                // block already occupies the surface cell.
+                // Bail if the placement cell isn't bare air — never
+                // overwrite a tree trunk (WoodLog) or canopy block
+                // (Leaves) sitting at the surface. Same shape as
+                // GenerateFlora's "must be air" guard.
                 if (chunk.RawBlocks[placeIdx] != (byte)BlockType.Air) continue;
+                // Ground must be a normal grass / dirt cap. Catches
+                // the cave-roof / ravine-edge case where the noise-
+                // derived surface column was carved away.
                 var ground = (BlockType)chunk.RawBlocks[groundIdx];
                 if (ground != BlockType.Grass && ground != BlockType.Dirt) continue;
+                // Bail if a tree's trunk or canopy occupies the cell
+                // directly above the placement cell. Catches trees
+                // seeded from neighbour-chunk columns whose lowest
+                // log lands at placeY: the tree's REAL trunk base
+                // is at placeY (not placeY + 1) and the existing
+                // placeIdx air-check above already covers that, but
+                // when a neighbour-seeded tree's CANOPY drapes over
+                // a snow column with placeY one cell BELOW the
+                // canopy band — i.e. a leaf at placeY+1 — we still
+                // don't want to lay snow on the bare grass beneath
+                // it. Visually that reads as "snow falling through
+                // the canopy gaps" which is the exact symptom the
+                // user reported. One-cell scan is enough; deeper
+                // is overkill (the canopy slab is contiguous).
+                int aboveIdx = Chunk.Index(x, placeY + 1, z);
+                if (placeY + 1 < Chunk.SizeY)
+                {
+                    var above = (BlockType)chunk.RawBlocks[aboveIdx];
+                    if (above == BlockType.WoodLog || above == BlockType.Leaves) continue;
+                }
                 chunk.RawBlocks[placeIdx] = (byte)BlockType.SnowBlock;
             }
         }
