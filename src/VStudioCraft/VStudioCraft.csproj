@@ -95,6 +95,7 @@
     <Compile Include="Game\ChestTileEntity.cs" />
     <Compile Include="Game\DroppedItem.cs" />
     <Compile Include="Game\Entity.cs" />
+    <Compile Include="Game\FallingBlockEntity.cs" />
     <Compile Include="Game\Pig.cs" />
     <Compile Include="Game\PassiveMob.cs" />
     <Compile Include="Game\PassiveMobs.cs" />

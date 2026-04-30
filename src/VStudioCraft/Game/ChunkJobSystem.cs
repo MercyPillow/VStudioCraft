@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace VStudioCraft.Game
@@ -28,6 +29,17 @@ namespace VStudioCraft.Game
         internal struct GenResult
         {
             public Chunk Chunk;
+            // Spawn intents computed by the worker. Render thread drains
+            // these into World.Passives / World.Hostiles after a successful
+            // freshly-installed chunk (skipping if the install was a
+            // cached-modified swap — the historic guard
+            // `freshlyInstalled && !r.Chunk.IsModified` in UpdateStreaming
+            // still applies, so the intents are simply discarded in that
+            // case). May be null if the chunk's spawn pass produced
+            // nothing — saves a List allocation in the common "ocean
+            // chunk with no eligible columns" case.
+            public List<PassiveMob> PassiveSpawns;
+            public List<HostileMob> HostileSpawns;
         }
 
         internal struct MeshResult
@@ -115,10 +127,57 @@ namespace VStudioCraft.Game
                     {
                         if (job.Kind == JobKind.Gen)
                         {
+                            // Stage 1: terrain (noise + caves + ravines + ores
+                            // + flora + trees + fluid features). Worker-thread-
+                            // safe because the chunk is brand-new and not
+                            // installed in `_chunks` yet — no other thread can
+                            // see it.
                             var c = new Chunk(job.X, job.Z);
                             TerrainGenerator.Generate(c, _world.Noise);
+                            // Stage 2: initial light pass — skylight column
+                            // descent + emitter BFS. Same chunk-private read.
                             LightCalculator.RecomputeChunk(c);
-                            _genResults.Enqueue(new GenResult { Chunk = c });
+
+                            // Stage 3 (P1 of chunk-streaming smoothness work):
+                            // dungeon gen + relight + mob-spawn USED to live
+                            // on the render thread inside UpdateStreaming,
+                            // running once per just-installed chunk. With
+                            // MaxInstallsPerFrame = 8 and ~3 ms per chunk
+                            // that was a ~24 ms render-thread spike whenever
+                            // the player crossed into a fresh ring. We move
+                            // it here so the entire post-install cost
+                            // becomes one List<>.AddRange on the render
+                            // thread.
+                            //
+                            // Dungeon gen registers chest tile entities at
+                            // world coords; `_chestEntities` is a
+                            // ConcurrentDictionary so two workers carving
+                            // dungeons in different chunks can register
+                            // chests in parallel without a lock. Light
+                            // recompute runs a second time because the
+                            // dungeon carved a hollow interior that wasn't
+                            // present during Stage 2.
+                            //
+                            // Mob spawns are computed into per-chunk
+                            // throwaway lists and shipped on GenResult; the
+                            // render-thread drain decides whether to keep
+                            // them (matches the historic
+                            // `freshlyInstalled && !r.Chunk.IsModified`
+                            // guard — see GameRenderer.UpdateStreaming).
+                            _world.GenerateDungeonsInChunk(c);
+                            LightCalculator.RecomputeChunk(c);
+
+                            var passives = new List<PassiveMob>();
+                            var hostiles = new List<HostileMob>();
+                            _world.ComputePassiveSpawnsForChunk(c, passives);
+                            _world.ComputeHostileSpawnsForChunk(c, hostiles);
+
+                            _genResults.Enqueue(new GenResult
+                            {
+                                Chunk = c,
+                                PassiveSpawns = passives.Count > 0 ? passives : null,
+                                HostileSpawns = hostiles.Count > 0 ? hostiles : null,
+                            });
                         }
                         else
                         {

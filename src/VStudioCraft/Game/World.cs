@@ -53,8 +53,18 @@ namespace VStudioCraft.Game
         // is created on placement, mutated by the open-chest UI, drained
         // and removed when the block breaks. Persisted alongside the
         // furnace dict in WorldSaveFormat.
-        private readonly Dictionary<(int x, int y, int z), ChestTileEntity> _chestEntities
-            = new Dictionary<(int x, int y, int z), ChestTileEntity>();
+        //
+        // ConcurrentDictionary (not Dictionary) because dungeon generation
+        // now runs on chunk-worker threads (P1 of the chunk-streaming
+        // smoothness work). GenerateDungeonsInChunk registers chest
+        // entities at the chunk's chest corner, and multiple workers can
+        // be generating different chunks at the same time. The render-
+        // thread reads / mutates from chest-open UI happen at a different
+        // moment and CD's TryGetValue/indexer-set/TryRemove handle the
+        // worker-vs-render race cleanly with no perceptible cost (these
+        // dicts are tiny — order of dozens of entries in a typical world).
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<(int x, int y, int z), ChestTileEntity> _chestEntities
+            = new System.Collections.Concurrent.ConcurrentDictionary<(int x, int y, int z), ChestTileEntity>();
         // Jukebox tile entities — same lifetime model as furnaces /
         // chests. Created when a disc is first inserted (a freshly
         // placed empty jukebox doesn't allocate one until interact);
@@ -164,10 +174,37 @@ namespace VStudioCraft.Game
         public static World Generate(int seed)
         {
             var w = new World(seed);
-            for (int cz = -InitialRadiusChunks; cz <= InitialRadiusChunks; cz++)
-            for (int cx = -InitialRadiusChunks; cx <= InitialRadiusChunks; cx++)
+
+            // P4 of the chunk-streaming smoothness work — parallelise
+            // the 5×5 initial-ring generation. Each chunk's gen is
+            // independent: terrain noise is per-cell-pure, dungeon
+            // gen mutates only the chunk's own blocks + the chest
+            // dict (now ConcurrentDictionary, see P1), and the
+            // mob-spawn compute is read-only on the chunk plus a
+            // local List<>. The single-threaded version was a
+            // ~200 ms render-thread freeze at world entry; spreading
+            // across all cores typically brings that under ~50 ms,
+            // and the loading screen behind it hides the rest.
+            //
+            // Spawn intents accumulate per-chunk into thread-local
+            // lists then merge into _passives / _hostiles in a final
+            // serial pass — sidesteps the otherwise-needed lock on
+            // those Lists. Order of merge doesn't matter; the spawn
+            // RNG is per-column-deterministic so the resulting
+            // _passives / _hostiles content is identical to the
+            // sequential version (just possibly in a different
+            // List<> order — no caller relies on the order).
+            int side = InitialRadiusChunks * 2 + 1;
+            int total = side * side;
+            var chunks = new Chunk[total];
+            var passiveBuckets = new List<PassiveMob>[total];
+            var hostileBuckets = new List<HostileMob>[total];
+
+            System.Threading.Tasks.Parallel.For(0, total, i =>
             {
-                var c = new Chunk(cx, cz);
+                int dz = (i / side) - InitialRadiusChunks;
+                int dx = (i % side) - InitialRadiusChunks;
+                var c = new Chunk(dx, dz);
                 TerrainGenerator.Generate(c, w._noise);
                 // Tier 6 #32 — Dungeons run after terrain (so caves
                 // exist and we can be selective about which chunks
@@ -176,12 +213,24 @@ namespace VStudioCraft.Game
                 // sky-light propagation).
                 w.GenerateDungeonsInChunk(c);
                 LightCalculator.RecomputeChunk(c);
-                w._chunks[(cx, cz)] = c;
-                // Initial spawn pass uses the same per-chunk hashed RNG
-                // as the streaming path, so passives scattered in the
-                // initial 5×5 patch stay deterministic for a given seed.
-                w.SpawnPassivesInChunk(c);
-                w.SpawnHostilesInChunk(c);
+
+                var pl = new List<PassiveMob>();
+                var hl = new List<HostileMob>();
+                w.ComputePassiveSpawnsForChunk(c, pl);
+                w.ComputeHostileSpawnsForChunk(c, hl);
+
+                chunks[i] = c;
+                passiveBuckets[i] = pl;
+                hostileBuckets[i] = hl;
+            });
+
+            // Serial merge — installs and spawn-list extend.
+            for (int i = 0; i < total; i++)
+            {
+                var c = chunks[i];
+                w._chunks[(c.ChunkX, c.ChunkZ)] = c;
+                if (passiveBuckets[i].Count > 0) w._passives.AddRange(passiveBuckets[i]);
+                if (hostileBuckets[i].Count > 0) w._hostiles.AddRange(hostileBuckets[i]);
             }
             return w;
         }
@@ -346,7 +395,29 @@ namespace VStudioCraft.Game
             }
         }
 
+        // Render-thread shim: keep the historical signature so existing
+        // callers (World.Generate's initial 5×5 ring) don't have to know
+        // the internal split. The actual work is done by
+        // ComputePassiveSpawnsForChunk so chunk workers can call it
+        // off-thread and ship the resulting mob list back via GenResult.
         public void SpawnPassivesInChunk(Chunk c)
+        {
+            ComputePassiveSpawnsForChunk(c, _passives);
+        }
+
+        // Pure-compute variant: same logic as the historical method, but
+        // appends new mobs to the caller-supplied list instead of
+        // touching `_passives` directly. Safe to call from any thread —
+        // it only reads the chunk's blocks (the chunk has no other
+        // observer at gen time, and even after install the block reads
+        // are byte-aligned and harmless to race).
+        //
+        // The chunk worker uses this with a fresh List<PassiveMob>
+        // and stashes the list on GenResult; UpdateStreaming on the
+        // render thread does a single AddRange(_passives, intents)
+        // when the chunk install is "fresh" (not a cached-modified
+        // reinstall — see InstallGeneratedChunk).
+        public void ComputePassiveSpawnsForChunk(Chunk c, List<PassiveMob> output)
         {
             const int RareDenominator = 720; // ~1 chance per 720 grass cells (¼ of the original 180)
             int chunkBaseX = c.ChunkX * Chunk.SizeX;
@@ -409,7 +480,7 @@ namespace VStudioCraft.Game
                 else if (kindRoll < 60) mob = new Cow(spawnPos,     mobSeed);
                 else if (kindRoll < 85) mob = new Sheep(spawnPos,   mobSeed);
                 else                    mob = new Chicken(spawnPos, mobSeed);
-                _passives.Add(mob);
+                output.Add(mob);
             }
         }
 
@@ -434,7 +505,22 @@ namespace VStudioCraft.Game
         // live-spawn loop happens to roll one — that's a long wait,
         // and breaks the "dig down into a cave and find mobs already
         // there" feel the Alpha world gives.
+        // Render-thread shim — same idiom as SpawnPassivesInChunk.
+        // Defers to ComputeHostileSpawnsForChunk so chunk workers can
+        // compute the freshly-generated chunk's hostile + slime spawn
+        // set off-thread and ship the result to the render thread for
+        // a single AddRange installation.
         public void SpawnHostilesInChunk(Chunk c)
+        {
+            ComputeHostileSpawnsForChunk(c, _hostiles);
+        }
+
+        // Pure-compute variant — see ComputePassiveSpawnsForChunk for
+        // the rationale. Walks the chunk's columns, runs both surface
+        // and cave passes, and runs the per-chunk slime-chunk pass.
+        // Output is appended to (not cleared) so the same buffer can
+        // accumulate spawns from multiple chunks if needed.
+        public void ComputeHostileSpawnsForChunk(Chunk c, List<HostileMob> output)
         {
             const int SurfaceRareDenominator = 360;
             // Cave attempts per column. Per-column hashed RNG draws this
@@ -496,7 +582,7 @@ namespace VStudioCraft.Game
                                 else if (kindRoll < 60) mob = new Skeleton(spawnPos, mobSeed);
                                 else if (kindRoll < 85) mob = new Spider(spawnPos, mobSeed);
                                 else                    mob = new Creeper(spawnPos, mobSeed);
-                                _hostiles.Add(mob);
+                                output.Add(mob);
                             }
                         }
                     }
@@ -538,7 +624,7 @@ namespace VStudioCraft.Game
                     else if (kindRoll < 60) mob = new Skeleton(spawnPos, mobSeed);
                     else if (kindRoll < 85) mob = new Spider(spawnPos, mobSeed);
                     else                    mob = new Creeper(spawnPos, mobSeed);
-                    _hostiles.Add(mob);
+                    output.Add(mob);
                 }
             }
 
@@ -592,7 +678,7 @@ namespace VStudioCraft.Game
                     int slimeMobSeed = unchecked((int)slimeRng) ^ 0x5151AA55;
                     var slimeSpawn = new OpenTK.Vector3(
                         chunkBaseX + slx + 0.5f, syCandidate + 1f, chunkBaseZ + slz + 0.5f);
-                    _hostiles.Add(new Slime(slimeSpawn, slimeMobSeed, /*size:*/2));
+                    output.Add(new Slime(slimeSpawn, slimeMobSeed, /*size:*/2));
                 }
             }
         }
@@ -1231,9 +1317,12 @@ namespace VStudioCraft.Game
                 c = new Chunk(cx, cz);
                 TerrainGenerator.Generate(c, _noise);
                 // Tier 6 #32 — Dungeon gen between terrain + light.
-                // Same threading rules as the streaming path's main-
-                // thread install — caller is on the main thread when
-                // calling AddChunk so mutating _chestEntities is safe.
+                // Both this synchronous path and the async streaming
+                // path now mutate `_chestEntities` (a ConcurrentDictionary
+                // since the chunk-streaming smoothness work moved
+                // dungeon gen onto chunk worker threads), so the
+                // chest-entity registration is thread-safe regardless
+                // of which thread we're on here.
                 GenerateDungeonsInChunk(c);
                 LightCalculator.RecomputeChunk(c);
             }
@@ -1467,16 +1556,12 @@ namespace VStudioCraft.Game
 
         // Remove the entity at the coordinate and return it (or null).
         // Used when the chest block is broken so the caller can spill
-        // contents as drops.
+        // contents as drops. ConcurrentDictionary's TryRemove returns
+        // the removed value atomically — no double-lookup needed.
         public ChestTileEntity RemoveChestEntity(int wx, int wy, int wz)
         {
-            var key = (wx, wy, wz);
-            if (_chestEntities.TryGetValue(key, out var ce))
-            {
-                _chestEntities.Remove(key);
-                return ce;
-            }
-            return null;
+            _chestEntities.TryRemove((wx, wy, wz), out var ce);
+            return ce;
         }
 
         // Iterate all (coord, entity) pairs — used by save/load.

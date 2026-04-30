@@ -277,6 +277,50 @@ void main()
         private const int MaxUnloadsPerFrame = 3;
         private const int MaxMeshUploadsPerFrame = 4; // completed-mesh drains per frame
 
+        // P2 of the chunk-streaming smoothness work — soft per-frame
+        // time budgets layered on top of the hard count caps. The
+        // count caps protect against pathological burst arrival
+        // (workers all finishing simultaneously); the time budgets
+        // protect against the more common "uploads happen to be
+        // expensive THIS frame" case (a chunk with lots of foliage
+        // is bigger to push to the GPU than a mostly-air chunk).
+        // Either limit triggers a break — whichever comes first.
+        // 2 ms of streaming + 2 ms of upload leaves 12+ ms of the
+        // 16.6 ms 60-fps frame budget for sim + render, which is
+        // plenty even in the worst case.
+        private const double MaxStreamingMsPerFrame = 2.0;
+        private const double MaxMeshUploadMsPerFrame = 2.0;
+
+        // Cached so we don't re-divide every frame. Frequency is
+        // wall-clock ticks per second; multiplying ms by this/1000
+        // gives the budget in raw stopwatch ticks for cheap
+        // comparison against (now - start).
+        private static readonly long _streamingBudgetTicks =
+            (long)(MaxStreamingMsPerFrame * System.Diagnostics.Stopwatch.Frequency / 1000.0);
+        private static readonly long _meshUploadBudgetTicks =
+            (long)(MaxMeshUploadMsPerFrame * System.Diagnostics.Stopwatch.Frequency / 1000.0);
+
+        // P6 — diagnostic counters surfaced in the F3 overlay so the
+        // user can see at a glance which streaming phase is consuming
+        // budget on a hitchy frame. Updated at the end of each
+        // UpdateStreaming / ProcessDirtyChunks call. Volatile-ish in
+        // intent (single-writer / single-reader) but plain double is
+        // fine on x64; the F3 reader is OK with a torn read because
+        // the value is just for an on-screen diagnostic.
+        private double _lastStreamingMs;
+        private double _lastMeshUploadMs;
+
+        // P3 — last (chunkX, chunkZ) the player was in when
+        // GenerateNearMissing ran. When the player stays inside the
+        // same chunk frame after frame, the missing-ring scan has
+        // nothing new to discover (all chunks are either already in
+        // _chunks or already in-flight via the job system's dedup
+        // set), so we can skip the 169-cell walk + sort + re-enqueue
+        // and save a few µs per frame. int.MinValue sentinels force
+        // a first-time run on world entry.
+        private int _lastStreamCx = int.MinValue;
+        private int _lastStreamCz = int.MinValue;
+
         // Mob render-cull distance. Mobs farther than this from the camera
         // skip rendering even if technically inside the frustum — at >64m a
         // pig is sub-pixel anyway, so issuing 5–9 draw calls per mob just
@@ -3136,12 +3180,23 @@ void main()
                 }
             }
 
+            // Drain mesh results until either the count cap or the
+            // time budget is exhausted. The count cap protects
+            // against burst arrival (workers all finishing on the
+            // same tick); the time budget protects against expensive
+            // uploads (a chunk with lots of foliage / ores has a
+            // larger VBO than a mostly-air chunk). Whichever fires
+            // first wins.
             int applied = 0;
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             while (applied < maxUploadsPerFrame && _jobs.TryDequeueMesh(out var r))
             {
                 ApplyMeshResult(r);
                 applied++;
+                if (System.Diagnostics.Stopwatch.GetTimestamp() - t0 > _meshUploadBudgetTicks) break;
             }
+            long elapsed = System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            _lastMeshUploadMs = elapsed * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         }
 
         private void ApplyMeshResult(ChunkJobSystem.MeshResult r)
@@ -3185,35 +3240,67 @@ void main()
 
             // Drain completed gen results and install them. Drop any that ended
             // up outside the current unload radius while they were in-flight.
+            // Both a count cap (MaxInstallsPerFrame) and a time budget
+            // (_streamingBudgetTicks) — whichever fires first wins. The
+            // count cap stops a burst of cheap installs from running away;
+            // the time budget protects against expensive ones (the
+            // worker-side dungeon gen / spawn-intent computation now
+            // happens on workers but the AddRange still costs a few µs
+            // per mob, and an unlucky chunk with a slime-chunk slime
+            // batch can carry hundreds).
             int installed = 0;
             int unloadR2 = UnloadDistanceChunks * UnloadDistanceChunks;
+            long sT0 = System.Diagnostics.Stopwatch.GetTimestamp();
             while (installed < MaxInstallsPerFrame && _jobs.TryDequeueGen(out var r))
             {
                 int dx = r.Chunk.ChunkX - pcx, dz = r.Chunk.ChunkZ - pcz;
                 if (dx * dx + dz * dz <= unloadR2)
                 {
                     bool freshlyInstalled = _world.InstallGeneratedChunk(r.Chunk);
-                    // Only spawn passive mobs in genuinely fresh terrain
-                    // — a chunk re-installed from the modified cache
-                    // (player edits survived an unload) skips because
-                    // mobs were already considered for it the first time.
+                    // Only commit pre-computed spawn intents in genuinely
+                    // fresh terrain — a chunk re-installed from the
+                    // modified cache (player edits survived an unload)
+                    // skips because mobs were already considered for it
+                    // the first time.
+                    //
+                    // Dungeon gen + the second light recompute + mob-spawn
+                    // calculation now happen on the chunk worker (P1 of
+                    // the chunk-streaming smoothness work — see
+                    // ChunkJobSystem.WorkerLoop). The only render-thread
+                    // cost left here is two AddRange calls into the
+                    // single-threaded passive / hostile lists, which is
+                    // negligible (~µs per chunk) compared to the
+                    // ~3 ms-per-chunk hitch the synchronous version had.
                     if (freshlyInstalled && !r.Chunk.IsModified)
                     {
-                        // Tier 6 #32 — Dungeon gen runs main-thread-only
-                        // (it mutates _chestEntities which isn't safe
-                        // to touch from the worker). Re-light the chunk
-                        // after dungeons carve the cobble interior so
-                        // sky-light propagates into the new air space.
-                        _world.GenerateDungeonsInChunk(r.Chunk);
-                        LightCalculator.RecomputeChunk(r.Chunk);
-                        _world.SpawnPassivesInChunk(r.Chunk);
-                        _world.SpawnHostilesInChunk(r.Chunk);
+                        if (r.PassiveSpawns != null)
+                            _world.Passives.AddRange(r.PassiveSpawns);
+                        if (r.HostileSpawns != null)
+                            _world.Hostiles.AddRange(r.HostileSpawns);
                     }
                 }
                 installed++;
+                if (System.Diagnostics.Stopwatch.GetTimestamp() - sT0 > _streamingBudgetTicks) break;
             }
+            long sElapsed = System.Diagnostics.Stopwatch.GetTimestamp() - sT0;
+            _lastStreamingMs = sElapsed * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
-            GenerateNearMissing(pcx, pcz);
+            // P3 — only walk the 169-cell missing-chunk ring when the
+            // player has actually changed chunks. While stationary,
+            // every chunk in the ring is already in _chunks or
+            // already in-flight, so the scan finds nothing each
+            // frame; skipping it shaves the steady-state overhead.
+            // The first frame a fresh chunk gets installed (e.g. a
+            // worker just finishes one) does NOT need a re-scan
+            // either — the install happened from a previously-queued
+            // job, so the install itself implies the queue was
+            // primed for that chunk.
+            if (pcx != _lastStreamCx || pcz != _lastStreamCz)
+            {
+                _lastStreamCx = pcx;
+                _lastStreamCz = pcz;
+                GenerateNearMissing(pcx, pcz);
+            }
             UnloadFar(pcx, pcz);
         }
 
@@ -11221,6 +11308,17 @@ void main()
             Line($"Facing: {FacingFromYaw(Camera.Yaw)}", row++);
             Line($"Mode: {GameMode}", row++);
             Line($"Time: {_timeOfDay:F3}", row++);
+
+            // P6 of the chunk-streaming smoothness work — show the
+            // per-frame budget consumed by the streaming + mesh-upload
+            // drains. Capped via _streamingBudgetTicks /
+            // _meshUploadBudgetTicks (currently 2 ms each), so a healthy
+            // frame should read well under that. Spikes here pinpoint
+            // hitches: high stream-ms = many chunk installs landed at
+            // once; high upload-ms = many mesh VBO uploads landed at
+            // once. Useful when hunting regressions in streaming
+            // performance.
+            Line($"Stream: {_lastStreamingMs:F2} ms   Upload: {_lastMeshUploadMs:F2} ms", row++);
 
             GL.Enable(EnableCap.CullFace);
             GL.Enable(EnableCap.DepthTest);

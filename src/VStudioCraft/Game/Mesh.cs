@@ -48,29 +48,57 @@ namespace VStudioCraft.Game
                 // Caller sets _indexCount = 0 which short-circuits Draw.
                 return;
             }
+            // P5 of the chunk-streaming smoothness work — track whether
+            // this stream is being initialised (first upload) so we can
+            // skip the redundant VertexAttribPointer setup on every
+            // subsequent re-upload. The VAO already remembers the
+            // attribute layout from the first bind, so reissuing 5
+            // VertexAttribPointer + 5 EnableVertexAttribArray on every
+            // chunk remesh is pure GL driver overhead.
+            bool freshVao = (vao == 0);
             if (vao == 0) vao = GL.GenVertexArray();
             if (vbo == 0) vbo = GL.GenBuffer();
             if (ebo == 0) ebo = GL.GenBuffer();
 
             GL.BindVertexArray(vao);
 
+            // P5 — orphan the existing buffer before refilling it. By
+            // calling BufferData with IntPtr.Zero (no data, just
+            // size+usage) we tell the driver "the previous contents
+            // are scratch", letting it allocate a fresh storage block
+            // instead of waiting for any in-flight GPU work that
+            // referenced the old contents to finish. Then the second
+            // BufferData with the actual data fills the new block.
+            // Without this, an upload immediately after a Draw of the
+            // same VBO can stall the CPU on an implicit GPU sync.
+            int vbBytes = vertFloats * sizeof(float);
             GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-            GL.BufferData(BufferTarget.ArrayBuffer, vertFloats * sizeof(float), vertices, BufferUsageHint.StaticDraw);
+            GL.BufferData(BufferTarget.ArrayBuffer, vbBytes, IntPtr.Zero, BufferUsageHint.StaticDraw);
+            GL.BufferData(BufferTarget.ArrayBuffer, vbBytes, vertices, BufferUsageHint.StaticDraw);
 
+            int ibBytes = indexCount * sizeof(uint);
             GL.BindBuffer(BufferTarget.ElementArrayBuffer, ebo);
-            GL.BufferData(BufferTarget.ElementArrayBuffer, indexCount * sizeof(uint), indices, BufferUsageHint.StaticDraw);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, ibBytes, IntPtr.Zero, BufferUsageHint.StaticDraw);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, ibBytes, indices, BufferUsageHint.StaticDraw);
 
-            const int stride = FloatsPerVertex * sizeof(float);
-            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
-            GL.EnableVertexAttribArray(0);
-            GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
-            GL.EnableVertexAttribArray(1);
-            GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, stride, 5 * sizeof(float));
-            GL.EnableVertexAttribArray(2);
-            GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, stride, 8 * sizeof(float));
-            GL.EnableVertexAttribArray(3);
-            GL.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, stride, 9 * sizeof(float));
-            GL.EnableVertexAttribArray(4);
+            // First-bind only — the VAO records the attrib pointers
+            // against the currently-bound VBO, and that record stays
+            // valid across subsequent BufferData calls on the same VBO.
+            // No need to reissue these on every remesh.
+            if (freshVao)
+            {
+                const int stride = FloatsPerVertex * sizeof(float);
+                GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+                GL.EnableVertexAttribArray(0);
+                GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+                GL.EnableVertexAttribArray(1);
+                GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, stride, 5 * sizeof(float));
+                GL.EnableVertexAttribArray(2);
+                GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, stride, 8 * sizeof(float));
+                GL.EnableVertexAttribArray(3);
+                GL.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, stride, 9 * sizeof(float));
+                GL.EnableVertexAttribArray(4);
+            }
 
             GL.BindVertexArray(0);
         }
