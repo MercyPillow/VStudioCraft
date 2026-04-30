@@ -638,16 +638,28 @@ namespace VStudioCraft.Game
 
         // Tier 6 #37 Phase 4 — Snow layer slab. 1×0.125×1 box pinned to
         // the cell bottom, fully filling X/Z so the cube footprint
-        // matches the cell. Top face uses the full TileSnow tile
-        // [0..1] UVs; the four lateral faces sample the FIRST two
-        // pixel rows of the source PNG snow tile so the strip reads
-        // as solid snow. CopyTile flips PNGs vertically when slicing
-        // (PNG row 0 lands at dst row 15), so V=1.0 in OpenGL maps
-        // to PNG row 0 — sampling V from (1 - 2/16) to 1.0 picks up
-        // PNG rows 0..1 = the "first" two rows. Sampling the bottom
-        // 2 rows instead lands on PNG rows 14..15 which are
-        // transparent in the canonical Alpha 1.1.2_01 snow tile and
-        // would render see-through sides.
+        // matches the cell. Top + bottom faces use the full TileSnow
+        // tile [0..1] UVs. The four lateral faces sample the FIRST
+        // two pixel rows of the source PNG snow tile (the dense band
+        // along the top of the canonical Alpha snow tile) so the
+        // strip reads as solid snow rather than the see-through
+        // half-empty bottom rows. CopyTile flips PNGs vertically
+        // when slicing (PNG row 0 lands at dst row 15) so V=1.0 in
+        // OpenGL maps to PNG row 0 — sampling V from (1 - 2/16) to
+        // (1 - 1/256) picks up PNG rows 0..1 without crossing the
+        // V=1 boundary where the Repeat wrap would land back on the
+        // opposite (empty) edge.
+        //
+        // Winding flip on the side faces — for negative-direction
+        // faces the cube mesher reverses the vertex order to keep
+        // the outward face CCW (see EmitQuad's dir<0 branch). The
+        // door slab's earlier face emit got away with the +dir order
+        // on both signs because the door covers the whole cell
+        // (camera typically inside a doorway sees the front-facing
+        // side anyway), but the snow slab is a thin strip and any
+        // back-facing strip shows as a transparent band. We emit
+        // each side using positive-dir winding for +X / +Z and
+        // reversed (CCW from outside) for -X / -Z.
         private void EmitSnowLayer(float wx, float wy, float wz, int layer, int lightPacked)
         {
             const float thick = 1f / 8f;
@@ -660,16 +672,18 @@ namespace VStudioCraft.Game
 
             // V range for side faces — top 2 pixel rows of the
             // texture (first 2 rows of the source PNG after the
-            // CopyTile flip). 2 pixels / 16 pixels-per-tile = 0.125.
-            const float sideV0 = 1f - 2f / 16f;   // 0.875
-            const float sideV1 = 1f;              // 1.0
+            // CopyTile flip). Stops one half-texel short of 1.0 so
+            // the Repeat wrap mode doesn't bleed in the opposite
+            // edge texel at the top vertex.
+            const float sideV0 = 1f - 2f / 16f;             // 0.875
+            const float sideV1 = 1f - 0.5f / 16f;           // ~0.969
 
-            // -X face
+            // -X face — reversed winding (CCW from -X viewpoint)
             EmitCrossQuad(
-                x0, y0, z1, 0f, sideV0,
-                x0, y0, z0, 1f, sideV0,
-                x0, y1, z0, 1f, sideV1,
-                x0, y1, z1, 0f, sideV1,
+                x0, y0, z0, 0f, sideV0,
+                x0, y0, z1, 1f, sideV0,
+                x0, y1, z1, 1f, sideV1,
+                x0, y1, z0, 0f, sideV1,
                 -1f, 0f, 0f, layer, lightPacked);
             // +X face
             EmitCrossQuad(
@@ -678,19 +692,19 @@ namespace VStudioCraft.Game
                 x1, y1, z1, 1f, sideV1,
                 x1, y1, z0, 0f, sideV1,
                 +1f, 0f, 0f, layer, lightPacked);
-            // -Z face
+            // -Z face — reversed winding (CCW from -Z viewpoint)
             EmitCrossQuad(
-                x0, y0, z0, 0f, sideV0,
-                x1, y0, z0, 1f, sideV0,
-                x1, y1, z0, 1f, sideV1,
-                x0, y1, z0, 0f, sideV1,
+                x1, y0, z0, 0f, sideV0,
+                x0, y0, z0, 1f, sideV0,
+                x0, y1, z0, 1f, sideV1,
+                x1, y1, z0, 0f, sideV1,
                 0f, 0f, -1f, layer, lightPacked);
             // +Z face
             EmitCrossQuad(
-                x1, y0, z1, 0f, sideV0,
-                x0, y0, z1, 1f, sideV0,
-                x0, y1, z1, 1f, sideV1,
-                x1, y1, z1, 0f, sideV1,
+                x0, y0, z1, 0f, sideV0,
+                x1, y0, z1, 1f, sideV0,
+                x1, y1, z1, 1f, sideV1,
+                x0, y1, z1, 0f, sideV1,
                 0f, 0f, +1f, layer, lightPacked);
             // +Y face (top)
             EmitCrossQuad(
