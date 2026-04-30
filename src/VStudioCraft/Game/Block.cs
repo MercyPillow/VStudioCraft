@@ -1120,16 +1120,13 @@ namespace VStudioCraft.Game
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
                     return (0.3f, 0f, 0.3f, 0.7f, 0.5f, 0.7f);
-                // Tier 6 #37 — Cactus is 16×12×12 (full height, 2
+                // Tier 6 #37 — Cactus is 16×14×14 (full height, 1
                 // pixel inset on each horizontal side). The visual
                 // mesh emits the four side faces at the inset plane
-                // (x = ±2/16 from the cell edge) but extends each
+                // (x = ±1/16 from the cell edge) but extends each
                 // face FULL on the perpendicular axis, producing the
                 // canonical Alpha hash-shape overlap at the corners.
-                // The collision AABB is the inset 12×12 footprint —
-                // matches the side-face plane positions, so the
-                // selection wireframe traces the visible column
-                // rather than the overlap fringe.
+                // The collision AABB matches the 14×14 column.
                 case BlockType.Cactus:
                     return (1f / 16f, 0f, 1f / 16f, 15f / 16f, 1f, 15f / 16f);
                 default:
@@ -1385,9 +1382,14 @@ namespace VStudioCraft.Game
                 // pond covered in ice still has the bed visible
                 // through the surface). SnowBlock is a 1/8 slab so
                 // the cell is mostly air — light propagates straight
-                // through.
+                // through. Cactus is a 14×16×14 inset column with
+                // the corner regions of the cell empty — light
+                // through those gaps must reach the sand below, or
+                // a cactus in sunlight would cast a 1m black square
+                // shadow on its supporting block.
                 case BlockType.Ice:
                 case BlockType.SnowBlock:
+                case BlockType.Cactus:
                 // Tier 4 #16 — Door halves don't fill the cell; light
                 // must propagate through them (otherwise a closed
                 // door would cast a dark column the height of the

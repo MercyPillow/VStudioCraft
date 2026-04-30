@@ -830,19 +830,28 @@ namespace VStudioCraft.Game
                 xF1, y1, zPP, 1f, 1f,
                 xF0, y1, zPP, 0f, 1f,
                 0f, 0f, +1f, sideLayer, lZPos);
-            // +Y face (top)
+            // +Y face (top) — spans full cell (16×16) so the
+            // cactus_top tile reads at its native size and the top
+            // visibly overhangs the inset side-face planes by 1
+            // pixel on each side. Matches canonical Alpha; clipping
+            // the top to the inset 14×14 made the tile appear 1
+            // pixel too small at every viewing angle.
             EmitCrossQuad(
-                xPN, y1, zPP, 0f, 0f,
-                xPP, y1, zPP, 1f, 0f,
-                xPP, y1, zPN, 1f, 1f,
-                xPN, y1, zPN, 0f, 1f,
+                xF0, y1, zF1, 0f, 0f,
+                xF1, y1, zF1, 1f, 0f,
+                xF1, y1, zF0, 1f, 1f,
+                xF0, y1, zF0, 0f, 1f,
                 0f, +1f, 0f, topLayer, lYPos);
-            // -Y face (bottom)
+            // -Y face (bottom) — also full cell so the underside
+            // matches the top in extent. Reuses cactus_top since
+            // the atlas only wires top + side; the bottom is
+            // invisible while the cactus stands on sand and the
+            // visual is fine for the rare floating-cactus case.
             EmitCrossQuad(
-                xPN, y0, zPN, 0f, 0f,
-                xPP, y0, zPN, 1f, 0f,
-                xPP, y0, zPP, 1f, 1f,
-                xPN, y0, zPP, 0f, 1f,
+                xF0, y0, zF0, 0f, 0f,
+                xF1, y0, zF0, 1f, 0f,
+                xF1, y0, zF1, 1f, 1f,
+                xF0, y0, zF1, 0f, 1f,
                 0f, -1f, 0f, topLayer, lYNeg);
         }
 
