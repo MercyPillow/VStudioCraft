@@ -952,6 +952,13 @@ void main()
         // Resets whenever the player steps out of fire.
         private float _fireDamageTimer;
 
+        // Tier 6 #37 Phase 3 — Cactus contact damage timer. Same
+        // pattern as fire — accumulates dt while any AABB corner
+        // overlaps a Cactus block, ticks 1 HP per half-second so a
+        // brush against a cactus is survivable but stationary contact
+        // hurts. Resets when the player steps clear.
+        private float _cactusDamageTimer;
+
         // Tier 6 #34 — True if any of the 8 corner samples of the
         // player's AABB lands on a Fire block. Cheap per-frame check
         // — the AABB is 0.6 × 1.8 m, sampled at the 8 corners is
@@ -974,6 +981,33 @@ void main()
                 int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
                 int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
                 if (_world.GetBlock(wx, wy, wz) == BlockType.Fire) return true;
+            }
+            return false;
+        }
+
+        // Tier 6 #37 Phase 3 — Cactus contact check. Same 8-corner
+        // sampling pattern as PlayerInFire; differs only in the
+        // block-type comparison. Inlining a copy is cheaper than
+        // adding a generic "block of type X intersects player" helper
+        // for two callers, and keeps the per-frame branch flat.
+        private bool PlayerInCactus()
+        {
+            if (_world == null || Player == null) return false;
+            float pad = 0.05f;
+            float x0 = Player.Position.X - Player.HalfWidth + pad;
+            float x1 = Player.Position.X + Player.HalfWidth - pad;
+            float y0 = Player.Position.Y + pad;
+            float y1 = Player.Position.Y + Player.Height - pad;
+            float z0 = Player.Position.Z - Player.HalfWidth + pad;
+            float z1 = Player.Position.Z + Player.HalfWidth - pad;
+            for (int yi = 0; yi < 2; yi++)
+            for (int xi = 0; xi < 2; xi++)
+            for (int zi = 0; zi < 2; zi++)
+            {
+                int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
+                int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
+                int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
+                if (_world.GetBlock(wx, wy, wz) == BlockType.Cactus) return true;
             }
             return false;
         }
@@ -2939,6 +2973,24 @@ void main()
             else
             {
                 _fireDamageTimer = 0f;
+            }
+
+            // Tier 6 #37 Phase 3 — Cactus contact damage. Same shape
+            // as fire damage above (1 HP per 0.5s of contact). Lands
+            // here in the survival-tick block so creative-mode +
+            // paused frames don't tick it.
+            if (PlayerInCactus())
+            {
+                _cactusDamageTimer += dt;
+                while (_cactusDamageTimer >= 0.5f)
+                {
+                    _cactusDamageTimer -= 0.5f;
+                    Player.TakeDamage(1);
+                }
+            }
+            else
+            {
+                _cactusDamageTimer = 0f;
             }
 
             // Drowning. WasHeadInWater is refreshed inside Player.Update
@@ -11342,6 +11394,10 @@ void main()
             Line($"Light: sky={sky} blk={blk}", row++);
 
             Line($"Facing: {FacingFromYaw(Camera.Yaw)}", row++);
+            // Tier 6 #37 — biome at the player's column. Sampled
+            // every frame; the BiomeMap classifier is two Perlin
+            // octave reads, negligible per-frame cost.
+            Line($"Biome: {BiomeMap.Classify(_world.Noise, bx, bz)}", row++);
             Line($"Mode: {GameMode}", row++);
             Line($"Time: {_timeOfDay:F3}", row++);
 

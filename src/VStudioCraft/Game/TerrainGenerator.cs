@@ -62,6 +62,18 @@ namespace VStudioCraft.Game
             GenerateFluidFeatures(chunk, noise);
             GenerateTrees(chunk, noise);
             GenerateFlora(chunk, noise);
+            // Tier 6 #37 Phase 2 — Freeze the topmost water cell in
+            // every column whose biome is Snow. Runs after fluid
+            // features so cliff springs and underground pools in snow
+            // chunks don't get re-frozen mid-cascade (only the top
+            // sea-level layer matters visually). Skipped entirely for
+            // non-Snow biomes via the per-column biome check.
+            FreezeWaterInSnowBiome(chunk, noise);
+            // Tier 6 #37 Phase 4 — Lay a 1/8 snow layer on every
+            // grass column in the Snow biome. Runs LAST so the layer
+            // sits above flora / trees / fluid features that already
+            // populated the column.
+            ScatterSnowLayer(chunk, noise);
             // Newly-generated chunks start "active" so the first fluid tick
             // gets a chance to propagate any source cells (terrain places
             // still water at sea level). After one no-op tick the flag will
@@ -76,8 +88,23 @@ namespace VStudioCraft.Game
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int z = 0; z < Chunk.SizeZ; z++)
             {
-                int height = SurfaceHeight(noise, chunk.ChunkX * Chunk.SizeX + x, chunk.ChunkZ * Chunk.SizeZ + z);
+                int wx = chunk.ChunkX * Chunk.SizeX + x;
+                int wz = chunk.ChunkZ * Chunk.SizeZ + z;
+                int height = SurfaceHeight(noise, wx, wz);
                 bool sandy = height <= BeachHeight;
+                // Tier 6 #37 — Biome-aware surface block. Coastal /
+                // sub-sea-level columns always read as beach sand
+                // (sandy=true) regardless of biome — the beach
+                // override wins so a desert next to ocean still has
+                // a clean shoreline. Inland (height > BeachHeight)
+                // the biome dispatch picks the surface variant:
+                //   Plains / Forest → Grass on Dirt
+                //   Desert          → Sand on Sand (4 deep)
+                //   Snow            → SnowBlock cap on Dirt (visual
+                //                     reskin of grass; saplings won't
+                //                     grow on snow but the player can
+                //                     dig through to the dirt below)
+                Biome biome = BiomeMap.Classify(noise, wx, wz);
                 for (int y = 0; y < height; y++)
                 {
                     BlockType t;
@@ -86,11 +113,32 @@ namespace VStudioCraft.Game
                         if (y >= height - 4) t = BlockType.Sand;
                         else t = BlockType.Stone;
                     }
+                    else if (biome == Biome.Desert)
+                    {
+                        if (y >= height - 4) t = BlockType.Sand;
+                        else t = BlockType.Stone;
+                    }
+                    else if (biome == Biome.Snow)
+                    {
+                        // Phase 4 — Snow biome surface keeps grass
+                        // underneath; the snow itself is a 1/8 LAYER
+                        // placed at height (one above the grass top)
+                        // by the post-column pass below. The grass
+                        // cell itself is left intact so digging
+                        // through the snow exposes a normal grass
+                        // surface, and so the chunk mesher's snowy-
+                        // grass-side dispatch (Grass + SnowBlock
+                        // above → TileSnowyGrassSide) reads correctly.
+                        if (y == height - 1)      t = BlockType.Grass;
+                        else if (y >= height - 4) t = BlockType.Dirt;
+                        else                      t = BlockType.Stone;
+                    }
                     else
                     {
-                        if (y == height - 1) t = BlockType.Grass;
+                        // Plains / Forest default — grass over dirt.
+                        if (y == height - 1)      t = BlockType.Grass;
                         else if (y >= height - 4) t = BlockType.Dirt;
-                        else t = BlockType.Stone;
+                        else                      t = BlockType.Stone;
                     }
                     chunk.Set(x, y, z, t);
                 }
@@ -653,9 +701,21 @@ namespace VStudioCraft.Game
             {
                 var colRng = new Random(ColumnHash(noise.Seed, wx, wz));
 
-                // ~1/240 columns seed a tree. 256 cols/chunk → ~1.1 trees avg,
-                // roughly matching the sparser oak scatter in Alpha's default biome.
-                if (colRng.Next(240) != 0) continue;
+                // Tier 6 #37 — Biome-gated tree density.
+                //   Forest → 1/60  (≈ 4× plains scatter)
+                //   Plains → 1/240 (canonical Alpha-default)
+                //   Desert → no trees (sand columns can't grow oaks)
+                //   Snow   → 1/360 (sparse snowy oaks for variety)
+                Biome biome = BiomeMap.Classify(noise, wx, wz);
+                int density;
+                switch (biome)
+                {
+                    case Biome.Forest: density = 60;  break;
+                    case Biome.Desert: continue;
+                    case Biome.Snow:   density = 360; break;
+                    default:           density = 240; break; // Plains
+                }
+                if (colRng.Next(density) != 0) continue;
 
                 int surface = SurfaceHeight(noise, wx, wz);
                 if (surface <= BeachHeight) continue;      // no trees on beach
@@ -734,6 +794,25 @@ namespace VStudioCraft.Game
                 // RNG, while still being deterministic per (seed, wx, wz).
                 var rng = new Random(unchecked(ColumnHash(noise.Seed, wx, wz) * (int)0x9E3779B1));
 
+                // Tier 6 #37 — Flora dispatched by biome.
+                //   Plains / Forest → flowers + mushrooms (the
+                //                      original code path, kept below).
+                //   Desert          → cacti (3-tall) + dead bushes
+                //                      (cross-sprite). Routed to a
+                //                      dedicated branch — desert flora
+                //                      sits on Sand, not Grass, so the
+                //                      same support-block check below
+                //                      can't be reused.
+                //   Snow            → no flora yet (saplings on snow
+                //                      planned for a later phase).
+                Biome biome = BiomeMap.Classify(noise, wx, wz);
+                if (biome == Biome.Snow) continue;
+                if (biome == Biome.Desert)
+                {
+                    PlaceDesertFlora(chunk, lx, lz, wx, wz, noise, rng);
+                    continue;
+                }
+
                 // ~1/16 chance to place SOMETHING. Scaled high enough that a
                 // grass field reads as "decorated" without becoming a meadow.
                 if (rng.Next(16) != 0) continue;
@@ -759,14 +838,120 @@ namespace VStudioCraft.Game
                 // mushrooms rare (alpha placed brown/red ones mostly in dim
                 // places — we still surface-spawn a few so the world isn't
                 // barren of them until we add cave-spawn).
+                // Pumpkins added in Phase 3 — tail of the table, very
+                // rare so they read as a "find" not as scenery clutter.
                 BlockType pick;
                 int r = rng.Next(100);
                 if (r < 55)      pick = BlockType.Dandelion;
-                else if (r < 90) pick = BlockType.Rose;
-                else if (r < 96) pick = BlockType.BrownMushroom;
-                else             pick = BlockType.RedMushroom;
+                else if (r < 88) pick = BlockType.Rose;
+                else if (r < 94) pick = BlockType.BrownMushroom;
+                else if (r < 98) pick = BlockType.RedMushroom;
+                else             pick = BlockType.Pumpkin;
 
                 chunk.RawBlocks[placeIdx] = (byte)pick;
+            }
+        }
+
+        // Tier 6 #37 Phase 2 — Freeze water surfaces in Snow biomes.
+        // Walks every column of the chunk, checks if its biome is
+        // Snow, and if so converts the topmost Water cell (at sea
+        // level) to Ice. We freeze ONLY the surface cell — the water
+        // body underneath stays liquid so the player can dig through
+        // the ice and find a normal pond beneath. Skips chunks whose
+        // entire footprint is non-Snow biome to avoid the per-column
+        // sample on common cases.
+        private static void FreezeWaterInSnowBiome(Chunk chunk, Noise noise)
+        {
+            for (int x = 0; x < Chunk.SizeX; x++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                int wx = chunk.ChunkX * Chunk.SizeX + x;
+                int wz = chunk.ChunkZ * Chunk.SizeZ + z;
+                if (BiomeMap.Classify(noise, wx, wz) != Biome.Snow) continue;
+                // Find the topmost water cell (sea-level surface)
+                // and freeze it. The column's water cells are
+                // contiguous from surfaceHeight up to SeaLevel-1, so
+                // SeaLevel-1 itself is the topmost wet cell when the
+                // column is below water. If it isn't water, the
+                // column is land — skip.
+                int topWaterY = SeaLevel - 1;
+                int idx = Chunk.Index(x, topWaterY, z);
+                if (chunk.RawBlocks[idx] != (byte)BlockType.Water) continue;
+                chunk.RawBlocks[idx] = (byte)BlockType.Ice;
+            }
+        }
+
+        // Tier 6 #37 Phase 4 — Scatter a 1/8-tall SnowBlock layer
+        // on top of every Grass/Dirt surface column in a Snow-biome
+        // chunk. Skipped for non-Snow columns; trivially cheap when
+        // the chunk is entirely outside Snow because the per-column
+        // biome classify is the only work done.
+        private static void ScatterSnowLayer(Chunk chunk, Noise noise)
+        {
+            for (int x = 0; x < Chunk.SizeX; x++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                int wx = chunk.ChunkX * Chunk.SizeX + x;
+                int wz = chunk.ChunkZ * Chunk.SizeZ + z;
+                if (BiomeMap.Classify(noise, wx, wz) != Biome.Snow) continue;
+                int surface = SurfaceHeight(noise, wx, wz);
+                if (surface <= BeachHeight) continue;
+                int placeY = surface;                   // one above ground
+                if (placeY >= Chunk.SizeY) continue;
+                int placeIdx = Chunk.Index(x, placeY, z);
+                int groundIdx = Chunk.Index(x, surface - 1, z);
+                // Only on bare grass / dirt; skip if a tree / flora
+                // block already occupies the surface cell.
+                if (chunk.RawBlocks[placeIdx] != (byte)BlockType.Air) continue;
+                var ground = (BlockType)chunk.RawBlocks[groundIdx];
+                if (ground != BlockType.Grass && ground != BlockType.Dirt) continue;
+                chunk.RawBlocks[placeIdx] = (byte)BlockType.SnowBlock;
+            }
+        }
+
+        // Tier 6 #37 Phase 2 — Desert flora. Places either a 3-tall
+        // cactus column or a single-cell dead bush on a Sand surface.
+        // Cactus is rarer (1/80 cols rolling for it) than dead bush
+        // (1/24) so the desert reads mostly as bare sand with the
+        // occasional cactus landmark and a sparser scatter of brown
+        // twigs. Both require a Sand surface block + an air cell
+        // above; cactus additionally needs 2 more headroom cells for
+        // its 3-block stack.
+        private static void PlaceDesertFlora(
+            Chunk chunk, int lx, int lz, int wx, int wz, Noise noise, Random rng)
+        {
+            int surface = SurfaceHeight(noise, wx, wz);
+            if (surface <= BeachHeight) return;                    // beach skip (sand at sea level — leave bare)
+            int placeY = surface;
+            if (placeY >= Chunk.SizeY) return;
+            int groundY = surface - 1;
+
+            int placeIdx  = Chunk.Index(lx, placeY,  lz);
+            int groundIdx = Chunk.Index(lx, groundY, lz);
+            if (chunk.RawBlocks[placeIdx] != (byte)BlockType.Air) return;
+            if (chunk.RawBlocks[groundIdx] != (byte)BlockType.Sand) return;
+
+            // Roll: 1/80 for cactus pillar, 1/24 (excluding cactus
+            // case) for dead bush, otherwise nothing. Probabilities
+            // chosen so a 16×16 chunk averages <1 cactus and ~10
+            // dead bushes — sparser than plains flora.
+            if (rng.Next(80) == 0)
+            {
+                // Cactus stack — needs 3 cells of clear headroom.
+                if (placeY + 2 >= Chunk.SizeY) return;
+                int idx0 = placeIdx;
+                int idx1 = Chunk.Index(lx, placeY + 1, lz);
+                int idx2 = Chunk.Index(lx, placeY + 2, lz);
+                if (chunk.RawBlocks[idx1] != (byte)BlockType.Air) return;
+                if (chunk.RawBlocks[idx2] != (byte)BlockType.Air) return;
+                chunk.RawBlocks[idx0] = (byte)BlockType.Cactus;
+                chunk.RawBlocks[idx1] = (byte)BlockType.Cactus;
+                chunk.RawBlocks[idx2] = (byte)BlockType.Cactus;
+                return;
+            }
+            if (rng.Next(24) == 0)
+            {
+                chunk.RawBlocks[placeIdx] = (byte)BlockType.DeadBush;
             }
         }
 

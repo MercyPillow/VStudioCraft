@@ -202,7 +202,33 @@ namespace VStudioCraft.Game
         // spawner layer.
         public const int FirstTailFireBlockLayer = FirstTailSpawnerLayer + TailSpawnerLayerCount; // 156
         public const int TailFireBlockLayerCount = 1;
-        public const int LayerCount = FirstTailFireBlockLayer + TailFireBlockLayerCount;          // 157
+        // Tier 6 #37 — Snow biome surface block. Single procedural
+        // tile (white speckled with subtle blue-grey shadow grains)
+        // at the tail of the atlas so the LayerCount bump is local
+        // and existing tile indices stay stable.
+        public const int FirstTailSnowBlockLayer = FirstTailFireBlockLayer + TailFireBlockLayerCount; // 157
+        public const int TailSnowBlockLayerCount = 1;
+        // Tier 6 #37 Phase 2 — Cactus (top + side), Ice, DeadBush.
+        // Four new tile layers appended past Snow. Cactus needs two
+        // tiles because its top face shows a crown ridge pattern
+        // distinct from the spiny side; Ice + DeadBush each need a
+        // single tile (Ice is a uniform translucent cube, DeadBush
+        // is a cross-sprite plant).
+        public const int FirstTailBiomeBlockLayer = FirstTailSnowBlockLayer + TailSnowBlockLayerCount; // 158
+        public const int TailBiomeBlockLayerCount = 4;
+        // Tier 6 #37 Phase 3 — Pumpkin (top + side, no dedicated
+        // bottom — bottom face is invisible while the pumpkin sits
+        // on grass, so it reuses the side tile). Two layers.
+        public const int FirstTailPumpkinLayer = FirstTailBiomeBlockLayer + TailBiomeBlockLayerCount;  // 162
+        public const int TailPumpkinLayerCount = 2;
+        // Tier 6 #37 Phase 4 — Snowy-grass side tile. Used by the
+        // chunk mesher when a Grass / Dirt cell has SnowBlock
+        // directly above; replaces the regular grass-side texture
+        // with a half-snow-half-grass variant so the surface reads
+        // as "snow lying on grass". One layer.
+        public const int FirstTailSnowyGrassLayer = FirstTailPumpkinLayer + TailPumpkinLayerCount;     // 164
+        public const int TailSnowyGrassLayerCount = 1;
+        public const int LayerCount = FirstTailSnowyGrassLayer + TailSnowyGrassLayerCount;             // 165
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -378,6 +404,14 @@ namespace VStudioCraft.Game
         public const int TileMobSpawner          = 155;
         // Tier 6 #34 — Fire block sprite tile.
         public const int TileFire                = 156;
+        public const int TileSnow                = 157;
+        public const int TileCactusTop           = 158;
+        public const int TileCactusSide          = 159;
+        public const int TileIce                 = 160;
+        public const int TileDeadBush            = 161;
+        public const int TilePumpkinTop          = 162;
+        public const int TilePumpkinSide         = 163;
+        public const int TileSnowyGrassSide      = 164;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -648,6 +682,24 @@ namespace VStudioCraft.Game
             // background.
             UploadLayer(layerPixels, TileFire, GenerateFire);
 
+            // Tier 6 #37 — Snow biome surface tile. Pure-ish white with
+            // subtle pale-blue speckle grain so it doesn't look like
+            // bare wool at distance.
+            UploadLayer(layerPixels, TileSnow, GenerateSnow);
+
+            // Tier 6 #37 Phase 2 — biome flora & ice tiles.
+            UploadLayer(layerPixels, TileCactusTop,  GenerateCactusTop);
+            UploadLayer(layerPixels, TileCactusSide, GenerateCactusSide);
+            UploadLayer(layerPixels, TileIce,        GenerateIce);
+            UploadLayer(layerPixels, TileDeadBush,   GenerateDeadBush);
+
+            // Tier 6 #37 Phase 3 — Pumpkin tiles.
+            UploadLayer(layerPixels, TilePumpkinTop,  GeneratePumpkinTop);
+            UploadLayer(layerPixels, TilePumpkinSide, GeneratePumpkinSide);
+
+            // Tier 6 #37 Phase 4 — Snowy grass side tile.
+            UploadLayer(layerPixels, TileSnowyGrassSide, GenerateSnowyGrassSide);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -774,7 +826,21 @@ namespace VStudioCraft.Game
                 || layer == TileWoodDoorTop  || layer == TileWoodDoorBottom
                 || layer == TileIronDoorTop  || layer == TileIronDoorBottom
                 || layer == TileJukeboxTop   || layer == TileJukeboxSide
-                || layer == TileJukeboxBottom;
+                || layer == TileJukeboxBottom
+                // Tier 6 #37 — Biome blocks all live in terrain.png
+                // (snow / cactus / ice / dead bush / pumpkin / snowy
+                // grass), not alpha_tools.png. Without this gate the
+                // post-tail UploadTailItemsFromAlphaTools loop would
+                // slice (col, row) out of the items sheet at the
+                // canonical terrain.png coords — landing on a totally
+                // unrelated item icon and overwriting the correct
+                // terrain tile we just painted.
+                || layer == TileSnow
+                || layer == TileCactusTop      || layer == TileCactusSide
+                || layer == TileIce
+                || layer == TileDeadBush
+                || layer == TilePumpkinTop     || layer == TilePumpkinSide
+                || layer == TileSnowyGrassSide;
         }
 
         // Tier 4 #26 — Slice the SugarCane block tile out of terrain.png.
@@ -3528,6 +3594,23 @@ namespace VStudioCraft.Game
             // Tier 6 #34 — Fire sprite. Procedural-only; the sentinel
             // keeps it out of the alpha-textures slicer.
             /* TileFire                */ (-1, -1),
+            // Tier 6 #37 — Biome blocks wired to canonical Alpha
+            // terrain.png coordinates. Procedural Generate*() methods
+            // still run as fallback / for the procedural-only atlas
+            // path, but CreateAtlasFromAlphaTerrain overlays these
+            // tiles from the loaded terrain.png last so the alpha
+            // texture wins when present.
+            /* TileSnow                */ (2, 4),
+            /* TileCactusTop           */ (5, 4),
+            /* TileCactusSide          */ (6, 4),
+            /* TileIce                 */ (3, 4),
+            /* TileDeadBush            */ (7, 3),
+            /* TilePumpkinTop          */ (6, 6),
+            /* TilePumpkinSide         */ (6, 7),
+            // Tier 6 #37 Phase 4 — Snowy-grass side, used when a
+            // grass cell has snow above (mesher swaps the side tile
+            // per-face). Canonical Alpha coord (4, 4).
+            /* TileSnowyGrassSide      */ (4, 4),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3715,6 +3798,49 @@ namespace VStudioCraft.Game
 
             // Tier 6 #34 — Fire sprite. Procedural-only.
             UploadLayer(layerPixels, TileFire, GenerateFire);
+
+            // Tier 6 #37 — Snow biome surface. Procedural-only.
+            UploadLayer(layerPixels, TileSnow, GenerateSnow);
+
+            // Tier 6 #37 Phase 2 — biome flora & ice. Procedural-only.
+            UploadLayer(layerPixels, TileCactusTop,  GenerateCactusTop);
+            UploadLayer(layerPixels, TileCactusSide, GenerateCactusSide);
+            UploadLayer(layerPixels, TileIce,        GenerateIce);
+            UploadLayer(layerPixels, TileDeadBush,   GenerateDeadBush);
+
+            // Tier 6 #37 Phase 3 — Pumpkin. Procedural-only.
+            UploadLayer(layerPixels, TilePumpkinTop,  GeneratePumpkinTop);
+            UploadLayer(layerPixels, TilePumpkinSide, GeneratePumpkinSide);
+
+            // Tier 6 #37 Phase 4 — Snowy-grass side. Procedural fallback
+            // (a grass-with-snow-cap composite painted from the existing
+            // grass-side palette + the snow tile palette).
+            UploadLayer(layerPixels, TileSnowyGrassSide, GenerateSnowyGrassSide);
+
+            // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
+            // coords for the biome blocks. Procedural pixels above are
+            // the safe fallback if the embedded terrain.png is missing
+            // those tiles; the slice loop below replaces them with the
+            // real Alpha art whenever the source has data at the
+            // declared coord. Snow / Cactus / Ice / DeadBush / Pumpkin
+            // / SnowyGrassSide all share this overlay loop.
+            int[] biomeTailLayers = new[]
+            {
+                TileSnow, TileCactusTop, TileCactusSide, TileIce, TileDeadBush,
+                TilePumpkinTop, TilePumpkinSide, TileSnowyGrassSide,
+            };
+            for (int i = 0; i < biomeTailLayers.Length; i++)
+            {
+                int layer = biomeTailLayers[i];
+                var (col, row) = AlphaTileCoords[layer];
+                if (col < 0 || row < 0) continue;
+                CopyTile(bgra, srcW, srcH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
 
             // Tier 4 — Overlay alpha_tools.png coords for ALL tail items
             // past the door pack: door inventory icons, flint+steel,
@@ -5650,6 +5776,309 @@ namespace VStudioCraft.Game
                     }
                     SetPixel(pixels, x, y, r, g, b, 235);
                 }
+            }
+        }
+
+        // Tier 6 #37 — Snow biome surface tile. Pure white base with
+        // a subtle pale-blue speckle so the surface doesn't read as
+        // flat wool at distance. RNG-seeded grain, half a dozen
+        // shadow specks per tile to suggest packed crystalline snow.
+        // Fully opaque (alpha=255 throughout); the mesher renders
+        // SnowBlock as a normal cube, no cross-sprite handling.
+        private static void GenerateSnow(byte[] pixels)
+        {
+            var rng = new Random(0x5A07); // "snow"
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                // Base near-white with a faint cool-blue cast (250,
+                // 252, 255) so the cube doesn't fight bright sunlit
+                // grass for visual dominance.
+                byte r = 250, g = 252, b = 255;
+                // ~1/6 pixels get a slight blue-grey shadow speck so
+                // the surface has visible micro-grain. Specks are
+                // pixel-sparse to avoid noise-out at distance.
+                if (rng.Next(6) == 0)
+                {
+                    r = 230; g = 234; b = 244;
+                }
+                else if (rng.Next(20) == 0)
+                {
+                    // Rare brighter highlight for ice-glint variety.
+                    r = 255; g = 255; b = 255;
+                }
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Tier 6 #37 Phase 2 — Cactus side tile. Solid green column
+        // with darker vertical ridges and tiny white spike pixels.
+        // Mid-saturation green so it reads against both desert sand
+        // and (when stacked) the open sky behind the cactus column.
+        private static void GenerateCactusSide(byte[] pixels)
+        {
+            var rng = new Random(0xCAC7);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                // Base green. Two slightly different shades chosen
+                // by horizontal position to suggest segment ridges.
+                bool ridge = (x % 4 == 0 || x % 4 == 3);
+                byte r = ridge ? (byte)0x33 : (byte)0x46;
+                byte g = ridge ? (byte)0x66 : (byte)0x82;
+                byte b = ridge ? (byte)0x33 : (byte)0x46;
+                // Vertical row of spike pixels every 4 rows on top
+                // of the brighter columns. Spikes are tiny white
+                // dots so the cactus reads as prickly without big
+                // visual noise.
+                if (!ridge && y % 4 == 1 && rng.Next(3) == 0)
+                {
+                    r = 0xE0; g = 0xE0; b = 0xCC;
+                }
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Cactus top tile — a small concentric crown so the top of
+        // a cactus column is visually distinct from the side. Same
+        // green palette but with a bright centre dot suggesting the
+        // pith of the plant.
+        private static void GenerateCactusTop(byte[] pixels)
+        {
+            int cx = TileSize / 2;
+            int cy = TileSize / 2;
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                int dx = x - cx;
+                int dy = y - cy;
+                int distSq = dx * dx + dy * dy;
+                byte r, g, b;
+                if (distSq <= 4)             { r = 0x86; g = 0xB0; b = 0x60; } // bright pith
+                else if (distSq <= 16)       { r = 0x4A; g = 0x8C; b = 0x4A; } // mid ring
+                else                         { r = 0x33; g = 0x66; b = 0x33; } // dark outer
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Ice tile. Pale blue with a sparse darker network of
+        // crack-like specks. Translucent isn't possible at the
+        // texture level (the alpha is mostly used for sprite
+        // discard); instead we lean on a high-blue base and rely on
+        // the player's perceptual cue from the colour to read this
+        // as ice. A future polish pass could make Ice a partially-
+        // transparent block via shader blend; deferred.
+        private static void GenerateIce(byte[] pixels)
+        {
+            var rng = new Random(0x1CE7); // "ice7"
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                byte r = 0xB8, g = 0xCE, b = 0xF0;          // pale blue base
+                if (rng.Next(20) == 0)
+                {
+                    r = 0x88; g = 0xA8; b = 0xCC;           // crack speck
+                }
+                else if (rng.Next(40) == 0)
+                {
+                    r = 0xE8; g = 0xF0; b = 0xFC;           // bright glint
+                }
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Dead-bush sprite — sparse brown twigs on a transparent
+        // background. Cross-sprite render in the mesher (same path
+        // as flowers) so the alpha cutout matters. The branching is
+        // intentionally asymmetric so two adjacent dead bushes don't
+        // form a tessellating pattern.
+        private static void GenerateDeadBush(byte[] pixels)
+        {
+            // Clear to transparent.
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            byte br = 0x6B, bg = 0x44, bb = 0x22;            // dry-twig brown
+            // Central trunk — vertical line in the middle column.
+            int cx = TileSize / 2;
+            for (int y = 4; y < TileSize - 1; y++)
+            {
+                int idx = (y * TileSize + cx) * 4;
+                pixels[idx + 0] = br;
+                pixels[idx + 1] = bg;
+                pixels[idx + 2] = bb;
+                pixels[idx + 3] = 255;
+            }
+            // A few short branches off the trunk at hand-picked
+            // offsets — looks more like a real dry shrub than a
+            // pure cross.
+            void DrawBranch(int x0, int y0, int dx, int dy, int len)
+            {
+                int x = x0, y = y0;
+                for (int i = 0; i < len; i++)
+                {
+                    if (x >= 0 && x < TileSize && y >= 0 && y < TileSize)
+                    {
+                        int idx = (y * TileSize + x) * 4;
+                        pixels[idx + 0] = br;
+                        pixels[idx + 1] = bg;
+                        pixels[idx + 2] = bb;
+                        pixels[idx + 3] = 255;
+                    }
+                    x += dx; y += dy;
+                }
+            }
+            DrawBranch(cx, 8,  -1, -1, 3);
+            DrawBranch(cx, 8,  +1, -1, 4);
+            DrawBranch(cx, 11, -1,  0, 2);
+            DrawBranch(cx, 11, +1,  0, 3);
+            DrawBranch(cx, 6,  +1, -1, 2);
+        }
+
+        // Tier 6 #37 Phase 3 — Pumpkin side tile. Vertical orange
+        // ridges with darker stripe rows between each ridge column,
+        // suggesting the segment grooves on a real pumpkin. Two
+        // shades of orange chosen so the side reads as 3D rather
+        // than a flat fill at distance.
+        private static void GeneratePumpkinSide(byte[] pixels)
+        {
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                // Ridges every 4 pixels — bright orange ridge column,
+                // darker valleys between, a darker row at top + bottom
+                // for a faint top/bottom border so the cube reads
+                // segmented when stacked next to other pumpkins.
+                bool ridge = (x % 4 == 1 || x % 4 == 2);
+                byte r, g, b;
+                if (y == 0 || y == TileSize - 1)
+                {
+                    r = 0xA0; g = 0x4F; b = 0x10;            // dark border row
+                }
+                else if (ridge)
+                {
+                    r = 0xE0; g = 0x80; b = 0x18;            // bright ridge
+                }
+                else
+                {
+                    r = 0xB8; g = 0x60; b = 0x14;            // darker valley
+                }
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Pumpkin top tile — orange base ringed with the segment
+        // grooves you see when looking down at a pumpkin, plus a
+        // small brown stem at the centre. Stem is short / fat so it
+        // reads from the typical pickaxe-distance angle.
+        private static void GeneratePumpkinTop(byte[] pixels)
+        {
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                // Concentric ring of orange + darker grooves at
+                // sectoral angles every 60° (approximated as 8 evenly
+                // spaced grooves for grid alignment).
+                int dx = x - TileSize / 2;
+                int dy = y - TileSize / 2;
+                bool groove = ((x + y) % 5 == 0) && (dx * dx + dy * dy > 4);
+                byte r = groove ? (byte)0xA0 : (byte)0xE0;
+                byte g = groove ? (byte)0x4F : (byte)0x80;
+                byte b = groove ? (byte)0x10 : (byte)0x18;
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+            // Stem patch — small brown block at the centre, two
+            // pixels wide, three tall, with a darker top cap.
+            int sx = TileSize / 2 - 1;
+            int sy = TileSize / 2 - 1;
+            for (int dy = 0; dy < 3; dy++)
+            for (int dx = 0; dx < 2; dx++)
+            {
+                int px = sx + dx, py = sy + dy;
+                int idx = (py * TileSize + px) * 4;
+                bool cap = (dy == 0);
+                pixels[idx + 0] = cap ? (byte)0x40 : (byte)0x66;
+                pixels[idx + 1] = cap ? (byte)0x60 : (byte)0x88;
+                pixels[idx + 2] = cap ? (byte)0x18 : (byte)0x22;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Tier 6 #37 Phase 4 — Snowy-grass side tile. Composite of
+        // dirt-brown lower half and snow-white upper third with a
+        // soft transition row in between. Used when a grass cell has
+        // a SnowBlock layer directly above (mesher swaps this in for
+        // the regular grass-side at face emit time). The procedural
+        // fallback approximates the canonical Alpha (4, 4) tile —
+        // when terrain.png is loaded, the alpha-textures atlas
+        // overlays the real art in CreateAtlasFromAlphaTerrain.
+        private static void GenerateSnowyGrassSide(byte[] pixels)
+        {
+            // Snow band: top 5 rows, white. Transition row 5 (2-pixel
+            // dither). Dirt below — same brown palette as the regular
+            // dirt tile so the cube reads as continuous geometry with
+            // a snowy crown.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                byte r, g, b;
+                if (y < 4)
+                {
+                    // Snow band.
+                    r = 0xFA; g = 0xFC; b = 0xFF;
+                }
+                else if (y < 6)
+                {
+                    // Transition — alternating snow / dirt pixels for
+                    // a subtle dither cap.
+                    bool snow = ((x + y) & 1) == 0;
+                    if (snow) { r = 0xF0; g = 0xF4; b = 0xFA; }
+                    else      { r = 0x86; g = 0x6B; b = 0x4E; }
+                }
+                else
+                {
+                    // Dirt body.
+                    r = 0x86; g = 0x6B; b = 0x4E;
+                    // Sparse darker speckle to match the regular dirt
+                    // tile's grain.
+                    if (((x * 7 + y * 11) & 7) == 0)
+                    {
+                        r = 0x6E; g = 0x55; b = 0x3E;
+                    }
+                }
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
             }
         }
 

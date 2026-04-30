@@ -381,6 +381,16 @@ namespace VStudioCraft.Game
                     byte meta = chunk.RawMeta[Chunk.Index(x, y, z)];
                     EmitDoorSlab(x + baseX, y, z + baseZ, t, meta, layer, lightPacked);
                 }
+                else if (t == BlockType.SnowBlock)
+                {
+                    // Tier 6 #37 Phase 4 — Snow layer. 1/8-tall slab
+                    // pinned to the bottom of the cell, six box faces
+                    // textured with TileSnow on every face. Same
+                    // overall structure as EmitDoorSlab but with a
+                    // fixed full-X/full-Z footprint and a 0.125 Y
+                    // height.
+                    EmitSnowLayer(x + baseX, y, z + baseZ, layer, lightPacked);
+                }
                 else
                 {
                     EmitCrossSprite(x + baseX, y, z + baseZ, layer, lightPacked);
@@ -618,6 +628,78 @@ namespace VStudioCraft.Game
                 x0, y1, z0, 0f, 1f,
                 0f, +1f, 0f, layer, lightPacked);
             // -Y face (bottom edge of slab)
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x1, y0, z0, 1f, 0f,
+                x1, y0, z1, 1f, 1f,
+                x0, y0, z1, 0f, 1f,
+                0f, -1f, 0f, layer, lightPacked);
+        }
+
+        // Tier 6 #37 Phase 4 — Snow layer slab. 1×0.125×1 box pinned to
+        // the cell bottom, fully filling X/Z so the cube footprint
+        // matches the cell. Top face uses the full TileSnow tile
+        // [0..1] UVs; the four lateral faces sample the FIRST two
+        // pixel rows of the source PNG snow tile so the strip reads
+        // as solid snow. CopyTile flips PNGs vertically when slicing
+        // (PNG row 0 lands at dst row 15), so V=1.0 in OpenGL maps
+        // to PNG row 0 — sampling V from (1 - 2/16) to 1.0 picks up
+        // PNG rows 0..1 = the "first" two rows. Sampling the bottom
+        // 2 rows instead lands on PNG rows 14..15 which are
+        // transparent in the canonical Alpha 1.1.2_01 snow tile and
+        // would render see-through sides.
+        private void EmitSnowLayer(float wx, float wy, float wz, int layer, int lightPacked)
+        {
+            const float thick = 1f / 8f;
+            float x0 = wx + 0f;
+            float x1 = wx + 1f;
+            float z0 = wz + 0f;
+            float z1 = wz + 1f;
+            float y0 = wy + 0f;
+            float y1 = wy + thick;
+
+            // V range for side faces — top 2 pixel rows of the
+            // texture (first 2 rows of the source PNG after the
+            // CopyTile flip). 2 pixels / 16 pixels-per-tile = 0.125.
+            const float sideV0 = 1f - 2f / 16f;   // 0.875
+            const float sideV1 = 1f;              // 1.0
+
+            // -X face
+            EmitCrossQuad(
+                x0, y0, z1, 0f, sideV0,
+                x0, y0, z0, 1f, sideV0,
+                x0, y1, z0, 1f, sideV1,
+                x0, y1, z1, 0f, sideV1,
+                -1f, 0f, 0f, layer, lightPacked);
+            // +X face
+            EmitCrossQuad(
+                x1, y0, z0, 0f, sideV0,
+                x1, y0, z1, 1f, sideV0,
+                x1, y1, z1, 1f, sideV1,
+                x1, y1, z0, 0f, sideV1,
+                +1f, 0f, 0f, layer, lightPacked);
+            // -Z face
+            EmitCrossQuad(
+                x0, y0, z0, 0f, sideV0,
+                x1, y0, z0, 1f, sideV0,
+                x1, y1, z0, 1f, sideV1,
+                x0, y1, z0, 0f, sideV1,
+                0f, 0f, -1f, layer, lightPacked);
+            // +Z face
+            EmitCrossQuad(
+                x1, y0, z1, 0f, sideV0,
+                x0, y0, z1, 1f, sideV0,
+                x0, y1, z1, 1f, sideV1,
+                x1, y1, z1, 0f, sideV1,
+                0f, 0f, +1f, layer, lightPacked);
+            // +Y face (top)
+            EmitCrossQuad(
+                x0, y1, z1, 0f, 0f,
+                x1, y1, z1, 1f, 0f,
+                x1, y1, z0, 1f, 1f,
+                x0, y1, z0, 0f, 1f,
+                0f, +1f, 0f, layer, lightPacked);
+            // -Y face (bottom)
             EmitCrossQuad(
                 x0, y0, z0, 0f, 0f,
                 x1, y0, z0, 1f, 0f,
@@ -954,6 +1036,30 @@ namespace VStudioCraft.Game
                         else
                         {
                             layer = BlockData.GetTileIndex((BlockType)a, faceKind);
+                            // Tier 6 #37 Phase 4 — Snowy-grass face
+                            // override. When a Grass / Dirt cell has a
+                            // SnowBlock layer directly above, swap the
+                            // side / top face tiles. Bounds-guarded
+                            // because the cube sweep can place (cx,
+                            // cy, cz) at chunk-local indices outside
+                            // [0, Size) (the source block was read via
+                            // BlockOrNeighbor which crosses chunks);
+                            // only the in-chunk case can safely call
+                            // Chunk.Index on this chunk's array.
+                            // For the cross-chunk case the neighbour
+                            // chunk's mesh handles its own dispatch.
+                            if ((a == (byte)BlockType.Grass || a == (byte)BlockType.Dirt)
+                                && (uint)cx < Chunk.SizeX
+                                && (uint)cz < Chunk.SizeZ
+                                && cy + 1 < Chunk.SizeY)
+                            {
+                                var aboveB = chunk.RawBlocks[Chunk.Index(cx, cy + 1, cz)];
+                                if (aboveB == (byte)BlockType.SnowBlock)
+                                {
+                                    if (faceKind == 0)      layer = BlockTextures.TileSnow;
+                                    else if (faceKind != 1) layer = BlockTextures.TileSnowyGrassSide;
+                                }
+                            }
                         }
                         int lightPacked = LightOrNeighbor(chunk, nx, ny, nz, nxNeg, nxPos, nzNeg, nzPos);
 

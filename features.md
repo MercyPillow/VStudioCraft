@@ -502,10 +502,6 @@ order, move on. Most Tier 1–4 items are 200–1500 LoC of new code in this
 codebase's style with no architectural blockers; Tiers 5+ start touching
 multiple subsystems at once.
 	
-### Tier 6 — World-gen variety
-
-37. **Biome system (snow / desert / forest / plains)** — `OverworldGenerator` clone using rainfall/temperature noise; per-biome surface-block + flora rules. Unlocks ice/snow blocks, cacti, pumpkin patches.
-
 ### Tier 7 — Lighting + sky polish
 
 39. **Cross-chunk light propagation** — Eliminates the small light seams at chunk borders next to torches.
@@ -518,7 +514,7 @@ multiple subsystems at once.
 43. **TNT priming + explosion algorithm** — Ray-based blast with block-resistance. Flint and Steel from Tier 4 #17 ignites it.
 44. **Signs (post + wall) with writable text + Sign item (323)** — Tile entity with a 4-line string + in-place text editor.
 45. **Slabs + stairs** — Sub-block geometry; metadata byte and a non-cube collision shape.
-46. **Pumpkins / cacti / ice / snow blocks / fences / ladders** — Round out the block list.
+46. **fences / ladders** — Round out the block list.
 
 ### Tier 9 — Infrastructure + completion
 
