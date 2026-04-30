@@ -10186,7 +10186,20 @@ void main()
             if (_world == null) return;
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit)) return;
 
-            var model = Matrix4.CreateTranslation(hit.X, hit.Y, hit.Z);
+            // Tier 6 #37 Phase 4 — Selection outline matches the
+            // block's collision AABB instead of always being a full
+            // unit cube. Snow layer (1×0.125×1) shows a thin wire
+            // strip; standard cubes still show the familiar full
+            // outline because GetCollisionAabb returns (0,0,0,1,1,1)
+            // by default. The wire mesh is built spanning [0..1] in
+            // each axis (with a tiny inflation), so a Scale matrix
+            // shrinks it to the partial extent and a Translate puts
+            // it at the cell + AABB origin.
+            var hitBlock = _world.GetBlock(hit.X, hit.Y, hit.Z);
+            var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(hitBlock);
+            var scale = Matrix4.CreateScale(b1x - b0x, b1y - b0y, b1z - b0z);
+            var translate = Matrix4.CreateTranslation(hit.X + b0x, hit.Y + b0y, hit.Z + b0z);
+            var model = scale * translate;
             var mvp = model * _frameVp;
 
             _overlayShader.Use();

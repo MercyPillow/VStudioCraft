@@ -11,7 +11,17 @@ namespace VStudioCraft.Game
             public int Nx, Ny, Nz;
         }
 
-        // Amanatides & Woo voxel traversal.
+        // Amanatides & Woo voxel traversal, with a per-cell ray-vs-
+        // AABB refinement so partial-cube blocks (snow layer today,
+        // slabs / stairs / torches in the future) are only hit when
+        // the ray actually crosses their sub-cell AABB. Without the
+        // refinement a snow layer at cellY would be clickable
+        // through the entire 1m cell — the wireframe would be 1/8
+        // tall but the click area would extend up to cellY+1, which
+        // reads as "the click target doesn't match what I'm looking
+        // at". Default cubes return (0,0,0,1,1,1) so the test
+        // collapses to "ray entered the cell" → hit, matching the
+        // original Amanatides & Woo behaviour for them.
         public static bool Cast(World world, Vector3 origin, Vector3 dir, float maxDist, out Hit hit)
         {
             hit = default;
@@ -39,38 +49,114 @@ namespace VStudioCraft.Game
             float tMaxY = dir.Y != 0 ? (nextY - origin.Y) / dir.Y : inf;
             float tMaxZ = dir.Z != 0 ? (nextZ - origin.Z) / dir.Z : inf;
 
-            int axis = -1;
             float t = 0f;
 
             while (t <= maxDist)
             {
-                if (BlockData.IsRaycastTarget(world.GetBlock(ix, iy, iz)))
+                var block = world.GetBlock(ix, iy, iz);
+                if (BlockData.IsRaycastTarget(block))
                 {
-                    hit.X = ix; hit.Y = iy; hit.Z = iz;
-                    switch (axis)
+                    var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(block);
+                    float minX = ix + b0x, maxX = ix + b1x;
+                    float minY = iy + b0y, maxY = iy + b1y;
+                    float minZ = iz + b0z, maxZ = iz + b1z;
+                    if (RayAabb(origin, dir, minX, minY, minZ, maxX, maxY, maxZ,
+                        out _, out int hitAxis, out int hitNegSign))
                     {
-                        case 0: hit.Nx = -stepX; hit.Ny = 0;      hit.Nz = 0;      break;
-                        case 1: hit.Nx = 0;      hit.Ny = -stepY; hit.Nz = 0;      break;
-                        case 2: hit.Nx = 0;      hit.Ny = 0;      hit.Nz = -stepZ; break;
-                        default: hit.Nx = 0;     hit.Ny = 1;      hit.Nz = 0;      break;
+                        hit.X = ix; hit.Y = iy; hit.Z = iz;
+                        // Face normal — points OUT of the AABB on the
+                        // entry face. hitAxis is the axis whose slab
+                        // we entered last; hitNegSign is the sign of
+                        // dir on that axis (we entered from the
+                        // opposite side, so the outward normal is
+                        // -sign(dir)).
+                        switch (hitAxis)
+                        {
+                            case 0: hit.Nx = -hitNegSign; hit.Ny = 0;            hit.Nz = 0;            break;
+                            case 1: hit.Nx = 0;           hit.Ny = -hitNegSign;  hit.Nz = 0;            break;
+                            case 2: hit.Nx = 0;           hit.Ny = 0;            hit.Nz = -hitNegSign;  break;
+                            default: hit.Nx = 0;          hit.Ny = 1;            hit.Nz = 0;            break;
+                        }
+                        return true;
                     }
-                    return true;
+                    // Cell is a target but the ray didn't actually
+                    // intersect its partial AABB — fall through to
+                    // the cell-step below so we keep traversing.
                 }
 
                 if (tMaxX < tMaxY && tMaxX < tMaxZ)
                 {
-                    ix += stepX; t = tMaxX; tMaxX += tDeltaX; axis = 0;
+                    ix += stepX; t = tMaxX; tMaxX += tDeltaX;
                 }
                 else if (tMaxY < tMaxZ)
                 {
-                    iy += stepY; t = tMaxY; tMaxY += tDeltaY; axis = 1;
+                    iy += stepY; t = tMaxY; tMaxY += tDeltaY;
                 }
                 else
                 {
-                    iz += stepZ; t = tMaxZ; tMaxZ += tDeltaZ; axis = 2;
+                    iz += stepZ; t = tMaxZ; tMaxZ += tDeltaZ;
                 }
             }
             return false;
+        }
+
+        // Slab-method ray-AABB intersection. Returns the entry t and
+        // the axis of the face the ray entered (used by the caller
+        // to compute the outward face normal). hitNegSign is the
+        // direction sign on that axis — the caller negates it to
+        // point outward from the AABB.
+        private static bool RayAabb(
+            Vector3 origin, Vector3 dir,
+            float minX, float minY, float minZ,
+            float maxX, float maxY, float maxZ,
+            out float tEnter, out int hitAxis, out int hitNegSign)
+        {
+            tEnter = 0f;
+            hitAxis = -1;
+            hitNegSign = 0;
+            float tNear = float.NegativeInfinity;
+            float tFar  = float.PositiveInfinity;
+
+            for (int a = 0; a < 3; a++)
+            {
+                float o = a == 0 ? origin.X : (a == 1 ? origin.Y : origin.Z);
+                float d = a == 0 ? dir.X    : (a == 1 ? dir.Y    : dir.Z);
+                float lo = a == 0 ? minX : (a == 1 ? minY : minZ);
+                float hi = a == 0 ? maxX : (a == 1 ? maxY : maxZ);
+
+                if (Math.Abs(d) < 1e-10f)
+                {
+                    if (o < lo || o > hi) return false;
+                    continue;
+                }
+
+                float t1 = (lo - o) / d;
+                float t2 = (hi - o) / d;
+                int sign = 1;       // dir crosses lo first (d>0)
+                if (t1 > t2) { var tmp = t1; t1 = t2; t2 = tmp; sign = -1; }
+
+                if (t1 > tNear)
+                {
+                    tNear = t1;
+                    hitAxis = a;
+                    hitNegSign = sign;
+                }
+                if (t2 < tFar) tFar = t2;
+                if (tNear > tFar) return false;
+            }
+
+            if (tNear < 0f)
+            {
+                // Ray origin is INSIDE the AABB. Treat as immediate
+                // hit at t=0 with no meaningful entry-face axis —
+                // caller falls through to the +Y default normal.
+                tEnter = 0f;
+                hitAxis = -1;
+                hitNegSign = 0;
+                return true;
+            }
+            tEnter = tNear;
+            return true;
         }
     }
 }

@@ -131,6 +131,22 @@ namespace VStudioCraft.Game
 
                 if (Collides(next, world))
                 {
+                    // Tier 6 #37 Phase 4 — Auto-step over partial-cube
+                    // obstacles (snow layer, future stairs / slabs).
+                    // For horizontal moves (X / Z) only, when we're
+                    // grounded: try lifting the player by up to
+                    // MaxAutoStepHeight and re-running the move from
+                    // there. If the lifted-then-stepped position is
+                    // clear, settle back down to the top of the
+                    // obstruction. This is what lets you walk INTO a
+                    // 1/8 snow layer or a half-slab without jumping.
+                    if ((axis == 0 || axis == 2) && OnGround
+                        && TryAutoStep(axis, subDelta, world, out Vector3 stepped))
+                    {
+                        Position = stepped;
+                        moved = true;
+                        continue;
+                    }
                     if (axis == 0) Velocity.X = 0f;
                     else if (axis == 1)
                     {
@@ -150,6 +166,60 @@ namespace VStudioCraft.Game
                 if (hitGround) OnGround = true;
                 else if (delta < 0 && moved) OnGround = false;
             }
+        }
+
+        // Maximum step-up the auto-step system will negotiate without
+        // the player jumping. 0.55 leaves headroom over the canonical
+        // half-block (0.5) so a slab-on-ground reads cleanly. Snow
+        // (0.125) and any future thin partial cubes fall well within.
+        protected const float MaxAutoStepHeight = 0.55f;
+        // Resolution for the "settle down" pass after a successful
+        // step. 1/16 catches Alpha-style 1/16 partial heights and is
+        // still cheap (≤ 9 Collides probes for a full-step settle).
+        private const float AutoStepSettle = 1f / 16f;
+
+        // Attempt to step up over an obstacle on the (axis) horizontal
+        // axis. Returns true with `stepped` set to the new player
+        // position if the step succeeded; false otherwise (caller
+        // falls through to the original "zero velocity, stop" branch).
+        // Conditions:
+        //   1. Lifting Y by MaxAutoStepHeight from the CURRENT position
+        //      must be clear (the player has overhead headroom).
+        //   2. Applying the desired horizontal subDelta from that
+        //      lifted position must also be clear (we'd actually fit
+        //      on top of the obstacle).
+        //   3. We then settle Y down in 1/16 increments until we hit
+        //      something solid — that's the obstacle's top surface.
+        //      The remaining Y above the obstacle is shed naturally.
+        private bool TryAutoStep(int axis, float subDelta, World world, out Vector3 stepped)
+        {
+            stepped = Position;
+
+            // (1) Headroom check.
+            Vector3 lifted = Position;
+            lifted.Y += MaxAutoStepHeight;
+            if (Collides(lifted, world)) return false;
+
+            // (2) Horizontal move from the lifted position.
+            Vector3 liftedNext = lifted;
+            SetAxis(ref liftedNext, axis, GetAxis(liftedNext, axis) + subDelta);
+            if (Collides(liftedNext, world)) return false;
+
+            // (3) Settle. Step Y down by AutoStepSettle until
+            // immediately before the first colliding probe — that's
+            // the obstruction's top surface. Loop bounded by the lift
+            // amount so we never settle below the original Y.
+            Vector3 settled = liftedNext;
+            for (float drop = AutoStepSettle; drop <= MaxAutoStepHeight + 1e-4f; drop += AutoStepSettle)
+            {
+                Vector3 probe = settled;
+                probe.Y = liftedNext.Y - drop;
+                if (Collides(probe, world)) break;
+                settled = probe;
+            }
+
+            stepped = settled;
+            return true;
         }
 
         protected bool IsStandingOnSomething(World world)
