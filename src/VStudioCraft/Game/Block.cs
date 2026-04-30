@@ -831,16 +831,23 @@ namespace VStudioCraft.Game
                 // per-tick fluid-contact check pattern rather than
                 // collision).
                 case BlockType.Fire:
-                // Tier 6 #37 Phase 4 — SnowBlock is now a 1/8-tall
-                // layer. We render it as a thin slab (mesher branch)
-                // and treat it as non-solid for collision so the
-                // player walks straight through onto the grass below.
-                // Proper 1/8 AABB collision is a follow-up; for now
-                // the visual fudge (player feet at the bottom of the
-                // snow layer, model intersecting 1/8) is acceptable
-                // at typical play distances.
-                case BlockType.SnowBlock:
                     return false;
+                // Tier 6 #37 Phase 4 — SnowBlock IS solid; its
+                // collision shape is a 1/8-tall slab pinned to the
+                // cell bottom, returned by GetCollisionAabb. The
+                // entity-collision code consults the AABB instead of
+                // assuming a full cube — falls through the default
+                // `return true` here so the cell is considered
+                // collidable, with the AABB function carving out the
+                // actual extent.
+                //
+                // Future blocks (torches, flowers, mushrooms) can
+                // adopt the same approach: return true here, return
+                // their actual sub-cell AABB from GetCollisionAabb.
+                // Currently those still return false and rely on the
+                // fast-path "non-solid → no collision" branch in
+                // Collides — they don't have visible collision
+                // surfaces yet, the player just walks through.
                 default:
                     return true;
             }
@@ -1075,6 +1082,33 @@ namespace VStudioCraft.Game
         // blocks (flowers, mushrooms) are targetable so the player can
         // interact even though they aren't collidable. Both fluid sources
         // (Water / Lava) and their flowing variants are non-targetable —
+        // Tier 6 #37 Phase 4 — Per-block collision AABB inside the
+        // unit cell, in fractional [0..1] coordinates. Caller adds
+        // the cell's world position to get the world-space AABB. The
+        // default is the full cube — every existing solid block falls
+        // through to that, so the change is invisible to the cube
+        // mesh / fluid sim / etc. SnowBlock returns a 1/8-tall slab
+        // pinned to the cell bottom so the player can stand ON the
+        // snow at Y = cellY + 0.125 instead of phasing through to
+        // the grass below.
+        //
+        // The intent is that future sub-cell blocks (slabs / stairs /
+        // partial torches / flower hitboxes) fill out additional
+        // cases here; their geometry pass already lives in
+        // EmitModels, this just gives them a matching collision
+        // shape. Non-solid blocks (IsSolid==false) skip this lookup
+        // entirely in the fast path inside Entity.Collides.
+        public static (float minX, float minY, float minZ, float maxX, float maxY, float maxZ) GetCollisionAabb(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.SnowBlock:
+                    return (0f, 0f, 0f, 1f, 1f / 8f, 1f);
+                default:
+                    return (0f, 0f, 0f, 1f, 1f, 1f);
+            }
+        }
+
         // matches Alpha (you can't punch out a fluid source by clicking it).
         public static bool IsRaycastTarget(BlockType t)
         {

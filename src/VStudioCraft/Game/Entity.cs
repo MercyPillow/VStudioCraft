@@ -186,7 +186,26 @@ namespace VStudioCraft.Game
             for (int x = bx0; x <= bx1; x++)
             for (int z = bz0; z <= bz1; z++)
             {
-                if (BlockData.IsSolid(world.GetBlock(x, y, z))) return true;
+                var t = world.GetBlock(x, y, z);
+                if (!BlockData.IsSolid(t)) continue;
+                // Tier 6 #37 Phase 4 — Test against the per-block
+                // partial AABB rather than assuming the whole cell
+                // is solid. Default cubes return (0,0,0,1,1,1) so
+                // the test reduces to the original "any overlap" for
+                // them; SnowBlock returns (0,0,0,1,0.125,1) which
+                // means the player can stand on top of the snow
+                // layer at Y = cellY + 0.125 instead of the full
+                // cellY + 1.
+                var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(t);
+                float blockMinX = x + b0x, blockMaxX = x + b1x;
+                float blockMinY = y + b0y, blockMaxY = y + b1y;
+                float blockMinZ = z + b0z, blockMaxZ = z + b1z;
+                if (maxX > blockMinX && minX < blockMaxX
+                    && maxY > blockMinY && minY < blockMaxY
+                    && maxZ > blockMinZ && minZ < blockMaxZ)
+                {
+                    return true;
+                }
             }
             return false;
         }

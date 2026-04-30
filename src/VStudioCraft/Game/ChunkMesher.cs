@@ -678,28 +678,39 @@ namespace VStudioCraft.Game
             const float sideV0 = 1f - 2f / 16f;             // 0.875
             const float sideV1 = 1f - 0.5f / 16f;           // ~0.969
 
-            // -X face — reversed winding (CCW from -X viewpoint)
+            // Side-face windings mirror the cube mesher's `EmitQuad`
+            // dir>0 / dir<0 split — for negative-direction faces the
+            // vertex order is reversed so the outward face stays
+            // CCW. Earlier revisions copied the door slab's order
+            // (which used dir>0 winding for both +X and -X) and the
+            // result was visible -X but back-facing +X.
+            //
+            // -X face (dir<0): traverse (Y_min, Z_min) → (Y_min, Z_max)
+            // → (Y_max, Z_max) → (Y_max, Z_min)
             EmitCrossQuad(
                 x0, y0, z0, 0f, sideV0,
                 x0, y0, z1, 1f, sideV0,
                 x0, y1, z1, 1f, sideV1,
                 x0, y1, z0, 0f, sideV1,
                 -1f, 0f, 0f, layer, lightPacked);
-            // +X face
+            // +X face (dir>0): traverse (Y_min, Z_min) → (Y_max, Z_min)
+            // → (Y_max, Z_max) → (Y_min, Z_max)
             EmitCrossQuad(
-                x1, y0, z0, 0f, sideV0,
-                x1, y0, z1, 1f, sideV0,
-                x1, y1, z1, 1f, sideV1,
-                x1, y1, z0, 0f, sideV1,
+                x1, y0, z0, 1f, sideV0,
+                x1, y1, z0, 1f, sideV1,
+                x1, y1, z1, 0f, sideV1,
+                x1, y0, z1, 0f, sideV0,
                 +1f, 0f, 0f, layer, lightPacked);
-            // -Z face — reversed winding (CCW from -Z viewpoint)
+            // -Z face (dir<0): traverse (X_min, Y_min) → (X_min, Y_max)
+            // → (X_max, Y_max) → (X_max, Y_min)
             EmitCrossQuad(
-                x1, y0, z0, 0f, sideV0,
-                x0, y0, z0, 1f, sideV0,
-                x0, y1, z0, 1f, sideV1,
-                x1, y1, z0, 0f, sideV1,
+                x0, y0, z0, 0f, sideV0,
+                x0, y1, z0, 0f, sideV1,
+                x1, y1, z0, 1f, sideV1,
+                x1, y0, z0, 1f, sideV0,
                 0f, 0f, -1f, layer, lightPacked);
-            // +Z face
+            // +Z face (dir>0): traverse (X_min, Y_min) → (X_max, Y_min)
+            // → (X_max, Y_max) → (X_min, Y_max)
             EmitCrossQuad(
                 x0, y0, z1, 0f, sideV0,
                 x1, y0, z1, 1f, sideV0,
