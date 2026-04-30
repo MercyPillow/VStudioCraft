@@ -208,27 +208,22 @@ namespace VStudioCraft.Game
         // and existing tile indices stay stable.
         public const int FirstTailSnowBlockLayer = FirstTailFireBlockLayer + TailFireBlockLayerCount; // 157
         public const int TailSnowBlockLayerCount = 1;
-        // Tier 6 #37 Phase 2 — Cactus (top + side), Ice, DeadBush.
-        // Four new tile layers appended past Snow. Cactus needs two
-        // tiles because its top face shows a crown ridge pattern
-        // distinct from the spiny side; Ice + DeadBush each need a
-        // single tile (Ice is a uniform translucent cube, DeadBush
-        // is a cross-sprite plant).
+        // Tier 6 #37 Phase 2 — Cactus (top + side) and Ice. Three
+        // tile layers appended past Snow. Cactus needs two tiles
+        // because its top face shows a crown ridge pattern distinct
+        // from the spiny side; Ice is a uniform translucent cube.
+        // Pumpkin / DeadBush were Beta-era additions, removed to
+        // keep the block list strict to Alpha 1.1.2_01.
         public const int FirstTailBiomeBlockLayer = FirstTailSnowBlockLayer + TailSnowBlockLayerCount; // 158
-        public const int TailBiomeBlockLayerCount = 4;
-        // Tier 6 #37 Phase 3 — Pumpkin (top + side, no dedicated
-        // bottom — bottom face is invisible while the pumpkin sits
-        // on grass, so it reuses the side tile). Two layers.
-        public const int FirstTailPumpkinLayer = FirstTailBiomeBlockLayer + TailBiomeBlockLayerCount;  // 162
-        public const int TailPumpkinLayerCount = 2;
+        public const int TailBiomeBlockLayerCount = 3;
         // Tier 6 #37 Phase 4 — Snowy-grass side tile. Used by the
         // chunk mesher when a Grass / Dirt cell has SnowBlock
         // directly above; replaces the regular grass-side texture
         // with a half-snow-half-grass variant so the surface reads
         // as "snow lying on grass". One layer.
-        public const int FirstTailSnowyGrassLayer = FirstTailPumpkinLayer + TailPumpkinLayerCount;     // 164
+        public const int FirstTailSnowyGrassLayer = FirstTailBiomeBlockLayer + TailBiomeBlockLayerCount; // 161
         public const int TailSnowyGrassLayerCount = 1;
-        public const int LayerCount = FirstTailSnowyGrassLayer + TailSnowyGrassLayerCount;             // 165
+        public const int LayerCount = FirstTailSnowyGrassLayer + TailSnowyGrassLayerCount;              // 162
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -408,10 +403,7 @@ namespace VStudioCraft.Game
         public const int TileCactusTop           = 158;
         public const int TileCactusSide          = 159;
         public const int TileIce                 = 160;
-        public const int TileDeadBush            = 161;
-        public const int TilePumpkinTop          = 162;
-        public const int TilePumpkinSide         = 163;
-        public const int TileSnowyGrassSide      = 164;
+        public const int TileSnowyGrassSide      = 161;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -691,11 +683,6 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileCactusTop,  GenerateCactusTop);
             UploadLayer(layerPixels, TileCactusSide, GenerateCactusSide);
             UploadLayer(layerPixels, TileIce,        GenerateIce);
-            UploadLayer(layerPixels, TileDeadBush,   GenerateDeadBush);
-
-            // Tier 6 #37 Phase 3 — Pumpkin tiles.
-            UploadLayer(layerPixels, TilePumpkinTop,  GeneratePumpkinTop);
-            UploadLayer(layerPixels, TilePumpkinSide, GeneratePumpkinSide);
 
             // Tier 6 #37 Phase 4 — Snowy grass side tile.
             UploadLayer(layerPixels, TileSnowyGrassSide, GenerateSnowyGrassSide);
@@ -838,8 +825,6 @@ namespace VStudioCraft.Game
                 || layer == TileSnow
                 || layer == TileCactusTop      || layer == TileCactusSide
                 || layer == TileIce
-                || layer == TileDeadBush
-                || layer == TilePumpkinTop     || layer == TilePumpkinSide
                 || layer == TileSnowyGrassSide;
         }
 
@@ -3604,9 +3589,6 @@ namespace VStudioCraft.Game
             /* TileCactusTop           */ (5, 4),
             /* TileCactusSide          */ (6, 4),
             /* TileIce                 */ (3, 4),
-            /* TileDeadBush            */ (7, 3),
-            /* TilePumpkinTop          */ (6, 6),
-            /* TilePumpkinSide         */ (6, 7),
             // Tier 6 #37 Phase 4 — Snowy-grass side, used when a
             // grass cell has snow above (mesher swaps the side tile
             // per-face). Canonical Alpha coord (4, 4).
@@ -3806,11 +3788,6 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileCactusTop,  GenerateCactusTop);
             UploadLayer(layerPixels, TileCactusSide, GenerateCactusSide);
             UploadLayer(layerPixels, TileIce,        GenerateIce);
-            UploadLayer(layerPixels, TileDeadBush,   GenerateDeadBush);
-
-            // Tier 6 #37 Phase 3 — Pumpkin. Procedural-only.
-            UploadLayer(layerPixels, TilePumpkinTop,  GeneratePumpkinTop);
-            UploadLayer(layerPixels, TilePumpkinSide, GeneratePumpkinSide);
 
             // Tier 6 #37 Phase 4 — Snowy-grass side. Procedural fallback
             // (a grass-with-snow-cap composite painted from the existing
@@ -3822,12 +3799,12 @@ namespace VStudioCraft.Game
             // the safe fallback if the embedded terrain.png is missing
             // those tiles; the slice loop below replaces them with the
             // real Alpha art whenever the source has data at the
-            // declared coord. Snow / Cactus / Ice / DeadBush / Pumpkin
-            // / SnowyGrassSide all share this overlay loop.
+            // declared coord. Snow / Cactus / Ice / SnowyGrassSide all
+            // share this overlay loop.
             int[] biomeTailLayers = new[]
             {
-                TileSnow, TileCactusTop, TileCactusSide, TileIce, TileDeadBush,
-                TilePumpkinTop, TilePumpkinSide, TileSnowyGrassSide,
+                TileSnow, TileCactusTop, TileCactusSide, TileIce,
+                TileSnowyGrassSide,
             };
             for (int i = 0; i < biomeTailLayers.Length; i++)
             {
@@ -5899,135 +5876,6 @@ namespace VStudioCraft.Game
                 pixels[idx + 0] = r;
                 pixels[idx + 1] = g;
                 pixels[idx + 2] = b;
-                pixels[idx + 3] = 255;
-            }
-        }
-
-        // Dead-bush sprite — sparse brown twigs on a transparent
-        // background. Cross-sprite render in the mesher (same path
-        // as flowers) so the alpha cutout matters. The branching is
-        // intentionally asymmetric so two adjacent dead bushes don't
-        // form a tessellating pattern.
-        private static void GenerateDeadBush(byte[] pixels)
-        {
-            // Clear to transparent.
-            for (int i = 0; i < pixels.Length; i += 4)
-            {
-                pixels[i + 0] = 0;
-                pixels[i + 1] = 0;
-                pixels[i + 2] = 0;
-                pixels[i + 3] = 0;
-            }
-            byte br = 0x6B, bg = 0x44, bb = 0x22;            // dry-twig brown
-            // Central trunk — vertical line in the middle column.
-            int cx = TileSize / 2;
-            for (int y = 4; y < TileSize - 1; y++)
-            {
-                int idx = (y * TileSize + cx) * 4;
-                pixels[idx + 0] = br;
-                pixels[idx + 1] = bg;
-                pixels[idx + 2] = bb;
-                pixels[idx + 3] = 255;
-            }
-            // A few short branches off the trunk at hand-picked
-            // offsets — looks more like a real dry shrub than a
-            // pure cross.
-            void DrawBranch(int x0, int y0, int dx, int dy, int len)
-            {
-                int x = x0, y = y0;
-                for (int i = 0; i < len; i++)
-                {
-                    if (x >= 0 && x < TileSize && y >= 0 && y < TileSize)
-                    {
-                        int idx = (y * TileSize + x) * 4;
-                        pixels[idx + 0] = br;
-                        pixels[idx + 1] = bg;
-                        pixels[idx + 2] = bb;
-                        pixels[idx + 3] = 255;
-                    }
-                    x += dx; y += dy;
-                }
-            }
-            DrawBranch(cx, 8,  -1, -1, 3);
-            DrawBranch(cx, 8,  +1, -1, 4);
-            DrawBranch(cx, 11, -1,  0, 2);
-            DrawBranch(cx, 11, +1,  0, 3);
-            DrawBranch(cx, 6,  +1, -1, 2);
-        }
-
-        // Tier 6 #37 Phase 3 — Pumpkin side tile. Vertical orange
-        // ridges with darker stripe rows between each ridge column,
-        // suggesting the segment grooves on a real pumpkin. Two
-        // shades of orange chosen so the side reads as 3D rather
-        // than a flat fill at distance.
-        private static void GeneratePumpkinSide(byte[] pixels)
-        {
-            for (int y = 0; y < TileSize; y++)
-            for (int x = 0; x < TileSize; x++)
-            {
-                // Ridges every 4 pixels — bright orange ridge column,
-                // darker valleys between, a darker row at top + bottom
-                // for a faint top/bottom border so the cube reads
-                // segmented when stacked next to other pumpkins.
-                bool ridge = (x % 4 == 1 || x % 4 == 2);
-                byte r, g, b;
-                if (y == 0 || y == TileSize - 1)
-                {
-                    r = 0xA0; g = 0x4F; b = 0x10;            // dark border row
-                }
-                else if (ridge)
-                {
-                    r = 0xE0; g = 0x80; b = 0x18;            // bright ridge
-                }
-                else
-                {
-                    r = 0xB8; g = 0x60; b = 0x14;            // darker valley
-                }
-                int idx = (y * TileSize + x) * 4;
-                pixels[idx + 0] = r;
-                pixels[idx + 1] = g;
-                pixels[idx + 2] = b;
-                pixels[idx + 3] = 255;
-            }
-        }
-
-        // Pumpkin top tile — orange base ringed with the segment
-        // grooves you see when looking down at a pumpkin, plus a
-        // small brown stem at the centre. Stem is short / fat so it
-        // reads from the typical pickaxe-distance angle.
-        private static void GeneratePumpkinTop(byte[] pixels)
-        {
-            for (int y = 0; y < TileSize; y++)
-            for (int x = 0; x < TileSize; x++)
-            {
-                // Concentric ring of orange + darker grooves at
-                // sectoral angles every 60° (approximated as 8 evenly
-                // spaced grooves for grid alignment).
-                int dx = x - TileSize / 2;
-                int dy = y - TileSize / 2;
-                bool groove = ((x + y) % 5 == 0) && (dx * dx + dy * dy > 4);
-                byte r = groove ? (byte)0xA0 : (byte)0xE0;
-                byte g = groove ? (byte)0x4F : (byte)0x80;
-                byte b = groove ? (byte)0x10 : (byte)0x18;
-                int idx = (y * TileSize + x) * 4;
-                pixels[idx + 0] = r;
-                pixels[idx + 1] = g;
-                pixels[idx + 2] = b;
-                pixels[idx + 3] = 255;
-            }
-            // Stem patch — small brown block at the centre, two
-            // pixels wide, three tall, with a darker top cap.
-            int sx = TileSize / 2 - 1;
-            int sy = TileSize / 2 - 1;
-            for (int dy = 0; dy < 3; dy++)
-            for (int dx = 0; dx < 2; dx++)
-            {
-                int px = sx + dx, py = sy + dy;
-                int idx = (py * TileSize + px) * 4;
-                bool cap = (dy == 0);
-                pixels[idx + 0] = cap ? (byte)0x40 : (byte)0x66;
-                pixels[idx + 1] = cap ? (byte)0x60 : (byte)0x88;
-                pixels[idx + 2] = cap ? (byte)0x18 : (byte)0x22;
                 pixels[idx + 3] = 255;
             }
         }

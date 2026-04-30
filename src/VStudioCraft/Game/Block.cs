@@ -451,14 +451,6 @@ namespace VStudioCraft.Game
         // (matches Alpha's brown twigs).
         Cactus             = 142, // Alpha 81
         Ice                = 143, // Alpha 79
-        DeadBush           = 144, // Alpha 32
-        // Tier 6 #37 Phase 3 — Pumpkin patch block. Plain orange-
-        // ridged cube with a stem-on-top tile; the carved jack-o'-
-        // lantern variant is a separate id Alpha had at 91 — we
-        // skip it for now since it needs the on-place rotation
-        // machinery furnaces use. Spawned in clusters in plains /
-        // forest by the terrain gen.
-        Pumpkin            = 145, // Alpha 86
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -839,9 +831,6 @@ namespace VStudioCraft.Game
                 // per-tick fluid-contact check pattern rather than
                 // collision).
                 case BlockType.Fire:
-                // Tier 6 #37 — DeadBush is a cross-sprite plant; the
-                // player walks through it the same as flowers.
-                case BlockType.DeadBush:
                 // Tier 6 #37 Phase 4 — SnowBlock is now a 1/8-tall
                 // layer. We render it as a thin slab (mesher branch)
                 // and treat it as non-solid for collision so the
@@ -1130,8 +1119,6 @@ namespace VStudioCraft.Game
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
                 case BlockType.Fire:
-                // Tier 6 #37 — DeadBush is a cross-sprite plant.
-                case BlockType.DeadBush:
                 // Tier 6 #37 Phase 4 — SnowBlock is a 1/8-tall layer,
                 // not a full cube. Routed through the mesher's slab
                 // emitter (EmitSnowLayer).
@@ -1217,11 +1204,6 @@ namespace VStudioCraft.Game
                 // door / cross-sprite entries above. The snow's own
                 // 6-box geometry is emitted by EmitSnowLayer.
                 case BlockType.SnowBlock:
-                // Tier 6 #37 Phase 4 — DeadBush is a cross-sprite,
-                // same non-fill rule as flowers above. Listed
-                // explicitly because the case above only covers the
-                // four canonical Alpha cross-sprites.
-                case BlockType.DeadBush:
                     return false;
                 default:
                     return true;
@@ -1302,12 +1284,10 @@ namespace VStudioCraft.Game
                 case BlockType.SugarCane:
                 // Tier 6 #37 — Ice is translucent (matches Alpha — a
                 // pond covered in ice still has the bed visible
-                // through the surface). DeadBush is a cross-sprite,
-                // light passes through the same as flowers/wheat.
-                // SnowBlock is a 1/8 slab so the cell is mostly air —
-                // light propagates straight through.
+                // through the surface). SnowBlock is a 1/8 slab so
+                // the cell is mostly air — light propagates straight
+                // through.
                 case BlockType.Ice:
-                case BlockType.DeadBush:
                 case BlockType.SnowBlock:
                 // Tier 4 #16 — Door halves don't fill the cell; light
                 // must propagate through them (otherwise a closed
@@ -1462,17 +1442,11 @@ namespace VStudioCraft.Game
                     return 0.2f;
                 // Tier 6 #37 — Cactus (Alpha 0.4, soft like wood
                 // sapling). Ice (0.5, slightly tougher than snow but
-                // still pickaxe-light). DeadBush instant-break like
-                // other cross-sprite plants. Pumpkin (1.0, axe-like
-                // — Alpha gives it a moderate cushion).
+                // still pickaxe-light).
                 case BlockType.Cactus:
                     return 0.4f;
                 case BlockType.Ice:
                     return 0.5f;
-                case BlockType.DeadBush:
-                    return 0f;
-                case BlockType.Pumpkin:
-                    return 1.0f;
                 case BlockType.Glass:
                 case BlockType.Sponge:
                     return 0.3f;
@@ -1636,18 +1610,6 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileCactusSide;
                 case BlockType.Ice:
                     return BlockTextures.TileIce;
-                case BlockType.DeadBush:
-                    return BlockTextures.TileDeadBush;
-                case BlockType.Pumpkin:
-                    // Top face shows the stem patch on a brown
-                    // crown; bottom shares the side tile to keep
-                    // the layer count down (Alpha actually had a
-                    // dedicated bottom tile but it's never visible
-                    // for a placed pumpkin sitting on the ground,
-                    // so reusing the side is invisible to the
-                    // player). Sides show vertical orange ridges.
-                    if (faceKind == 0) return BlockTextures.TilePumpkinTop;
-                    return BlockTextures.TilePumpkinSide;
                 case BlockType.Torch:
                 case BlockType.TorchEast:
                 case BlockType.TorchWest:

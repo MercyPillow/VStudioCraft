@@ -838,15 +838,12 @@ namespace VStudioCraft.Game
                 // mushrooms rare (alpha placed brown/red ones mostly in dim
                 // places — we still surface-spawn a few so the world isn't
                 // barren of them until we add cave-spawn).
-                // Pumpkins added in Phase 3 — tail of the table, very
-                // rare so they read as a "find" not as scenery clutter.
                 BlockType pick;
                 int r = rng.Next(100);
                 if (r < 55)      pick = BlockType.Dandelion;
-                else if (r < 88) pick = BlockType.Rose;
-                else if (r < 94) pick = BlockType.BrownMushroom;
-                else if (r < 98) pick = BlockType.RedMushroom;
-                else             pick = BlockType.Pumpkin;
+                else if (r < 90) pick = BlockType.Rose;
+                else if (r < 96) pick = BlockType.BrownMushroom;
+                else             pick = BlockType.RedMushroom;
 
                 chunk.RawBlocks[placeIdx] = (byte)pick;
             }
@@ -909,14 +906,12 @@ namespace VStudioCraft.Game
             }
         }
 
-        // Tier 6 #37 Phase 2 — Desert flora. Places either a 3-tall
-        // cactus column or a single-cell dead bush on a Sand surface.
-        // Cactus is rarer (1/80 cols rolling for it) than dead bush
-        // (1/24) so the desert reads mostly as bare sand with the
-        // occasional cactus landmark and a sparser scatter of brown
-        // twigs. Both require a Sand surface block + an air cell
-        // above; cactus additionally needs 2 more headroom cells for
-        // its 3-block stack.
+        // Tier 6 #37 Phase 2 — Desert flora. Places a 3-tall cactus
+        // column on a Sand surface. Dead bush is omitted because it
+        // wasn't in Alpha 1.1.2_01 (Beta-era addition); the desert
+        // reads as bare sand with occasional cactus landmarks. Both
+        // require a Sand surface block + 3 cells of clear air above
+        // for the column's headroom.
         private static void PlaceDesertFlora(
             Chunk chunk, int lx, int lz, int wx, int wz, Noise noise, Random rng)
         {
@@ -931,28 +926,21 @@ namespace VStudioCraft.Game
             if (chunk.RawBlocks[placeIdx] != (byte)BlockType.Air) return;
             if (chunk.RawBlocks[groundIdx] != (byte)BlockType.Sand) return;
 
-            // Roll: 1/80 for cactus pillar, 1/24 (excluding cactus
-            // case) for dead bush, otherwise nothing. Probabilities
-            // chosen so a 16×16 chunk averages <1 cactus and ~10
-            // dead bushes — sparser than plains flora.
-            if (rng.Next(80) == 0)
-            {
-                // Cactus stack — needs 3 cells of clear headroom.
-                if (placeY + 2 >= Chunk.SizeY) return;
-                int idx0 = placeIdx;
-                int idx1 = Chunk.Index(lx, placeY + 1, lz);
-                int idx2 = Chunk.Index(lx, placeY + 2, lz);
-                if (chunk.RawBlocks[idx1] != (byte)BlockType.Air) return;
-                if (chunk.RawBlocks[idx2] != (byte)BlockType.Air) return;
-                chunk.RawBlocks[idx0] = (byte)BlockType.Cactus;
-                chunk.RawBlocks[idx1] = (byte)BlockType.Cactus;
-                chunk.RawBlocks[idx2] = (byte)BlockType.Cactus;
-                return;
-            }
-            if (rng.Next(24) == 0)
-            {
-                chunk.RawBlocks[placeIdx] = (byte)BlockType.DeadBush;
-            }
+            // 1/80 chance per column. Probability chosen so a 16×16
+            // chunk averages <1 cactus — they read as landmarks
+            // rather than scenery clutter.
+            if (rng.Next(80) != 0) return;
+
+            // Cactus stack — needs 3 cells of clear headroom.
+            if (placeY + 2 >= Chunk.SizeY) return;
+            int idx0 = placeIdx;
+            int idx1 = Chunk.Index(lx, placeY + 1, lz);
+            int idx2 = Chunk.Index(lx, placeY + 2, lz);
+            if (chunk.RawBlocks[idx1] != (byte)BlockType.Air) return;
+            if (chunk.RawBlocks[idx2] != (byte)BlockType.Air) return;
+            chunk.RawBlocks[idx0] = (byte)BlockType.Cactus;
+            chunk.RawBlocks[idx1] = (byte)BlockType.Cactus;
+            chunk.RawBlocks[idx2] = (byte)BlockType.Cactus;
         }
 
         // ---------- Deterministic hash helpers. ----------
