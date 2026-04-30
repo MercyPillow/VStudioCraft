@@ -216,6 +216,62 @@ namespace VStudioCraft.Game
                 int group = BlockData.FluidGroup(b);
                 if (group == 0) continue;
 
+                // Tier 6 #36 — Water-meets-lava contact conversion.
+                // Only LAVA cells convert; water always survives the
+                // contact. Rules:
+                //   Lava source     + any water adjacent     → Obsidian
+                //   Flowing lava    + water DIRECTLY below   → Stone
+                //   Flowing lava    + water elsewhere        → Cobblestone
+                // The stone case captures the canonical "lava drip
+                // landing on the surface of a pool freezes instantly"
+                // outcome: a flowing-lava column descending into water
+                // forms a stone cap rather than cobble. We check
+                // "water below" first so a flowing-lava cell that has
+                // BOTH water below AND water beside still resolves to
+                // stone — the vertical drop dominates visually because
+                // the lava is moving down into the contact, not
+                // sideways.
+                // Detected by scanning all 6 neighbours for a water-
+                // group fluid. Slightly more aggressive than canonical
+                // Alpha (which only converts on flowing-water trigger,
+                // not source-water static contact) but visually
+                // identical to the player AND much simpler than
+                // tracking which side initiated the spread. Mutates in
+                // place + continues so the converted cell skips the
+                // rest of the fluid-processing pipeline for this tick.
+                if (group == 2 && HasWaterNeighbour(chunk, world, x, y, z))
+                {
+                    BlockType newT;
+                    if (b == BlockType.Lava)
+                    {
+                        newT = BlockType.Obsidian;
+                    }
+                    else
+                    {
+                        bool waterBelow = y > 0 && IsWaterAt(chunk, world, x, y - 1, z);
+                        newT = waterBelow ? BlockType.Stone : BlockType.Cobblestone;
+                    }
+                    blocks[idx] = (byte)newT;
+                    meta[idx] = 0;
+                    chunk.IsModified = true;
+                    _producedWrites.Add(chunk);
+                    // Lava → solid is an opacity change. Run the same
+                    // incremental light update SetBlock would have run
+                    // for a manual edit so the surrounding sky/block
+                    // light recomputes; otherwise a converted cell at
+                    // ground level can leave a stale-bright corridor
+                    // where lava used to let light pass.
+                    int wx = chunk.ChunkX * Chunk.SizeX + x;
+                    int wz = chunk.ChunkZ * Chunk.SizeZ + z;
+                    var touched = LightCalculator.UpdateAfterEdit(world, wx, y, wz, b, newT);
+                    foreach (var k in touched)
+                    {
+                        var nc = world.GetChunk(k.cx, k.cz);
+                        if (nc != null) _producedWrites.Add(nc);
+                    }
+                    continue;
+                }
+
                 bool isSource = (b == BlockType.Water || b == BlockType.Lava);
                 bool isFalling = !isSource && (meta[idx] & 0x10) != 0;
                 int reach = isSource ? FluidReach : (meta[idx] & 0x0F);
@@ -394,6 +450,40 @@ namespace VStudioCraft.Game
                 || HasHorizFeeder(chunk, world, x, y, z, -1,  0, group, reach)
                 || HasHorizFeeder(chunk, world, x, y, z,  0, +1, group, reach)
                 || HasHorizFeeder(chunk, world, x, y, z,  0, -1, group, reach);
+        }
+
+        // Tier 6 #36 — True iff any of the 6 axis-aligned neighbours
+        // of (x,y,z) holds a water-group fluid (Water or FlowingWater).
+        // Crosses chunk boundaries via world.GetChunk to avoid missing
+        // contact at chunk seams. Cheap — at worst 6 cell reads + up
+        // to 4 chunk lookups for boundary cells.
+        private static bool HasWaterNeighbour(Chunk chunk, World world, int x, int y, int z)
+        {
+            if (y > 0 && IsWaterAt(chunk, world, x, y - 1, z)) return true;
+            if (y < Chunk.SizeY - 1 && IsWaterAt(chunk, world, x, y + 1, z)) return true;
+            if (IsWaterAt(chunk, world, x + 1, y, z)) return true;
+            if (IsWaterAt(chunk, world, x - 1, y, z)) return true;
+            if (IsWaterAt(chunk, world, x, y, z + 1)) return true;
+            if (IsWaterAt(chunk, world, x, y, z - 1)) return true;
+            return false;
+        }
+
+        private static bool IsWaterAt(Chunk chunk, World world, int lx, int y, int lz)
+        {
+            Chunk target = chunk;
+            int xx = lx, zz = lz;
+            if ((uint)lx >= Chunk.SizeX || (uint)lz >= Chunk.SizeZ)
+            {
+                int ncx = chunk.ChunkX, ncz = chunk.ChunkZ;
+                if (lx < 0)              { ncx--; xx = Chunk.SizeX - 1; }
+                else if (lx >= Chunk.SizeX) { ncx++; xx = 0; }
+                if (lz < 0)              { ncz--; zz = Chunk.SizeZ - 1; }
+                else if (lz >= Chunk.SizeZ) { ncz++; zz = 0; }
+                target = world.GetChunk(ncx, ncz);
+                if (target == null) return false;
+            }
+            var b = (BlockType)target.RawBlocks[Chunk.Index(xx, y, zz)];
+            return b == BlockType.Water || b == BlockType.FlowingWater;
         }
 
         private static bool HasHorizFeeder(
