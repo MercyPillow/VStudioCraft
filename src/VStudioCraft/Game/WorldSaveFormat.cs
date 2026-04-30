@@ -529,20 +529,28 @@ namespace VStudioCraft.Game
                 // derived state and isn't persisted), so freshly-loaded
                 // chunks have all-zero sky-light arrays. Without this
                 // pass the shader's vSkyLight reads as 0 everywhere
-                // and the world renders dark in broad daytime — the
-                // user-visible bug. World-gen runs the same recompute
-                // call inside World.Generate's chunk loop, so this is
-                // just bringing the load path into parity with the
-                // gen path. Cost: one full BFS per loaded chunk
-                // (~hundreds of µs each), comparable to a fresh world
-                // generation pass. Done in chunk-order before any
-                // tile-entity / spawn-vector blocks are read so the
-                // chunk graph is complete (lighting needs neighbors
-                // for cross-chunk edge propagation).
-                foreach (var c in world.AllChunksForPersistence())
+                // and the world renders dark in broad daytime.
+                //
+                // Parallelised across cores (Phase A of the
+                // parallelisation analysis) — the prior version's
+                // sequential `foreach` was the dominant cost in
+                // Load() per the dedicated server's startup log
+                // (3.7 s on a 169-chunk world, with ~70 %+ of that
+                // being relight). Each chunk's RecomputeChunk reads
+                // and writes ONLY its own `_blocks` and `_light`
+                // arrays — no cross-chunk dependencies in the
+                // single-chunk recompute path (cross-chunk edge
+                // bleed gets cleaned up the first time a player edits
+                // near a seam, same as the gen-time seams the engine
+                // already accepts; see LightCalculator.cs:141).
+                // Materialising the chunk list lets Parallel.ForEach
+                // partition cleanly without enumerator races.
+                var chunkList = new List<Chunk>();
+                foreach (var c in world.AllChunksForPersistence()) chunkList.Add(c);
+                System.Threading.Tasks.Parallel.ForEach(chunkList, c =>
                 {
                     LightCalculator.RecomputeChunk(c);
-                }
+                });
 
                 // v5: furnace tile entities. Pre-v5 saves had no furnaces
                 // (the block didn't exist), so legacy worlds load with

@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Tasks;
 using VStudioCraft.Game;
 
 // Phase 7 (Open to LAN) — ServerHub moved from VStudioCraft.Server to
@@ -901,7 +903,13 @@ namespace VStudioCraft.Net
                     // were enqueued by previous outer-loop iterations.
                     int ring = Math.Max(Math.Abs(dx), Math.Abs(dz));
                     if (ring != r) continue;
-                    client.PendingChunkSends.Enqueue((spawnCx + dx, spawnCz + dz));
+                    var key = (spawnCx + dx, spawnCz + dz);
+                    client.PendingChunkSends.Enqueue(key);
+                    // Phase A.3 — start gzipping in the background so
+                    // ChunksPerTick draws from the cache instead of
+                    // blocking the tick thread on inline gzip when
+                    // the queue gets popped a few ticks from now.
+                    PrefetchChunkCompression(key.Item1, key.Item2);
                 }
             }
         }
@@ -1005,6 +1013,11 @@ namespace VStudioCraft.Net
                 if (client.TrackedChunks.Contains(key)) continue;
                 if (alreadyPending.Contains(key)) continue;
                 client.PendingChunkSends.Enqueue(key);
+                // Phase A.3 — same prefetch hook as the spawn-ring
+                // burst, so chunks visible "ahead" of the player are
+                // gzipping in the background while the tick thread
+                // drains older chunks at ChunksPerTick.
+                PrefetchChunkCompression(key.Item1, key.Item2);
             }
         }
 
@@ -2229,26 +2242,42 @@ namespace VStudioCraft.Net
         private void TickHostileMobs()
         {
             var hostiles = _world.Hostiles;
-            for (int i = hostiles.Count - 1; i >= 0; i--)
+
+            // Phase B.2 — parallel mob update on the server tick
+            // thread. Server uses NoopServerSinks (DamagePlayer is a
+            // no-op pending Phase 5c+, SpawnDrop is server-side
+            // ignored), so no sink-lock is needed here. mob.Update
+            // mutates per-instance state only and reads _world; the
+            // serial dead-mob reap below handles broadcast +
+            // RemoveAt because both touch shared server state
+            // (DespawnMobFromAllViewers iterates _clients, which
+            // mutates session send queues, and broadcast ordering
+            // matters for entity-id reuse safety).
+            int count = hostiles.Count;
+            System.Threading.Tasks.Parallel.For(0, count, i =>
             {
                 var mob = hostiles[i];
-                if (mob.IsDead)
-                {
-                    if (mob.NetworkId >= 0)
-                    {
-                        DespawnMobFromAllViewers(mob.NetworkId);
-                    }
-                    hostiles.RemoveAt(i);
-                    continue;
-                }
+                if (mob.IsDead) return;
                 var target = ClosestPlayerPosTo(mob.Position);
                 mob.Update(0.05f, _world, target, NoopServerSinks.Instance);
-                // Creeper fuse decoupled from Update (matches the
-                // Alpha "primed creeper doesn't always defuse" rule).
                 if (mob is Creeper creeper)
                 {
                     creeper.TickFuse(0.05f, target, NoopServerSinks.Instance);
                 }
+            });
+
+            // Serial reap — DespawnMobFromAllViewers iterates client
+            // sessions and adds to per-session writer queues, which
+            // are not safe to touch concurrently.
+            for (int i = hostiles.Count - 1; i >= 0; i--)
+            {
+                var mob = hostiles[i];
+                if (!mob.IsDead) continue;
+                if (mob.NetworkId >= 0)
+                {
+                    DespawnMobFromAllViewers(mob.NetworkId);
+                }
+                hostiles.RemoveAt(i);
             }
         }
 
@@ -2261,33 +2290,33 @@ namespace VStudioCraft.Net
         private void TickPassiveMobs()
         {
             var passives = _world.Passives;
-            // PassiveMob.Update mutates Position + Velocity + Yaw; the
-            // physics path is otherwise side-effect-free, so we can
-            // call it directly on the tick thread without coordinating
-            // with the broadcast pass that runs immediately after.
-            //
-            // Dead mob reap is INSIDE this loop because the broadcast
-            // pass shouldn't have to think about IsDead vs alive
-            // separately from "is in the world list". Iterating
-            // backwards lets RemoveAt run in O(1) without shifting
-            // unread tail.
-            for (int i = passives.Count - 1; i >= 0; i--)
+            // Phase B.2 — parallel mob update mirroring TickHostileMobs.
+            // PassiveMob.Update mutates per-instance state only and
+            // reads _world; the broadcast pass runs after this method
+            // returns so there's no concurrent socket-write contention.
+            int count = passives.Count;
+            System.Threading.Tasks.Parallel.For(0, count, i =>
             {
                 var mob = passives[i];
-                if (mob.IsDead)
-                {
-                    if (mob.NetworkId >= 0)
-                    {
-                        DespawnMobFromAllViewers(mob.NetworkId);
-                    }
-                    passives.RemoveAt(i);
-                    continue;
-                }
+                if (mob.IsDead) return;
                 // 0.05 = 1 / 20 Hz tick. Hardcoded here rather than
                 // pulling Program.TickSeconds (private to that class)
                 // because the server tick rate is a hub-level invariant
                 // that doesn't depend on Program's pacing.
                 mob.Update(0.05f, _world);
+            });
+
+            // Serial reap — DespawnMobFromAllViewers touches per-session
+            // writer queues which aren't safe to mutate concurrently.
+            for (int i = passives.Count - 1; i >= 0; i--)
+            {
+                var mob = passives[i];
+                if (!mob.IsDead) continue;
+                if (mob.NetworkId >= 0)
+                {
+                    DespawnMobFromAllViewers(mob.NetworkId);
+                }
+                passives.RemoveAt(i);
             }
         }
 
@@ -2695,6 +2724,16 @@ namespace VStudioCraft.Net
                 var rec = changes[i];
                 int rcx = rec.X >> 4;
                 int rcz = rec.Z >> 4;
+                // Phase A.3 — invalidate any prefetched gzip blob for
+                // this chunk. The blob captures a snapshot of
+                // chunk.RawBlocks taken at prefetch time; if the chunk
+                // is edited between prefetch and SendChunk's drain,
+                // the snapshot is stale. Removing the cache entry
+                // forces SendChunk to fall back to inline gzip on the
+                // tick thread, which sees the post-edit bytes. New
+                // clients tracking the chunk for the first time get a
+                // fresh compression that includes the edit.
+                _compressedChunkCache.TryRemove((rcx, rcz), out _);
                 for (int c = 0; c < _clients.Count; c++)
                 {
                     var client = _clients[c];
@@ -2726,6 +2765,91 @@ namespace VStudioCraft.Net
         // and the cost of being defensive is one HashSet lookup. If a
         // race ever surfaces in profiling, this short-circuit kicks in.
         private readonly HashSet<(int, int)> _chunkGenInFlight = new HashSet<(int, int)>();
+
+        // Phase A.3 of the parallelisation analysis — pre-compressed
+        // ChunkLoad payloads, populated by Task.Run-spawned background
+        // compressors and drained by SendChunk on the tick thread. The
+        // initial-window burst (169 chunks at login) used to gzip every
+        // chunk inline on the tick thread at ~50–200 µs each — small
+        // per chunk, but the 20 Hz tick thread is also the heartbeat
+        // for every other client's gameplay updates, so spreading the
+        // gzip across the .NET ThreadPool keeps the tick rhythm
+        // smoother. Cache key is (cx, cz). ConcurrentDictionary lets
+        // SendChunk's TryRemove do the producer-consumer handoff
+        // atomically without an explicit lock.
+        //
+        // Memory: each entry is ~6 KiB compressed; bounded by the
+        // initial-window size (169) × concurrent clients. Empty in
+        // steady state. SendChunk removes on consume, so no eviction
+        // policy needed.
+        private readonly ConcurrentDictionary<(int, int), byte[]> _compressedChunkCache
+            = new ConcurrentDictionary<(int, int), byte[]>();
+        // De-dupes prefetch tasks. Two clients enqueueing the same
+        // chunk wouldn't kick off two compressions. Cleared once the
+        // task lands its result in _compressedChunkCache.
+        private readonly ConcurrentDictionary<(int, int), byte> _compressInFlight
+            = new ConcurrentDictionary<(int, int), byte>();
+
+        // Kick off background compression for a chunk if it's already
+        // generated and not already cached or in flight. Called right
+        // after a chunk gets enqueued onto a client's PendingChunkSends
+        // — by the time AdvanceState pops it (potentially many ticks
+        // later for chunks deep in the spawn-window queue), the
+        // compressed bytes are usually already sitting in the cache.
+        //
+        // No-op if the chunk hasn't been generated yet (on-demand
+        // server gen runs on the tick thread; SendChunk falls back to
+        // inline compression for those).
+        private void PrefetchChunkCompression(int cx, int cz)
+        {
+            var key = (cx, cz);
+            // Already cached or scheduled — nothing to do.
+            if (_compressedChunkCache.ContainsKey(key)) return;
+            if (!_compressInFlight.TryAdd(key, 0)) return;
+
+            // Snapshot the chunk reference up-front. If the chunk
+            // isn't yet generated we bail and let SendChunk do the
+            // (gen + gzip) inline path.
+            var chunk = _world.GetChunk(cx, cz);
+            if (chunk == null)
+            {
+                _compressInFlight.TryRemove(key, out _);
+                return;
+            }
+
+            // Defensive copy of the block bytes — the chunk is shared
+            // mutable state (player edits could write into it on the
+            // tick thread while the compressor reads). 32 KiB memcpy
+            // is ~5 µs, well below the gzip cost.
+            var blocks = new byte[chunk.RawBlocks.Length];
+            Buffer.BlockCopy(chunk.RawBlocks, 0, blocks, 0, blocks.Length);
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    byte[] compressed;
+                    using (var ms = new MemoryStream(8192))
+                    {
+                        using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true))
+                        {
+                            gz.Write(blocks, 0, blocks.Length);
+                        }
+                        compressed = ms.ToArray();
+                    }
+                    _compressedChunkCache[key] = compressed;
+                }
+                catch
+                {
+                    // Compression failure is harmless — SendChunk falls
+                    // back to inline gzip on cache miss.
+                }
+                finally
+                {
+                    _compressInFlight.TryRemove(key, out _);
+                }
+            });
+        }
 
         private void SendChunk(ServerClient client, int cx, int cz)
         {
@@ -2762,16 +2886,26 @@ namespace VStudioCraft.Net
             }
 
             // Gzip the raw block bytes. ~6 KiB per chunk typical, vs 32 KiB
-            // raw — worth the ~50 µs compression cost for the bandwidth
-            // savings, especially on first-join when 169 chunks ship.
+            // raw — worth the compression cost for the bandwidth savings,
+            // especially on first-join when 169 chunks ship.
+            //
+            // Phase A.3 — check the prefetch cache first; if a background
+            // task already produced the compressed bytes (the common case
+            // for the spawn-ring burst), pop them and skip the inline
+            // compression. Fallback path runs gzip on the tick thread for
+            // chunks generated on demand or freshly edited since the
+            // prefetch ran.
             byte[] compressed;
-            using (var ms = new MemoryStream(8192))
+            if (!_compressedChunkCache.TryRemove((cx, cz), out compressed))
             {
-                using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true))
+                using (var ms = new MemoryStream(8192))
                 {
-                    gz.Write(chunk.RawBlocks, 0, chunk.RawBlocks.Length);
+                    using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true))
+                    {
+                        gz.Write(chunk.RawBlocks, 0, chunk.RawBlocks.Length);
+                    }
+                    compressed = ms.ToArray();
                 }
-                compressed = ms.ToArray();
             }
 
             client.Session.Send(PacketIds.ChunkLoad, w =>

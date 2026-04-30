@@ -239,32 +239,76 @@ namespace VStudioCraft.Game
         // full pool flushing on the same frame.
         public void Update(float dt)
         {
-            int write = 0;
-            for (int read = 0; read < _count; read++)
+            // Phase B.3 of the parallelisation analysis — split into a
+            // parallel physics integration phase and a serial compaction
+            // phase. The integration is per-particle pure (each particle
+            // touches only its own slot), but the compaction is a
+            // moving-write-cursor "swap-and-pop" that's inherently
+            // serial. Parallelising only when the count is high enough
+            // to amortise the Parallel.For startup (~10 µs); below the
+            // threshold the loop runs in one pass to avoid a double-
+            // traversal cost.
+            const int ParallelThreshold = 64;
+
+            if (_count >= ParallelThreshold)
             {
-                ref var p = ref _pool[read];
-                p.Age += dt;
-                if (p.Age >= p.Lifetime) continue;
-                if (p.Gravity)
+                int countLocal = _count;
+                System.Threading.Tasks.Parallel.For(0, countLocal, i =>
                 {
-                    // Gravity matches dropped-item physics (-20 m/s²
-                    // capped). Particles bounce off the ground only
-                    // implicitly — we don't run a voxel sweep, so they
-                    // just clip into the floor and disappear at lifetime
-                    // end. Acceptable for sub-second visuals.
-                    p.Velocity.Y -= 20f * dt;
-                    if (p.Velocity.Y < -20f) p.Velocity.Y = -20f;
-                    // Light air drag so break-puffs don't shoot far
-                    // horizontally; matches the dropped-item drag rate.
-                    float drag = (float)System.Math.Pow(0.95, dt * 60.0);
-                    p.Velocity.X *= drag;
-                    p.Velocity.Z *= drag;
+                    // Index-based access; can't use `ref var p` inside a
+                    // lambda. Each thread writes only to _pool[i], so
+                    // the parallel writes don't race.
+                    _pool[i].Age += dt;
+                    if (_pool[i].Age >= _pool[i].Lifetime) return;
+                    if (_pool[i].Gravity)
+                    {
+                        // Gravity matches dropped-item physics (-20 m/s²
+                        // capped); air-drag matches dropped-item drag rate.
+                        _pool[i].Velocity.Y -= 20f * dt;
+                        if (_pool[i].Velocity.Y < -20f) _pool[i].Velocity.Y = -20f;
+                        float drag = (float)System.Math.Pow(0.95, dt * 60.0);
+                        _pool[i].Velocity.X *= drag;
+                        _pool[i].Velocity.Z *= drag;
+                    }
+                    _pool[i].Position += _pool[i].Velocity * dt;
+                });
+                // Serial compaction — same swap-and-pop as the legacy
+                // path, but we only inspect Age vs Lifetime here since
+                // the integration above already happened.
+                int write = 0;
+                for (int read = 0; read < _count; read++)
+                {
+                    if (_pool[read].Age >= _pool[read].Lifetime) continue;
+                    if (write != read) _pool[write] = _pool[read];
+                    write++;
                 }
-                p.Position += p.Velocity * dt;
-                if (write != read) _pool[write] = p;
-                write++;
+                _count = write;
             }
-            _count = write;
+            else
+            {
+                // Below threshold: keep the legacy single-pass integrate-
+                // and-compact loop. Parallel.For startup overhead would
+                // exceed the work for tiny pools.
+                int write = 0;
+                for (int read = 0; read < _count; read++)
+                {
+                    ref var p = ref _pool[read];
+                    p.Age += dt;
+                    if (p.Age >= p.Lifetime) continue;
+                    if (p.Gravity)
+                    {
+                        p.Velocity.Y -= 20f * dt;
+                        if (p.Velocity.Y < -20f) p.Velocity.Y = -20f;
+                        float drag = (float)System.Math.Pow(0.95, dt * 60.0);
+                        p.Velocity.X *= drag;
+                        p.Velocity.Z *= drag;
+                    }
+                    p.Position += p.Velocity * dt;
+                    if (write != read) _pool[write] = p;
+                    write++;
+                }
+                _count = write;
+            }
             // Reset the eviction cursor when the pool is no longer full —
             // prevents stale wrap state from biasing eviction order if the
             // count climbs back to MaxParticles later.

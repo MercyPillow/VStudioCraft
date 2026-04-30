@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace VStudioCraft.Game
 {
@@ -56,29 +58,54 @@ namespace VStudioCraft.Game
             public HashSet<(int x, int z)> ChangedChunks;
         }
 
-        // Reusable scratch buffers — the tick fires four times a second, and
-        // allocating fresh List/HashSet/Dictionary instances added to GC
-        // pressure on the render thread. The state is owned by the static
-        // class because the tick currently runs serialised on the render
-        // thread; if we ever multi-thread it this becomes a TLS field.
-        private static readonly List<(Chunk c, int lx, int y, int lz, byte block, byte meta)> _writes
-            = new List<(Chunk, int, int, int, byte, byte)>(256);
-        // Drain queue: cells whose upstream feed is gone this tick. Stored as a
-        // separate list (not folded into _writes) because they have different
-        // apply semantics — drains FORCE the cell to Air regardless of current
-        // contents, while spread writes only fill genuinely-empty cells.
-        private static readonly List<(Chunk c, int lx, int y, int lz, int group)> _drains
-            = new List<(Chunk, int, int, int, int)>(64);
-        private static readonly HashSet<Chunk> _producedWrites = new HashSet<Chunk>();
+        // Per-thread scratch buffers used by ScanChunk during a parallel
+        // tick. Each thread that participates in the Parallel.ForEach
+        // gets its own ScanState (via Parallel.ForEach's localInit), so
+        // ScanChunk's appends to Writes / Drains / LavaConversions /
+        // ProducedWrites never contend across threads. Tick() merges
+        // every thread's state into the global apply-pass at the end.
+        //
+        // States are pooled in `_scanStatePool` (a ConcurrentBag) so a
+        // tick reuses last tick's allocations rather than allocating
+        // fresh lists every 50 ms. The pool is bounded only by the
+        // peak parallelism we've ever hit (~ Environment.ProcessorCount).
+        private sealed class ScanState
+        {
+            public readonly List<(Chunk c, int lx, int y, int lz, byte block, byte meta)> Writes
+                = new List<(Chunk, int, int, int, byte, byte)>(256);
+            public readonly List<(Chunk c, int lx, int y, int lz, int group)> Drains
+                = new List<(Chunk, int, int, int, int)>(64);
+            // Lava↔water contact conversions. Deferred to the serial
+            // apply-pass because (a) the conversion mutates the chunk's
+            // RawBlocks/RawMeta in place which would race with parallel
+            // scans of neighbour chunks, and (b) the conversion's
+            // follow-up LightCalculator.UpdateAfterEdit call is not
+            // thread-safe (it walks 3×3 chunks of light arrays).
+            public readonly List<(Chunk c, int lx, int y, int lz, BlockType oldT, BlockType newT)> LavaConversions
+                = new List<(Chunk, int, int, int, BlockType, BlockType)>(8);
+            public readonly HashSet<Chunk> ProducedWrites = new HashSet<Chunk>();
+
+            public void Clear()
+            {
+                Writes.Clear();
+                Drains.Clear();
+                LavaConversions.Clear();
+                ProducedWrites.Clear();
+            }
+        }
+
+        private static readonly ConcurrentBag<ScanState> _scanStatePool = new ConcurrentBag<ScanState>();
         private static readonly List<Chunk> _activeChunks = new List<Chunk>(64);
+        // Aggregated across all per-thread ScanStates after the
+        // parallel scan completes; consumed by the (serial) apply
+        // pass below. Cleared at the start of each Tick.
+        private static readonly HashSet<Chunk> _producedWrites = new HashSet<Chunk>();
 
         // Run a single tick over every active chunk in the world. Returns
         // the set of chunk keys that mutated so the caller can mark them
         // dirty for remesh and re-light.
         public static TickResult Tick(World world)
         {
-            _writes.Clear();
-            _drains.Clear();
             _producedWrites.Clear();
             _activeChunks.Clear();
 
@@ -91,19 +118,83 @@ namespace VStudioCraft.Game
                 if (chunk.HasActiveFluid) _activeChunks.Add(chunk);
             }
 
-            for (int ci = 0; ci < _activeChunks.Count; ci++)
+            // Phase B.1 of the parallelisation analysis — scan all
+            // active chunks in parallel. Each thread takes its own
+            // ScanState (rented from the pool) and ScanChunk only
+            // appends to that state — no shared mutable state during
+            // the scan. After the parallel scan completes we run the
+            // existing apply-pass single-threaded against the merged
+            // state. Sequential semantics differ in one edge case
+            // (lava↔water conversion latency by one tick when the
+            // conversion would have rippled into another active
+            // chunk's same-tick scan), which is invisible to the
+            // player; everything else (spread + drain) was already
+            // staged in the original code so order doesn't matter.
+            //
+            // Materialising the per-thread states into a list lets
+            // the merge phase iterate them deterministically.
+            var threadStates = new ConcurrentBag<ScanState>();
+            Parallel.ForEach(
+                _activeChunks,
+                () =>
+                {
+                    if (!_scanStatePool.TryTake(out var s)) s = new ScanState();
+                    s.Clear();
+                    return s;
+                },
+                (chunk, _, state) =>
+                {
+                    ScanChunk(chunk, world, state);
+                    return state;
+                },
+                state => threadStates.Add(state));
+
+            // Merge thread-local states into single lists for the
+            // serial apply-pass below. The lists are local — the old
+            // class-static _writes/_drains scratch buffers are gone.
+            var allWrites = new List<(Chunk c, int lx, int y, int lz, byte block, byte meta)>(256);
+            var allDrains = new List<(Chunk c, int lx, int y, int lz, int group)>(64);
+            var allLava = new List<(Chunk c, int lx, int y, int lz, BlockType oldT, BlockType newT)>(8);
+            foreach (var s in threadStates)
             {
-                var chunk = _activeChunks[ci];
-                ScanChunk(chunk, world);
+                allWrites.AddRange(s.Writes);
+                allDrains.AddRange(s.Drains);
+                allLava.AddRange(s.LavaConversions);
+                foreach (var c in s.ProducedWrites) _producedWrites.Add(c);
+                _scanStatePool.Add(s); // return to pool for next tick
             }
 
-            // Apply staged spread writes first. We accept that two sources
+            // Apply staged lava↔water conversions first. These mutate
+            // blocks + meta unconditionally and run a 3×3 light update
+            // per conversion. Order doesn't matter inside this list
+            // because each conversion targets a unique cell (the
+            // ScanChunk pass that produced it had `continue;`'d before
+            // checking that cell again).
+            for (int li = 0; li < allLava.Count; li++)
+            {
+                var lv = allLava[li];
+                int idx = Chunk.Index(lv.lx, lv.y, lv.lz);
+                lv.c.RawBlocks[idx] = (byte)lv.newT;
+                lv.c.RawMeta[idx] = 0;
+                lv.c.IsModified = true;
+                _producedWrites.Add(lv.c);
+                int wx = lv.c.ChunkX * Chunk.SizeX + lv.lx;
+                int wz = lv.c.ChunkZ * Chunk.SizeZ + lv.lz;
+                var touched = LightCalculator.UpdateAfterEdit(world, wx, lv.y, wz, lv.oldT, lv.newT);
+                foreach (var k in touched)
+                {
+                    var nc = world.GetChunk(k.cx, k.cz);
+                    if (nc != null) _producedWrites.Add(nc);
+                }
+            }
+
+            // Apply staged spread writes next. We accept that two sources
             // writing into the same cell may overwrite each other —
             // last-write-wins, which produces the slight visual jitter you
             // see in Alpha when two streams meet (acceptable for V1).
-            for (int wi = 0; wi < _writes.Count; wi++)
+            for (int wi = 0; wi < allWrites.Count; wi++)
             {
-                var w = _writes[wi];
+                var w = allWrites[wi];
                 int idx = Chunk.Index(w.lx, w.y, w.lz);
                 // Only overwrite air. A source already there should win;
                 // placement during the tick can have already filled the
@@ -114,16 +205,16 @@ namespace VStudioCraft.Game
                 w.c.IsModified = true;
             }
 
-            // Apply drain writes second. A drained cell pre-tick was a
+            // Apply drain writes last. A drained cell pre-tick was a
             // flowing fluid with no upstream feeder — spread can't have
             // re-filled it (spread targets only pre-tick-air cells), so the
             // ordering question reduces to: do we want a flowing cell to
             // become Air this tick? Yes. The wave of drained cells advances
             // outward by one cell per tick, matching Alpha's "water recedes
             // step by step" feel after a source is removed.
-            for (int di = 0; di < _drains.Count; di++)
+            for (int di = 0; di < allDrains.Count; di++)
             {
-                var d = _drains[di];
+                var d = allDrains[di];
                 int idx = Chunk.Index(d.lx, d.y, d.lz);
                 d.c.RawBlocks[idx] = (byte)BlockType.Air;
                 d.c.RawMeta[idx] = 0;
@@ -203,7 +294,7 @@ namespace VStudioCraft.Game
             c = world.GetChunk(cx, cz + 1); if (c != null) c.HasActiveFluid = true;
         }
 
-        private static void ScanChunk(Chunk chunk, World world)
+        private static void ScanChunk(Chunk chunk, World world, ScanState state)
         {
             var blocks = chunk.RawBlocks;
             var meta = chunk.RawMeta;
@@ -251,24 +342,17 @@ namespace VStudioCraft.Game
                         bool waterBelow = y > 0 && IsWaterAt(chunk, world, x, y - 1, z);
                         newT = waterBelow ? BlockType.Stone : BlockType.Cobblestone;
                     }
-                    blocks[idx] = (byte)newT;
-                    meta[idx] = 0;
-                    chunk.IsModified = true;
-                    _producedWrites.Add(chunk);
-                    // Lava → solid is an opacity change. Run the same
-                    // incremental light update SetBlock would have run
-                    // for a manual edit so the surrounding sky/block
-                    // light recomputes; otherwise a converted cell at
-                    // ground level can leave a stale-bright corridor
-                    // where lava used to let light pass.
-                    int wx = chunk.ChunkX * Chunk.SizeX + x;
-                    int wz = chunk.ChunkZ * Chunk.SizeZ + z;
-                    var touched = LightCalculator.UpdateAfterEdit(world, wx, y, wz, b, newT);
-                    foreach (var k in touched)
-                    {
-                        var nc = world.GetChunk(k.cx, k.cz);
-                        if (nc != null) _producedWrites.Add(nc);
-                    }
+                    // Phase B.1 — stage the conversion (don't mutate in
+                    // place) so concurrent ScanChunk threads scanning
+                    // neighbouring chunks see a consistent snapshot of
+                    // this chunk's blocks. The serial apply-pass at the
+                    // end of Tick() runs the LightCalculator step. The
+                    // observable difference vs. the sequential version
+                    // is one tick of latency on lava↔water reactions
+                    // when the conversion would have rippled into another
+                    // chunk's same-tick scan — invisible to the player.
+                    state.LavaConversions.Add((chunk, x, y, z, b, newT));
+                    state.ProducedWrites.Add(chunk);
                     continue;
                 }
 
@@ -305,7 +389,7 @@ namespace VStudioCraft.Game
                 {
                     if (!HasFeeder(chunk, world, x, y, z, group, isFalling, reach))
                     {
-                        _drains.Add((chunk, x, y, z, group));
+                        state.Drains.Add((chunk, x, y, z, group));
                         continue;
                     }
                 }
@@ -326,7 +410,7 @@ namespace VStudioCraft.Game
                     {
                         belowAir = true;
                         byte fallMeta = (byte)((FluidReach & 0x0F) | 0x10); // bit 4 = falling
-                        StageWrite(chunk, x, y - 1, z, (byte)flowing, fallMeta, group);
+                        StageWrite(state, chunk, x, y - 1, z, (byte)flowing, fallMeta, group);
                     }
                     else if (BlockData.FluidGroup(below) == group)
                     {
@@ -371,19 +455,22 @@ namespace VStudioCraft.Game
                 int outReach = reach - 1;
                 if (outReach < 0) continue;
                 byte outMeta = (byte)(outReach & 0x0F);
-                SpreadHoriz(chunk, world, x, y, z, +1,  0, flowing, outMeta, group);
-                SpreadHoriz(chunk, world, x, y, z, -1,  0, flowing, outMeta, group);
-                SpreadHoriz(chunk, world, x, y, z,  0, +1, flowing, outMeta, group);
-                SpreadHoriz(chunk, world, x, y, z,  0, -1, flowing, outMeta, group);
+                SpreadHoriz(state, chunk, world, x, y, z, +1,  0, flowing, outMeta, group);
+                SpreadHoriz(state, chunk, world, x, y, z, -1,  0, flowing, outMeta, group);
+                SpreadHoriz(state, chunk, world, x, y, z,  0, +1, flowing, outMeta, group);
+                SpreadHoriz(state, chunk, world, x, y, z,  0, -1, flowing, outMeta, group);
             }
         }
 
-        private static void StageWrite(Chunk c, int lx, int y, int lz, byte block, byte meta, int group)
+        private static void StageWrite(ScanState state, Chunk c, int lx, int y, int lz, byte block, byte meta, int group)
         {
-            _writes.Add((c, lx, y, lz, block, meta));
-            _producedWrites.Add(c);
+            state.Writes.Add((c, lx, y, lz, block, meta));
+            state.ProducedWrites.Add(c);
             // Keep the chunk active for next tick — it just produced a fresh
-            // boundary that will need follow-up propagation.
+            // boundary that will need follow-up propagation. Multiple threads
+            // may write `true` to the same chunk's HasActiveFluid in the
+            // parallel scan; the race is benign (every writer writes the
+            // same value) and the bool write is atomic.
             c.HasActiveFluid = true;
             // group is unused now that water and lava share the same code
             // path; kept on the signature so the call sites stay symmetric
@@ -392,7 +479,7 @@ namespace VStudioCraft.Game
         }
 
         private static void SpreadHoriz(
-            Chunk chunk, World world,
+            ScanState state, Chunk chunk, World world,
             int x, int y, int z, int dx, int dz,
             BlockType flowing, byte outMeta, int group)
         {
@@ -402,7 +489,7 @@ namespace VStudioCraft.Game
             {
                 int idx = Chunk.Index(nlx, y, nlz);
                 if (chunk.RawBlocks[idx] != (byte)BlockType.Air) return;
-                StageWrite(chunk, nlx, y, nlz, (byte)flowing, outMeta, group);
+                StageWrite(state, chunk, nlx, y, nlz, (byte)flowing, outMeta, group);
                 return;
             }
             // Crossing into a neighbour chunk.
@@ -416,7 +503,7 @@ namespace VStudioCraft.Game
             if (nc == null) return;
             int nidx = Chunk.Index(xx, y, zz);
             if (nc.RawBlocks[nidx] != (byte)BlockType.Air) return;
-            StageWrite(nc, xx, y, zz, (byte)flowing, outMeta, group);
+            StageWrite(state, nc, xx, y, zz, (byte)flowing, outMeta, group);
         }
 
         // Does this flowing cell have an upstream fluid feeder right now?

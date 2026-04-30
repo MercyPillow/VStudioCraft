@@ -6555,23 +6555,34 @@ void main()
             var passives = _world.Passives;
             for (int s = 0; s < steps; s++)
             {
-                for (int i = passives.Count - 1; i >= 0; i--)
+                // Phase B.2 — parallel update across the passive list.
+                // Each PassiveMob.Update mutates per-instance state
+                // only (Position, Velocity, Yaw, HurtTimer, OnGround)
+                // and reads `_world` (block lookups). World mutations
+                // happen elsewhere in the tick loop (player edits +
+                // FluidTick apply pass), not concurrently with this.
+                // Chicken.TickEggLay is the only sink call in this
+                // path; SpawnDrop is lock-protected via _sinkLock.
+                //
+                // Dead-mob reap stays serial below — RemoveAt at index
+                // i invalidates parallel indexers, and reaping inside
+                // the loop is a footgun.
+                int count = passives.Count;
+                System.Threading.Tasks.Parallel.For(0, count, i =>
                 {
                     var mob = passives[i];
-                    if (mob.IsDead)
-                    {
-                        passives.RemoveAt(i);
-                        continue;
-                    }
+                    if (mob.IsDead) return; // serial reap below
                     mob.Update(MobTickInterval, _world);
                     if (mob is Chicken chicken)
                     {
-                        // Egg-lay countdown is decoupled from the base wander
-                        // tick so PassiveMob.Update can stay sink-free; the
-                        // chicken-only path threads `this` (the IDropSink)
-                        // through here.
                         chicken.TickEggLay(MobTickInterval, this);
                     }
+                });
+                // Serial reap — backwards iteration so RemoveAt at
+                // index i doesn't shift unread tail.
+                for (int i = passives.Count - 1; i >= 0; i--)
+                {
+                    if (passives[i].IsDead) passives.RemoveAt(i);
                 }
             }
         }
@@ -6599,14 +6610,17 @@ void main()
             var playerPos = Player != null ? Player.Position : Vector3.Zero;
             for (int s = 0; s < steps; s++)
             {
-                for (int i = hostiles.Count - 1; i >= 0; i--)
+                // Phase B.2 — parallel update mirroring TickPassives.
+                // mob.Update + Creeper.TickFuse can call DamagePlayer
+                // through `this` (IPlayerDamageSink); _sinkLock guards
+                // Player.TakeDamage so two creepers detonating in the
+                // same tick can't race. mob.Update reads _world but
+                // doesn't write to it.
+                int count = hostiles.Count;
+                System.Threading.Tasks.Parallel.For(0, count, i =>
                 {
                     var mob = hostiles[i];
-                    if (mob.IsDead)
-                    {
-                        hostiles.RemoveAt(i);
-                        continue;
-                    }
+                    if (mob.IsDead) return; // serial reap below
                     mob.Update(MobTickInterval, _world, playerPos, this);
                     if (mob is Creeper creeper)
                     {
@@ -6618,6 +6632,11 @@ void main()
                         // gunpowder from blowing themselves up — matches
                         // the "explosion eats the corpse" Alpha behaviour.
                     }
+                });
+                // Serial reap.
+                for (int i = hostiles.Count - 1; i >= 0; i--)
+                {
+                    if (hostiles[i].IsDead) hostiles.RemoveAt(i);
                 }
             }
         }
@@ -6658,6 +6677,16 @@ void main()
             _world.UpdateFallingBlocks(dt);
         }
 
+        // Lock used to serialise the mob-side sink calls when the per-tick
+        // hostile / passive update is running in parallel (Phase B.2 of
+        // the parallelisation analysis). The vast majority of mob ticks
+        // never hit a sink — only Creeper TickFuse calls DamagePlayer
+        // when exploding, and Chicken TickEggLay calls SpawnDrop when
+        // the egg-lay timer fires (every ~5 minutes per chicken). So
+        // the lock contention is effectively zero in steady-state play
+        // and avoids a much messier per-mob deferred-effect queue.
+        private readonly object _sinkLock = new object();
+
         // IPlayerDamageSink: HostileMob calls this to inflict melee
         // damage. Wraps Player.TakeDamage with a null guard since the
         // mob list can outlive a Player swap (eg. world reload during
@@ -6665,7 +6694,11 @@ void main()
         public void DamagePlayer(int amount)
         {
             if (Player == null || amount <= 0) return;
-            Player.TakeDamage(amount);
+            // Lock for B.2 — Player.TakeDamage mutates HP, hurt-flash
+            // timer, etc. Concurrent calls from parallel hostile mob
+            // ticks would race on those fields. Lock is uncontended in
+            // practice (creepers detonating simultaneously is rare).
+            lock (_sinkLock) { Player.TakeDamage(amount); }
         }
 
         // IDropSink: HostileMob.SpawnDeathDrops calls this for each
@@ -6683,7 +6716,10 @@ void main()
                 AgeSec = 0f,
                 PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
             };
-            _drops.Add(d);
+            // Lock for B.2 — _drops is a List<>, not thread-safe for
+            // Add. Chicken egg-lay during a parallel TickPassives can
+            // call this from any worker thread.
+            lock (_sinkLock) { _drops.Add(d); }
         }
 
         // IDropSink — Tier 4 #18 Slime split insertion. A dying Big or

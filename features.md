@@ -504,9 +504,6 @@ multiple subsystems at once.
 	
 ### Tier 6 — World-gen variety
 
-34. **Fire propagation block** — Block, spread/die tick. Flint and Steel (Tier 4 #17) lights it; pairs with Tier 8 TNT priming.
-35. **Falling sand / gravel physics** — DONE. Two-stage: (1) Edit-driven candidate scan — `World.SetBlock` enqueues coordinates into `_pendingFallChecks` whenever the new block is sand/gravel OR whenever it opens an air cell beneath one. `World.TickFallingPhysics` drains the queue every `FallStepInterval = 0.10s`, clears the source cell to Air and spawns a `FallingBlockEntity`. (2) Per-frame entity integration — `World.UpdateFallingBlocks` runs every frame, applies gravity (16 m/s², terminal -20 m/s) and probes every integer cell crossed for a solid floor; on landing it commits via `SetBlock` at the landing Y. `GameRenderer.RenderFallingBlocks` draws each in-flight entity as a flat-coloured cube (sand-tan / gravel-grey) via the existing `_overlayShader` + `_breakCubeMesh` path used by projectiles. Cascaded stacks trickle one block per 100ms instead of plummeting in lockstep. Skipped Alpha's network-replicated FallingSand entity 70 — current single-host implementation is local-only; revisit when MP support is needed.
-36. **Water-meets-lava → cobblestone / stone / obsidian** — DONE. Conversion lives at the top of `FluidTick.ScanChunk`'s per-cell fluid loop: any LAVA cell with a water-group neighbour (Water or FlowingWater, on any of 6 axes including across chunk seams) converts in place. Three-rule resolution: `Lava` source → `Obsidian`; `FlowingLava` with water DIRECTLY below → `Stone` (canonical "lava drip lands on the surface of a pool" cap); `FlowingLava` with water elsewhere → `Cobblestone`. Water never converts; only lava does. The vertical-down case is checked before the horizontal case so a flowing-lava cell with both water-below and water-beside resolves to stone (the descending motion dominates the contact). Mutation is direct (chunk RawBlocks + meta=0) plus an `LightCalculator.UpdateAfterEdit` call so the opacity flip from light-transparent fluid to opaque solid recomputes sky/block light in the affected chunks.
 37. **Biome system (snow / desert / forest / plains)** — `OverworldGenerator` clone using rainfall/temperature noise; per-biome surface-block + flora rules. Unlocks ice/snow blocks, cacti, pumpkin patches.
 
 ### Tier 7 — Lighting + sky polish
@@ -525,10 +522,8 @@ multiple subsystems at once.
 
 ### Tier 9 — Infrastructure + completion
 
-47. **Main menu + world select + world creation screen** — Currently we go straight from the VS tool window into a world.
 48. **Configurable key bindings + autosave + backup-on-load-failure**.
 49. **Minecart (328) + Storage Minecart (342) + Powered Minecart (343) + Boat (333) + rail blocks** — Vehicles. Minecart on rails, boat on water; each is a ridable entity. Powered Minecart has a furnace that burns coal to push it. Storage Minecart shows a chest GUI when ridden.
-50. **Multiplayer (TCP server + protocol + auth + interp)** — Alpha had this; it's a project on its own. ~3000+ LoC.
 	
 ### Tier 10 — Optional Features
 51. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
