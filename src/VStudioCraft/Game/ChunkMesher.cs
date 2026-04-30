@@ -73,7 +73,7 @@ namespace VStudioCraft.Game
 
             // Model pass — scan for non-cube blocks and emit per-block sprite
             // geometry into the opaque stream (alpha-tested via shader discard).
-            EmitModels(chunk, baseX, baseZ);
+            EmitModels(chunk, baseX, baseZ, nxNeg, nxPos, nzNeg, nzPos);
 
             // Fluid surface lids — for each non-falling flowing-fluid cell with
             // air directly above we drop the cube sweep's full-cube top face
@@ -338,7 +338,9 @@ namespace VStudioCraft.Game
         // cell centre, each rendered double-sided so the player sees the torch
         // from any angle. Used today by torches; flowers / mushrooms / tall
         // grass will reuse this geometry once their tiles are added.
-        private void EmitModels(Chunk chunk, int baseX, int baseZ)
+        private void EmitModels(
+            Chunk chunk, int baseX, int baseZ,
+            Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos)
         {
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int y = 0; y < Chunk.SizeY; y++)
@@ -390,6 +392,19 @@ namespace VStudioCraft.Game
                     // fixed full-X/full-Z footprint and a 0.125 Y
                     // height.
                     EmitSnowLayer(x + baseX, y, z + baseZ, layer, lightPacked);
+                }
+                else if (t == BlockType.Cactus)
+                {
+                    // Tier 6 #37 — Cactus 12×16×12 inset box with
+                    // hash-overlap sides. Light is sampled per-face
+                    // from the OUTWARD neighbour (same convention
+                    // the cube mesher uses) — sampling at the cactus
+                    // cell itself would always be black because the
+                    // cell is light-blocking.
+                    EmitCactusBox(
+                        x + baseX, y, z + baseZ,
+                        chunk, x, y, z,
+                        nxNeg, nxPos, nzNeg, nzPos);
                 }
                 else
                 {
@@ -731,6 +746,104 @@ namespace VStudioCraft.Game
                 x1, y0, z1, 1f, 1f,
                 x0, y0, z1, 0f, 1f,
                 0f, -1f, 0f, layer, lightPacked);
+        }
+
+        // Tier 6 #37 — Cactus inset box with hash-overlap sides.
+        // Two-pixel inset on each horizontal side (12×16×12 inside
+        // the cell), but the four lateral faces extend the FULL
+        // perpendicular axis instead of stopping at the inset
+        // square — that's what makes the four faces visibly overlap
+        // at the corners and read as a # pattern from above. The
+        // side-face plane sits at x = 2/16 / x = 14/16 (or z), and
+        // each face spans Y:[0..1] × the perpendicular axis at its
+        // full [0..1] range. Top + bottom are at the 12×12 inset
+        // square (matching the side-face plane positions) so the
+        // top texture caps the central column visibly above the
+        // overlapping side strips. Side-face windings follow the
+        // dir>0 / dir<0 convention from the cube mesher's EmitQuad.
+        private void EmitCactusBox(
+            float wx, float wy, float wz,
+            Chunk chunk, int cx, int cy, int cz,
+            Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos)
+        {
+            // 1-pixel inset for the side-face PLANES (matches the
+            // canonical Alpha 14×16×14 cactus). The top + bottom
+            // span the same 14×14 footprint at 1/16..15/16, so the
+            // top tile reads at the canonical Alpha cactus_top size
+            // — earlier 2/16 inset made the top look 1 pixel too
+            // small. Hash-overlap on the sides is preserved because
+            // each side face still spans the FULL perpendicular
+            // axis (z=0..1 for ±X, x=0..1 for ±Z), extending past
+            // the top face's edges and producing the visible #
+            // silhouette at corner viewing angles.
+            const float inset = 1f / 16f;
+            float xPN = wx + inset;
+            float xPP = wx + 1f - inset;
+            float zPN = wz + inset;
+            float zPP = wz + 1f - inset;
+            float xF0 = wx + 0f;
+            float xF1 = wx + 1f;
+            float zF0 = wz + 0f;
+            float zF1 = wz + 1f;
+            float y0 = wy + 0f;
+            float y1 = wy + 1f;
+
+            int sideLayer = BlockTextures.TileCactusSide;
+            int topLayer  = BlockTextures.TileCactusTop;
+
+            // Per-face neighbour-sampled lights — solid cactus cell
+            // is light-blocking, so sampling AT the cactus cell would
+            // give black faces. Use the same outward-cell convention
+            // the cube mesher uses for normal blocks.
+            int lXNeg = LightOrNeighbor(chunk, cx - 1, cy,     cz,     nxNeg, nxPos, nzNeg, nzPos);
+            int lXPos = LightOrNeighbor(chunk, cx + 1, cy,     cz,     nxNeg, nxPos, nzNeg, nzPos);
+            int lZNeg = LightOrNeighbor(chunk, cx,     cy,     cz - 1, nxNeg, nxPos, nzNeg, nzPos);
+            int lZPos = LightOrNeighbor(chunk, cx,     cy,     cz + 1, nxNeg, nxPos, nzNeg, nzPos);
+            int lYPos = LightOrNeighbor(chunk, cx,     cy + 1, cz,     nxNeg, nxPos, nzNeg, nzPos);
+            int lYNeg = LightOrNeighbor(chunk, cx,     cy - 1, cz,     nxNeg, nxPos, nzNeg, nzPos);
+
+            // -X face
+            EmitCrossQuad(
+                xPN, y0, zF0, 0f, 0f,
+                xPN, y0, zF1, 1f, 0f,
+                xPN, y1, zF1, 1f, 1f,
+                xPN, y1, zF0, 0f, 1f,
+                -1f, 0f, 0f, sideLayer, lXNeg);
+            // +X face
+            EmitCrossQuad(
+                xPP, y0, zF0, 1f, 0f,
+                xPP, y1, zF0, 1f, 1f,
+                xPP, y1, zF1, 0f, 1f,
+                xPP, y0, zF1, 0f, 0f,
+                +1f, 0f, 0f, sideLayer, lXPos);
+            // -Z face
+            EmitCrossQuad(
+                xF0, y0, zPN, 0f, 0f,
+                xF0, y1, zPN, 0f, 1f,
+                xF1, y1, zPN, 1f, 1f,
+                xF1, y0, zPN, 1f, 0f,
+                0f, 0f, -1f, sideLayer, lZNeg);
+            // +Z face
+            EmitCrossQuad(
+                xF0, y0, zPP, 0f, 0f,
+                xF1, y0, zPP, 1f, 0f,
+                xF1, y1, zPP, 1f, 1f,
+                xF0, y1, zPP, 0f, 1f,
+                0f, 0f, +1f, sideLayer, lZPos);
+            // +Y face (top)
+            EmitCrossQuad(
+                xPN, y1, zPP, 0f, 0f,
+                xPP, y1, zPP, 1f, 0f,
+                xPP, y1, zPN, 1f, 1f,
+                xPN, y1, zPN, 0f, 1f,
+                0f, +1f, 0f, topLayer, lYPos);
+            // -Y face (bottom)
+            EmitCrossQuad(
+                xPN, y0, zPN, 0f, 0f,
+                xPP, y0, zPN, 1f, 0f,
+                xPP, y0, zPP, 1f, 1f,
+                xPN, y0, zPP, 0f, 1f,
+                0f, -1f, 0f, topLayer, lYNeg);
         }
 
         private void EmitCrossSprite(float wx, float wy, float wz, int layer, int lightPacked)

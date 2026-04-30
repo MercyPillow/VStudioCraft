@@ -1120,8 +1120,45 @@ namespace VStudioCraft.Game
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
                     return (0.3f, 0f, 0.3f, 0.7f, 0.5f, 0.7f);
+                // Tier 6 #37 — Cactus is 16×12×12 (full height, 2
+                // pixel inset on each horizontal side). The visual
+                // mesh emits the four side faces at the inset plane
+                // (x = ±2/16 from the cell edge) but extends each
+                // face FULL on the perpendicular axis, producing the
+                // canonical Alpha hash-shape overlap at the corners.
+                // The collision AABB is the inset 12×12 footprint —
+                // matches the side-face plane positions, so the
+                // selection wireframe traces the visible column
+                // rather than the overlap fringe.
+                case BlockType.Cactus:
+                    return (1f / 16f, 0f, 1f / 16f, 15f / 16f, 1f, 15f / 16f);
                 default:
                     return (0f, 0f, 0f, 1f, 1f, 1f);
+            }
+        }
+
+        // Tier 6 #37 — Inventory / hotbar / held-view icon dispatch.
+        // The icon paths used to gate "show as 3D cube vs flat sprite"
+        // on IsCubeShape, but that breaks for sub-cube blocks that
+        // are visually still cube-LIKE (Cactus is an inset 14×16×14
+        // box, but the icon should still read as a 3D block, not a
+        // flat sprite). This helper lets the cube-icon path opt in
+        // those cases without affecting the chunk mesher's IsCubeShape
+        // branch (which gates "does the cube sweep emit faces for
+        // this block").
+        //
+        // Snow layer is INTENTIONALLY excluded — its 1/8 height makes
+        // a full-cube icon look wrong, and the flat-sprite icon
+        // (using TileSnow as a square) reads as a snow tile.
+        public static bool RendersAsCubeIcon(BlockType t)
+        {
+            if (IsCubeShape(t)) return true;
+            switch (t)
+            {
+                case BlockType.Cactus:
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -1173,6 +1210,10 @@ namespace VStudioCraft.Game
                 // not a full cube. Routed through the mesher's slab
                 // emitter (EmitSnowLayer).
                 case BlockType.SnowBlock:
+                // Tier 6 #37 — Cactus is an inset 14×16×14 box, not
+                // a full cube. Routed through the mesher's custom
+                // box emitter (EmitCactusBox).
+                case BlockType.Cactus:
                     return false;
                 // Tier 4 #16 — Door halves are a thin slab (3/16-deep
                 // quad against the wall face), not a full 1×1×1 cube.
@@ -1254,6 +1295,14 @@ namespace VStudioCraft.Game
                 // door / cross-sprite entries above. The snow's own
                 // 6-box geometry is emitted by EmitSnowLayer.
                 case BlockType.SnowBlock:
+                // Tier 6 #37 — Cactus is an inset 14×16×14 box; if
+                // marked opaque the cube sweep would cull adjacent
+                // block faces against it (a dirt cube touching a
+                // cactus would lose its facing side, so the player
+                // would see straight through the dirt at the 1/16
+                // gap on either side of the cactus). Same reasoning
+                // as the door / snow / cross-sprite entries.
+                case BlockType.Cactus:
                     return false;
                 default:
                     return true;

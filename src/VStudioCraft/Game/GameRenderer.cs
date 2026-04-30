@@ -9922,7 +9922,7 @@ void main()
                 return;
             }
 
-            if (BlockData.IsCubeShape(stack.Type))
+            if (BlockData.RendersAsCubeIcon(stack.Type))
             {
                 RenderBlockIcon3D(stack.Type, x0, y0, iconPx, iconPx, ortho);
             }
@@ -10301,7 +10301,7 @@ void main()
                 if (stack.IsEmpty) continue;
                 HotbarLayout.GetIconRect(i, width, height,
                     out int xp, out int yp, out int iw, out int ih);
-                if (BlockData.IsCubeShape(stack.Type))
+                if (BlockData.RendersAsCubeIcon(stack.Type))
                 {
                     RenderBlockIcon3D(stack.Type, xp, yp, iw, ih, ortho);
                 }
@@ -11702,7 +11702,7 @@ void main()
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
 
-                if (BlockData.IsCubeShape(inv.Cursor.Type))
+                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
                 {
                     RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
                     GL.Disable(EnableCap.CullFace);
@@ -11902,7 +11902,7 @@ void main()
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
 
-                if (BlockData.IsCubeShape(inv.Cursor.Type))
+                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
                 {
                     RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
                     GL.Disable(EnableCap.CullFace);
@@ -12158,7 +12158,7 @@ void main()
                 int iconSize = FurnaceScreen.IconPx(width, height);
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
-                if (BlockData.IsCubeShape(inv.Cursor.Type))
+                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
                 {
                     RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
                     GL.Disable(EnableCap.CullFace);
@@ -12319,7 +12319,7 @@ void main()
                 int iconSize = ChestScreen.IconPx(width, height);
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
-                if (BlockData.IsCubeShape(inv.Cursor.Type))
+                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
                 {
                     RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
                     GL.Disable(EnableCap.CullFace);
@@ -12864,7 +12864,7 @@ void main()
         private void DrawSlotIcon(BlockType type, int xp, int yp, int viewW, int viewH, Matrix4 ortho)
         {
             int icon = InventoryScreen.IconPx(viewW, viewH);
-            if (BlockData.IsCubeShape(type))
+            if (BlockData.RendersAsCubeIcon(type))
             {
                 RenderBlockIcon3D(type, xp, yp, icon, icon, ortho);
             }
