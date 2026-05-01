@@ -231,7 +231,12 @@ namespace VStudioCraft.Game
         // randomised tick window via World.TickSaplings.
         public const int FirstTailSaplingLayer = FirstTailPumpkinLayer + TailPumpkinLayerCount;         // 164
         public const int TailSaplingLayerCount = 1;
-        public const int LayerCount = FirstTailSaplingLayer + TailSaplingLayerCount;                    // 165
+        // Tier 8 #48 — Note Block. Single all-faces tile (Alpha's
+        // note block uses one tile across all 6 faces — a wood
+        // panel with a small dark dot in the centre).
+        public const int FirstTailNoteBlockLayer = FirstTailSaplingLayer + TailSaplingLayerCount;       // 165
+        public const int TailNoteBlockLayerCount = 1;
+        public const int LayerCount = FirstTailNoteBlockLayer + TailNoteBlockLayerCount;                // 166
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -415,6 +420,7 @@ namespace VStudioCraft.Game
         public const int TilePumpkinTop          = 162;
         public const int TilePumpkinSide         = 163;
         public const int TileSapling             = 164;
+        public const int TileNoteBlock           = 165;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -705,6 +711,9 @@ namespace VStudioCraft.Game
             // Tier 8 #47 — Sapling sprite.
             UploadLayer(layerPixels, TileSapling, GenerateSapling);
 
+            // Tier 8 #48 — Note Block tile.
+            UploadLayer(layerPixels, TileNoteBlock, GenerateNoteBlock);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -845,7 +854,8 @@ namespace VStudioCraft.Game
                 || layer == TileIce
                 || layer == TileSnowyGrassSide
                 || layer == TilePumpkinTop     || layer == TilePumpkinSide
-                || layer == TileSapling;
+                || layer == TileSapling
+                || layer == TileNoteBlock;
         }
 
         // Tier 4 #26 — Slice the SugarCane block tile out of terrain.png.
@@ -3621,6 +3631,9 @@ namespace VStudioCraft.Game
             // (15, 0) — the lone sapling tile in Alpha 1.1.2_01
             // (Birch / Spruce / Jungle saplings are Beta-era).
             /* TileSapling             */ (15, 0),
+            // Tier 8 #48 — Note Block all-faces tile. Canonical
+            // Alpha (10, 4).
+            /* TileNoteBlock           */ (10, 4),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3829,6 +3842,9 @@ namespace VStudioCraft.Game
             // Tier 8 #47 — Sapling sprite. Procedural fallback.
             UploadLayer(layerPixels, TileSapling, GenerateSapling);
 
+            // Tier 8 #48 — Note Block. Procedural fallback.
+            UploadLayer(layerPixels, TileNoteBlock, GenerateNoteBlock);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -3842,6 +3858,7 @@ namespace VStudioCraft.Game
                 TileSnowyGrassSide,
                 TilePumpkinTop, TilePumpkinSide,
                 TileSapling,
+                TileNoteBlock,
             };
             for (int i = 0; i < biomeTailLayers.Length; i++)
             {
@@ -6086,6 +6103,49 @@ namespace VStudioCraft.Game
             int trimR = (trimRow * TileSize + (cx + 1)) * 4;
             pixels[trimL + 3] = 0;
             pixels[trimR + 3] = 0;
+        }
+
+        // Tier 8 #48 — Note Block tile. Light-wood plank background
+        // with a small dark note-head dot in the centre. Single
+        // tile applied to all six faces (Alpha used one tile across
+        // all faces — the dot signals "this is the playable face"
+        // visually, even though pitch interaction works on any face).
+        // Procedural fallback only; the alpha-textures atlas overlays
+        // the canonical (10, 4) tile from terrain.png.
+        private static void GenerateNoteBlock(byte[] pixels)
+        {
+            // Wood-plank background. Two alternating brown shades in
+            // 4-pixel-tall horizontal stripes for plank seams.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool darkBand = (y % 4 == 0);
+                byte r = darkBand ? (byte)0x80 : (byte)0xA8;
+                byte g = darkBand ? (byte)0x55 : (byte)0x78;
+                byte b = darkBand ? (byte)0x28 : (byte)0x40;
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+            // Dark note-head dot — small round patch at the centre.
+            int cx = TileSize / 2;
+            int cy = TileSize / 2;
+            int rr = 3;
+            for (int dy = -rr; dy <= rr; dy++)
+            for (int dx = -rr; dx <= rr; dx++)
+            {
+                if (dx * dx + dy * dy > rr * rr) continue;
+                int px = cx + dx;
+                int py = cy + dy;
+                if ((uint)px >= TileSize || (uint)py >= TileSize) continue;
+                int idx = (py * TileSize + px) * 4;
+                pixels[idx + 0] = 0x18;
+                pixels[idx + 1] = 0x10;
+                pixels[idx + 2] = 0x08;
+                pixels[idx + 3] = 255;
+            }
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

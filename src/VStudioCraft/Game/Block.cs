@@ -465,6 +465,13 @@ namespace VStudioCraft.Game
         // serves as both the placeable block and the carryable
         // item — Alpha kept those unified for sapling.
         Sapling            = 145, // Alpha 6
+        // Tier 8 #48 — Note Block. Right-click increments the per-
+        // cell pitch (0..24, stored in low 5 bits of meta) and
+        // plays a click placeholder sound. Real procedural pitched
+        // audio is a follow-up; without redstone (Tier 8 #42 still
+        // pending) the only trigger is the right-click itself,
+        // which mirrors Alpha's "click to advance + play" coupling.
+        NoteBlock          = 146, // Alpha 25
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -1610,6 +1617,10 @@ namespace VStudioCraft.Game
                 // Tier 8 #47 — Sapling instant-break (Alpha hardness 0).
                 case BlockType.Sapling:
                     return 0f;
+                // Tier 8 #48 — Note Block hardness 0.8 (Alpha — same as
+                // wool, breaks fastest with an axe but bare-hand works).
+                case BlockType.NoteBlock:
+                    return 0.8f;
                 case BlockType.Glass:
                 case BlockType.Sponge:
                     return 0.3f;
@@ -1775,6 +1786,8 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileIce;
                 case BlockType.Sapling:
                     return BlockTextures.TileSapling;
+                case BlockType.NoteBlock:
+                    return BlockTextures.TileNoteBlock;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
                     // Bottom shares the side tile (the bottom of a

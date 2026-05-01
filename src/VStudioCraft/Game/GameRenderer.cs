@@ -4580,6 +4580,29 @@ void main()
                     // because the jukebox happened to be slotless.
                     return true;
                 }
+                case BlockType.NoteBlock:
+                {
+                    // Tier 8 #48 — Note Block RMB. Increments the
+                    // pitch metadata 0..24 (Alpha's 25-note range:
+                    // F#3 → F#5) and plays a placeholder click. Real
+                    // procedural pitched audio is a follow-up; the
+                    // pitch storage + interaction loop is correct
+                    // already, so plugging a synth in later is just
+                    // a one-call swap inside this branch.
+                    int ncx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
+                    int ncz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
+                    var ch = _world.GetChunk(ncx, ncz);
+                    if (ch != null)
+                    {
+                        int lx = hit.X - ncx * Chunk.SizeX;
+                        int lz = hit.Z - ncz * Chunk.SizeZ;
+                        byte meta = ch.GetMeta(lx, hit.Y, lz);
+                        int pitch = ((meta & 0x1F) + 1) % 25;
+                        ch.SetMeta(lx, hit.Y, lz, (byte)((meta & 0xE0) | pitch));
+                    }
+                    SfxBank.PlayClick();
+                    return true;
+                }
                 case BlockType.WoodDoorBlockBottom:
                 case BlockType.WoodDoorBlockTop:
                     // Tier 4 #16 — Wooden door RMB toggles open/closed
