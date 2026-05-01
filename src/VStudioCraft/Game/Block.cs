@@ -493,6 +493,16 @@ namespace VStudioCraft.Game
         // propagation simulation is the follow-up — for now the
         // wire is a passive visual without signal flow.
         RedstoneWire       = 150, // Alpha 55
+        // Tier 8 #42 — Input blocks. All five drive the power
+        // propagation system: lever (toggle on/off), buttons (press
+        // for ~10 ticks then release), pressure plates (pressed
+        // while any entity stands on them). Metadata low bit = on/
+        // pressed state; the power BFS reads this each tick and
+        // pushes 15-level signal into adjacent wires.
+        Lever              = 151, // Alpha 69
+        StoneButton        = 152, // Alpha 77 (Wood Button was Beta-era — out of scope)
+        StonePressurePlate = 153, // Alpha 70
+        WoodPressurePlate  = 154, // Alpha 72
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -880,6 +890,16 @@ namespace VStudioCraft.Game
                 // never blocks player movement. Walking through it
                 // is the canonical Alpha behaviour.
                 case BlockType.RedstoneWire:
+                // Tier 8 #42 — Lever, button, pressure plates: all
+                // non-solid for player movement (walk through / stand
+                // on top — the pressure plates are walkable but the
+                // collision is handled by the partial AABB, so
+                // IsSolid = false here lets the player phase through
+                // the cell's empty volume above the slab).
+                case BlockType.Lever:
+                case BlockType.StoneButton:
+                case BlockType.StonePressurePlate:
+                case BlockType.WoodPressurePlate:
                 // Tier 6 #34 — Fire is non-solid; the player walks
                 // straight through it (taking damage via the
                 // per-tick fluid-contact check pattern rather than
@@ -1193,6 +1213,21 @@ namespace VStudioCraft.Game
                 // visible thin red line on the floor.
                 case BlockType.RedstoneWire:
                     return (0f, 0f, 0f, 1f, 1f / 16f, 1f);
+                // Lever — small block at the bottom of the cell.
+                // 6/16 wide × 6/16 tall × 6/16 deep, centred.
+                case BlockType.Lever:
+                    return (5f / 16f, 0f, 5f / 16f, 11f / 16f, 6f / 16f, 11f / 16f);
+                // Stone button — small recessed cuboid on the floor.
+                // 6/16 wide × 2/16 tall × 4/16 deep.
+                case BlockType.StoneButton:
+                    return (5f / 16f, 0f, 6f / 16f, 11f / 16f, 2f / 16f, 10f / 16f);
+                // Pressure plates — 14/16 footprint, 1/16 thick (the
+                // border 1-pixel ring is implied air around the
+                // visible plate face). Same dimensions for stone +
+                // wood.
+                case BlockType.StonePressurePlate:
+                case BlockType.WoodPressurePlate:
+                    return (1f / 16f, 0f, 1f / 16f, 15f / 16f, 1f / 16f, 15f / 16f);
                 // Tier 6 — Torch hitboxes match the 2-pixel-wide
                 // wood column rendered by the chunk mesher. Floor
                 // torch: a 2/16 × 10/16 × 2/16 tower at the cell
@@ -1310,6 +1345,12 @@ namespace VStudioCraft.Game
                 // slab — handled by a custom mesher branch
                 // (EmitRedstoneWire) rather than the cube sweep.
                 case BlockType.RedstoneWire:
+                // Tier 8 #42 — Lever / button / pressure plate all
+                // render as sub-cube meshes, not full cubes.
+                case BlockType.Lever:
+                case BlockType.StoneButton:
+                case BlockType.StonePressurePlate:
+                case BlockType.WoodPressurePlate:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1393,6 +1434,12 @@ namespace VStudioCraft.Game
                 // Wire 1/16 slab — adjacent cube faces below + sides
                 // must still emit so the cell reads correctly.
                 case BlockType.RedstoneWire:
+                // Lever / button / pressure plate sub-cell volumes —
+                // adjacent cube faces must still emit.
+                case BlockType.Lever:
+                case BlockType.StoneButton:
+                case BlockType.StonePressurePlate:
+                case BlockType.WoodPressurePlate:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -1510,6 +1557,12 @@ namespace VStudioCraft.Game
                 case BlockType.RedstoneTorchOff:
                 // Wire is a 1/16 slab, the cell is mostly air.
                 case BlockType.RedstoneWire:
+                // Lever / button / pressure plate — sub-cell volumes
+                // with mostly air, light propagates through the cell.
+                case BlockType.Lever:
+                case BlockType.StoneButton:
+                case BlockType.StonePressurePlate:
+                case BlockType.WoodPressurePlate:
                 // Tier 6 #37 — Ice is translucent (matches Alpha — a
                 // pond covered in ice still has the bed visible
                 // through the surface). SnowBlock is a 1/8 slab so
@@ -1695,11 +1748,17 @@ namespace VStudioCraft.Game
                 // wool, breaks fastest with an axe but bare-hand works).
                 case BlockType.NoteBlock:
                     return 0.8f;
-                // Tier 8 #42 — Redstone torch instant-break (Alpha 0).
+                // Tier 8 #42 — Redstone torch / wire instant-break.
                 case BlockType.RedstoneTorchOn:
                 case BlockType.RedstoneTorchOff:
                 case BlockType.RedstoneWire:
                     return 0f;
+                // Lever / buttons / plates: 0.5 hardness (Alpha).
+                case BlockType.Lever:
+                case BlockType.StoneButton:
+                case BlockType.StonePressurePlate:
+                case BlockType.WoodPressurePlate:
+                    return 0.5f;
                 case BlockType.Glass:
                 case BlockType.Sponge:
                     return 0.3f;
@@ -1875,6 +1934,17 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileRedstoneDust;
                 case BlockType.RedstoneWire:
                     return BlockTextures.TileRedstoneWire;
+                case BlockType.Lever:
+                    // Cobblestone-coloured base; the small lever
+                    // protrusion above it shares the same tile in
+                    // this simplified single-tile pass.
+                    return BlockTextures.TileCobblestone;
+                case BlockType.StoneButton:
+                    return BlockTextures.TileStone;
+                case BlockType.StonePressurePlate:
+                    return BlockTextures.TileStone;
+                case BlockType.WoodPressurePlate:
+                    return BlockTextures.TilePlanks;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
                     // Bottom shares the side tile (the bottom of a

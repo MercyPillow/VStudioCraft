@@ -3158,6 +3158,11 @@ void main()
             _jobs?.Dispose();
             _jobs = null;
 
+            // Tier 8 #42 perf — Clear the static redstone cell registry
+            // so the new world doesn't inherit stale (wx, wy, wz)
+            // entries from the previous session.
+            RedstonePowerSystem.ClearAll();
+
             foreach (var m in _chunkMeshes.Values) m.Dispose();
             _chunkMeshes.Clear();
 
@@ -4599,6 +4604,57 @@ void main()
                     // player wouldn't expect their pickaxe / cobblestone
                     // / whatever to mount onto the jukebox face just
                     // because the jukebox happened to be slotless.
+                    return true;
+                }
+                case BlockType.Lever:
+                {
+                    // Tier 8 #42 — Lever RMB toggles bit 0 of metadata
+                    // (the on/off state). The power-propagation pass
+                    // reads this bit each tick and seeds 15-level
+                    // signal into adjacent wires when the lever is
+                    // ON. Visual stays the same regardless of state
+                    // for now (proper handle-tilt rendering is a
+                    // polish follow-up).
+                    int lcx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
+                    int lcz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
+                    var lch = _world.GetChunk(lcx, lcz);
+                    if (lch != null)
+                    {
+                        int lx = hit.X - lcx * Chunk.SizeX;
+                        int lz = hit.Z - lcz * Chunk.SizeZ;
+                        byte meta = lch.GetMeta(lx, hit.Y, lz);
+                        meta = (byte)(meta ^ 0x01);
+                        lch.SetMeta(lx, hit.Y, lz, meta);
+                    }
+                    SfxBank.PlayClick();
+                    return true;
+                }
+                case BlockType.StoneButton:
+                {
+                    // Tier 8 #42 — Button RMB sets the pressed bit.
+                    // The render-side per-frame tick will release the
+                    // button after ButtonHoldFrames have elapsed
+                    // (handled by World.TickRedstoneButtons below).
+                    int bcx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
+                    int bcz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
+                    var bch = _world.GetChunk(bcx, bcz);
+                    if (bch != null)
+                    {
+                        int lx = hit.X - bcx * Chunk.SizeX;
+                        int lz = hit.Z - bcz * Chunk.SizeZ;
+                        // Bit 0 = pressed flag, bits 4..7 = release-
+                        // countdown ticks (max 15 covers the canonical
+                        // 10-tick stone-button hold window plus
+                        // headroom).
+                        byte meta = bch.GetMeta(lx, hit.Y, lz);
+                        meta = (byte)((meta & 0xF0) | 0x01);
+                        // Stamp 10-tick countdown into the high
+                        // nibble so a tick driver can decrement and
+                        // release.
+                        meta = (byte)((meta & 0x0F) | (10 << 4));
+                        bch.SetMeta(lx, hit.Y, lz, meta);
+                    }
+                    SfxBank.PlayClick();
                     return true;
                 }
                 case BlockType.NoteBlock:
@@ -6815,6 +6871,18 @@ void main()
             //     entities are airborne (early-out on empty list).
             _world.TickFallingPhysics(dt);
             _world.UpdateFallingBlocks(dt);
+
+            // Tier 8 #42 — Redstone power propagation tick. Internally
+            // rate-limited at RedstonePowerSystem.TickInterval (10 Hz)
+            // so per-frame cost is just a counter decrement when not
+            // due. Player cell drives pressure-plate overlap.
+            if (Player != null)
+            {
+                int pcx = (int)Math.Floor(Player.Position.X);
+                int pcy = (int)Math.Floor(Player.Position.Y);
+                int pcz = (int)Math.Floor(Player.Position.Z);
+                _world.TickRedstone(dt, pcx, pcy, pcz);
+            }
         }
 
         // Lock used to serialise the mob-side sink calls when the per-tick

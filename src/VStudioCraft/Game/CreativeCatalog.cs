@@ -90,6 +90,17 @@ namespace VStudioCraft.Game
                 // of two (the world block + the item, both labelled
                 // "Wheat" via BlockData.Name).
                 case BlockType.Wheat:
+                // Tier 8 #42 — Redstone runtime-only variants. Player
+                // should only see / hold:
+                //   - RedstoneTorchOn (the canonical lit form; the
+                //     OFF variant is a power-driven runtime state).
+                //   - RedstoneDust (the held / dropped item form;
+                //     RedstoneWire is the placed-block form, spawned
+                //     when RedstoneDust is RMB'd onto a solid top
+                //     face — same shape as the door item-vs-blocks
+                //     pattern).
+                case BlockType.RedstoneTorchOff:
+                case BlockType.RedstoneWire:
                     return false;
                 default:
                     return true;

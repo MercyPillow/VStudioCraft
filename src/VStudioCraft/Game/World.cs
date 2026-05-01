@@ -1293,6 +1293,22 @@ namespace VStudioCraft.Game
             }
         }
 
+        // Tier 8 #42 — Redstone tick driver. Cadence-rate-limits the
+        // RedstonePowerSystem.Tick(world) call so the per-tick BFS
+        // only runs at 10 Hz regardless of frame-rate. Player cell
+        // is passed in so pressure plates can detect overlap without
+        // a generic entity-AABB query.
+        private float _redstoneTimer;
+        public void TickRedstone(float dt, int playerCellX, int playerCellY, int playerCellZ)
+        {
+            _redstoneTimer -= dt;
+            if (_redstoneTimer > 0f) return;
+            _redstoneTimer = RedstonePowerSystem.TickInterval;
+
+            RedstonePowerSystem.SetPlayerCell(playerCellX, playerCellY, playerCellZ);
+            RedstonePowerSystem.Tick(this);
+        }
+
         // Tier 8 #47 — Runtime oak growth. Called from TickRandomCrops
         // when a sapling's RNG rolls successful growth. Replaces the
         // sapling cell with a trunk + canopy via SetBlock so each
@@ -1427,6 +1443,12 @@ namespace VStudioCraft.Game
             if (_modified.TryRemove(key, out var cached)) chunk = cached;
             _chunks[key] = chunk;
             MarkChunkAndNeighborsDirty(chunk.ChunkX, chunk.ChunkZ);
+            // Tier 8 #42 perf — Populate the redstone registry for
+            // any in-cache redstone blocks (player edits that
+            // survived an unload, or chunks loaded from a save).
+            // Cheap on chunks with no redstone (one byte compare
+            // per cell, no allocation).
+            RedstonePowerSystem.RegisterChunk(chunk);
             return true;
         }
 
@@ -1546,6 +1568,13 @@ namespace VStudioCraft.Game
             // etc.) needs to flip the flag back on or the next tick will
             // skip the chunk entirely.
             FluidTick.MarkActiveAroundEdit(this, cx, cz);
+
+            // Tier 8 #42 perf — Maintain the redstone power system's
+            // sparse cell registry incrementally. Without this hook
+            // the per-tick simulation falls back to a full-world
+            // walk, which crashed the game tick to ~4 fps for users
+            // with no redstone placed at all.
+            RedstonePowerSystem.OnBlockChanged(wx, wy, wz, oldT, t);
 
             // Tier 6 #35 — Falling-physics enqueue. Two cases trigger
             // a fall check: (a) the new block IS sand/gravel and might

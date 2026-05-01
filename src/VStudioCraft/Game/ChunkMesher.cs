@@ -407,6 +407,28 @@ namespace VStudioCraft.Game
                     EmitSnowLayer(x + baseX, y, z + baseZ,
                         BlockTextures.TileRedstoneWire, lightPacked);
                 }
+                else if (t == BlockType.StonePressurePlate
+                      || t == BlockType.WoodPressurePlate)
+                {
+                    // Tier 8 #42 — Pressure plates: 1/16 floor slab
+                    // (slightly inset on X/Z by 1 pixel each side
+                    // forming the canonical 14×1×14 footprint). The
+                    // existing snow-layer 1/8 emitter is too thick
+                    // and doesn't inset, so use the dedicated thin-
+                    // slab path below.
+                    int plateLayer = (t == BlockType.WoodPressurePlate)
+                        ? BlockTextures.TilePlanks
+                        : BlockTextures.TileStone;
+                    EmitPressurePlate(x + baseX, y, z + baseZ, plateLayer, lightPacked);
+                }
+                else if (t == BlockType.Lever)
+                {
+                    EmitLeverBox(x + baseX, y, z + baseZ, lightPacked);
+                }
+                else if (t == BlockType.StoneButton)
+                {
+                    EmitButtonBox(x + baseX, y, z + baseZ, lightPacked);
+                }
                 else if (t == BlockType.Cactus)
                 {
                     // Tier 6 #37 — Cactus 12×16×12 inset box with
@@ -814,6 +836,102 @@ namespace VStudioCraft.Game
                 x1, y0, z1, 1f, 1f,
                 x0, y0, z1, 0f, 1f,
                 0f, -1f, 0f, layer, lightPacked);
+        }
+
+        // Tier 8 #42 — Generic axis-aligned sub-cube box. Used by
+        // lever / button (and any future redstone primitive that
+        // needs a small box at sub-cell extents). Single layer for
+        // all six faces; UVs sample full [0..1] for top/bottom and
+        // height-fractional for the sides so a non-cube-tall box
+        // doesn't stretch its texture vertically. Light is sampled
+        // at the source cell only (these blocks are non-light-
+        // blocking, so the cell's own sky+block light is bright).
+        private void EmitSubCubeBox(
+            float x0, float y0, float z0,
+            float x1, float y1, float z1,
+            int layer, int lightPacked)
+        {
+            float vTop = y1 - y0;            // V-extent for side faces
+            // -X face (dir<0)
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x0, y0, z1, 1f, 0f,
+                x0, y1, z1, 1f, vTop,
+                x0, y1, z0, 0f, vTop,
+                -1f, 0f, 0f, layer, lightPacked);
+            // +X face (dir>0)
+            EmitCrossQuad(
+                x1, y0, z0, 1f, 0f,
+                x1, y1, z0, 1f, vTop,
+                x1, y1, z1, 0f, vTop,
+                x1, y0, z1, 0f, 0f,
+                +1f, 0f, 0f, layer, lightPacked);
+            // -Z face (dir<0)
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x0, y1, z0, 0f, vTop,
+                x1, y1, z0, 1f, vTop,
+                x1, y0, z0, 1f, 0f,
+                0f, 0f, -1f, layer, lightPacked);
+            // +Z face (dir>0)
+            EmitCrossQuad(
+                x0, y0, z1, 0f, 0f,
+                x1, y0, z1, 1f, 0f,
+                x1, y1, z1, 1f, vTop,
+                x0, y1, z1, 0f, vTop,
+                0f, 0f, +1f, layer, lightPacked);
+            // +Y face (top)
+            EmitCrossQuad(
+                x0, y1, z1, 0f, 0f,
+                x1, y1, z1, 1f, 0f,
+                x1, y1, z0, 1f, 1f,
+                x0, y1, z0, 0f, 1f,
+                0f, +1f, 0f, layer, lightPacked);
+            // -Y face (bottom)
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x1, y0, z0, 1f, 0f,
+                x1, y0, z1, 1f, 1f,
+                x0, y0, z1, 0f, 1f,
+                0f, -1f, 0f, layer, lightPacked);
+        }
+
+        // Tier 8 #42 — Pressure plate. 14×1×14 floor slab inset by 1
+        // pixel on each horizontal side (matches Alpha's standard
+        // pressure-plate footprint). Single-tile face for both
+        // stone + wood variants; the variant is selected at the
+        // dispatch site.
+        private void EmitPressurePlate(float wx, float wy, float wz, int layer, int lightPacked)
+        {
+            float x0 = wx + 1f / 16f, x1 = wx + 15f / 16f;
+            float z0 = wz + 1f / 16f, z1 = wz + 15f / 16f;
+            float y0 = wy + 0f,        y1 = wy + 1f / 16f;
+            EmitSubCubeBox(x0, y0, z0, x1, y1, z1, layer, lightPacked);
+        }
+
+        // Tier 8 #42 — Lever (simplified single-tile cube). 6×6×6
+        // small box pinned to cell bottom. Real Alpha lever has a
+        // distinct base + tilted handle; the simplified single-box
+        // form trades visual fidelity for getting the placement /
+        // power-source plumbing in. Future polish can replace this
+        // with a proper two-piece mesh.
+        private void EmitLeverBox(float wx, float wy, float wz, int lightPacked)
+        {
+            float x0 = wx + 5f / 16f, x1 = wx + 11f / 16f;
+            float z0 = wz + 5f / 16f, z1 = wz + 11f / 16f;
+            float y0 = wy + 0f,        y1 = wy + 6f / 16f;
+            EmitSubCubeBox(x0, y0, z0, x1, y1, z1, BlockTextures.TileCobblestone, lightPacked);
+        }
+
+        // Tier 8 #42 — Stone button. 6×2×4 small recessed cuboid
+        // sitting on the floor at cell centre. Same simplified
+        // single-tile rendering as the lever for now.
+        private void EmitButtonBox(float wx, float wy, float wz, int lightPacked)
+        {
+            float x0 = wx + 5f / 16f, x1 = wx + 11f / 16f;
+            float z0 = wz + 6f / 16f, z1 = wz + 10f / 16f;
+            float y0 = wy + 0f,        y1 = wy + 2f / 16f;
+            EmitSubCubeBox(x0, y0, z0, x1, y1, z1, BlockTextures.TileStone, lightPacked);
         }
 
         // Tier 6 #37 — Cactus inset box with hash-overlap sides.
