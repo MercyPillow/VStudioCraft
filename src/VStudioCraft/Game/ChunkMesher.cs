@@ -396,6 +396,17 @@ namespace VStudioCraft.Game
                     // height.
                     EmitSnowLayer(x + baseX, y, z + baseZ, layer, lightPacked);
                 }
+                else if (t == BlockType.RedstoneWire)
+                {
+                    // Tier 8 #42 — Redstone wire reuses the 1/8 slab
+                    // emitter for now (slab thickness is constant
+                    // across the slab path; wire visually reads
+                    // as a thin red strip on the floor). Per-direction
+                    // routed wire variants are a follow-up needing
+                    // neighbour-aware UV picking.
+                    EmitSnowLayer(x + baseX, y, z + baseZ,
+                        BlockTextures.TileRedstoneWire, lightPacked);
+                }
                 else if (t == BlockType.Cactus)
                 {
                     // Tier 6 #37 — Cactus 12×16×12 inset box with

@@ -4277,6 +4277,27 @@ void main()
                         }
                     }
                 }
+                // Tier 8 #42 — RedstoneDust held + RMB on top face of
+                // a solid block places a RedstoneWire on the cell
+                // above. Matches Alpha — wire is the placed-block
+                // form of dust, dust is what you carry / craft from.
+                if (held == BlockType.RedstoneDust)
+                {
+                    if (hit.Ny == 1 && BlockData.IsSolid(target))
+                    {
+                        int wx = hit.X, wy = hit.Y + 1, wz = hit.Z;
+                        if (_world.GetBlock(wx, wy, wz) == BlockType.Air)
+                        {
+                            if (_world.SetBlock(wx, wy, wz, BlockType.RedstoneWire))
+                            {
+                                if (GameMode == GameMode.Survival)
+                                    Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                                SfxBank.PlayPlace(BlockType.RedstoneWire);
+                                return true;
+                            }
+                        }
+                    }
+                }
                 // Tier 4 #14 — Held-food RMB. Bread restores 5 HP
                 // (and feeds hunger if the bar is enabled), Mushroom
                 // Stew restores 8 HP and returns the wooden bowl to

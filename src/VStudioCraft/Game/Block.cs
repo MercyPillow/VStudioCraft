@@ -472,6 +472,27 @@ namespace VStudioCraft.Game
         // pending) the only trigger is the right-click itself,
         // which mirrors Alpha's "click to advance + play" coupling.
         NoteBlock          = 146, // Alpha 25
+        // Tier 8 #42 — Redstone primitives, first slice. The torch is
+        // implemented in two block types: RedstoneTorchOn (emits
+        // light = 7, the canonical Alpha glow) and RedstoneTorchOff
+        // (zero emission, dark red sprite). Without the power-prop
+        // simulation those state transitions never fire on their
+        // own — the torch placed by hand is permanently the "on"
+        // variant — but having both block types in the enum means
+        // the simulation pass landing later is a one-line SetBlock
+        // swap rather than another save-format bump. RedstoneDust
+        // is the inventory item that wires + torches both craft
+        // from / drop as.
+        RedstoneTorchOn    = 147, // Alpha 76
+        RedstoneTorchOff   = 148, // Alpha 75
+        RedstoneDust       = 149, // Alpha 331
+        // Tier 8 #42 — Redstone Wire (placed-block form). Lies flat
+        // on top of its supporting block as a 1-pixel slab. Drops
+        // as RedstoneDust item when broken; placed by right-clicking
+        // a RedstoneDust onto the top face of a solid block. Power
+        // propagation simulation is the follow-up — for now the
+        // wire is a passive visual without signal flow.
+        RedstoneWire       = 150, // Alpha 55
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -851,6 +872,14 @@ namespace VStudioCraft.Game
                 // player walks straight through it the same way they
                 // walk through flowers.
                 case BlockType.Sapling:
+                // Tier 8 #42 — Redstone torches behave like regular
+                // torches: cross-sprite, non-solid, light-transparent.
+                case BlockType.RedstoneTorchOn:
+                case BlockType.RedstoneTorchOff:
+                // Tier 8 #42 — Redstone wire is a 1/16 floor slab,
+                // never blocks player movement. Walking through it
+                // is the canonical Alpha behaviour.
+                case BlockType.RedstoneWire:
                 // Tier 6 #34 — Fire is non-solid; the player walks
                 // straight through it (taking damage via the
                 // per-tick fluid-contact check pattern rather than
@@ -1099,7 +1128,12 @@ namespace VStudioCraft.Game
             // collision branches treat them as non-cube items the same
             // way every other item id behaves) and fold cleanly into
             // this contiguous range.
-            || ((byte)t >= (byte)BlockType.Disc13       && (byte)t <= (byte)BlockType.GoldBoots);
+            || ((byte)t >= (byte)BlockType.Disc13       && (byte)t <= (byte)BlockType.GoldBoots)
+            // Tier 8 #42 — RedstoneDust item. Standalone id past the
+            // RedstoneTorchOn / Off block pair so the per-block
+            // IsSolid / IsCubeShape branches still catch the torch
+            // ids correctly.
+            || t == BlockType.RedstoneDust;
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -1148,6 +1182,17 @@ namespace VStudioCraft.Game
                 // Tier 8 #47 — Sapling small seedling (~0.3×0.4×0.3).
                 case BlockType.Sapling:
                     return (0.35f, 0f, 0.35f, 0.65f, 0.4f, 0.65f);
+                // Tier 8 #42 — Redstone torch shares the regular-
+                // torch hitbox: small column at cell centre, ~0.6
+                // tall.
+                case BlockType.RedstoneTorchOn:
+                case BlockType.RedstoneTorchOff:
+                    return (0.4f, 0f, 0.4f, 0.6f, 0.6f, 0.6f);
+                // Tier 8 #42 — Redstone wire: 1×1/16×1 floor slab so
+                // the click area + selection wireframe match the
+                // visible thin red line on the floor.
+                case BlockType.RedstoneWire:
+                    return (0f, 0f, 0f, 1f, 1f / 16f, 1f);
                 // Tier 6 — Torch hitboxes match the 2-pixel-wide
                 // wood column rendered by the chunk mesher. Floor
                 // torch: a 2/16 × 10/16 × 2/16 tower at the cell
@@ -1257,6 +1302,14 @@ namespace VStudioCraft.Game
                 // Tier 8 #47 — Sapling renders as a cross-sprite, same
                 // mesher path as flowers / wheat.
                 case BlockType.Sapling:
+                // Tier 8 #42 — Redstone torches use the cross-sprite
+                // path same as regular torches.
+                case BlockType.RedstoneTorchOn:
+                case BlockType.RedstoneTorchOff:
+                // Tier 8 #42 — Redstone wire renders as a 1/16 floor
+                // slab — handled by a custom mesher branch
+                // (EmitRedstoneWire) rather than the cube sweep.
+                case BlockType.RedstoneWire:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1332,6 +1385,14 @@ namespace VStudioCraft.Game
                 // Tier 8 #47 — Sapling cross-sprite, doesn't fill
                 // the cell so neighbouring cube faces must still emit.
                 case BlockType.Sapling:
+                // Tier 8 #42 — Redstone torch sub-cell volume —
+                // adjacent cube faces must still emit, same as
+                // regular torches.
+                case BlockType.RedstoneTorchOn:
+                case BlockType.RedstoneTorchOff:
+                // Wire 1/16 slab — adjacent cube faces below + sides
+                // must still emit so the cell reads correctly.
+                case BlockType.RedstoneWire:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -1442,6 +1503,13 @@ namespace VStudioCraft.Game
                 // Tier 8 #47 — Sapling is a cross-sprite, light passes
                 // straight through.
                 case BlockType.Sapling:
+                // Tier 8 #42 — Redstone torches: light flows past the
+                // sub-cell volume the same way it does through
+                // regular torches.
+                case BlockType.RedstoneTorchOn:
+                case BlockType.RedstoneTorchOff:
+                // Wire is a 1/16 slab, the cell is mostly air.
+                case BlockType.RedstoneWire:
                 // Tier 6 #37 — Ice is translucent (matches Alpha — a
                 // pond covered in ice still has the bed visible
                 // through the surface). SnowBlock is a 1/8 slab so
@@ -1512,6 +1580,12 @@ namespace VStudioCraft.Game
                 // through a corridor sees flames visibly cast light.
                 case BlockType.Fire:
                     return 14;
+                // Tier 8 #42 — Redstone torch emits 7 in Alpha (about
+                // half the reach of a regular torch). The dim red
+                // glow is the canonical "I'm a redstone signal"
+                // visual cue.
+                case BlockType.RedstoneTorchOn:
+                    return 7;
                 default:
                     return 0;
             }
@@ -1621,6 +1695,11 @@ namespace VStudioCraft.Game
                 // wool, breaks fastest with an axe but bare-hand works).
                 case BlockType.NoteBlock:
                     return 0.8f;
+                // Tier 8 #42 — Redstone torch instant-break (Alpha 0).
+                case BlockType.RedstoneTorchOn:
+                case BlockType.RedstoneTorchOff:
+                case BlockType.RedstoneWire:
+                    return 0f;
                 case BlockType.Glass:
                 case BlockType.Sponge:
                     return 0.3f;
@@ -1788,6 +1867,14 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileSapling;
                 case BlockType.NoteBlock:
                     return BlockTextures.TileNoteBlock;
+                case BlockType.RedstoneTorchOn:
+                    return BlockTextures.TileRedstoneTorchOn;
+                case BlockType.RedstoneTorchOff:
+                    return BlockTextures.TileRedstoneTorchOff;
+                case BlockType.RedstoneDust:
+                    return BlockTextures.TileRedstoneDust;
+                case BlockType.RedstoneWire:
+                    return BlockTextures.TileRedstoneWire;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
                     // Bottom shares the side tile (the bottom of a
@@ -2498,6 +2585,17 @@ namespace VStudioCraft.Game
                 case BlockType.IronDoorBlockBottom:
                 case BlockType.IronDoorBlockTop:
                     return BlockType.IronDoorItem;
+                // Tier 8 #42 — Both redstone torch states drop the
+                // canonical "lit" variant — Alpha gives back the
+                // active item form when you mine either, mirroring
+                // how a wall-torch break gives back the floor torch.
+                case BlockType.RedstoneTorchOff:
+                    return BlockType.RedstoneTorchOn;
+                // Wire breaks back to the dust item — a placed wire
+                // is just visually-routed dust; you get back the raw
+                // ingredient.
+                case BlockType.RedstoneWire:
+                    return BlockType.RedstoneDust;
                 default: return block;
             }
         }

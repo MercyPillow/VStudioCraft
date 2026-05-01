@@ -236,7 +236,19 @@ namespace VStudioCraft.Game
         // panel with a small dark dot in the centre).
         public const int FirstTailNoteBlockLayer = FirstTailSaplingLayer + TailSaplingLayerCount;       // 165
         public const int TailNoteBlockLayerCount = 1;
-        public const int LayerCount = FirstTailNoteBlockLayer + TailNoteBlockLayerCount;                // 166
+        // Tier 8 #42 — Redstone primitives slice 1: torch lit + off
+        // tiles (cross-sprite blocks) and the dust item icon. Three
+        // layers; the dust tile lives in alpha_tools.png while the
+        // torches are sliced from terrain.png.
+        public const int FirstTailRedstoneLayer  = FirstTailNoteBlockLayer + TailNoteBlockLayerCount;   // 166
+        public const int TailRedstoneLayerCount  = 3;
+        // Tier 8 #42 — Redstone Wire (placed-block form). One tile
+        // for now (the canonical Alpha "+" cross variant); per-
+        // direction routed wire variants are a follow-up requiring
+        // mesher logic that inspects neighbour cells.
+        public const int FirstTailWireLayer      = FirstTailRedstoneLayer + TailRedstoneLayerCount;     // 169
+        public const int TailWireLayerCount      = 1;
+        public const int LayerCount = FirstTailWireLayer + TailWireLayerCount;                          // 170
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -421,6 +433,10 @@ namespace VStudioCraft.Game
         public const int TilePumpkinSide         = 163;
         public const int TileSapling             = 164;
         public const int TileNoteBlock           = 165;
+        public const int TileRedstoneTorchOn     = 166;
+        public const int TileRedstoneTorchOff    = 167;
+        public const int TileRedstoneDust        = 168;
+        public const int TileRedstoneWire        = 169;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -714,6 +730,14 @@ namespace VStudioCraft.Game
             // Tier 8 #48 — Note Block tile.
             UploadLayer(layerPixels, TileNoteBlock, GenerateNoteBlock);
 
+            // Tier 8 #42 — Redstone torch (lit + off) + redstone dust.
+            UploadLayer(layerPixels, TileRedstoneTorchOn,  GenerateRedstoneTorchOn);
+            UploadLayer(layerPixels, TileRedstoneTorchOff, GenerateRedstoneTorchOff);
+            UploadLayer(layerPixels, TileRedstoneDust,     GenerateRedstoneDust);
+
+            // Redstone Wire (placed-block form, "+" cross tile).
+            UploadLayer(layerPixels, TileRedstoneWire, GenerateRedstoneWire);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -855,7 +879,10 @@ namespace VStudioCraft.Game
                 || layer == TileSnowyGrassSide
                 || layer == TilePumpkinTop     || layer == TilePumpkinSide
                 || layer == TileSapling
-                || layer == TileNoteBlock;
+                || layer == TileNoteBlock
+                || layer == TileRedstoneTorchOn
+                || layer == TileRedstoneTorchOff
+                || layer == TileRedstoneWire;
         }
 
         // Tier 4 #26 — Slice the SugarCane block tile out of terrain.png.
@@ -3634,6 +3661,18 @@ namespace VStudioCraft.Game
             // Tier 8 #48 — Note Block all-faces tile. Canonical
             // Alpha (10, 4).
             /* TileNoteBlock           */ (10, 4),
+            // Tier 8 #42 — Redstone torches sliced from terrain.png.
+            // Lit at (3, 6), off at (3, 7) — canonical Alpha.
+            /* TileRedstoneTorchOn     */ (3, 6),
+            /* TileRedstoneTorchOff    */ (3, 7),
+            // Redstone Dust item lives in alpha_tools.png (item
+            // sheet) — sentinel here so the terrain slicer skips it.
+            // The actual icon will fall back to the procedural
+            // generator until a tools-sheet slicer wires it in.
+            /* TileRedstoneDust        */ (-1, -1),
+            // Redstone Wire (in-world block) — canonical Alpha
+            // terrain.png "+" cross variant at (4, 5).
+            /* TileRedstoneWire        */ (4, 5),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3845,6 +3884,14 @@ namespace VStudioCraft.Game
             // Tier 8 #48 — Note Block. Procedural fallback.
             UploadLayer(layerPixels, TileNoteBlock, GenerateNoteBlock);
 
+            // Tier 8 #42 — Redstone primitives. Procedural fallback.
+            UploadLayer(layerPixels, TileRedstoneTorchOn,  GenerateRedstoneTorchOn);
+            UploadLayer(layerPixels, TileRedstoneTorchOff, GenerateRedstoneTorchOff);
+            UploadLayer(layerPixels, TileRedstoneDust,     GenerateRedstoneDust);
+
+            // Redstone Wire (placed-block form). Procedural fallback.
+            UploadLayer(layerPixels, TileRedstoneWire, GenerateRedstoneWire);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -3859,6 +3906,8 @@ namespace VStudioCraft.Game
                 TilePumpkinTop, TilePumpkinSide,
                 TileSapling,
                 TileNoteBlock,
+                TileRedstoneTorchOn, TileRedstoneTorchOff,
+                TileRedstoneWire,
             };
             for (int i = 0; i < biomeTailLayers.Length; i++)
             {
@@ -6144,6 +6193,176 @@ namespace VStudioCraft.Game
                 pixels[idx + 0] = 0x18;
                 pixels[idx + 1] = 0x10;
                 pixels[idx + 2] = 0x08;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Tier 8 #42 — Redstone Torch (lit). Same shape as the
+        // regular torch generator (2-pixel wood column + flame on
+        // top) but the flame is bright red and the wood is darker.
+        // Cross-sprite render in the mesher; the alpha cutout pulls
+        // the silhouette from the surrounding transparent pixels.
+        private static void GenerateRedstoneTorchOn(byte[] pixels)
+        {
+            // Clear to transparent.
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            int cx = TileSize / 2;
+            // Stick — dark brown 2px wide column from the bottom up
+            // to ~10 pixels.
+            byte sr = 0x55, sg = 0x36, sb = 0x18;
+            for (int y = TileSize - 11; y < TileSize - 1; y++)
+            for (int x = cx - 1; x <= cx; x++)
+            {
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = sr;
+                pixels[idx + 1] = sg;
+                pixels[idx + 2] = sb;
+                pixels[idx + 3] = 255;
+            }
+            // Tip — bright red 2x2 block at the top of the stick
+            // representing the lit redstone signal head, with a
+            // brighter highlight pixel at the very top centre.
+            byte tipR = 0xFF, tipG = 0x44, tipB = 0x22;
+            for (int dy = -2; dy <= 0; dy++)
+            for (int dx = -1; dx <= 0; dx++)
+            {
+                int px = cx + dx;
+                int py = TileSize - 12 + dy;
+                if ((uint)px >= TileSize || (uint)py >= TileSize) continue;
+                int idx = (py * TileSize + px) * 4;
+                pixels[idx + 0] = tipR;
+                pixels[idx + 1] = tipG;
+                pixels[idx + 2] = tipB;
+                pixels[idx + 3] = 255;
+            }
+            // Highlight pixel — soft pinkish glow just above the tip.
+            int hx = cx;
+            int hy = TileSize - 14;
+            if ((uint)hy < TileSize)
+            {
+                int idx = (hy * TileSize + hx) * 4;
+                pixels[idx + 0] = 0xFF;
+                pixels[idx + 1] = 0x99;
+                pixels[idx + 2] = 0x88;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Off variant — same shape as the lit torch but the tip
+        // pixels are a deep dim red (no light emission, the cell's
+        // sky/block light alone illuminates it).
+        private static void GenerateRedstoneTorchOff(byte[] pixels)
+        {
+            GenerateRedstoneTorchOn(pixels);
+            // Re-paint the tip + highlight in dim colours.
+            int cx = TileSize / 2;
+            byte dimR = 0x55, dimG = 0x18, dimB = 0x10;
+            for (int dy = -2; dy <= 0; dy++)
+            for (int dx = -1; dx <= 0; dx++)
+            {
+                int px = cx + dx;
+                int py = TileSize - 12 + dy;
+                if ((uint)px >= TileSize || (uint)py >= TileSize) continue;
+                int idx = (py * TileSize + px) * 4;
+                pixels[idx + 0] = dimR;
+                pixels[idx + 1] = dimG;
+                pixels[idx + 2] = dimB;
+                pixels[idx + 3] = 255;
+            }
+            // Clear the highlight pixel that the lit version added.
+            int hx = cx;
+            int hy = TileSize - 14;
+            if ((uint)hy < TileSize)
+            {
+                int idx = (hy * TileSize + hx) * 4;
+                pixels[idx + 0] = 0;
+                pixels[idx + 1] = 0;
+                pixels[idx + 2] = 0;
+                pixels[idx + 3] = 0;
+            }
+        }
+
+        // Redstone Dust item icon — small pile of red granules
+        // centred on a transparent background. Used as the inventory
+        // / hotbar / dropped-item sprite. The actual world block
+        // (RedstoneWire) gets its own tile in a follow-up.
+        private static void GenerateRedstoneDust(byte[] pixels)
+        {
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            var rng = new Random(0xDEAD5);
+            int cx = TileSize / 2;
+            int cy = TileSize / 2;
+            // ~25 random red dots clustered in a circular pile.
+            for (int n = 0; n < 25; n++)
+            {
+                double angle = rng.NextDouble() * Math.PI * 2.0;
+                double r = rng.NextDouble() * (TileSize * 0.30);
+                int px = cx + (int)(Math.Cos(angle) * r);
+                int py = cy + (int)(Math.Sin(angle) * r);
+                if ((uint)px >= TileSize || (uint)py >= TileSize) continue;
+                int idx = (py * TileSize + px) * 4;
+                pixels[idx + 0] = (byte)(0xC0 + rng.Next(40));
+                pixels[idx + 1] = (byte)(0x10 + rng.Next(20));
+                pixels[idx + 2] = (byte)(0x10 + rng.Next(20));
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Tier 8 #42 — Redstone Wire (placed-block "+" cross
+        // tile). Two thin red lines crossing at cell centre on a
+        // transparent background — when the mesher draws the wire
+        // top face, the alpha-discard shader pulls the cross
+        // silhouette out and you see a red "+" lying on the floor.
+        // Side faces of the 1/16 slab sample the same tile, which
+        // would normally read as garbage on the narrow strips, but
+        // the slab is so thin that the side faces are nearly
+        // invisible at gameplay distance.
+        private static void GenerateRedstoneWire(byte[] pixels)
+        {
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            int cx = TileSize / 2;
+            int cy = TileSize / 2;
+            // Horizontal bar — 2-pixel-tall × full-width red line at
+            // cell centre.
+            for (int x = 0; x < TileSize; x++)
+            for (int dy = -1; dy <= 0; dy++)
+            {
+                int y = cy + dy;
+                if ((uint)y >= TileSize) continue;
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = 0xC8;
+                pixels[idx + 1] = 0x12;
+                pixels[idx + 2] = 0x12;
+                pixels[idx + 3] = 255;
+            }
+            // Vertical bar.
+            for (int y = 0; y < TileSize; y++)
+            for (int dx = -1; dx <= 0; dx++)
+            {
+                int x = cx + dx;
+                if ((uint)x >= TileSize) continue;
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = 0xC8;
+                pixels[idx + 1] = 0x12;
+                pixels[idx + 2] = 0x12;
                 pixels[idx + 3] = 255;
             }
         }
