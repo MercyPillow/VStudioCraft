@@ -1120,6 +1120,29 @@ namespace VStudioCraft.Game
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
                     return (0.3f, 0f, 0.3f, 0.7f, 0.5f, 0.7f);
+                // Tier 6 — Torch hitboxes match the 2-pixel-wide
+                // wood column rendered by the chunk mesher. Floor
+                // torch: a 2/16 × 10/16 × 2/16 tower at the cell
+                // centre. Wall torches: an axis-aligned bounding
+                // box around the tilted shaft (base at the wall,
+                // tip leaning toward cell centre, Y from 0.2 to
+                // 0.9). All torches stay non-solid so the player
+                // walks through them — the AABB is purely for
+                // selection wireframe + raycast click area.
+                case BlockType.Torch:
+                    return (7f / 16f, 0f, 7f / 16f, 9f / 16f, 10f / 16f, 9f / 16f);
+                // Wall torch on the -X wall (faces +X / leans east).
+                case BlockType.TorchEast:
+                    return (0f, 0.2f, 7f / 16f, 0.5f, 0.9f, 9f / 16f);
+                // Wall torch on the +X wall (faces -X / leans west).
+                case BlockType.TorchWest:
+                    return (0.5f, 0.2f, 7f / 16f, 1f, 0.9f, 9f / 16f);
+                // Wall torch on the -Z wall (faces +Z / leans south).
+                case BlockType.TorchSouth:
+                    return (7f / 16f, 0.2f, 0f, 9f / 16f, 0.9f, 0.5f);
+                // Wall torch on the +Z wall (faces -Z / leans north).
+                case BlockType.TorchNorth:
+                    return (7f / 16f, 0.2f, 0.5f, 9f / 16f, 0.9f, 1f);
                 // Tier 6 #37 — Cactus is 16×14×14 (full height, 1
                 // pixel inset on each horizontal side). The visual
                 // mesh emits the four side faces at the inset plane
