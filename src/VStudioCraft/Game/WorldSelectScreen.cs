@@ -18,6 +18,7 @@ namespace VStudioCraft.Game
         {
             None,
             SelectWorld,   // payload = absolute index into the saves array
+            DeleteWorld,   // payload = absolute index into the saves array
             CreateNew,
             Back,
         }
@@ -36,6 +37,14 @@ namespace VStudioCraft.Game
         private const int FooterButtonGapBase = 12;
         private const int TitleGapBase     = 36;
         private const int TitleFontScaleBase = 4;
+        // Per-row delete button — square (matches row height), sits to
+        // the right of the row with a 7-pixel gap. Single-click deletes
+        // the .voxworld file from disk; no confirmation dialog (single-
+        // player worlds are user-owned, the action mirrors a Recycle
+        // Bin delete in the OS Save folder rather than a system-level
+        // destructive op).
+        private const int DeleteButtonGapBase  = 7;
+        private const int DeleteButtonSizeBase = 44;   // square, = RowHeightBase
 
         public static int RowWidth(int viewW, int viewH)         => UiScale.S(RowWidthBase, viewW, viewH);
         public static int RowHeight(int viewW, int viewH)        => UiScale.S(RowHeightBase, viewW, viewH);
@@ -49,6 +58,17 @@ namespace VStudioCraft.Game
         {
             int s = (int)(TitleFontScaleBase * UiScale.For(viewW, viewH) + 0.5f);
             return s < 1 ? 1 : s;
+        }
+        public static int DeleteButtonGap(int viewW, int viewH)  => UiScale.S(DeleteButtonGapBase, viewW, viewH);
+        public static int DeleteButtonSize(int viewW, int viewH) => UiScale.S(DeleteButtonSizeBase, viewW, viewH);
+
+        // Delete-button rect for a given row. Sits flush against the
+        // right edge of the row + the configured 7-pixel gap.
+        public static (int x, int y, int w, int h) GetDeleteRect(in Row row, int screenW, int screenH)
+        {
+            int sz  = DeleteButtonSize(screenW, screenH);
+            int gap = DeleteButtonGap(screenW, screenH);
+            return (row.X + row.W + gap, row.Y, sz, sz);
         }
 
         public struct Row
@@ -167,6 +187,12 @@ namespace VStudioCraft.Game
             for (int i = 0; i < rows.Length; i++)
             {
                 var r = rows[i];
+                // Delete button takes priority over the row body so a
+                // click in the delete rect doesn't also trigger a
+                // SelectWorld on the row beneath.
+                var (dx, dy, dw, dh) = GetDeleteRect(r, screenW, screenH);
+                if (mx >= dx && mx < dx + dw && my >= dy && my < dy + dh)
+                    return (ActionId.DeleteWorld, r.AbsoluteIndex);
                 if (mx >= r.X && mx < r.X + r.W && my >= r.Y && my < r.Y + r.H)
                     return (ActionId.SelectWorld, r.AbsoluteIndex);
             }

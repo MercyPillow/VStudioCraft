@@ -11058,6 +11058,15 @@ void main()
                     r.X + padX + subTotal / 2,
                     r.Y + padX + HotbarTextures.GlyphCellH * subScale + UiScale.S(2, width, height),
                     new Vector4(0.85f, 0.88f, 0.92f, 1f), ortho);
+
+                // Per-row Delete button — same DrawMenuButton chrome
+                // as the rest of the menu, with an "X" centred in the
+                // square. Clicking deletes the .voxworld file (handled
+                // by the host's WorldSelectScreen.ActionId.DeleteWorld
+                // case).
+                var (dx, dy, dw, dh) = WorldSelectScreen.GetDeleteRect(r, width, height);
+                bool dHover = mx >= dx && mx < dx + dw && my >= dy && my < dy + dh;
+                DrawMenuButton(dx, dy, dw, dh, "X", dHover, width, height, ortho);
             }
 
             // Empty list helper text.

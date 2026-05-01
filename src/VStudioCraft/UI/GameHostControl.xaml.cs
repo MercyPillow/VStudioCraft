@@ -1750,6 +1750,22 @@ namespace VStudioCraft.UI
                     CaptureMouseLook();
                     break;
                 }
+                case WorldSelectScreen.ActionId.DeleteWorld:
+                {
+                    if (payload < 0 || payload >= saves.Length) break;
+                    var s = saves[payload];
+                    try { System.IO.File.Delete(s.Path); }
+                    catch (System.IO.IOException) { /* file in use / locked — silently ignore */ }
+                    catch (System.UnauthorizedAccessException) { /* permission — silently ignore */ }
+                    // The next frame's RenderWorldSelect re-enumerates
+                    // saves so the row vanishes naturally; just clamp
+                    // the scroll index in case the deleted row was the
+                    // last one and we're now past the end.
+                    var remaining = VStudioCraft.Game.WorldSaveFormat.EnumerateSaves();
+                    _input.WorldSelectScroll = WorldSelectScreen.ClampScroll(
+                        _input.WorldSelectScroll, remaining.Length);
+                    break;
+                }
                 case WorldSelectScreen.ActionId.CreateNew:
                     _input.WorldNameText = "";
                     _input.WorldSeedText = "";
