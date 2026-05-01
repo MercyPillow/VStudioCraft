@@ -212,8 +212,6 @@ namespace VStudioCraft.Game
         // tile layers appended past Snow. Cactus needs two tiles
         // because its top face shows a crown ridge pattern distinct
         // from the spiny side; Ice is a uniform translucent cube.
-        // Pumpkin / DeadBush were Beta-era additions, removed to
-        // keep the block list strict to Alpha 1.1.2_01.
         public const int FirstTailBiomeBlockLayer = FirstTailSnowBlockLayer + TailSnowBlockLayerCount; // 158
         public const int TailBiomeBlockLayerCount = 3;
         // Tier 6 #37 Phase 4 — Snowy-grass side tile. Used by the
@@ -223,7 +221,12 @@ namespace VStudioCraft.Game
         // as "snow lying on grass". One layer.
         public const int FirstTailSnowyGrassLayer = FirstTailBiomeBlockLayer + TailBiomeBlockLayerCount; // 161
         public const int TailSnowyGrassLayerCount = 1;
-        public const int LayerCount = FirstTailSnowyGrassLayer + TailSnowyGrassLayerCount;              // 162
+        // Tier 6 #37 — Pumpkin (top + side). Re-added after the
+        // earlier removal: Halloween Update / Alpha 1.1.0 (in scope
+        // for our Alpha 1.1.2_01 target).
+        public const int FirstTailPumpkinLayer = FirstTailSnowyGrassLayer + TailSnowyGrassLayerCount;   // 162
+        public const int TailPumpkinLayerCount = 2;
+        public const int LayerCount = FirstTailPumpkinLayer + TailPumpkinLayerCount;                    // 164
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -404,6 +407,8 @@ namespace VStudioCraft.Game
         public const int TileCactusSide          = 159;
         public const int TileIce                 = 160;
         public const int TileSnowyGrassSide      = 161;
+        public const int TilePumpkinTop          = 162;
+        public const int TilePumpkinSide         = 163;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -687,6 +692,10 @@ namespace VStudioCraft.Game
             // Tier 6 #37 Phase 4 — Snowy grass side tile.
             UploadLayer(layerPixels, TileSnowyGrassSide, GenerateSnowyGrassSide);
 
+            // Tier 6 #37 — Pumpkin tiles.
+            UploadLayer(layerPixels, TilePumpkinTop,  GeneratePumpkinTop);
+            UploadLayer(layerPixels, TilePumpkinSide, GeneratePumpkinSide);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -825,7 +834,8 @@ namespace VStudioCraft.Game
                 || layer == TileSnow
                 || layer == TileCactusTop      || layer == TileCactusSide
                 || layer == TileIce
-                || layer == TileSnowyGrassSide;
+                || layer == TileSnowyGrassSide
+                || layer == TilePumpkinTop     || layer == TilePumpkinSide;
         }
 
         // Tier 4 #26 — Slice the SugarCane block tile out of terrain.png.
@@ -3593,6 +3603,10 @@ namespace VStudioCraft.Game
             // grass cell has snow above (mesher swaps the side tile
             // per-face). Canonical Alpha coord (4, 4).
             /* TileSnowyGrassSide      */ (4, 4),
+            // Tier 6 #37 — Pumpkin re-added. Canonical Alpha
+            // terrain.png coords from the Halloween Update tile pack.
+            /* TilePumpkinTop          */ (6, 6),
+            /* TilePumpkinSide         */ (6, 7),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3794,6 +3808,10 @@ namespace VStudioCraft.Game
             // grass-side palette + the snow tile palette).
             UploadLayer(layerPixels, TileSnowyGrassSide, GenerateSnowyGrassSide);
 
+            // Tier 6 #37 — Pumpkin. Procedural fallback.
+            UploadLayer(layerPixels, TilePumpkinTop,  GeneratePumpkinTop);
+            UploadLayer(layerPixels, TilePumpkinSide, GeneratePumpkinSide);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -3805,6 +3823,7 @@ namespace VStudioCraft.Game
             {
                 TileSnow, TileCactusTop, TileCactusSide, TileIce,
                 TileSnowyGrassSide,
+                TilePumpkinTop, TilePumpkinSide,
             };
             for (int i = 0; i < biomeTailLayers.Length; i++)
             {
@@ -5926,6 +5945,75 @@ namespace VStudioCraft.Game
                 pixels[idx + 0] = r;
                 pixels[idx + 1] = g;
                 pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Tier 6 #37 — Pumpkin side tile. Vertical orange ridges
+        // with darker stripe rows between each ridge column,
+        // approximating the segment grooves on a real pumpkin.
+        // Dark border row top + bottom gives the cube a faint
+        // segmented look when stacked.
+        private static void GeneratePumpkinSide(byte[] pixels)
+        {
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool ridge = (x % 4 == 1 || x % 4 == 2);
+                byte r, g, b;
+                if (y == 0 || y == TileSize - 1)
+                {
+                    r = 0xA0; g = 0x4F; b = 0x10;        // dark border row
+                }
+                else if (ridge)
+                {
+                    r = 0xE0; g = 0x80; b = 0x18;        // bright ridge
+                }
+                else
+                {
+                    r = 0xB8; g = 0x60; b = 0x14;        // darker valley
+                }
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        // Pumpkin top tile — orange base with sectoral grooves and
+        // a small brown stem patch at the centre. Reads as the top
+        // of a pumpkin from the normal pickaxe-distance angle.
+        private static void GeneratePumpkinTop(byte[] pixels)
+        {
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                int dx = x - TileSize / 2;
+                int dy = y - TileSize / 2;
+                bool groove = ((x + y) % 5 == 0) && (dx * dx + dy * dy > 4);
+                byte r = groove ? (byte)0xA0 : (byte)0xE0;
+                byte g = groove ? (byte)0x4F : (byte)0x80;
+                byte b = groove ? (byte)0x10 : (byte)0x18;
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = 255;
+            }
+            // Stem patch — small brown 2×3 block at the centre with
+            // a darker top cap so the stem reads as 3D.
+            int sx = TileSize / 2 - 1;
+            int sy = TileSize / 2 - 1;
+            for (int dy = 0; dy < 3; dy++)
+            for (int dx = 0; dx < 2; dx++)
+            {
+                int px = sx + dx, py = sy + dy;
+                int idx = (py * TileSize + px) * 4;
+                bool cap = (dy == 0);
+                pixels[idx + 0] = cap ? (byte)0x40 : (byte)0x66;
+                pixels[idx + 1] = cap ? (byte)0x60 : (byte)0x88;
+                pixels[idx + 2] = cap ? (byte)0x18 : (byte)0x22;
                 pixels[idx + 3] = 255;
             }
         }

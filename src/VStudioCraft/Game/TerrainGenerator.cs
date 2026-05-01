@@ -838,12 +838,17 @@ namespace VStudioCraft.Game
                 // mushrooms rare (alpha placed brown/red ones mostly in dim
                 // places — we still surface-spawn a few so the world isn't
                 // barren of them until we add cave-spawn).
+                // Pumpkins re-added to the tail (Halloween Update /
+                // Alpha 1.1.0, in scope for Alpha 1.1.2_01). 2 % rate
+                // — slightly rarer than red mushrooms so they read as
+                // a "find" rather than scenery clutter.
                 BlockType pick;
                 int r = rng.Next(100);
                 if (r < 55)      pick = BlockType.Dandelion;
-                else if (r < 90) pick = BlockType.Rose;
-                else if (r < 96) pick = BlockType.BrownMushroom;
-                else             pick = BlockType.RedMushroom;
+                else if (r < 88) pick = BlockType.Rose;
+                else if (r < 94) pick = BlockType.BrownMushroom;
+                else if (r < 98) pick = BlockType.RedMushroom;
+                else             pick = BlockType.Pumpkin;
 
                 chunk.RawBlocks[placeIdx] = (byte)pick;
             }

@@ -451,6 +451,13 @@ namespace VStudioCraft.Game
         // (matches Alpha's brown twigs).
         Cactus             = 142, // Alpha 81
         Ice                = 143, // Alpha 79
+        // Tier 6 #37 — Pumpkin patch block (re-added after the
+        // earlier removal). Halloween Update / Alpha 1.1.0 added it,
+        // which is in scope for our Alpha 1.1.2_01 target. Plain
+        // orange-ridged cube with a stem-on-top tile; the carved
+        // jack-o-lantern variant is a separate id Alpha had at 91 —
+        // Tier 8 #51 will wire that as the lit variant.
+        Pumpkin            = 144, // Alpha 86
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -1182,6 +1189,10 @@ namespace VStudioCraft.Game
             }
         }
 
+        // Pumpkin is IsCubeShape=true (regular cube), so it falls
+        // through the IsCubeShape branch above without needing a
+        // dedicated case here.
+
         // matches Alpha (you can't punch out a fluid source by clicking it).
         public static bool IsRaycastTarget(BlockType t)
         {
@@ -1566,11 +1577,13 @@ namespace VStudioCraft.Game
                     return 0.2f;
                 // Tier 6 #37 — Cactus (Alpha 0.4, soft like wood
                 // sapling). Ice (0.5, slightly tougher than snow but
-                // still pickaxe-light).
+                // still pickaxe-light). Pumpkin (1.0, axe-friendly).
                 case BlockType.Cactus:
                     return 0.4f;
                 case BlockType.Ice:
                     return 0.5f;
+                case BlockType.Pumpkin:
+                    return 1.0f;
                 case BlockType.Glass:
                 case BlockType.Sponge:
                     return 0.3f;
@@ -1734,6 +1747,14 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileCactusSide;
                 case BlockType.Ice:
                     return BlockTextures.TileIce;
+                case BlockType.Pumpkin:
+                    // Top face = stem patch on a brown crown tile.
+                    // Bottom shares the side tile (the bottom of a
+                    // pumpkin sitting on grass is invisible; reusing
+                    // side avoids a third atlas slot). Sides use the
+                    // canonical orange-ridge tile.
+                    if (faceKind == 0) return BlockTextures.TilePumpkinTop;
+                    return BlockTextures.TilePumpkinSide;
                 case BlockType.Torch:
                 case BlockType.TorchEast:
                 case BlockType.TorchWest:
