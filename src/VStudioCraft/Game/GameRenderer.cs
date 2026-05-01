@@ -5290,17 +5290,21 @@ void main()
                 // Fall through — Grass still drops Dirt via the normal
                 // path (DropFor maps Grass → Dirt for bare-hand breaks).
             }
-            // Tier 4 #17 — Leaves have a 1-in-200 (0.5%) chance to drop
-            // an Apple in addition to the normal sapling odds. Alpha
-            // 1.1.2_01 only had one leaf type so any Leaves break is
-            // treated as oak for the apple drop. Runs alongside the
-            // default DropFor (which still produces a sapling chance).
+            // Tier 4 #17 / Tier 8 #47 — Leaves drops. 1-in-200 (0.5 %)
+            // chance to drop an Apple, AND a 1-in-20 (5 %) chance to
+            // drop a Sapling (Alpha rate). Both rolls are independent.
+            // The sapling drop replaces the default DropFor path
+            // (Leaves dropping themselves) — Alpha leaves don't drop
+            // their block form on bare-hand break, only the
+            // probabilistic apple/sapling. Returning here skips the
+            // generic DropFor branch below.
             if (type == BlockType.Leaves)
             {
                 if (_dropRng.Next(200) == 0)
                     SpawnSingleDrop(bx, by, bz, new ItemStack(BlockType.Apple, 1));
-                // Fall through to DropFor for the standard sapling /
-                // leaves drop.
+                if (_dropRng.Next(20) == 0)
+                    SpawnSingleDrop(bx, by, bz, new ItemStack(BlockType.Sapling, 1));
+                return;
             }
 
             // Stone → cobblestone, CoalOre → Coal item, DiamondOre →

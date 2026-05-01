@@ -1056,6 +1056,27 @@ namespace VStudioCraft.Game
                         continue;
                     }
 
+                    // Tier 8 #47 — Sapling growth. When a sapling cell
+                    // is sampled with enough light AND clear vertical
+                    // headroom, roll 1/40 to grow into an oak. Average
+                    // wall-clock time is ~5-10 min depending on how
+                    // many other saplings share the random sample
+                    // pool — close to Alpha's natural growth rate.
+                    if (chunk.RawBlocks[idx] == (byte)BlockType.Sapling)
+                    {
+                        // Light gate (same threshold as wheat).
+                        byte lp = chunk.RawLight[idx];
+                        int skyL = (lp >> 4) & 0xF;
+                        int blkL = lp & 0xF;
+                        if (skyL < 9 && blkL < 9) continue;
+                        // Probability gate.
+                        if (_cropRng.Next(40) != 0) continue;
+                        int wx = key.x * Chunk.SizeX + lx;
+                        int wz = key.z * Chunk.SizeZ + lz;
+                        TryGrowOakTree(wx, ly, wz, _cropRng);
+                        continue;
+                    }
+
                     if (chunk.RawBlocks[idx] != (byte)BlockType.Wheat) continue;
 
                     // Light gate. Block-light overrides darkness in
@@ -1270,6 +1291,71 @@ namespace VStudioCraft.Game
                     _fallingBlocks.RemoveAt(i);
                 }
             }
+        }
+
+        // Tier 8 #47 — Runtime oak growth. Called from TickRandomCrops
+        // when a sapling's RNG rolls successful growth. Replaces the
+        // sapling cell with a trunk + canopy via SetBlock so each
+        // placement triggers light updates + chunk-dirty marks
+        // (the chunk-gen-time PlaceOakTree path writes RawBlocks
+        // directly because lighting hasn't been computed yet —
+        // not safe at runtime). Returns true on success; false if
+        // there's not enough vertical clearance.
+        public bool TryGrowOakTree(int wx, int wy, int wz, Random rng)
+        {
+            int trunkHeight = 4 + rng.Next(3);   // 4..6
+            int topY = wy + trunkHeight;
+            if (topY + 1 >= Chunk.SizeY) return false;
+
+            // Check headroom — the trunk + 2-cell canopy halo above
+            // it must all be passable (Air or replaceable).
+            for (int y = wy + 1; y <= topY + 1; y++)
+            for (int dx = -2; dx <= 2; dx++)
+            for (int dz = -2; dz <= 2; dz++)
+            {
+                if (y > topY && (Math.Abs(dx) > 1 || Math.Abs(dz) > 1)) continue;
+                var t = GetBlock(wx + dx, y, wz + dz);
+                if (t != BlockType.Air && t != BlockType.Leaves
+                    && t != BlockType.Sapling) return false;
+            }
+
+            // Trunk — base replaces the sapling itself.
+            for (int y = wy; y <= topY; y++)
+                SetBlock(wx, y, wz, BlockType.WoodLog);
+
+            // Canopy — top-2 + top-1 layers, 5×5 with corner clip.
+            for (int dy = -2; dy <= -1; dy++)
+            for (int dx = -2; dx <= 2; dx++)
+            for (int dz = -2; dz <= 2; dz++)
+            {
+                if (Math.Abs(dx) == 2 && Math.Abs(dz) == 2 && rng.Next(2) == 0) continue;
+                if (dx == 0 && dz == 0) continue;          // trunk passes through
+                int x = wx + dx, y = topY + dy, z = wz + dz;
+                if (GetBlock(x, y, z) == BlockType.Air)
+                    SetBlock(x, y, z, BlockType.Leaves);
+            }
+            // Top 3×3 leaf disc around the trunk tip.
+            for (int dx = -1; dx <= 1; dx++)
+            for (int dz = -1; dz <= 1; dz++)
+            {
+                if (dx == 0 && dz == 0) continue;
+                int x = wx + dx, z = wz + dz;
+                if (GetBlock(x, topY, z) == BlockType.Air)
+                    SetBlock(x, topY, z, BlockType.Leaves);
+            }
+            // Plus-sign crown one cell above the trunk top.
+            if (GetBlock(wx, topY + 1, wz) == BlockType.Air)
+                SetBlock(wx, topY + 1, wz, BlockType.Leaves);
+            if (GetBlock(wx + 1, topY + 1, wz) == BlockType.Air)
+                SetBlock(wx + 1, topY + 1, wz, BlockType.Leaves);
+            if (GetBlock(wx - 1, topY + 1, wz) == BlockType.Air)
+                SetBlock(wx - 1, topY + 1, wz, BlockType.Leaves);
+            if (GetBlock(wx, topY + 1, wz + 1) == BlockType.Air)
+                SetBlock(wx, topY + 1, wz + 1, BlockType.Leaves);
+            if (GetBlock(wx, topY + 1, wz - 1) == BlockType.Air)
+                SetBlock(wx, topY + 1, wz - 1, BlockType.Leaves);
+
+            return true;
         }
 
         // Despawn far mobs. Alpha 1.1.2 instant-despawns mobs > 128 blocks

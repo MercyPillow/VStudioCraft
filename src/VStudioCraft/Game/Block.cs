@@ -458,6 +458,13 @@ namespace VStudioCraft.Game
         // jack-o-lantern variant is a separate id Alpha had at 91 —
         // Tier 8 #51 will wire that as the lit variant.
         Pumpkin            = 144, // Alpha 86
+        // Tier 8 #47 — Sapling. Cross-sprite plant placed on
+        // grass/dirt; grows into an oak tree over a randomised
+        // tick window (TickSaplings inside World). Drops from
+        // leaves at ~5 % per break (Alpha rate), and the same id
+        // serves as both the placeable block and the carryable
+        // item — Alpha kept those unified for sapling.
+        Sapling            = 145, // Alpha 6
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -833,6 +840,10 @@ namespace VStudioCraft.Game
                 // vertically (each cell of the stack is independently
                 // walk-through).
                 case BlockType.SugarCane:
+                // Tier 8 #47 — Sapling is a cross-sprite plant; the
+                // player walks straight through it the same way they
+                // walk through flowers.
+                case BlockType.Sapling:
                 // Tier 6 #34 — Fire is non-solid; the player walks
                 // straight through it (taking damage via the
                 // per-tick fluid-contact check pattern rather than
@@ -1127,6 +1138,9 @@ namespace VStudioCraft.Game
                 case BlockType.BrownMushroom:
                 case BlockType.RedMushroom:
                     return (0.3f, 0f, 0.3f, 0.7f, 0.5f, 0.7f);
+                // Tier 8 #47 — Sapling small seedling (~0.3×0.4×0.3).
+                case BlockType.Sapling:
+                    return (0.35f, 0f, 0.35f, 0.65f, 0.4f, 0.65f);
                 // Tier 6 — Torch hitboxes match the 2-pixel-wide
                 // wood column rendered by the chunk mesher. Floor
                 // torch: a 2/16 × 10/16 × 2/16 tower at the cell
@@ -1233,6 +1247,9 @@ namespace VStudioCraft.Game
                 // Mesher routes it through EmitCrossSprite via the
                 // standard non-cube path (same as flowers/wheat).
                 case BlockType.SugarCane:
+                // Tier 8 #47 — Sapling renders as a cross-sprite, same
+                // mesher path as flowers / wheat.
+                case BlockType.Sapling:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1305,6 +1322,9 @@ namespace VStudioCraft.Game
                 // beneath the cane loses its top face and the cell
                 // walls disappear).
                 case BlockType.SugarCane:
+                // Tier 8 #47 — Sapling cross-sprite, doesn't fill
+                // the cell so neighbouring cube faces must still emit.
+                case BlockType.Sapling:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -1412,6 +1432,9 @@ namespace VStudioCraft.Game
                 // would cast a dark shadow column underneath it like a
                 // solid cube does.
                 case BlockType.SugarCane:
+                // Tier 8 #47 — Sapling is a cross-sprite, light passes
+                // straight through.
+                case BlockType.Sapling:
                 // Tier 6 #37 — Ice is translucent (matches Alpha — a
                 // pond covered in ice still has the bed visible
                 // through the surface). SnowBlock is a 1/8 slab so
@@ -1584,6 +1607,9 @@ namespace VStudioCraft.Game
                     return 0.5f;
                 case BlockType.Pumpkin:
                     return 1.0f;
+                // Tier 8 #47 — Sapling instant-break (Alpha hardness 0).
+                case BlockType.Sapling:
+                    return 0f;
                 case BlockType.Glass:
                 case BlockType.Sponge:
                     return 0.3f;
@@ -1747,6 +1773,8 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileCactusSide;
                 case BlockType.Ice:
                     return BlockTextures.TileIce;
+                case BlockType.Sapling:
+                    return BlockTextures.TileSapling;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
                     // Bottom shares the side tile (the bottom of a

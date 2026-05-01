@@ -226,7 +226,12 @@ namespace VStudioCraft.Game
         // for our Alpha 1.1.2_01 target).
         public const int FirstTailPumpkinLayer = FirstTailSnowyGrassLayer + TailSnowyGrassLayerCount;   // 162
         public const int TailPumpkinLayerCount = 2;
-        public const int LayerCount = FirstTailPumpkinLayer + TailPumpkinLayerCount;                    // 164
+        // Tier 8 #47 — Sapling cross-sprite. Single layer past
+        // Pumpkin. Drops from leaves and grows into a tree on a
+        // randomised tick window via World.TickSaplings.
+        public const int FirstTailSaplingLayer = FirstTailPumpkinLayer + TailPumpkinLayerCount;         // 164
+        public const int TailSaplingLayerCount = 1;
+        public const int LayerCount = FirstTailSaplingLayer + TailSaplingLayerCount;                    // 165
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -409,6 +414,7 @@ namespace VStudioCraft.Game
         public const int TileSnowyGrassSide      = 161;
         public const int TilePumpkinTop          = 162;
         public const int TilePumpkinSide         = 163;
+        public const int TileSapling             = 164;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -696,6 +702,9 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TilePumpkinTop,  GeneratePumpkinTop);
             UploadLayer(layerPixels, TilePumpkinSide, GeneratePumpkinSide);
 
+            // Tier 8 #47 — Sapling sprite.
+            UploadLayer(layerPixels, TileSapling, GenerateSapling);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -835,7 +844,8 @@ namespace VStudioCraft.Game
                 || layer == TileCactusTop      || layer == TileCactusSide
                 || layer == TileIce
                 || layer == TileSnowyGrassSide
-                || layer == TilePumpkinTop     || layer == TilePumpkinSide;
+                || layer == TilePumpkinTop     || layer == TilePumpkinSide
+                || layer == TileSapling;
         }
 
         // Tier 4 #26 — Slice the SugarCane block tile out of terrain.png.
@@ -3607,6 +3617,10 @@ namespace VStudioCraft.Game
             // terrain.png coords from the Halloween Update tile pack.
             /* TilePumpkinTop          */ (6, 6),
             /* TilePumpkinSide         */ (6, 7),
+            // Tier 8 #47 — Sapling. Canonical Alpha terrain.png
+            // (15, 0) — the lone sapling tile in Alpha 1.1.2_01
+            // (Birch / Spruce / Jungle saplings are Beta-era).
+            /* TileSapling             */ (15, 0),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3812,6 +3826,9 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TilePumpkinTop,  GeneratePumpkinTop);
             UploadLayer(layerPixels, TilePumpkinSide, GeneratePumpkinSide);
 
+            // Tier 8 #47 — Sapling sprite. Procedural fallback.
+            UploadLayer(layerPixels, TileSapling, GenerateSapling);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -3824,6 +3841,7 @@ namespace VStudioCraft.Game
                 TileSnow, TileCactusTop, TileCactusSide, TileIce,
                 TileSnowyGrassSide,
                 TilePumpkinTop, TilePumpkinSide,
+                TileSapling,
             };
             for (int i = 0; i < biomeTailLayers.Length; i++)
             {
@@ -6016,6 +6034,58 @@ namespace VStudioCraft.Game
                 pixels[idx + 2] = cap ? (byte)0x18 : (byte)0x22;
                 pixels[idx + 3] = 255;
             }
+        }
+
+        // Tier 8 #47 — Sapling cross-sprite. Tiny seedling: a brown
+        // stem column 2-pixel wide × 4-pixel tall in the bottom-
+        // centre, with a 4-pixel-wide green leaf-cluster cap on top.
+        // Transparent background — cross-sprite render in the
+        // mesher (alpha-discard pulls the silhouette out at render
+        // time). Procedural fallback only; CreateAtlasFromAlphaTerrain
+        // overlays the canonical Alpha sapling tile from terrain.png
+        // at (15, 0) when the embedded image is loaded.
+        private static void GenerateSapling(byte[] pixels)
+        {
+            // Clear to transparent.
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            int cx = TileSize / 2;
+            // Brown stem column — 2 px wide × 4 px tall, sitting at
+            // the bottom centre of the tile.
+            byte sr = 0x6B, sg = 0x44, sb = 0x22;
+            for (int y = TileSize - 5; y < TileSize - 1; y++)
+            for (int x = cx - 1; x <= cx; x++)
+            {
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = sr;
+                pixels[idx + 1] = sg;
+                pixels[idx + 2] = sb;
+                pixels[idx + 3] = 255;
+            }
+            // Green leaf cluster — 4 px wide × 4 px tall on top of
+            // the stem, with a single bright pixel at the top centre
+            // for a faint highlight.
+            byte lr = 0x44, lg = 0x88, lb = 0x2E;
+            for (int y = TileSize - 10; y < TileSize - 5; y++)
+            for (int x = cx - 2; x <= cx + 1; x++)
+            {
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = lr;
+                pixels[idx + 1] = lg;
+                pixels[idx + 2] = lb;
+                pixels[idx + 3] = 255;
+            }
+            // Trim corners of the leaf cluster for a softer cap.
+            int trimRow = TileSize - 10;
+            int trimL = (trimRow * TileSize + (cx - 2)) * 4;
+            int trimR = (trimRow * TileSize + (cx + 1)) * 4;
+            pixels[trimL + 3] = 0;
+            pixels[trimR + 3] = 0;
         }
 
         // Helmet silhouette — a hooded square spanning the top half of
