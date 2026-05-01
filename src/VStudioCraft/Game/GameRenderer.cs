@@ -8166,6 +8166,28 @@ void main()
             return night;
         }
 
+        // Tier 7 #41 — Zenith + horizon palette for the sky-dome
+        // gradient pass. Same time-of-day pivots as ComputeSkyColor;
+        // the existing flat-sky function returns the HORIZON
+        // colour so the rest of the renderer (cloud tint, fog
+        // colour) keeps reading "sky" as the bottom-of-sky band.
+        // Zenith is a deeper, slightly desaturated variant —
+        // looking straight up reads as a bit darker than the haze
+        // at the horizon, matching how a real sky lightens toward
+        // the horizon from atmospheric scatter.
+        private Vector3 ComputeZenithColor(Vector3 sun)
+        {
+            float h = sun.Y;
+            var day   = new Vector3(0.30f, 0.55f, 0.90f);   // deep sky blue
+            var dusk  = new Vector3(0.18f, 0.10f, 0.32f);   // dark plum
+            var night = new Vector3(0.005f, 0.01f, 0.04f);  // near-black
+
+            if (h >= 0.2f) return day;
+            if (h >= 0f)   return Lerp(dusk, day, h / 0.2f);
+            if (h >= -0.2f) return Lerp(night, dusk, (h + 0.2f) / 0.2f);
+            return night;
+        }
+
         private Vector3 ComputeSunColor(Vector3 sun)
         {
             float h = sun.Y;
@@ -8213,6 +8235,7 @@ void main()
 
             var sun = ComputeSunDirection();
             var sky = ComputeSkyColor(sun);
+            var zenith = ComputeZenithColor(sun);
             var sunColor = ComputeSunColor(sun);
             float ambient = 0.22f + 0.18f * Math.Max(0f, sun.Y);
             // 0..1 scale on the per-block sky-light term. At noon (sun.Y ≈ 1)
@@ -8225,6 +8248,14 @@ void main()
 
             GL.ClearColor(sky.X, sky.Y, sky.Z, 1.0f);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            // Tier 7 #41 — Horizon gradient pass. Replaces the flat
+            // GL.ClearColor sky with a vertical gradient (horizon →
+            // zenith). Drawn at the far plane with depth disabled
+            // so the world overlays cleanly on top. ClearColor
+            // remains useful as the underwater fallback / split-
+            // moment between clear and gradient draw.
+            _sky.RenderHorizonGradient(sky, zenith);
 
             var proj = Camera.GetProjection(width, height);
             var view = Camera.GetView();

@@ -46,13 +46,39 @@ uniform mat4 uProjection;
 uniform mat4 uView;
 uniform vec3 uWorldPos;   // billboard centre (world space)
 uniform float uSize;      // world-space edge length
+// Optional world-space ""up"" axis for the billboard. Zero vector
+// = use camera-aligned up (sun, generic billboards). Non-zero =
+// align the billboard's local-Y to this world direction (used by
+// the moon to keep its top edge facing along its motion tangent
+// across the sky, instead of always staying view-upright).
+uniform vec3 uWorldUp;
 out vec2 vUV;
 void main()
 {
-    // Pull right/up basis vectors out of the view matrix so the quad always
-    // faces the camera, regardless of how the camera yaws or pitches.
-    vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]);
-    vec3 up    = vec3(uView[0][1], uView[1][1], uView[2][1]);
+    vec3 right;
+    vec3 up;
+    if (length(uWorldUp) < 0.001)
+    {
+        // Camera-aligned path: pull right/up basis vectors from the
+        // view matrix so the quad always faces the camera with its
+        // local-Y matching screen-up.
+        right = vec3(uView[0][0], uView[1][0], uView[2][0]);
+        up    = vec3(uView[0][1], uView[1][1], uView[2][1]);
+    }
+    else
+    {
+        // World-up override: build a basis where the quad's local-Y
+        // axis tracks uWorldUp, then face the camera as best as
+        // possible. Forward = camera's world-forward (negated view
+        // -Z column). Right = perpendicular to forward and the
+        // desired up. Re-orthogonalised up = perpendicular to right
+        // and forward (snaps the actual up axis to the plane
+        // perpendicular to camera-forward, which is what billboard
+        // rendering requires).
+        vec3 forward = -vec3(uView[0][2], uView[1][2], uView[2][2]);
+        right = normalize(cross(uWorldUp, forward));
+        up = cross(forward, right);
+    }
     vec3 worldP = uWorldPos + right * (aCorner.x * uSize) + up * (aCorner.y * uSize);
     gl_Position = uProjection * uView * vec4(worldP, 1.0);
     vUV = aCorner.xy + 0.5;
@@ -156,9 +182,51 @@ void main()
         private Shader _billboardShader;
         private Shader _starShader;
         private Shader _cloudShader;
+        private Shader _horizonShader;
         private int _sunTex;
         private int _moonTex;
         private int _cloudTex;
+        // Full-screen quad in clip space [-1,1]^2 — the horizon
+        // gradient pass uses this as a sky-dome substitute. Drawn at
+        // the far plane (z=1) with depth test disabled so the world
+        // overlays it cleanly.
+        private OverlayMesh _fullscreenQuad;
+
+        // Tier 7 #41 — Horizon gradient. Two-stop vertical gradient
+        // (horizon → zenith) painted across the framebuffer so the
+        // sky reads as a soft top-to-bottom blend instead of a flat
+        // GL.ClearColor wash. Screen-space rather than world-ray
+        // because (a) the camera doesn't roll in this game so screen-Y
+        // always aligns with world-up after the pitch rotation, and
+        // (b) world geometry occludes the gradient anyway when
+        // looking down — only the visible sky band needs to read
+        // correctly.
+        private const string HorizonVS = @"#version 330 core
+layout(location = 0) in vec3 aClip;
+out float vClipY;
+void main()
+{
+    // Far-plane Z so any depth-tested geometry overlays cleanly.
+    gl_Position = vec4(aClip.xy, 1.0, 1.0);
+    vClipY = aClip.y;
+}
+";
+        private const string HorizonFS = @"#version 330 core
+in float vClipY;
+out vec4 FragColor;
+uniform vec3 uHorizon;
+uniform vec3 uZenith;
+void main()
+{
+    // Map clip-Y [-1,1] to t [0,1] (0 = bottom, 1 = top). Bias
+    // toward the horizon end with pow(t, 1.4) so the brighter
+    // horizon band fills more screen area (matches how a real
+    // sky has a bigger horizon haze layer than the zenith).
+    float t = clamp((vClipY + 1.0) * 0.5, 0.0, 1.0);
+    t = pow(t, 1.4);
+    FragColor = vec4(mix(uHorizon, uZenith, t), 1.0);
+}
+";
 
         // Unit-quad centred at origin ([-0.5,0.5]^2) for billboarding.
         private OverlayMesh _quad;
@@ -178,12 +246,48 @@ void main()
             _billboardShader = new Shader(BillboardVS, BillboardFS);
             _starShader = new Shader(StarVS, StarFS);
             _cloudShader = new Shader(CloudVS, CloudFS);
+            _horizonShader = new Shader(HorizonVS, HorizonFS);
             _sunTex = SkyTextures.CreateSunTexture();
             _moonTex = SkyTextures.CreateMoonPhasesTexture(MoonPhaseFrames);
             _cloudTex = SkyTextures.CreateCloudTexture();
             _quad = BuildCentredQuad();
+            _fullscreenQuad = BuildFullscreenQuad();
             BuildStars();
             _cloudMesh = BuildCloudPlane();
+        }
+
+        // 6 vertices spanning NDC [-1,+1]² for the horizon gradient
+        // pass. Z is unused — the vertex shader pins it to the far
+        // plane so depth-test passes leave the gradient behind any
+        // world geometry rendered later.
+        private static OverlayMesh BuildFullscreenQuad()
+        {
+            // 3-component verts (z=0, ignored — VS pins to far plane).
+            // OverlayMesh is hardcoded to position-only 3-component
+            // layout; rather than fork it, the unused Z just rides
+            // along.
+            float[] v =
+            {
+                -1f, -1f, 0f,   1f, -1f, 0f,   1f,  1f, 0f,
+                -1f, -1f, 0f,   1f,  1f, 0f,  -1f,  1f, 0f,
+            };
+            var m = new OverlayMesh { Primitive = PrimitiveType.Triangles };
+            m.Upload(v);
+            return m;
+        }
+
+        public void RenderHorizonGradient(Vector3 horizon, Vector3 zenith)
+        {
+            _horizonShader.Use();
+            _horizonShader.SetVector3("uHorizon", horizon);
+            _horizonShader.SetVector3("uZenith", zenith);
+            GL.Disable(EnableCap.DepthTest);
+            GL.DepthMask(false);
+            GL.Disable(EnableCap.CullFace);
+            _fullscreenQuad.Draw();
+            GL.DepthMask(true);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Enable(EnableCap.CullFace);
         }
 
         private static OverlayMesh BuildCentredQuad()
@@ -329,15 +433,31 @@ void main()
             // ---- Moon ---- 8-phase strip texture; sample column =
             // moonPhase out of MoonPhaseFrames. uvScale.x = 1/N picks
             // a single frame's worth of texture width.
+            //
+            // Tier 7 #41 — Pass the motion tangent of the moon's
+            // arc as the billboard's world-up axis so the moon's
+            // top edge points along its direction of travel. The
+            // sun's direction is (cos α, sin α, 0.15); antiSunDir =
+            // -sun, so its derivative in α is (sin α, -cos α, 0).
+            // Without this override the billboard pulls up from
+            // the view matrix and the moon stays permanently
+            // upright relative to the camera, which reads as the
+            // moon swivelling around the player rather than
+            // travelling along a fixed celestial path.
             float moonAlpha = Math.Max(0f, Math.Min(1f, (antiSunDir.Y + 0.15f) / 0.3f));
             if (moonAlpha > 0.01f)
             {
                 int phase = ((moonPhase % MoonPhaseFrames) + MoonPhaseFrames) % MoonPhaseFrames;
                 float uOffset = phase / (float)MoonPhaseFrames;
                 float uScale  = 1f / MoonPhaseFrames;
+                Vector3 moonTangent = new Vector3(
+                    (float)Math.Sin(sunAngleRad),
+                    -(float)Math.Cos(sunAngleRad),
+                    0f);
                 DrawBillboard(projection, view, camPos + antiSunDir * SkyRadius, MoonSize,
                     _moonTex, new Vector4(1f, 1f, 1f, moonAlpha),
-                    new Vector2(uOffset, 0f), new Vector2(uScale, 1f));
+                    new Vector2(uOffset, 0f), new Vector2(uScale, 1f),
+                    moonTangent);
             }
 
             // Leave GL state how the world pass expects it.
@@ -403,13 +523,25 @@ void main()
             float size, int texture, Vector4 tint)
         {
             DrawBillboard(projection, view, worldPos, size, texture, tint,
-                Vector2.Zero, Vector2.One);
+                Vector2.Zero, Vector2.One, Vector3.Zero);
         }
 
         // Variant with explicit UV transform — used for the moon
         // strip texture so each phase samples one of the 8 sub-frames.
         private void DrawBillboard(Matrix4 projection, Matrix4 view, Vector3 worldPos,
             float size, int texture, Vector4 tint, Vector2 uvOffset, Vector2 uvScale)
+        {
+            DrawBillboard(projection, view, worldPos, size, texture, tint,
+                uvOffset, uvScale, Vector3.Zero);
+        }
+
+        // Full variant — adds a world-space "up" axis. Pass Vector3.Zero
+        // to keep the camera-aligned upright behaviour. Pass a non-zero
+        // direction (e.g. the moon's motion tangent) and the billboard's
+        // local-Y axis tracks it instead of view-up.
+        private void DrawBillboard(Matrix4 projection, Matrix4 view, Vector3 worldPos,
+            float size, int texture, Vector4 tint, Vector2 uvOffset, Vector2 uvScale,
+            Vector3 worldUp)
         {
             _billboardShader.Use();
             _billboardShader.SetMatrix4("uProjection", projection);
@@ -419,6 +551,7 @@ void main()
             _billboardShader.SetVector4("uTint", tint);
             _billboardShader.SetVector2("uUVOffset", uvOffset);
             _billboardShader.SetVector2("uUVScale",  uvScale);
+            _billboardShader.SetVector3("uWorldUp",  worldUp);
             _billboardShader.SetInt("uTex", 0);
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2D, texture);
@@ -431,7 +564,9 @@ void main()
             _billboardShader?.Dispose();
             _starShader?.Dispose();
             _cloudShader?.Dispose();
+            _horizonShader?.Dispose();
             _quad?.Dispose();
+            _fullscreenQuad?.Dispose();
             _cloudMesh?.Dispose();
             if (_sunTex != 0)   { GL.DeleteTexture(_sunTex);   _sunTex = 0; }
             if (_moonTex != 0)  { GL.DeleteTexture(_moonTex);  _moonTex = 0; }
