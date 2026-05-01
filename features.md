@@ -504,7 +504,7 @@ multiple subsystems at once.
 	
 ### Tier 7 — Lighting + sky polish
 
-41. **Real moon phases (8-frame texture)** + **horizon gradient** + **rain / snow / lightning** + **biome sky tints**.
+(All Tier 7 items shipped — see git history for individual feature postmortems.)
 
 ### Tier 8 — Late-Alpha systems
 

@@ -795,6 +795,7 @@ void main()
             if (old != 0) GL.DeleteTexture(old);
         }
         private SkyRenderer _sky;
+        private WeatherSystem _weather;
         private World _world;
         private ChunkJobSystem _jobs;
 
@@ -1198,6 +1199,8 @@ void main()
             _fontTexture = HotbarTextures.CreateFontTexture();
             _sky = new SkyRenderer();
             _sky.Initialize();
+            _weather = new WeatherSystem();
+            _weather.Initialize();
 
             // Tier 6 — Title-screen animated background. Decode runs
             // on a background thread so app startup isn't halted by
@@ -8114,6 +8117,17 @@ void main()
             _timeOfDay = (_timeOfDay + dt / TotalCycle) % 1f;
             if (_timeOfDay < prev) _lunarDay++;
             _sky?.Advance(dt);
+            // Tier 7 #41 — Weather tick. Cycles the global Clear ↔
+            // Raining mode and integrates rain/snow particles around
+            // the camera. Cheap when Clear (early-out in Update);
+            // when Raining the per-particle update is ~600 vec3s.
+            if (_weather != null && _world != null && Player != null)
+            {
+                int pcx = (int)Math.Floor(Player.Position.X);
+                int pcz = (int)Math.Floor(Player.Position.Z);
+                _weather.SetPlayerBiome(BiomeMap.Classify(_world.Noise, pcx, pcz));
+                _weather.Update(dt, Camera.Position);
+            }
         }
 
         // Piecewise angle so day/night/transitions each get their own share of the cycle.
@@ -8175,6 +8189,22 @@ void main()
         // looking straight up reads as a bit darker than the haze
         // at the horizon, matching how a real sky lightens toward
         // the horizon from atmospheric scatter.
+        // Tier 7 #41 — Per-biome multiplicative tint applied to both
+        // horizon + zenith colours so the sky reads as "biome-coloured"
+        // without re-authoring the time-of-day palette per biome.
+        // Plains is the identity (1,1,1); other biomes shift hue
+        // toward their thematic atmosphere.
+        private static Vector3 BiomeSkyTint(Biome b)
+        {
+            switch (b)
+            {
+                case Biome.Desert: return new Vector3(1.05f, 1.00f, 0.85f); // warmer / yellow-shifted
+                case Biome.Snow:   return new Vector3(0.92f, 0.97f, 1.05f); // cooler / blue-white
+                case Biome.Forest: return new Vector3(0.95f, 1.02f, 0.95f); // faint green tinge
+                default:           return new Vector3(1.00f, 1.00f, 1.00f); // plains unchanged
+            }
+        }
+
         private Vector3 ComputeZenithColor(Vector3 sun)
         {
             float h = sun.Y;
@@ -8237,6 +8267,40 @@ void main()
             var sky = ComputeSkyColor(sun);
             var zenith = ComputeZenithColor(sun);
             var sunColor = ComputeSunColor(sun);
+
+            // Tier 7 #41 — Biome sky tint. Multiplicative bias on
+            // horizon + zenith based on the biome at the player's
+            // column: deserts read warmer (yellow-shift), snow reads
+            // colder (cool blue-white), forest greener-tinged, plains
+            // unchanged. Ocean biome doesn't exist as a separate enum
+            // value yet so it inherits the column's underlying biome
+            // (typically Plains).
+            Biome playerBiome = Biome.Plains;
+            if (_world != null && Player != null)
+            {
+                int pcx = (int)Math.Floor(Player.Position.X);
+                int pcz = (int)Math.Floor(Player.Position.Z);
+                playerBiome = BiomeMap.Classify(_world.Noise, pcx, pcz);
+                Vector3 tint = BiomeSkyTint(playerBiome);
+                sky    = new Vector3(sky.X    * tint.X, sky.Y    * tint.Y, sky.Z    * tint.Z);
+                zenith = new Vector3(zenith.X * tint.X, zenith.Y * tint.Y, zenith.Z * tint.Z);
+            }
+
+            // Tier 7 #41 — Lightning flash. Multiplies sky + zenith
+            // (and ambient further down) by the weather system's
+            // current boost during a strike. Lasts a couple frames
+            // per strike, so the flash reads as a sharp lift in
+            // overall sky brightness rather than a steady glow.
+            float lightningBoost = _weather?.LightningBoost ?? 1f;
+            if (lightningBoost > 1.001f)
+            {
+                sky    = new Vector3(Math.Min(1f, sky.X    * lightningBoost),
+                                     Math.Min(1f, sky.Y    * lightningBoost),
+                                     Math.Min(1f, sky.Z    * lightningBoost));
+                zenith = new Vector3(Math.Min(1f, zenith.X * lightningBoost),
+                                     Math.Min(1f, zenith.Y * lightningBoost),
+                                     Math.Min(1f, zenith.Z * lightningBoost));
+            }
             float ambient = 0.22f + 0.18f * Math.Max(0f, sun.Y);
             // 0..1 scale on the per-block sky-light term. At noon (sun.Y ≈ 1)
             // it's 1.0; at midnight (sun.Y ≈ -1) it floors at 0.18 so a moonlit
@@ -8271,6 +8335,14 @@ void main()
             float sunAngle = ComputeSunAngle();
             Vector3 antiSun = -sun;
             _sky.RenderCelestial(proj, view, Camera.Position, sunAngle, sun, antiSun, LunarPhase);
+
+            // Tier 7 #41 — Rain / snow particles. Drawn after the
+            // celestial pass so flakes/streaks sit in front of the
+            // sky dome but behind world geometry; world chunks
+            // draw next and depth-overwrite the particles where
+            // they should be occluded by mountains / buildings.
+            // Skipped silently in non-precipitating biomes.
+            _weather?.Render(vp, Camera.Position, playerBiome);
 
             // Tier 7 #40 — Detect camera-in-fluid state up-front so the
             // chunk-pass fog uniforms can swap to a deep underwater
@@ -13155,6 +13227,8 @@ void main()
             _multiFaceCubeShader?.Dispose();
             _sky?.Dispose();
             _sky = null;
+            _weather?.Dispose();
+            _weather = null;
             if (_atlasTexture != 0)
             {
                 GL.DeleteTexture(_atlasTexture);
