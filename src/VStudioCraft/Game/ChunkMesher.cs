@@ -694,51 +694,113 @@ namespace VStudioCraft.Game
             float y1 = wy + 1f;
 
             // Six box faces. UVs sample the full tile [0..1] on the two
-            // broad faces; the four thin edges sample a 3/16-wide UV
-            // strip from the same tile so they pick up an in-palette
-            // colour without obvious texture distortion.
-            // -X face
-            EmitCrossQuad(
-                x0, y0, z1, 0f, 0f,
-                x0, y0, z0, 1f, 0f,
-                x0, y1, z0, 1f, 1f,
-                x0, y1, z1, 0f, 1f,
-                -1f, 0f, 0f, layer, lightPacked);
-            // +X face
-            EmitCrossQuad(
-                x1, y0, z0, 0f, 0f,
-                x1, y0, z1, 1f, 0f,
-                x1, y1, z1, 1f, 1f,
-                x1, y1, z0, 0f, 1f,
-                +1f, 0f, 0f, layer, lightPacked);
-            // -Z face
-            EmitCrossQuad(
-                x0, y0, z0, 0f, 0f,
-                x1, y0, z0, 1f, 0f,
-                x1, y1, z0, 1f, 1f,
-                x0, y1, z0, 0f, 1f,
-                0f, 0f, -1f, layer, lightPacked);
-            // +Z face
-            EmitCrossQuad(
-                x1, y0, z1, 0f, 0f,
-                x0, y0, z1, 1f, 0f,
-                x0, y1, z1, 1f, 1f,
-                x1, y1, z1, 0f, 1f,
-                0f, 0f, +1f, layer, lightPacked);
-            // +Y face (top edge of slab)
-            EmitCrossQuad(
-                x0, y1, z1, 0f, 0f,
-                x1, y1, z1, 1f, 0f,
-                x1, y1, z0, 1f, 1f,
-                x0, y1, z0, 0f, 1f,
-                0f, +1f, 0f, layer, lightPacked);
-            // -Y face (bottom edge of slab)
-            EmitCrossQuad(
-                x0, y0, z0, 0f, 0f,
-                x1, y0, z0, 1f, 0f,
-                x1, y0, z1, 1f, 1f,
-                x0, y0, z1, 0f, 1f,
-                0f, -1f, 0f, layer, lightPacked);
+            // broad faces (1×1 in world space); the four thin edges
+            // sample a 3/16-wide UV strip from the door tile's hinge
+            // edge so they read as a solid wood strip rather than a
+            // stretched copy of the windows / knob art. Without this
+            // narrowing the side / top / bottom faces of the slab
+            // showed the full door artwork crammed into a 3/16-thick
+            // strip — visually reads as "the door texture appears on
+            // the inside faces of the slab."
+            //
+            // Broad/thin face assignment depends on which wall the
+            // slab is pinned to: N/S-pinned slabs (z range = thick)
+            // make ±Z the broad faces and ±X / ±Y the thin edges;
+            // E/W-pinned slabs (x range = thick) flip that. We pick
+            // the strip from the LEFT/HINGE side of the source tile
+            // (U ∈ [0, 3/16]) for vertical edges and from the TOP
+            // strip (V ∈ [1−3/16, 1] — the door's top frame) for
+            // horizontal edges. After the CopyTile flip those map to
+            // PNG row 0 (top of source = solid frame band on both
+            // wood and iron tiles), so the slim edges read as plain
+            // wood/iron rather than mid-door art.
+            const float u3 = 3f / 16f;
+            bool nsPinned = slabWall == BlockFacing.North || slabWall == BlockFacing.South;
+
+            if (nsPinned)
+            {
+                // ±Z are BROAD (1×1) — full tile UVs.
+                EmitCrossQuad(
+                    x0, y0, z0, 0f, 0f,
+                    x1, y0, z0, 1f, 0f,
+                    x1, y1, z0, 1f, 1f,
+                    x0, y1, z0, 0f, 1f,
+                    0f, 0f, -1f, layer, lightPacked);
+                EmitCrossQuad(
+                    x1, y0, z1, 0f, 0f,
+                    x0, y0, z1, 1f, 0f,
+                    x0, y1, z1, 1f, 1f,
+                    x1, y1, z1, 0f, 1f,
+                    0f, 0f, +1f, layer, lightPacked);
+                // ±X are THIN (thick×1) — vertical hinge strip.
+                EmitCrossQuad(
+                    x0, y0, z1, 0f,  0f,
+                    x0, y0, z0, u3,  0f,
+                    x0, y1, z0, u3,  1f,
+                    x0, y1, z1, 0f,  1f,
+                    -1f, 0f, 0f, layer, lightPacked);
+                EmitCrossQuad(
+                    x1, y0, z0, 0f,  0f,
+                    x1, y0, z1, u3,  0f,
+                    x1, y1, z1, u3,  1f,
+                    x1, y1, z0, 0f,  1f,
+                    +1f, 0f, 0f, layer, lightPacked);
+                // ±Y are THIN (1×thick) — horizontal top-frame strip.
+                EmitCrossQuad(
+                    x0, y1, z1, 0f, 1f - u3,
+                    x1, y1, z1, 1f, 1f - u3,
+                    x1, y1, z0, 1f, 1f,
+                    x0, y1, z0, 0f, 1f,
+                    0f, +1f, 0f, layer, lightPacked);
+                EmitCrossQuad(
+                    x0, y0, z0, 0f, 1f - u3,
+                    x1, y0, z0, 1f, 1f - u3,
+                    x1, y0, z1, 1f, 1f,
+                    x0, y0, z1, 0f, 1f,
+                    0f, -1f, 0f, layer, lightPacked);
+            }
+            else
+            {
+                // E/W-pinned: ±X are BROAD (1×1) — full tile UVs.
+                EmitCrossQuad(
+                    x0, y0, z1, 0f, 0f,
+                    x0, y0, z0, 1f, 0f,
+                    x0, y1, z0, 1f, 1f,
+                    x0, y1, z1, 0f, 1f,
+                    -1f, 0f, 0f, layer, lightPacked);
+                EmitCrossQuad(
+                    x1, y0, z0, 0f, 0f,
+                    x1, y0, z1, 1f, 0f,
+                    x1, y1, z1, 1f, 1f,
+                    x1, y1, z0, 0f, 1f,
+                    +1f, 0f, 0f, layer, lightPacked);
+                // ±Z are THIN (thick×1) — vertical hinge strip.
+                EmitCrossQuad(
+                    x0, y0, z0, 0f,  0f,
+                    x1, y0, z0, u3,  0f,
+                    x1, y1, z0, u3,  1f,
+                    x0, y1, z0, 0f,  1f,
+                    0f, 0f, -1f, layer, lightPacked);
+                EmitCrossQuad(
+                    x1, y0, z1, 0f,  0f,
+                    x0, y0, z1, u3,  0f,
+                    x0, y1, z1, u3,  1f,
+                    x1, y1, z1, 0f,  1f,
+                    0f, 0f, +1f, layer, lightPacked);
+                // ±Y are THIN (thick×1) — horizontal top-frame strip.
+                EmitCrossQuad(
+                    x0, y1, z1, 0f, 1f - u3,
+                    x1, y1, z1, 1f, 1f - u3,
+                    x1, y1, z0, 1f, 1f,
+                    x0, y1, z0, 0f, 1f,
+                    0f, +1f, 0f, layer, lightPacked);
+                EmitCrossQuad(
+                    x0, y0, z0, 0f, 1f - u3,
+                    x1, y0, z0, 1f, 1f - u3,
+                    x1, y0, z1, 1f, 1f,
+                    x0, y0, z1, 0f, 1f,
+                    0f, -1f, 0f, layer, lightPacked);
+            }
         }
 
         // Tier 6 #37 Phase 4 — Snow layer slab. 1×0.125×1 box pinned to
