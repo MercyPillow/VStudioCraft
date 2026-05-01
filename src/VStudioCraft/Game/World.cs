@@ -811,6 +811,17 @@ namespace VStudioCraft.Game
         // thread (host SP / server tick loop) — no concurrent access.
         private readonly List<FallingBlockEntity> _fallingBlocks = new List<FallingBlockEntity>();
         public IReadOnlyList<FallingBlockEntity> FallingBlocks => _fallingBlocks;
+
+        // Tier 8 #43 — Live primed-TNT entities. Spawned when the
+        // player ignites a placed Tnt block with Flint & Steel; each
+        // counts down a 4-second fuse and is removed when the host
+        // renderer's per-frame tick runs the explosion algorithm
+        // (which writes the block damage via SetBlock and scatters
+        // drops). Same pattern as the falling-block list.
+        private readonly List<PrimedTntEntity> _primedTnt = new List<PrimedTntEntity>();
+        public IReadOnlyList<PrimedTntEntity> PrimedTnt => _primedTnt;
+        public void AddPrimedTnt(PrimedTntEntity e) => _primedTnt.Add(e);
+        public void RemovePrimedTntAt(int index) => _primedTnt.RemoveAt(index);
         // Per-tick: 4 chunks, 6 cells each = 24 sample chances. With
         // ~1/12 promotion probability per sampled wheat cell, a single
         // wheat block walks through stages 0..7 in ~6 minutes of real

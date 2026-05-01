@@ -1294,6 +1294,26 @@ namespace VStudioCraft.Game
         // through the IsCubeShape branch above without needing a
         // dedicated case here.
 
+        // Tier 8 #43 — Blast resistance. True for blocks that a TNT
+        // explosion (radius ~4) cannot break. Alpha's actual model
+        // is a numeric resistance value compared against the per-
+        // cell explosion intensity along a ray; for the V1 simulation
+        // we just split blocks into "TNT can break" and "TNT can't
+        // break" — Bedrock + Obsidian on the indestructible side,
+        // everything else (including water / lava sources, but the
+        // explosion code skips fluids separately) destroyable.
+        public static bool IsBlastResistant(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Bedrock:
+                case BlockType.Obsidian:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         // matches Alpha (you can't punch out a fluid source by clicking it).
         public static bool IsRaycastTarget(BlockType t)
         {
@@ -1940,7 +1960,15 @@ namespace VStudioCraft.Game
                     // this simplified single-tile pass.
                     return BlockTextures.TileCobblestone;
                 case BlockType.StoneButton:
-                    return BlockTextures.TileStone;
+                    // Inventory / held-icon tile only — the placed
+                    // block's faces are sampled directly from
+                    // TileStone by EmitButtonBox in ChunkMesher,
+                    // bypassing this lookup. Routing GetTileIndex
+                    // to the dedicated TileStoneButtonItem keeps
+                    // DrawFlatSpriteIcon's side-tile fetch on the
+                    // canonical Alpha button sprite without
+                    // affecting the in-world cuboid.
+                    return BlockTextures.TileStoneButtonItem;
                 case BlockType.StonePressurePlate:
                     return BlockTextures.TileStone;
                 case BlockType.WoodPressurePlate:

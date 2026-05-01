@@ -4364,6 +4364,23 @@ void main()
                 // didn't suppress block interactions.
                 else if (held == BlockType.FlintAndSteel)
                 {
+                    // Tier 8 #43 — TNT priming. RMB Flint+Steel on a
+                    // placed Tnt block clears the cell to Air and
+                    // spawns a PrimedTntEntity at the cell centre
+                    // with a 4-second fuse. Checked BEFORE the fire-
+                    // placement branch so the player can ignite a
+                    // TNT block directly without first targeting an
+                    // adjacent face.
+                    var hitT0 = _world.GetBlock(hit.X, hit.Y, hit.Z);
+                    if (hitT0 == BlockType.Tnt)
+                    {
+                        _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
+                        _world.AddPrimedTnt(new PrimedTntEntity(
+                            new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f)));
+                        SfxBank.PlayClick();
+                        return true;
+                    }
+
                     // Tier 6 #34 — Light fire on the targeted face.
                     // Place a Fire block at the cell adjacent to the
                     // hit block on the hit face's normal direction;
@@ -6872,6 +6889,26 @@ void main()
             _world.TickFallingPhysics(dt);
             _world.UpdateFallingBlocks(dt);
 
+            // Tier 8 #43 — Primed TNT fuse tick. Walks the live list
+            // back-to-front so explode-driven SetBlock cascades don't
+            // shift indices we still need to iterate. On fuse expiry
+            // the entity is removed AFTER Explode runs (so the cell
+            // it occupied is air-clear when the radial sweep starts
+            // — the TNT block was cleared to Air at prime time).
+            var ptList = _world.PrimedTnt;
+            if (ptList.Count > 0)
+            {
+                for (int i = ptList.Count - 1; i >= 0; i--)
+                {
+                    var e = ptList[i];
+                    if (e.Update(dt))
+                    {
+                        Explode(e.Position, PrimedTntEntity.ExplosionRadius);
+                        _world.RemovePrimedTntAt(i);
+                    }
+                }
+            }
+
             // Tier 8 #42 — Redstone power propagation tick. Internally
             // rate-limited at RedstonePowerSystem.TickInterval (10 Hz)
             // so per-frame cost is just a counter decrement when not
@@ -8630,6 +8667,10 @@ void main()
             // entity level (the cube is sand-tan or gravel-grey).
             // Cheap, no-op when nothing's falling.
             RenderFallingBlocks(width, height);
+            // Tier 8 #43 — Primed TNT pulses. Same overlay-shader
+            // path as falling blocks; cheap when no TNT is primed
+            // (early-out on empty list).
+            RenderPrimedTnt(width, height);
             // Tier 3 #12 third-person Steve. Drawn first in the entity
             // layer so passives + hostiles + particles can occlude /
             // overlay the player rig naturally; only renders when F5 is
@@ -9255,6 +9296,105 @@ void main()
                 var mvp = model * vp;
                 _overlayShader.SetMatrix4("uMVP", mvp);
                 _breakCubeMesh.Draw();
+            }
+        }
+
+        // Tier 8 #43 — Primed TNT entities. Drawn as flat-coloured
+        // pulse cubes via the same overlay shader / unit cube mesh
+        // path as projectiles + falling blocks. Colour pulses
+        // between dim red and a bright wash so the player can see
+        // the fuse counting down.
+        private void RenderPrimedTnt(int width, int height)
+        {
+            if (_world == null) return;
+            var pts = _world.PrimedTnt;
+            if (pts == null || pts.Count == 0) return;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+            var vp = _frameVp;
+            var sizeScale = Matrix4.CreateScale(PrimedTntEntity.RenderScale);
+
+            for (int i = 0; i < pts.Count; i++)
+            {
+                var e = pts[i];
+                _overlayShader.SetVector3("uColor", e.GetRenderColor());
+                var trans = Matrix4.CreateTranslation(e.RenderPosition);
+                var model = sizeScale * trans;
+                var mvp = model * vp;
+                _overlayShader.SetMatrix4("uMVP", mvp);
+                _breakCubeMesh.Draw();
+            }
+        }
+
+        // Tier 8 #43 — Explosion algorithm. Sweeps a cube around the
+        // centre, breaks every cell within `radius` Euclidean
+        // distance whose blast resistance is below the local
+        // intensity. Drops the broken blocks (1-in-4 chance per
+        // block — Alpha rule) and clears them to Air via SetBlock.
+        // Light + chunk-dirty propagation runs naturally through
+        // the SetBlock pipeline. Centre cell is force-cleared even
+        // if a TNT block somehow re-appeared between fuse expiry
+        // and the explode call.
+        //
+        // Chained TNT: if the explosion sweep hits another Tnt
+        // block, we prime it (replace with PrimedTntEntity at half
+        // a fuse so the chain reads as a quick rolling boom rather
+        // than instantaneous total annihilation). Matches Alpha's
+        // "TNT lights TNT" cascade.
+        private void Explode(Vector3 center, float radius)
+        {
+            if (_world == null) return;
+            int r = (int)System.Math.Ceiling(radius);
+            float r2 = radius * radius;
+            int cx = (int)System.Math.Floor(center.X);
+            int cy = (int)System.Math.Floor(center.Y);
+            int cz = (int)System.Math.Floor(center.Z);
+            for (int dy = -r; dy <= r; dy++)
+            for (int dx = -r; dx <= r; dx++)
+            for (int dz = -r; dz <= r; dz++)
+            {
+                float dist2 = dx * dx + dy * dy + dz * dz;
+                if (dist2 > r2) continue;
+                int wx = cx + dx, wy = cy + dy, wz = cz + dz;
+                var t = _world.GetBlock(wx, wy, wz);
+                if (t == BlockType.Air) continue;
+                if (BlockData.IsBlastResistant(t)) continue;
+                // Skip fluids — clearing a water source mid-blast
+                // creates a draining cascade that overwhelms the
+                // fluid tick. Alpha behaves the same; lava + water
+                // are blast-immune in practice.
+                if (t == BlockType.Water || t == BlockType.FlowingWater
+                 || t == BlockType.Lava  || t == BlockType.FlowingLava) continue;
+                // Chained TNT — re-prime instead of vaporising.
+                if (t == BlockType.Tnt)
+                {
+                    _world.SetBlock(wx, wy, wz, BlockType.Air);
+                    var chained = new PrimedTntEntity(
+                        new Vector3(wx + 0.5f, wy + 0.5f, wz + 0.5f));
+                    chained.FuseSeconds = 0.5f + (float)_dropRng.NextDouble() * 1.5f;
+                    _world.AddPrimedTnt(chained);
+                    continue;
+                }
+                // Probabilistic drop (1-in-4 — Alpha 25 % rule).
+                if (_dropRng.Next(4) == 0)
+                {
+                    SpawnBreakDrop(wx, wy, wz, t, BlockType.Air);
+                }
+                _world.SetBlock(wx, wy, wz, BlockType.Air);
+            }
+            // Player damage — falloff from centre. 8 HP at point-
+            // blank, 0 HP at radius edge. Skipped if the player is
+            // outside the radius.
+            if (Player != null)
+            {
+                Vector3 d = Player.Position + new Vector3(0f, Player.Height * 0.5f, 0f) - center;
+                float dist = d.Length;
+                if (dist < radius)
+                {
+                    int dmg = (int)System.Math.Ceiling(8f * (1f - dist / radius));
+                    if (dmg > 0) Player.TakeDamage(dmg);
+                }
             }
         }
 

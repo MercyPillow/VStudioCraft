@@ -504,17 +504,13 @@ multiple subsystems at once.
 	
 ### Tier 8 — Late-Alpha systems
 
-42. ~~**Redstone primitives (wire + torch + lever + button + pressure plate) + Redstone Dust item (331)**~~ — DONE. Five new blocks (RedstoneWire, Lever, StoneButton, StonePressurePlate, WoodPressurePlate) plus RedstoneTorchOn / RedstoneTorchOff and the RedstoneDust item. RedstonePowerSystem.cs runs a 10 Hz BFS — sources (lit redstone torch, lever ON, button pressed, pressure plate pressed) seed strength 15, decay 1 per cell stepping through wires only. Sinks: door open-state auto-toggles when any neighbour cell is powered (both halves stay in sync), redstone torch inverts (lit ↔ off) based on power-below-it, note block plays a click on the rising-edge power transition. Pressure-plate overlap is keyed off the player's footprint cell (single-entity for now; mob-overlap is the natural follow-up). Visual polish deferred: wall-mounted redstone torch variants and per-direction routed wire visuals (T/L/cross/straight) are still on the lever / wire's existing single-tile rendering — functionality is correct, the cosmetic seam can be filled in later without simulation changes.
-43. **TNT priming + explosion algorithm** — Alpha 1.0.14. Ray-based blast with block-resistance. Flint and Steel from Tier 4 #17 ignites it.
 44. **Signs (post + wall) with writable text + Sign item (323)** — Alpha 1.0.16. Tile entity with a 4-line string + in-place text editor.
 45. **Slabs + stairs** — Stairs are Alpha 1.0.5_01 canonical; slabs are Beta 1.3 but the user has explicitly opted to keep them in scope (sub-block geometry is general infrastructure that pairs naturally with stairs). Sub-block metadata byte + non-cube collision shape.
 46. **Fences / ladders** — Alpha 1.0.14 / 1.0.17.
-47. **Sapling (block + item)** — Alpha 1.0.5. Tree gen drops them, planted saplings grow into trees over a randomised tick window. Required for renewable wood without leaving spawn forest.
-48. **Note Block** — Alpha 1.0.15. Tile entity; right-click to advance pitch, redstone signal triggers a note. Sound playback uses the existing AudioEngine.
 49. **Dispenser** — Alpha 1.0.16. 9-slot tile entity facing outward; redstone signal pops one item from a random slot. Reuses chest's tile-entity infrastructure plus furnace-style facing metadata.
 50. **Bone + Bone Meal** — Alpha 1.0.14. Skeleton drop + crafted dye. Bone meal forces a wheat / sapling / etc. to advance one growth stage on right-click.
-51. **Halloween Update block set** — Alpha 1.1.0 (Oct 30, 2010), in scope for our 1.1.2_01 target:
-    - **Pumpkin / Jack-o-lantern** — Pumpkin is plain orange-ridged cube, jack-o-lantern is the lit variant placed via Flint+Steel right-click. Pumpkin can be worn on the head as a helmet. Earlier removed by user request, now back per re-analysis.
+51. **Halloween Update block set** — Alpha 1.1.0 (Oct 30, 2010), in scope for our 1.1.2_01 target. Pumpkin already shipped (Tier 6 polish). Remaining:
+    - **Jack-o-lantern** — lit variant of Pumpkin, placed via Flint+Steel right-click on a regular Pumpkin. Emits light.
     - **Netherrack** — soft red rock; lava can spread through it.
     - **Soul Sand** — slows player movement, reduces fall damage.
     - **Glowstone** — emits light=15, breaks into Glowstone Dust.

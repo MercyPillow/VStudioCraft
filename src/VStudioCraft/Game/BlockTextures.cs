@@ -248,7 +248,14 @@ namespace VStudioCraft.Game
         // mesher logic that inspects neighbour cells.
         public const int FirstTailWireLayer      = FirstTailRedstoneLayer + TailRedstoneLayerCount;     // 169
         public const int TailWireLayerCount      = 1;
-        public const int LayerCount = FirstTailWireLayer + TailWireLayerCount;                          // 170
+        // Stone Button item icon — separate from the placed-block tile
+        // (which the EmitButtonBox mesher samples directly as
+        // TileStone). This layer is ONLY used by the inventory / hand
+        // sprite path so the held button reads as a recognisable
+        // button silhouette instead of a plain stone cube.
+        public const int FirstTailButtonItemLayer = FirstTailWireLayer + TailWireLayerCount;            // 170
+        public const int TailButtonItemLayerCount = 1;
+        public const int LayerCount = FirstTailButtonItemLayer + TailButtonItemLayerCount;              // 171
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -437,6 +444,12 @@ namespace VStudioCraft.Game
         public const int TileRedstoneTorchOff    = 167;
         public const int TileRedstoneDust        = 168;
         public const int TileRedstoneWire        = 169;
+        // Tier 8 #42 — Stone Button inventory icon. Sliced from
+        // alpha_tools.png (the items atlas) at (6, 4); separate
+        // from the in-world button tile so the placed block keeps
+        // its TileStone face while the held / inventory icon shows
+        // the canonical Alpha button sprite.
+        public const int TileStoneButtonItem     = 170;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -738,6 +751,9 @@ namespace VStudioCraft.Game
             // Redstone Wire (placed-block form, "+" cross tile).
             UploadLayer(layerPixels, TileRedstoneWire, GenerateRedstoneWire);
 
+            // Stone Button inventory icon (procedural pill fallback).
+            UploadLayer(layerPixels, TileStoneButtonItem, GenerateStoneButtonItem);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -883,6 +899,12 @@ namespace VStudioCraft.Game
                 || layer == TileRedstoneTorchOn
                 || layer == TileRedstoneTorchOff
                 || layer == TileRedstoneWire;
+                // NOTE: TileStoneButtonItem is intentionally NOT in
+                // this whitelist — its (6, 4) coord references
+                // alpha_tools.png (the items atlas), not terrain.png.
+                // Keeping it on the tools-sourced side of the gate
+                // routes it through UploadTailItemsFromAlphaTools
+                // below.
         }
 
         // Tier 4 #26 — Slice the SugarCane block tile out of terrain.png.
@@ -3671,8 +3693,23 @@ namespace VStudioCraft.Game
             // generator until a tools-sheet slicer wires it in.
             /* TileRedstoneDust        */ (-1, -1),
             // Redstone Wire (in-world block) — canonical Alpha
-            // terrain.png "+" cross variant at (4, 5).
+            // terrain.png unpowered cross variant at (4, 5). The
+            // powered variant lives at (4, 6); not currently sliced
+            // because the wire mesher doesn't differentiate by
+            // power state yet (every wire renders with the unpowered
+            // dim-red art). When power-state-driven texturing is
+            // added, allocate a TileRedstoneWirePowered tile and
+            // point it at (4, 6).
             /* TileRedstoneWire        */ (4, 5),
+            // Stone Button inventory icon — sliced from
+            // alpha_tools.png (the items atlas) at (6, 4). Used by
+            // DrawFlatSpriteIcon for the held / inventory sprite;
+            // the placed block continues to sample TileStone via
+            // EmitButtonBox in ChunkMesher. NOT terrain-sourced —
+            // see IsTailLayerTerrainSourced (the layer is omitted
+            // from that whitelist so UploadTailItemsFromAlphaTools
+            // picks it up).
+            /* TileStoneButtonItem     */ (6, 4),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3796,15 +3833,29 @@ namespace VStudioCraft.Game
             GenerateProceduralCaneLayers(layerPixels);
             UploadCaneBlockLayersFromTerrain(bgra, srcW, srcH, layerPixels);
 
-            // Tier 4 #16 — Door tiles. All 6 layers (4 block halves +
-            // 2 inventory icons) ship procedural for now; their
-            // AlphaTileCoords entries are sentinels so there's no
-            // overlay step to call. Painting here in the alpha-atlas
-            // path mirrors the cane / farming-item handling — without
-            // this call the door tile slots would be transparent in
-            // alpha-textures mode while the procedural-only atlas
-            // (CreateAtlas) would render them correctly.
+            // Tier 4 #16 — Door tiles. Procedural fallback paints all
+            // 6 layers (4 block halves + 2 inventory icons) first so
+            // the slots are guaranteed-non-transparent. Then the four
+            // BLOCK halves (top/bottom for wood + iron) get overlaid
+            // from terrain.png at their canonical Alpha coords —
+            // wood top (1, 5), wood bottom (1, 6), iron top (2, 5),
+            // iron bottom (2, 6). The two ITEM icons (TileWoodDoorItem,
+            // TileIronDoorItem) live on alpha_tools.png and are
+            // sliced by UploadTailItemsFromAlphaTools below — they
+            // are deliberately skipped here via IsTailLayerTerrainSourced.
             GenerateProceduralDoorLayers(layerPixels);
+            for (int layer = FirstTailDoorLayer; layer < FirstTailDoorLayer + TailDoorLayerCount; layer++)
+            {
+                if (!IsTailLayerTerrainSourced(layer)) continue;
+                var (col, row) = AlphaTileCoords[layer];
+                if (col < 0 || row < 0) continue;
+                CopyTile(bgra, srcW, srcH, col, row, layerPixels);
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray, 0,
+                    0, 0, layer,
+                    TileSize, TileSize, 1,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, layerPixels);
+            }
 
             // Tier 4 #17 — Flint and Steel + Apple icons, same
             // procedural-always story as the door pack.
@@ -3892,6 +3943,10 @@ namespace VStudioCraft.Game
             // Redstone Wire (placed-block form). Procedural fallback.
             UploadLayer(layerPixels, TileRedstoneWire, GenerateRedstoneWire);
 
+            // Stone Button inventory icon. Procedural fallback;
+            // overlaid below from terrain.png (6, 4) when present.
+            UploadLayer(layerPixels, TileStoneButtonItem, GenerateStoneButtonItem);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -3908,6 +3963,9 @@ namespace VStudioCraft.Game
                 TileNoteBlock,
                 TileRedstoneTorchOn, TileRedstoneTorchOff,
                 TileRedstoneWire,
+                // TileStoneButtonItem is sliced from alpha_tools.png
+                // (items atlas) in UploadTailItemsFromAlphaTools,
+                // not from terrain.png — it does NOT belong here.
             };
             for (int i = 0; i < biomeTailLayers.Length; i++)
             {
@@ -6365,6 +6423,51 @@ namespace VStudioCraft.Game
                 pixels[idx + 2] = 0x12;
                 pixels[idx + 3] = 255;
             }
+        }
+
+        // Stone Button inventory icon — procedural fallback. Small
+        // recessed pill on a transparent background; reads as a
+        // clearly-different silhouette from the plain stone cube
+        // even when alpha terrain.png isn't bundled. The alpha-
+        // textures path overlays the canonical (6, 4) tile on top.
+        private static void GenerateStoneButtonItem(byte[] pixels)
+        {
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            // Pill body — 8 wide × 4 tall, centred. Stone-grey with a
+            // 1-pixel highlight on the top edge and a 1-pixel shadow
+            // along the bottom edge for a recessed look.
+            (byte r, byte g, byte b) body   = (130, 130, 130);
+            (byte r, byte g, byte b) hi     = (180, 180, 180);
+            (byte r, byte g, byte b) lo     = ( 90,  90,  90);
+            int x0 = 4, x1 = 11; // inclusive
+            int y0 = 6, y1 = 9;
+            for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
+                SetPixel(pixels, x, y, body.r, body.g, body.b);
+            for (int x = x0; x <= x1; x++)
+                SetPixel(pixels, x, y0, hi.r, hi.g, hi.b);
+            for (int x = x0; x <= x1; x++)
+                SetPixel(pixels, x, y1, lo.r, lo.g, lo.b);
+            // Round the pill ends by zeroing the corner pixels'
+            // alpha so they read transparent against the icon
+            // backdrop. SetPixel writes alpha=255 so we punch the
+            // bytes directly here.
+            void Clear(int x, int y)
+            {
+                int idx = (y * TileSize + x) * 4;
+                pixels[idx + 0] = 0;
+                pixels[idx + 1] = 0;
+                pixels[idx + 2] = 0;
+                pixels[idx + 3] = 0;
+            }
+            Clear(x0, y0); Clear(x1, y0);
+            Clear(x0, y1); Clear(x1, y1);
         }
 
         // Helmet silhouette — a hooded square spanning the top half of
