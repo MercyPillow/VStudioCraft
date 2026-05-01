@@ -17,6 +17,11 @@ namespace VStudioCraft.Game
         private const float SkyRadius = 100f;
         private const float SunSize = 18f;   // ~10° across on the sky dome
         private const float MoonSize = 14f;
+        // 8 phases packed horizontally into a single moon strip
+        // texture (full → waning → new → waxing → full). Driven by
+        // the renderer's _lunarDay counter, which exposes
+        // LunarPhase = _lunarDay & 7.
+        private const int MoonPhaseFrames = 8;
 
         // Height of the cloud plane, matching Alpha exactly.
         private const float CloudY = 108f;
@@ -59,9 +64,16 @@ in vec2 vUV;
 out vec4 FragColor;
 uniform sampler2D uTex;
 uniform vec4 uTint;
+// UV transform — selects a sub-region of the source texture so a
+// single billboard quad can sample one frame of an N-frame strip
+// (used by the moon-phase 8-frame texture). Default is (0,0)
+// offset + (1,1) scale for the sun's whole-texture sample.
+uniform vec2 uUVOffset;
+uniform vec2 uUVScale;
 void main()
 {
-    vec4 t = texture(uTex, vUV);
+    vec2 sampleUV = uUVOffset + vUV * uUVScale;
+    vec4 t = texture(uTex, sampleUV);
     if (t.a < 0.01) discard;
     FragColor = vec4(t.rgb * uTint.rgb, t.a * uTint.a);
 }
@@ -167,7 +179,7 @@ void main()
             _starShader = new Shader(StarVS, StarFS);
             _cloudShader = new Shader(CloudVS, CloudFS);
             _sunTex = SkyTextures.CreateSunTexture();
-            _moonTex = SkyTextures.CreateMoonTexture();
+            _moonTex = SkyTextures.CreateMoonPhasesTexture(MoonPhaseFrames);
             _cloudTex = SkyTextures.CreateCloudTexture();
             _quad = BuildCentredQuad();
             BuildStars();
@@ -268,7 +280,8 @@ void main()
         // must have cleared colour + depth already. Leaves GL state in a
         // restored configuration so the world pass can run unmodified.
         public void RenderCelestial(Matrix4 projection, Matrix4 view, Vector3 camPos,
-            float sunAngleRad, Vector3 sunDir, Vector3 antiSunDir)
+            float sunAngleRad, Vector3 sunDir, Vector3 antiSunDir,
+            int moonPhase = 0)
         {
             // No depth: sun/moon/stars are "at infinity" and the world pass
             // will overdraw anything in front of them.
@@ -313,12 +326,18 @@ void main()
                     _sunTex, new Vector4(1f, 1f, 1f, sunAlpha));
             }
 
-            // ---- Moon ----
+            // ---- Moon ---- 8-phase strip texture; sample column =
+            // moonPhase out of MoonPhaseFrames. uvScale.x = 1/N picks
+            // a single frame's worth of texture width.
             float moonAlpha = Math.Max(0f, Math.Min(1f, (antiSunDir.Y + 0.15f) / 0.3f));
             if (moonAlpha > 0.01f)
             {
+                int phase = ((moonPhase % MoonPhaseFrames) + MoonPhaseFrames) % MoonPhaseFrames;
+                float uOffset = phase / (float)MoonPhaseFrames;
+                float uScale  = 1f / MoonPhaseFrames;
                 DrawBillboard(projection, view, camPos + antiSunDir * SkyRadius, MoonSize,
-                    _moonTex, new Vector4(1f, 1f, 1f, moonAlpha));
+                    _moonTex, new Vector4(1f, 1f, 1f, moonAlpha),
+                    new Vector2(uOffset, 0f), new Vector2(uScale, 1f));
             }
 
             // Leave GL state how the world pass expects it.
@@ -383,12 +402,23 @@ void main()
         private void DrawBillboard(Matrix4 projection, Matrix4 view, Vector3 worldPos,
             float size, int texture, Vector4 tint)
         {
+            DrawBillboard(projection, view, worldPos, size, texture, tint,
+                Vector2.Zero, Vector2.One);
+        }
+
+        // Variant with explicit UV transform — used for the moon
+        // strip texture so each phase samples one of the 8 sub-frames.
+        private void DrawBillboard(Matrix4 projection, Matrix4 view, Vector3 worldPos,
+            float size, int texture, Vector4 tint, Vector2 uvOffset, Vector2 uvScale)
+        {
             _billboardShader.Use();
             _billboardShader.SetMatrix4("uProjection", projection);
             _billboardShader.SetMatrix4("uView", view);
             _billboardShader.SetVector3("uWorldPos", worldPos);
             _billboardShader.SetFloat("uSize", size);
             _billboardShader.SetVector4("uTint", tint);
+            _billboardShader.SetVector2("uUVOffset", uvOffset);
+            _billboardShader.SetVector2("uUVScale",  uvScale);
             _billboardShader.SetInt("uTex", 0);
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2D, texture);

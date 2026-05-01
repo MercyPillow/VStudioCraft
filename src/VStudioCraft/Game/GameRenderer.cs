@@ -8099,9 +8099,20 @@ void main()
             GL.Viewport(0, 0, width, height);
         }
 
+        // Tier 7 #41 — Lunar day counter. Ticks up each time
+        // _timeOfDay wraps past 1.0 (= midnight rollover). Drives
+        // the 8-frame moon phase: phase = _lunarDay & 7. Resets to
+        // 0 on world load (not persisted in the save header yet —
+        // a future save-format bump can promote this to a stored
+        // field if save-roundtrip phase continuity matters).
+        private int _lunarDay;
+        public int LunarPhase => _lunarDay & 7;
+
         public void AdvanceTime(float dt)
         {
+            float prev = _timeOfDay;
             _timeOfDay = (_timeOfDay + dt / TotalCycle) % 1f;
+            if (_timeOfDay < prev) _lunarDay++;
             _sky?.Advance(dt);
         }
 
@@ -8228,7 +8239,7 @@ void main()
             // the world — they need to respect terrain occlusion from below.
             float sunAngle = ComputeSunAngle();
             Vector3 antiSun = -sun;
-            _sky.RenderCelestial(proj, view, Camera.Position, sunAngle, sun, antiSun);
+            _sky.RenderCelestial(proj, view, Camera.Position, sunAngle, sun, antiSun, LunarPhase);
 
             // Tier 7 #40 — Detect camera-in-fluid state up-front so the
             // chunk-pass fog uniforms can swap to a deep underwater

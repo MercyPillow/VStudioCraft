@@ -16,44 +16,27 @@ namespace VStudioCraft.Game
 
         public static int CreateSunTexture()
         {
+            // Tier 7 #41 — Square sun, matching the canonical Alpha
+            // 1.1.2 look: a flat opaque yellow square filling the
+            // billboard quad with a slight inner→edge warm gradient
+            // for visual depth. No circular halo or anti-aliased
+            // disc — the silhouette is a hard square.
             byte[] rgba = new byte[SunPx * SunPx * 4];
-            float cx = (SunPx - 1) * 0.5f;
-            float cy = (SunPx - 1) * 0.5f;
-            float rOuter = SunPx * 0.46f;   // disc edge
-            float rInner = SunPx * 0.32f;   // bright core
-            float rGlow  = SunPx * 0.50f;   // soft halo
-
+            float halfPx = (SunPx - 1) * 0.5f;
             for (int py = 0; py < SunPx; py++)
             for (int px = 0; px < SunPx; px++)
             {
-                float dx = px - cx, dy = py - cy;
-                float d = (float)Math.Sqrt(dx * dx + dy * dy);
-                byte r, g, b, a;
-                if (d <= rInner)
-                {
-                    // Hot white-yellow core
-                    r = 255; g = 250; b = 220; a = 255;
-                }
-                else if (d <= rOuter)
-                {
-                    // Body: interpolate to warmer yellow at the edge
-                    float t = (d - rInner) / (rOuter - rInner);
-                    r = 255;
-                    g = (byte)(250 - 40 * t);
-                    b = (byte)(220 - 140 * t);
-                    a = 255;
-                }
-                else if (d <= rGlow)
-                {
-                    // Halo: fade alpha to zero beyond the disc
-                    float t = (d - rOuter) / (rGlow - rOuter);
-                    r = 255; g = 210; b = 80;
-                    a = (byte)(255 * (1f - t));
-                }
-                else
-                {
-                    r = g = b = a = 0;
-                }
+                // Distance to centre, normalised by half-width on
+                // the longer axis — used only for a subtle gradient
+                // toward the warmer yellow at the edges of the
+                // square. Not a circular cutoff.
+                float dx = (px - halfPx) / halfPx;
+                float dy = (py - halfPx) / halfPx;
+                float r2 = Math.Min(1f, Math.Max(Math.Abs(dx), Math.Abs(dy)));
+                byte r = 255;
+                byte g = (byte)(250 - 30 * r2);
+                byte b = (byte)(200 - 100 * r2);
+                byte a = 255;
                 int idx = (py * SunPx + px) * 4;
                 rgba[idx + 0] = r;
                 rgba[idx + 1] = g;
@@ -63,16 +46,39 @@ namespace VStudioCraft.Game
             return Upload2D(rgba, SunPx, SunPx);
         }
 
-        public static int CreateMoonTexture()
+        // Tier 7 #41 — 8-frame moon phase strip texture, laid out as
+        // 8 sub-images of MoonPx × MoonPx packed horizontally into a
+        // single (8 * MoonPx) × MoonPx atlas. Phase 0 = full moon;
+        // phases 1..3 wane the lit-from-the-EAST half (mirrors a
+        // real waning moon as seen from the northern hemisphere);
+        // phase 4 = new moon (dark disc); phases 5..7 wax back to
+        // full. The lit fraction is determined by a half-plane cut:
+        // for each phase, pixels on the "lit" side of a vertical
+        // line through the moon centre are bright, the "dark" side
+        // is shadowed (very faint silhouette so the disc still
+        // reads as round even at new moon).
+        //
+        // Layout choice: a single 2D strip + UV offset is much
+        // simpler than a Texture2DArray (no separate uniform plumb
+        // for the layer index) — the billboard shader just receives
+        // a UV-offset/scale pair from the renderer per draw call.
+        public static int CreateMoonPhasesTexture(int frames = 8)
         {
-            byte[] rgba = new byte[MoonPx * MoonPx * 4];
-            float cx = (MoonPx - 1) * 0.5f;
-            float cy = (MoonPx - 1) * 0.5f;
-            float rOuter = MoonPx * 0.44f;
-            float rGlow  = MoonPx * 0.50f;
+            // Tier 7 #41 — Square moon phases, matching the canonical
+            // Alpha 1.1.2 look: each phase frame is a flat square,
+            // not a circular disc. The PHASE shadow is still a
+            // vertical-ish terminator splitting the square into a
+            // bright lit half + a dim dark half. Craters add
+            // texture to the lit side. No outer glow halo.
+            int stripW = MoonPx * frames;
+            byte[] rgba = new byte[stripW * MoonPx * 4];
+            float halfPx = (MoonPx - 1) * 0.5f;
+            float rOuter = MoonPx * 0.5f;   // half the square edge
 
-            // Fixed "craters" (circles darker than the body) — picked by hand so
-            // every moonrise looks the same without a full phase system.
+            // Fixed "craters" — same hand-picked positions as the
+            // circular version so the moon still has its
+            // recognisable face. Crater radius is small relative to
+            // the square so they read as dark spots, not lobes.
             var craters = new (float cx, float cy, float r)[]
             {
                 (MoonPx * 0.38f, MoonPx * 0.42f, MoonPx * 0.07f),
@@ -81,45 +87,87 @@ namespace VStudioCraft.Game
                 (MoonPx * 0.62f, MoonPx * 0.60f, MoonPx * 0.04f),
             };
 
-            for (int py = 0; py < MoonPx; py++)
-            for (int px = 0; px < MoonPx; px++)
+            for (int frame = 0; frame < frames; frame++)
             {
-                float dx = px - cx, dy = py - cy;
-                float d = (float)Math.Sqrt(dx * dx + dy * dy);
-                byte r, g, b, a;
-                if (d <= rOuter)
+                // litFraction: 1 = full, 0 = new. Indexed sequence
+                // 1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75 cycles
+                // full → waning → new → waxing → full.
+                float litFrac;
+                bool litLeft;   // which half of the disc is lit at this phase
+                switch (frame)
                 {
-                    // Pale off-white body. Crater test: if any crater contains
-                    // the pixel, darken by a fixed amount.
-                    r = 235; g = 235; b = 225;
-                    foreach (var c in craters)
+                    case 0: litFrac = 1.0f; litLeft = true;  break; // full
+                    case 1: litFrac = 0.75f; litLeft = true; break; // waning gibbous
+                    case 2: litFrac = 0.5f;  litLeft = true; break; // last quarter (right half lit, but we set litLeft as anchor)
+                    case 3: litFrac = 0.25f; litLeft = true; break; // waning crescent
+                    case 4: litFrac = 0.0f;  litLeft = true; break; // new moon
+                    case 5: litFrac = 0.25f; litLeft = false; break; // waxing crescent
+                    case 6: litFrac = 0.5f;  litLeft = false; break; // first quarter
+                    default: litFrac = 0.75f; litLeft = false; break; // waxing gibbous
+                }
+
+                int frameOffsetX = frame * MoonPx;
+                for (int py = 0; py < MoonPx; py++)
+                for (int px = 0; px < MoonPx; px++)
+                {
+                    float dx = px - halfPx;
+                    // Phase terminator — vertical line splitting the
+                    // square. For litFrac = 1 the terminator is past
+                    // the square on the dark side (whole square lit);
+                    // for litFrac = 0 it's past the square on the lit
+                    // side (whole square dark). For the litLeft
+                    // (waning) sequence the lit half is on -X, so the
+                    // terminator's X moves from +rOuter (full) toward
+                    // -rOuter (new), and a pixel is lit when its dx
+                    // is LESS than the boundary. The litRight (waxing)
+                    // sequence mirrors: terminator from -rOuter (new)
+                    // toward +rOuter (full), pixel lit when dx is
+                    // GREATER than boundary.
+                    //
+                    // Earlier this used (1 - 2*litFrac), which gave
+                    // -rOuter at litFrac=1 — making the full-moon
+                    // pixel-lit test fail for every pixel inside the
+                    // moon and rendering the whole disc as the dark
+                    // side. Sign corrected to (2*litFrac - 1) below.
+                    float boundary;
+                    if (litLeft)
+                        boundary = (2f * litFrac - 1f) * rOuter;
+                    else
+                        boundary = (1f - 2f * litFrac) * rOuter;
+                    bool pixelLit = litLeft ? (dx < boundary) : (dx > boundary);
+
+                    byte r, g, b, a;
+                    if (pixelLit)
                     {
-                        float ddx = px - c.cx, ddy = py - c.cy;
-                        if (ddx * ddx + ddy * ddy <= c.r * c.r)
+                        // Pale off-white body. Crater test: any
+                        // crater containing the pixel darkens it.
+                        r = 235; g = 235; b = 225;
+                        foreach (var c in craters)
                         {
-                            r = 180; g = 180; b = 170;
-                            break;
+                            float ddx = px - c.cx, ddy = py - c.cy;
+                            if (ddx * ddx + ddy * ddy <= c.r * c.r)
+                            {
+                                r = 180; g = 180; b = 170;
+                                break;
+                            }
                         }
+                        a = 255;
                     }
-                    a = 255;
+                    else
+                    {
+                        // Dark side — dim navy so the silhouette
+                        // still reads as a square at new moon.
+                        r = 22; g = 22; b = 30;
+                        a = 200;
+                    }
+                    int idx = (py * stripW + frameOffsetX + px) * 4;
+                    rgba[idx + 0] = r;
+                    rgba[idx + 1] = g;
+                    rgba[idx + 2] = b;
+                    rgba[idx + 3] = a;
                 }
-                else if (d <= rGlow)
-                {
-                    float t = (d - rOuter) / (rGlow - rOuter);
-                    r = 235; g = 235; b = 225;
-                    a = (byte)(255 * (1f - t));
-                }
-                else
-                {
-                    r = g = b = a = 0;
-                }
-                int idx = (py * MoonPx + px) * 4;
-                rgba[idx + 0] = r;
-                rgba[idx + 1] = g;
-                rgba[idx + 2] = b;
-                rgba[idx + 3] = a;
             }
-            return Upload2D(rgba, MoonPx, MoonPx);
+            return Upload2D(rgba, stripW, MoonPx);
         }
 
         // Two-octave value noise thresholded into puffy clouds. The clouds are
