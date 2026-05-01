@@ -552,6 +552,16 @@ namespace VStudioCraft.Game
                     LightCalculator.RecomputeChunk(c);
                 });
 
+                // Cross-chunk seam fix-up. The parallel per-chunk pass
+                // above gives each chunk correct INTERNAL lighting but
+                // leaves seams at every chunk boundary — a torch near
+                // the seam doesn't bleed into the neighbour, sky-light
+                // under an overhang doesn't fan across. This single
+                // BFS pass walks every chunk-edge cell with positive
+                // light and propagates outward across chunk boundaries
+                // until the level decay (1 per cell) drops to 0.
+                LightCalculator.PropagateAcrossSeams(world);
+
                 // v5: furnace tile entities. Pre-v5 saves had no furnaces
                 // (the block didn't exist), so legacy worlds load with
                 // an empty entity table. The block layer in restored

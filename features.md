@@ -504,7 +504,6 @@ multiple subsystems at once.
 	
 ### Tier 7 — Lighting + sky polish
 
-39. **Cross-chunk light propagation** — Eliminates the small light seams at chunk borders next to torches.
 40. **Underwater fog colour swap** — Real deep-blue fog when the camera is submerged (we currently only tint the framebuffer).
 41. **Real moon phases (8-frame texture)** + **horizon gradient** + **rain / snow / lightning** + **biome sky tints**.
 

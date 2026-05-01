@@ -3330,6 +3330,35 @@ void main()
                         if (r.HostileSpawns != null)
                             _world.Hostiles.AddRange(r.HostileSpawns);
                     }
+
+                    // Tier 7 #39 — Cross-chunk light propagation.
+                    // The worker thread's RecomputeChunk only flood-
+                    // fills WITHIN this chunk; light from a torch
+                    // near the chunk seam doesn't bleed into the
+                    // neighbour, sky-light under an overhang stops
+                    // at the chunk edge. PropagateSeamsForChunkInstall
+                    // runs a targeted cross-chunk BFS seeded from
+                    // both sides of the four chunk pairings, fixing
+                    // the seam in one pass. Cheap (~5 chunks of edge
+                    // cells), runs only on freshly-installed chunks
+                    // so steady-state is unaffected. Neighbour chunks
+                    // whose light field was modified pick up a
+                    // dirty-flag in the BFS path; mark them for
+                    // remesh so their faces re-render with the new
+                    // edge values.
+                    if (freshlyInstalled)
+                    {
+                        LightCalculator.PropagateSeamsForChunkInstall(_world, r.Chunk);
+                        // Re-mesh the 4 horizontal neighbours too —
+                        // their edge faces against this chunk may
+                        // have new light values now. The per-frame
+                        // remesh budget caps the immediate cost.
+                        int rcx = r.Chunk.ChunkX, rcz = r.Chunk.ChunkZ;
+                        if (_world.GetChunk(rcx - 1, rcz) != null) _world.DirtyChunks.Add((rcx - 1, rcz));
+                        if (_world.GetChunk(rcx + 1, rcz) != null) _world.DirtyChunks.Add((rcx + 1, rcz));
+                        if (_world.GetChunk(rcx, rcz - 1) != null) _world.DirtyChunks.Add((rcx, rcz - 1));
+                        if (_world.GetChunk(rcx, rcz + 1) != null) _world.DirtyChunks.Add((rcx, rcz + 1));
+                    }
                 }
                 installed++;
                 if (System.Diagnostics.Stopwatch.GetTimestamp() - sT0 > _streamingBudgetTicks) break;

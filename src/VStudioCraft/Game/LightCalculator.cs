@@ -274,6 +274,198 @@ namespace VStudioCraft.Game
             queue.Enqueue(PackR(newIdx, x, y, z));
         }
 
+        // ---- Cross-chunk seam propagation -------------------------------
+        //
+        // After a parallel per-chunk RecomputeChunk pass (the world-load
+        // path), each chunk has correct light values from its OWN
+        // emitters and sky exposure but ZERO light bleeding in from
+        // neighbour chunks. A torch placed near a chunk seam doesn't
+        // light the neighbour's near face; sky-light next to an
+        // overhang on the seam doesn't fan out into the neighbour's
+        // shaded cells.
+        //
+        // This pass fixes those seams in a single cross-chunk BFS:
+        //   1. Seed the queue with every chunk-edge cell that has
+        //      positive light (sky pass first, then block pass).
+        //   2. Flood-fill across chunk boundaries via world.GetChunk,
+        //      writing into neighbour chunks where the new level is
+        //      strictly higher than what's already there.
+        //
+        // Cost is dominated by the seed scan, which is 4 × SizeY ×
+        // SizeX cells per chunk = ~8 K reads per chunk; on a 169-chunk
+        // world that's ~1.4 M cell reads + the BFS itself. Runs once
+        // per world load (or per generated-but-unlit batch) — not on
+        // a hot path.
+        public static void PropagateAcrossSeams(World world)
+        {
+            var queue = new Queue<long>(8192);
+
+            // === Sky-light pass ===
+            foreach (var chunk in world.Chunks)
+                SeedEdgesForSeamPass(chunk, queue, isSky: true);
+            FloodAcrossSeams(world, queue, isSky: true);
+
+            // === Block-light pass ===
+            queue.Clear();
+            foreach (var chunk in world.Chunks)
+                SeedEdgesForSeamPass(chunk, queue, isSky: false);
+            FloodAcrossSeams(world, queue, isSky: false);
+        }
+
+        // Targeted version for the chunk-streaming path. When a freshly-
+        // generated chunk is installed beside one or more existing
+        // chunks, the only seams that could have new light to
+        // propagate are the four pairings (new ↔ each cardinal
+        // neighbour). Seeding those pairs only — instead of every
+        // chunk-edge in the world — keeps the per-install cost bounded
+        // (~5 chunks of edge cells + the BFS) so the streaming budget
+        // doesn't balloon when the player crosses into a fresh ring.
+        public static void PropagateSeamsForChunkInstall(World world, Chunk newChunk)
+        {
+            if (newChunk == null) return;
+            var queue = new Queue<long>(2048);
+
+            // === Sky-light pass ===
+            SeedInstallSeams(world, newChunk, queue, isSky: true);
+            FloodAcrossSeams(world, queue, isSky: true);
+
+            // === Block-light pass ===
+            queue.Clear();
+            SeedInstallSeams(world, newChunk, queue, isSky: false);
+            FloodAcrossSeams(world, queue, isSky: false);
+        }
+
+        private static void SeedInstallSeams(World world, Chunk newChunk, Queue<long> queue, bool isSky)
+        {
+            // The new chunk has its single-chunk lighting from
+            // RecomputeChunk. Seed all 4 of its edges so its light
+            // can spill OUT into neighbour chunks.
+            SeedEdgesForSeamPass(newChunk, queue, isSky);
+
+            // Each existing neighbour also has potentially-higher
+            // light at the edge facing the new chunk; seed those
+            // mirror edges so light flows IN to the new chunk too.
+            var west  = world.GetChunk(newChunk.ChunkX - 1, newChunk.ChunkZ);
+            var east  = world.GetChunk(newChunk.ChunkX + 1, newChunk.ChunkZ);
+            var north = world.GetChunk(newChunk.ChunkX,     newChunk.ChunkZ - 1);
+            var south = world.GetChunk(newChunk.ChunkX,     newChunk.ChunkZ + 1);
+
+            if (west  != null) SeedEdgeX(west,  Chunk.SizeX - 1, queue, isSky);
+            if (east  != null) SeedEdgeX(east,  0,               queue, isSky);
+            if (north != null) SeedEdgeZ(north, Chunk.SizeZ - 1, queue, isSky);
+            if (south != null) SeedEdgeZ(south, 0,               queue, isSky);
+        }
+
+        private static void SeedEdgeX(Chunk chunk, int x, Queue<long> queue, bool isSky)
+        {
+            int baseX = chunk.ChunkX * Chunk.SizeX;
+            int baseZ = chunk.ChunkZ * Chunk.SizeZ;
+            for (int y = 0; y < Chunk.SizeY; y++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                int l = isSky ? chunk.GetSkyLight(x, y, z) : chunk.GetBlockLight(x, y, z);
+                if (l > 1) queue.Enqueue(PackWorld(baseX + x, y, baseZ + z));
+            }
+        }
+
+        private static void SeedEdgeZ(Chunk chunk, int z, Queue<long> queue, bool isSky)
+        {
+            int baseX = chunk.ChunkX * Chunk.SizeX;
+            int baseZ = chunk.ChunkZ * Chunk.SizeZ;
+            for (int y = 0; y < Chunk.SizeY; y++)
+            for (int x = 0; x < Chunk.SizeX; x++)
+            {
+                int l = isSky ? chunk.GetSkyLight(x, y, z) : chunk.GetBlockLight(x, y, z);
+                if (l > 1) queue.Enqueue(PackWorld(baseX + x, y, baseZ + z));
+            }
+        }
+
+        // Pack a world-space cell coord into a 64-bit key. We expect
+        // chunk coords to fit within ±2^19 (-524288..524287 worlds —
+        // 8 million blocks per axis), well outside any reasonable
+        // play range. wy fits in 7 bits (0..127). 21+7+21 = 49 bits.
+        private static long PackWorld(int wx, int wy, int wz)
+            => ((long)(wx & 0x1FFFFF))
+             | ((long)(wy & 0x7F) << 21)
+             | ((long)(wz & 0x1FFFFF) << 28);
+        private static int UnpackWX(long p) => SignExtend21((int)(p & 0x1FFFFF));
+        private static int UnpackWY(long p) => (int)((p >> 21) & 0x7F);
+        private static int UnpackWZ(long p) => SignExtend21((int)((p >> 28) & 0x1FFFFF));
+        private static int SignExtend21(int v) => (v & 0x100000) != 0 ? v | unchecked((int)0xFFE00000) : v;
+
+        private static void SeedEdgesForSeamPass(Chunk chunk, Queue<long> queue, bool isSky)
+        {
+            int baseX = chunk.ChunkX * Chunk.SizeX;
+            int baseZ = chunk.ChunkZ * Chunk.SizeZ;
+            for (int y = 0; y < Chunk.SizeY; y++)
+            {
+                for (int z = 0; z < Chunk.SizeZ; z++)
+                {
+                    int lLo = isSky ? chunk.GetSkyLight(0, y, z) : chunk.GetBlockLight(0, y, z);
+                    if (lLo > 1) queue.Enqueue(PackWorld(baseX, y, baseZ + z));
+                    int lHi = isSky ? chunk.GetSkyLight(Chunk.SizeX - 1, y, z) : chunk.GetBlockLight(Chunk.SizeX - 1, y, z);
+                    if (lHi > 1) queue.Enqueue(PackWorld(baseX + Chunk.SizeX - 1, y, baseZ + z));
+                }
+                for (int x = 0; x < Chunk.SizeX; x++)
+                {
+                    int lLo = isSky ? chunk.GetSkyLight(x, y, 0) : chunk.GetBlockLight(x, y, 0);
+                    if (lLo > 1) queue.Enqueue(PackWorld(baseX + x, y, baseZ));
+                    int lHi = isSky ? chunk.GetSkyLight(x, y, Chunk.SizeZ - 1) : chunk.GetBlockLight(x, y, Chunk.SizeZ - 1);
+                    if (lHi > 1) queue.Enqueue(PackWorld(baseX + x, y, baseZ + Chunk.SizeZ - 1));
+                }
+            }
+        }
+
+        private static void FloodAcrossSeams(World world, Queue<long> queue, bool isSky)
+        {
+            while (queue.Count > 0)
+            {
+                long packed = queue.Dequeue();
+                int wx = UnpackWX(packed);
+                int wy = UnpackWY(packed);
+                int wz = UnpackWZ(packed);
+                int level = WorldGetLight(world, wx, wy, wz, isSky);
+                int next = level - 1;
+                if (next <= 0) continue;
+                TrySpreadWorld(world, wx - 1, wy,     wz,     next, queue, isSky);
+                TrySpreadWorld(world, wx + 1, wy,     wz,     next, queue, isSky);
+                TrySpreadWorld(world, wx,     wy - 1, wz,     next, queue, isSky);
+                TrySpreadWorld(world, wx,     wy + 1, wz,     next, queue, isSky);
+                TrySpreadWorld(world, wx,     wy,     wz - 1, next, queue, isSky);
+                TrySpreadWorld(world, wx,     wy,     wz + 1, next, queue, isSky);
+            }
+        }
+
+        private static int WorldGetLight(World world, int wx, int wy, int wz, bool isSky)
+        {
+            if ((uint)wy >= Chunk.SizeY) return 0;
+            int cx = (int)Math.Floor(wx / (float)Chunk.SizeX);
+            int cz = (int)Math.Floor(wz / (float)Chunk.SizeZ);
+            int lx = wx - cx * Chunk.SizeX;
+            int lz = wz - cz * Chunk.SizeZ;
+            var c = world.GetChunk(cx, cz);
+            if (c == null) return 0;
+            return isSky ? c.GetSkyLight(lx, wy, lz) : c.GetBlockLight(lx, wy, lz);
+        }
+
+        private static void TrySpreadWorld(World world, int wx, int wy, int wz, int level, Queue<long> queue, bool isSky)
+        {
+            if ((uint)wy >= Chunk.SizeY) return;
+            int cx = (int)Math.Floor(wx / (float)Chunk.SizeX);
+            int cz = (int)Math.Floor(wz / (float)Chunk.SizeZ);
+            int lx = wx - cx * Chunk.SizeX;
+            int lz = wz - cz * Chunk.SizeZ;
+            var c = world.GetChunk(cx, cz);
+            if (c == null) return;
+            var t = c.Get(lx, wy, lz);
+            if (!BlockData.IsLightTransparent(t)) return;
+            int existing = isSky ? c.GetSkyLight(lx, wy, lz) : c.GetBlockLight(lx, wy, lz);
+            if (existing >= level) return;
+            if (isSky) c.SetSkyLight(lx, wy, lz, (byte)level);
+            else c.SetBlockLight(lx, wy, lz, (byte)level);
+            queue.Enqueue(PackWorld(wx, wy, wz));
+        }
+
         // ---- Incremental update after a single block edit ----------------
         //
         // The 3×3 RecomputeRegion path is correct but synchronous-on-render-
