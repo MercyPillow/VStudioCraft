@@ -265,6 +265,29 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Chest, 1)));
 
+            // Tier 8 #44 — Sign. 6 planks (top two rows) + 1 stick
+            // (centre of bottom row) → 1 SignItem. Alpha 1.1.2_01
+            // yields 1 sign per craft (modern Minecraft yields 3);
+            // we go with the Alpha-faithful 1-yield matching the
+            // project's stated target version. Pattern is:
+            //
+            //   PPP
+            //   PPP
+            //   .S.
+            //
+            // Crafting a sign consumes 7 inventory slots' worth of
+            // ingredients per output — by far the most-expensive
+            // single-output recipe in Alpha. Decorative-only blocks
+            // were considered "luxury" in the early-Alpha economy.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                    { BlockType.Air,    BlockType.Stick,  BlockType.Air },
+                },
+                new ItemStack(BlockType.SignItem, 1)));
+
             // Tools — 5 materials (wood = Planks, stone = Cobblestone,
             // iron = IronIngot, diamond = Diamond, gold = GoldIngot)
             // × 4 kinds (pickaxe / shovel / axe / sword). Material

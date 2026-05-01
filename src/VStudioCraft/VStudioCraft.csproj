@@ -104,6 +104,7 @@
     <Compile Include="Game\ArrowProjectile.cs" />
     <Compile Include="Game\Bobber.cs" />
     <Compile Include="Game\JukeboxTileEntity.cs" />
+    <Compile Include="Game\SignTileEntity.cs" />
     <Compile Include="Game\Painting.cs" />
     <Compile Include="Game\ParticleSystem.cs" />
     <Compile Include="Game\ThrownProjectile.cs" />
@@ -182,6 +183,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Assets\alpha_terrain.png">
       <LogicalName>VStudioCraft.Assets.alpha_terrain.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Assets\steve.png">
+      <LogicalName>VStudioCraft.Assets.steve.png</LogicalName>
     </EmbeddedResource>
     <EmbeddedResource Include="Assets\Day_Night.gif">
       <LogicalName>VStudioCraft.Assets.Day_Night.gif</LogicalName>

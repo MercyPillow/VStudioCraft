@@ -503,6 +503,40 @@ namespace VStudioCraft.Game
         StoneButton        = 152, // Alpha 77 (Wood Button was Beta-era — out of scope)
         StonePressurePlate = 153, // Alpha 70
         WoodPressurePlate  = 154, // Alpha 72
+
+        // Tier 8 #44 — Signs. Three entries cover the full feature:
+        //   SignPost (Alpha 63) — free-standing sign-on-a-post block
+        //     placed on top of a solid block. Renders as a 2×16×2
+        //     pole + a 16×8×1 board oriented to one of 16 yaw steps.
+        //     We expose 4 cardinal facings (matching the existing
+        //     BlockFacing enum) — finer rotation is a future polish
+        //     item if the canonical Alpha 16-step rotation matters
+        //     more than the implementation simplicity.
+        //   WallSign (Alpha 68) — wall-mounted sign placed on the
+        //     side face of a block. Renders as a 16×8×1.5 board
+        //     hugging the supporting wall, oriented along the same
+        //     BlockFacing space.
+        //   SignItem (Alpha 323) — the inventory item the player
+        //     crafts and holds. Right-clicking with one held places
+        //     either SignPost (top face) or WallSign (side face),
+        //     opens the editor, and consumes one from the stack.
+        //
+        // All three are append-only past WoodPressurePlate=154 so
+        // existing v8..v13 saves stay byte-stable. Pre-v14 worlds
+        // load with no signs in the world (the BlockType range
+        // wasn't populated, so chunk byte streams couldn't reference
+        // these ids); v14 adds a trailing per-sign tile-entity block
+        // to persist the typed text + facing alongside the existing
+        // furnace/chest/jukebox tail blocks.
+        //
+        // Texture: per user direction, signs reuse the existing
+        // PlanksOak atlas tile rather than carrying a sign-specific
+        // texture. The board, post, and wall plate all sample the
+        // plank tile so a placed sign looks like a panel of the same
+        // wood the rest of the world's planks-grade structures use.
+        SignPost           = 155, // Alpha 63
+        WallSign           = 156, // Alpha 68
+        SignItem           = 157, // Alpha 323
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -633,6 +667,15 @@ namespace VStudioCraft.Game
         public const BlockType GoldChestplate      = BlockType.GoldChestplate;
         public const BlockType GoldLeggings        = BlockType.GoldLeggings;
         public const BlockType GoldBoots           = BlockType.GoldBoots;
+        // Tier 8 #44 — Sign item. Held by the player after crafting (6
+        // planks + 1 stick → 1 sign), placed via RMB on a top face
+        // (becomes SignPost) or side face (becomes WallSign). The two
+        // in-world block ids (BlockType.SignPost / BlockType.WallSign)
+        // are NOT in the ItemType surface — they only ever exist in
+        // chunk byte streams, never in the player's inventory. The
+        // SignItem alias is the only sign-shaped name code outside
+        // the placement path needs to know.
+        public const BlockType SignItem            = BlockType.SignItem;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -738,6 +781,11 @@ namespace VStudioCraft.Game
                 case BlockType.GoldChestplate:      return 315;
                 case BlockType.GoldLeggings:        return 316;
                 case BlockType.GoldBoots:           return 317;
+                // Tier 8 #44 — Sign item. Alpha numeric id 323. The
+                // in-world SignPost (id 63) / WallSign (id 68) blocks
+                // aren't items so they never reach AlphaId; only the
+                // SignItem alias does.
+                case BlockType.SignItem:            return 323;
                 default:                       return -1;
             }
         }
@@ -833,6 +881,12 @@ namespace VStudioCraft.Game
                 case BlockType.GoldChestplate:      return "Gold Chestplate";
                 case BlockType.GoldLeggings:        return "Gold Leggings";
                 case BlockType.GoldBoots:           return "Gold Boots";
+                // Tier 8 #44 — Sign item display name. Alpha tooltip
+                // is just "Sign" (no qualifier — the in-world post vs
+                // wall variant is decided at placement, not by the
+                // item form, so the inventory shows the same name
+                // regardless of which face the player ends up using).
+                case BlockType.SignItem:            return "Sign";
                 default:                       return t.ToString();
             }
         }
@@ -900,6 +954,12 @@ namespace VStudioCraft.Game
                 case BlockType.StoneButton:
                 case BlockType.StonePressurePlate:
                 case BlockType.WoodPressurePlate:
+                // Tier 8 #44 — Signs (post + wall variant). Walk-
+                // through in Alpha so the swept AABB skips them; the
+                // pole is a thin 2/16-wide square that the player
+                // glides past.
+                case BlockType.SignPost:
+                case BlockType.WallSign:
                 // Tier 6 #34 — Fire is non-solid; the player walks
                 // straight through it (taking damage via the
                 // per-tick fluid-contact check pattern rather than
@@ -1153,7 +1213,13 @@ namespace VStudioCraft.Game
             // RedstoneTorchOn / Off block pair so the per-block
             // IsSolid / IsCubeShape branches still catch the torch
             // ids correctly.
-            || t == BlockType.RedstoneDust;
+            || t == BlockType.RedstoneDust
+            // Tier 8 #44 — Sign item. Standalone id past the
+            // SignPost / WallSign in-world blocks so the per-block
+            // mesher / collision branches still catch the two block
+            // ids correctly. The two block ids never appear in the
+            // player's inventory, only the SignItem alias does.
+            || t == BlockType.SignItem;
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -1371,6 +1437,10 @@ namespace VStudioCraft.Game
                 case BlockType.StoneButton:
                 case BlockType.StonePressurePlate:
                 case BlockType.WoodPressurePlate:
+                // Tier 8 #44 — Sign post / wall sign aren't full cubes —
+                // mesher dispatches to EmitSignPost / EmitWallSign.
+                case BlockType.SignPost:
+                case BlockType.WallSign:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1460,6 +1530,13 @@ namespace VStudioCraft.Game
                 case BlockType.StoneButton:
                 case BlockType.StonePressurePlate:
                 case BlockType.WoodPressurePlate:
+                // Tier 8 #44 — Signs are sub-cell geometry; their
+                // adjacent neighbours need full faces drawn (a sign
+                // on a stone wall must show the stone face beside
+                // it, not have the stone face culled away as if a
+                // cube were there).
+                case BlockType.SignPost:
+                case BlockType.WallSign:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -1583,6 +1660,13 @@ namespace VStudioCraft.Game
                 case BlockType.StoneButton:
                 case BlockType.StonePressurePlate:
                 case BlockType.WoodPressurePlate:
+                // Tier 8 #44 — Signs are sub-cell wood; light passes
+                // through the cell on every side except the thin
+                // board / post slab. Without this, a sign sitting in
+                // sunlight would cast a 1m black square shadow on
+                // adjacent ground.
+                case BlockType.SignPost:
+                case BlockType.WallSign:
                 // Tier 6 #37 — Ice is translucent (matches Alpha — a
                 // pond covered in ice still has the bed visible
                 // through the surface). SnowBlock is a 1/8 slab so
@@ -1779,6 +1863,11 @@ namespace VStudioCraft.Game
                 case BlockType.StonePressurePlate:
                 case BlockType.WoodPressurePlate:
                     return 0.5f;
+                // Tier 8 #44 — Signs are wood; Alpha hardness is 1.0s
+                // by hand. Same as Planks (which signs are made from).
+                case BlockType.SignPost:
+                case BlockType.WallSign:
+                    return 1.0f;
                 case BlockType.Glass:
                 case BlockType.Sponge:
                     return 0.3f;
@@ -1972,6 +2061,17 @@ namespace VStudioCraft.Game
                 case BlockType.StonePressurePlate:
                     return BlockTextures.TileStone;
                 case BlockType.WoodPressurePlate:
+                    return BlockTextures.TilePlanks;
+                // Tier 8 #44 — Signs reuse the existing PlanksOak
+                // tile (per-feature direction; no sign-specific atlas
+                // entry). The mesher's EmitSignPost / EmitWallSign
+                // sample this index directly for the board, post,
+                // and back faces; the player-typed text overlays the
+                // front face as a separate quad batch driven by the
+                // HUD font atlas.
+                case BlockType.SignPost:
+                case BlockType.WallSign:
+                case BlockType.SignItem:
                     return BlockTextures.TilePlanks;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
@@ -2694,6 +2794,15 @@ namespace VStudioCraft.Game
                 // ingredient.
                 case BlockType.RedstoneWire:
                     return BlockType.RedstoneDust;
+                // Tier 8 #44 — Both sign block variants drop the
+                // generic SignItem; the player gets back a fungible
+                // sign they can re-place in any orientation. The
+                // break path also tears down the tile entity (text +
+                // facing are NOT preserved across break + replace —
+                // matches Alpha behaviour and intuitive reset).
+                case BlockType.SignPost:
+                case BlockType.WallSign:
+                    return BlockType.SignItem;
                 default: return block;
             }
         }

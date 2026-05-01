@@ -101,6 +101,17 @@ namespace VStudioCraft.Game
                 //     pattern).
                 case BlockType.RedstoneTorchOff:
                 case BlockType.RedstoneWire:
+                // Tier 8 #44 — Sign block variants (SignPost / WallSign)
+                // are runtime-only — the player crafts and holds the
+                // SignItem id, and the placement path picks the post
+                // vs wall variant from the hit-face normal. The
+                // SignItem itself is included via the default branch
+                // below; excluding the two block variants here keeps
+                // the catalog from showing three sign entries (the
+                // item + two block forms) when only the item is the
+                // valid hold-and-place form.
+                case BlockType.SignPost:
+                case BlockType.WallSign:
                     return false;
                 default:
                     return true;

@@ -73,6 +73,21 @@ namespace VStudioCraft.Game
         // the save version to v11 with a new trailing block).
         private readonly Dictionary<(int x, int y, int z), JukeboxTileEntity> _jukeboxEntities
             = new Dictionary<(int x, int y, int z), JukeboxTileEntity>();
+        // Tier 8 #44 — Sign tile entities. Created at placement time
+        // (the editor allocates the entity on Enter so the typed text
+        // commits even if the line is empty — distinguishes a blank
+        // sign that the player explicitly placed from "no sign here").
+        // Removed when the block breaks. Persisted alongside the
+        // furnace / chest / jukebox dicts (WorldSaveFormat v14 bumps
+        // the save version with a new trailing block).
+        //
+        // Render-thread-only mutations during play, like furnace +
+        // jukebox; the dungeon generator doesn't place signs so no
+        // ConcurrentDictionary needed (chests are concurrent because
+        // the worker-thread dungeon generator drops chest tile
+        // entities directly).
+        private readonly Dictionary<(int x, int y, int z), SignTileEntity> _signEntities
+            = new Dictionary<(int x, int y, int z), SignTileEntity>();
 
         // Live passive-mob list. Pig was the first entity added in Tier 3
         // #9; Tier 3 #12 generalised the list to PassiveMob so Cow, Sheep
@@ -1742,5 +1757,53 @@ namespace VStudioCraft.Game
         // Iterate all (coord, entity) pairs — used by save/load (v11+).
         public IEnumerable<KeyValuePair<(int x, int y, int z), JukeboxTileEntity>> JukeboxEntities
             => _jukeboxEntities;
+
+        // ---- Sign tile entities (Tier 8 #44) ----
+
+        // Get-or-create a SignTileEntity at (wx, wy, wz). Caller has
+        // already verified the block at the position is a SignPost or
+        // WallSign; the method just hands back (or installs) the
+        // persistent slot. Used by the placement path so the editor
+        // has a stable entity to write line-by-line into.
+        public SignTileEntity GetOrCreateSignEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (!_signEntities.TryGetValue(key, out var se))
+            {
+                se = new SignTileEntity();
+                _signEntities[key] = se;
+            }
+            return se;
+        }
+
+        // Look up a SignTileEntity without creating one. Returns null
+        // if no entity exists for the coordinate (which can happen if
+        // a save was hand-edited or a placement crashed mid-way; the
+        // mesher renders a sign with empty text as a blank board, the
+        // intuitive fallback).
+        public SignTileEntity TryGetSignEntity(int wx, int wy, int wz)
+        {
+            _signEntities.TryGetValue((wx, wy, wz), out var se);
+            return se;
+        }
+
+        // Remove the entity at the coordinate and return it (or null).
+        // Used when the sign block is broken so the caller can drop a
+        // SignItem and clear the persistent text. Sign text is NOT
+        // preserved across break + replace — matches Alpha behaviour.
+        public SignTileEntity RemoveSignEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (_signEntities.TryGetValue(key, out var se))
+            {
+                _signEntities.Remove(key);
+                return se;
+            }
+            return null;
+        }
+
+        // Iterate all (coord, entity) pairs — used by save/load (v14+).
+        public IEnumerable<KeyValuePair<(int x, int y, int z), SignTileEntity>> SignEntities
+            => _signEntities;
     }
 }

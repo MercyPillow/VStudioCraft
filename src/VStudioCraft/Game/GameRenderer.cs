@@ -231,6 +231,39 @@ void main()
 }
 ";
 
+        // Skin shader — pos(3) + uv(2) → sample sampler2D. Used by
+        // DrawSteveRig to draw the third-person player using a real
+        // Minecraft skin instead of the procedural cuboid palette.
+        // uTint applies a multiplicative red tint while the player is
+        // hurt-flashing (alpha=0 means no tint), so the same texture
+        // can read normally and as a damage flash without needing
+        // separate shaders.
+        private const string SkinVertexSrc = @"#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUV;
+out vec2 vUV;
+uniform mat4 uMVP;
+void main()
+{
+    vUV = aUV;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+";
+
+        private const string SkinFragmentSrc = @"#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2D uSkin;
+uniform vec4 uTint;   // rgb = tint colour, a = blend factor (0 = no tint)
+void main()
+{
+    vec4 t = texture(uSkin, vUV);
+    if (t.a < 0.01) discard;
+    vec3 c = mix(t.rgb, uTint.rgb, uTint.a);
+    FragColor = vec4(c, t.a);
+}
+";
+
         // Variant of the sprite shader that samples from the block-atlas
         // Texture2DArray. Same vertex shader; the fragment picks a layer
         // from a uniform so a single draw can pick out any tile in the atlas.
@@ -351,6 +384,25 @@ void main()
         private Shader _backgroundShader;  // passthrough sampler2DArray for animated-GIF background — no discard, no shading
         private Shader _crackShader;       // pos+uv -> sampler2DArray for break overlay
         private Shader _multiFaceCubeShader; // pos+uv -> per-face sampler2DArray (drops + iso icons)
+        private Shader _skinShader;          // pos+uv -> sampler2D (textured-3D player skin)
+
+        // Player-skin texture (single 64×64 / 64×32 Texture2D) and the 6
+        // per-body-part textured cuboid meshes. Built once at GL-init,
+        // drawn many times per frame by DrawSteveRig with the rig pose
+        // applied as the per-cuboid MVP. Left arm / left leg are
+        // dedicated mirrored meshes — their UV layout swaps the right/
+        // left face regions and flips the front/back UVs horizontally,
+        // so the right-arm/leg texture in the canonical Steve skin
+        // shows correctly on the player's left side (Alpha behaviour:
+        // the classic 64×32 skin only stores right-side textures and
+        // mirrors them onto the left).
+        private int _steveSkinTexture;
+        private SkinCuboidMesh _steveHeadMesh;
+        private SkinCuboidMesh _steveBodyMesh;
+        private SkinCuboidMesh _steveArmRMesh;
+        private SkinCuboidMesh _steveArmLMesh;
+        private SkinCuboidMesh _steveLegRMesh;
+        private SkinCuboidMesh _steveLegLMesh;
         private OverlayMesh _crosshairMesh;
         private OverlayMesh _wireCubeMesh;
         private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
@@ -1164,6 +1216,8 @@ void main()
             _backgroundShader  = new Shader(SpriteVertexSrc, BackgroundArrayFragmentSrc);
             _crackShader = new Shader(CrackVertexSrc, CrackFragmentSrc);
             _multiFaceCubeShader = new Shader(MultiFaceCubeVertexSrc, MultiFaceCubeFragmentSrc);
+            _skinShader = new Shader(SkinVertexSrc, SkinFragmentSrc);
+            BuildSteveSkin();
             _crosshairMesh = BuildCrosshairMesh();
             _wireCubeMesh = BuildWireCubeMesh();
             _unitQuadMesh = BuildUnitQuadMesh();
@@ -1365,6 +1419,64 @@ void main()
             var m = new TexturedCubeMesh();
             m.Upload(v);
             return m;
+        }
+
+        // Decode the embedded Steve skin PNG, upload it as a Texture2D,
+        // and build the 6 textured-cuboid meshes (head, body, arms,
+        // legs) used by DrawSteveRig in third-person view. Pixel sizes
+        // mirror the canonical Minecraft humanoid (head 8³, body 8×12×4,
+        // arms/legs 4×12×4) and the world-space dimensions are derived
+        // at the Minecraft-canonical scale of 1/16 m per skin pixel —
+        // the rig comes out 2 m tall (32 px × 1/16), slightly above the
+        // 1.8 m AABB top, matching how Alpha 1.1.2 actually renders the
+        // model (it overshoots the hitbox by 0.2 m).
+        //
+        // If the PNG decode or texture upload fails (e.g. corrupted
+        // base64, GDI+ unavailable on this host), _steveSkinTexture
+        // stays 0 and DrawSteveRig falls back to the original procedural
+        // cuboid palette. So a busted skin can never crash the renderer.
+        private void BuildSteveSkin()
+        {
+            _steveSkinTexture = SteveSkin.CreateTexture();
+            if (_steveSkinTexture == 0) return;
+
+            const float Px = 1f / 16f; // world-units per skin pixel
+            const int TexW = 64;
+            const int TexH = 64; // top half is byte-identical to 64×32 layout
+
+            // Head — 8×8×8 px = 0.5×0.5×0.5 m. Skin region (0,0).
+            _steveHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                8 * Px, 8 * Px, 8 * Px,
+                0, 0, 8, 8, 8, TexW, TexH, mirror: false);
+
+            // Body / torso — 8×12×4 px = 0.5×0.75×0.25 m. Region (16,16).
+            _steveBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                8 * Px, 12 * Px, 4 * Px,
+                16, 16, 8, 12, 4, TexW, TexH, mirror: false);
+
+            // Right arm — 4×12×4 px = 0.25×0.75×0.25. Region (40,16).
+            _steveArmRMesh = SkinCuboidMesh.BuildBodyPart(
+                4 * Px, 12 * Px, 4 * Px,
+                40, 16, 4, 12, 4, TexW, TexH, mirror: false);
+
+            // Left arm — same source rectangle as right arm, mirrored
+            // (Alpha-era classic 64×32 layout doesn't store dedicated
+            // left-side textures). The 64×64 modern format DOES store
+            // them at (32,48) but using the right-arm mirror is exactly
+            // how Alpha 1.1.2 actually rendered.
+            _steveArmLMesh = SkinCuboidMesh.BuildBodyPart(
+                4 * Px, 12 * Px, 4 * Px,
+                40, 16, 4, 12, 4, TexW, TexH, mirror: true);
+
+            // Right leg — 4×12×4 px. Region (0,16).
+            _steveLegRMesh = SkinCuboidMesh.BuildBodyPart(
+                4 * Px, 12 * Px, 4 * Px,
+                0, 16, 4, 12, 4, TexW, TexH, mirror: false);
+
+            // Left leg — mirrored from right leg (same as arms above).
+            _steveLegLMesh = SkinCuboidMesh.BuildBodyPart(
+                4 * Px, 12 * Px, 4 * Px,
+                0, 16, 4, 12, 4, TexW, TexH, mirror: true);
         }
 
         // Phase 2c — connect to a dedicated server. Performs the synchronous
@@ -3563,6 +3675,16 @@ void main()
                 var je = _world.RemoveJukeboxEntity(hit.X, hit.Y, hit.Z);
                 if (je != null && !je.IsEmpty) AudioEngine.StopMusic();
             }
+            else if (t == BlockType.SignPost || t == BlockType.WallSign)
+            {
+                // Tier 8 #44 — Sign creative-break. Discard the typed
+                // text + facing along with the entity (creative breaks
+                // don't drop a signed sign — same way breaking a chest
+                // doesn't drop its inventory in creative). The block
+                // clear below replaces the cell with Air; the meta
+                // byte goes with it.
+                _world.RemoveSignEntity(hit.X, hit.Y, hit.Z);
+            }
             // Tier 4 #16 — Door cascade. Breaking either half of a
             // door must clear the OTHER half too (a half-door is
             // visually broken and would have no interact target). Run
@@ -3745,6 +3867,18 @@ void main()
                     spilledJukebox = _world.RemoveJukeboxEntity(bx, by, bz);
                     if (spilledJukebox != null && !spilledJukebox.IsEmpty)
                         AudioEngine.StopMusic();
+                }
+                else if (brokenType == BlockType.SignPost || brokenType == BlockType.WallSign)
+                {
+                    // Tier 8 #44 — Sign break in survival. Pop the
+                    // entity so the typed text is discarded; the
+                    // SpawnBreakDrop call below routes through DropFor
+                    // and emits a SignItem (a fungible un-typed sign)
+                    // for the player to pick up. Sign text is NOT
+                    // preserved across break + replace — matches
+                    // Alpha behaviour and the user's intuitive
+                    // "fresh sign" expectation.
+                    _world.RemoveSignEntity(bx, by, bz);
                 }
                 // Tier 4 #16 — Door cascade (survival path). See the
                 // creative-break comment — same rationale: clear the
@@ -4091,6 +4225,30 @@ void main()
                     // type in the cube sense), so consuming the RMB by
                     // returning here would just block the player from
                     // trying again at a different angle.
+                }
+                // Tier 8 #44 — Sign placement. Top-of-block click
+                // produces a SignPost; side-of-block click produces
+                // a WallSign. Bottom-of-block clicks are rejected
+                // (Alpha doesn't allow ceiling-mounted signs and we
+                // follow suit). Routed here ahead of the standard
+                // place path because SignItem returns true from
+                // BlockData.IsItem and would otherwise short-circuit
+                // out of TryPlace's `IsItem -> return false` guard
+                // before reaching the per-id placement branches.
+                if (held == BlockType.SignItem)
+                {
+                    if (TryPlaceSign(hit))
+                    {
+                        if (GameMode == GameMode.Survival)
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                        SfxBank.PlayPlace(BlockType.Planks);
+                        return true;
+                    }
+                    // Invalid placement (bottom-face hit, target cell
+                    // occupied by a non-fluid block, sign would have
+                    // no support beneath the post variant) — fall
+                    // through; nothing else in this dispatch
+                    // consumes the SignItem RMB so it's a no-op.
                 }
             }
 
@@ -4895,6 +5053,102 @@ void main()
             if (ax > az)
                 return forward.X > 0 ? BlockFacing.West : BlockFacing.East;
             return forward.Z > 0 ? BlockFacing.North : BlockFacing.South;
+        }
+
+        // Tier 8 #44 — Sign placement. Inspects the hit's face normal
+        // to dispatch:
+        //   hit.Ny == +1 (top face)    → SignPost on the air cell above
+        //   hit.Ny ==  0 (side face)   → WallSign hugging that wall
+        //   hit.Ny == -1 (bottom face) → reject (no ceiling signs)
+        //
+        // For SignPost, the cell BELOW the post must be solid (the
+        // post needs a block to sit on; placing on top of a torch /
+        // flower / other non-cube would fail). The post's facing
+        // mirrors the player's view direction so the writing greets
+        // them — same FacingTowardPlayer rule furnaces and chests use.
+        //
+        // For WallSign, the wall is the hit cell itself (already
+        // known solid because IsRaycastTarget hit it as a cube).
+        // Facing is the hit normal direction so the writing faces
+        // outward from the wall — i.e. toward the placer.
+        //
+        // Successful placement:
+        //   1. SetBlock writes SignPost or WallSign at the target.
+        //   2. Chunk metadata stores the facing in low 2 bits.
+        //   3. SignTileEntity is allocated with empty Lines (the
+        //      editor will commit text into the entity on the next
+        //      tick; until then the sign renders blank).
+        private bool TryPlaceSign(Raycast.Hit hit)
+        {
+            if (_world == null) return false;
+            if (hit.Ny == -1) return false; // ceiling — Alpha-faithful reject
+
+            // Air cell on the player's side of the hit face — that's
+            // where the new sign block lives.
+            int px = hit.X + hit.Nx;
+            int py = hit.Y + hit.Ny;
+            int pz = hit.Z + hit.Nz;
+
+            // Target cell must be empty (Air) or fluid-replaceable.
+            // Same rule as TryPlace's standard cube path.
+            var existing = _world.GetBlock(px, py, pz);
+            if (existing != BlockType.Air
+                && existing != BlockType.Water && existing != BlockType.FlowingWater
+                && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
+
+            BlockType signType;
+            BlockFacing facing;
+            if (hit.Ny == 1)
+            {
+                // Top face → SignPost. The post needs a solid block
+                // beneath it (the cell at hit.X/Y/Z is the supporter).
+                if (!BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))) return false;
+                signType = BlockType.SignPost;
+                facing = FacingTowardPlayer(Camera.Forward);
+            }
+            else
+            {
+                // Side face → WallSign. The wall is the hit cell.
+                // hit.Nx / hit.Nz tells us which side of the wall the
+                // air cell is on, so the writing faces outward in
+                // that direction.
+                if (!BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))) return false;
+                signType = BlockType.WallSign;
+                if (hit.Nx == 1)       facing = BlockFacing.East;
+                else if (hit.Nx == -1) facing = BlockFacing.West;
+                else if (hit.Nz == 1)  facing = BlockFacing.South;
+                else                   facing = BlockFacing.North;
+            }
+
+            if (!_world.SetBlock(px, py, pz, signType)) return false;
+
+            // Stamp facing into chunk metadata — the mesher reads the
+            // low 2 bits to orient EmitSignPost / EmitWallSign on
+            // the next remesh. Same SetMeta pattern doors and pumpkins
+            // use; if the chunk lookup fails (race during world
+            // unload) we leave meta=0 (= North), which is harmless.
+            int cx = px >> 4, cz = pz >> 4;
+            var chunk = _world.GetChunk(cx, cz);
+            if (chunk != null)
+            {
+                int lx = px - (cx << 4);
+                int lz = pz - (cz << 4);
+                byte meta = (byte)((byte)facing & 0x03);
+                chunk.SetMeta(lx, py, lz, meta);
+                // Journal the meta poke so multiplayer clients receive
+                // the facing in the BlockChange broadcast — without
+                // this the SetBlock above ships with meta=0 (= North)
+                // and friends would see every sign placed by another
+                // player oriented on the +Z axis regardless of where
+                // the placer was actually looking.
+                _world.RecordMetaChange(px, py, pz);
+            }
+
+            // Allocate the tile entity so the editor (when it ships)
+            // has a stable slot to write into. Empty Lines render as
+            // a blank board until the player types and commits.
+            _world.GetOrCreateSignEntity(px, py, pz);
+            return true;
         }
 
         // Tier 4 #24 — Painting placement. Mounts a 1×1 Painting onto
@@ -9799,20 +10053,50 @@ void main()
         //   walkFrac     — 0..1 amplitude scale for legs/arms
         //   swingArc     — extra forward sweep on the right arm (attack)
         //   hurt         — 0..1 red-tint blend (TakeDamage flash)
+        //
+        // If the canonical Steve skin loaded successfully at GL-init
+        // time, we render textured cuboids sized to the skin's pixel
+        // dimensions (head 8³ → 0.5 m, body 8×12×4 → 0.5×0.75×0.25 m,
+        // arms/legs 4×12×4 → 0.25×0.75×0.25 m, total height 2.0 m
+        // matching how Alpha 1.1.2 actually overshoots its 1.8 m AABB).
+        // If the skin failed to decode, fall back to the procedural
+        // colour-cuboid rig — so a busted asset never breaks the
+        // renderer.
         private void DrawSteveRig(Vector3 pos, float cameraYaw, float cameraPitch,
+            float walkPhase, float walkFrac, float swingArc, float hurt)
+        {
+            if (_steveSkinTexture != 0 && _steveHeadMesh != null)
+            {
+                DrawSteveRigTextured(pos, cameraYaw, cameraPitch, walkPhase, walkFrac, swingArc, hurt);
+            }
+            else
+            {
+                DrawSteveRigProcedural(pos, cameraYaw, cameraPitch, walkPhase, walkFrac, swingArc, hurt);
+            }
+        }
+
+        // Textured rig — uses the canonical Steve skin uploaded at
+        // GL-init. Pixel-accurate sizing means the rig is 2.0 m tall
+        // (0.75 legs + 0.75 body + 0.5 head), slightly above the 1.8 m
+        // AABB, exactly matching Alpha behaviour.
+        private void DrawSteveRigTextured(Vector3 pos, float cameraYaw, float cameraPitch,
             float walkPhase, float walkFrac, float swingArc, float hurt)
         {
             var vp = _frameVp;
 
-            _overlayShader.Use();
-            _overlayShader.SetFloat("uAlpha", 1f);
-
-            var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
+            _skinShader.Use();
+            _skinShader.SetInt("uSkin", 0);
+            // Hurt flash: the fragment shader mixes texture rgb toward
+            // uTint.rgb by uTint.a. So tint.a = hurt fraction, tint.rgb
+            // = the same red used by mob hurt flashes for visual
+            // consistency.
+            _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, _steveSkinTexture);
 
             // Rig yaw: align the rig's local +Z (front face) with
             // Camera.Forward so the camera always looks at the player's
-            // back. See the long original derivation comment in the git
-            // history — short version: a = π - cameraYaw.
+            // back. Same derivation as the procedural rig.
             float rigYaw = (float)Math.PI - cameraYaw;
             var rot = Matrix4.CreateRotationY(rigYaw);
             var trans = Matrix4.CreateTranslation(pos);
@@ -9822,8 +10106,101 @@ void main()
             float legSwing = (float)Math.Sin(walkPhase) * WalkAmplitude * walkFrac;
             float armSwing = -legSwing;
 
-            // Steve palette. Skin a warm tan, hair brown, shirt cyan,
-            // pants indigo, eyes near-black, mouth a brick red.
+            // Pixel-accurate joint points (1/16 m per skin pixel):
+            //   legs    Y 0.00 .. 0.75  (hip pivot Y = 0.75)
+            //   body    Y 0.75 .. 1.50
+            //   arms    Y 0.75 .. 1.50  (shoulder pivot Y = 1.50)
+            //   head    Y 1.50 .. 2.00  (neck pivot Y = 1.50)
+            const float HipY      = 0.75f;
+            const float ShoulderY = 1.50f;
+            const float NeckY     = 1.50f;
+
+            // Right leg. Inner edge of the leg sits at body centerline
+            // (X=0); outer edge at body half-width (0.25). So leg
+            // centerline at X = body_half - leg_half = 0.25 - 0.125
+            //                  = +0.125.
+            DrawSkinCuboid(_steveLegRMesh, new Vector3(+0.125f, 0f, 0f),
+                new Vector3(+0.125f, HipY, 0f), +legSwing, rigToWorld, vp);
+            DrawSkinCuboid(_steveLegLMesh, new Vector3(-0.125f, 0f, 0f),
+                new Vector3(-0.125f, HipY, 0f), -legSwing, rigToWorld, vp);
+
+            // Body — static (no rotation around its own pivot). Bottom
+            // of torso at hip height; centerline on rig X axis.
+            DrawSkinCuboid(_steveBodyMesh, new Vector3(0f, HipY, 0f),
+                Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Right + left arms. Arm half-width 0.125, body half-width
+            // 0.25, so arm centerline at body_half + arm_half = 0.375.
+            // Arms hang DOWN from the shoulder, so feet of the arm
+            // mesh sit at HipY (same as legs); shoulder is at top.
+            DrawSkinCuboid(_steveArmRMesh, new Vector3(+0.375f, HipY, 0f),
+                new Vector3(+0.375f, ShoulderY, 0f), +armSwing + swingArc, rigToWorld, vp);
+            DrawSkinCuboid(_steveArmLMesh, new Vector3(-0.375f, HipY, 0f),
+                new Vector3(-0.375f, ShoulderY, 0f), -armSwing, rigToWorld, vp);
+
+            // Head — pitch around the neck point. Damped pitch so
+            // looking straight up/down doesn't fully vertical-flip
+            // the face. Rig stays upright.
+            float headPitch = -cameraPitch * 0.8f;
+            DrawSkinCuboid(_steveHeadMesh, new Vector3(0f, NeckY, 0f),
+                new Vector3(0f, NeckY, 0f), headPitch, rigToWorld, vp);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Place + draw a single textured body-part mesh.
+        //
+        //   mesh     — pre-built SkinCuboidMesh (head/body/arm/leg). The
+        //              mesh's local origin is bottom-centre (Y=0 at
+        //              feet, Y=hWorld at top).
+        //   footPos  — rig-local position of the mesh's bottom-centre.
+        //   pivot    — rig-local rotation pivot (e.g. hip / shoulder /
+        //              neck). For a non-rotated cuboid pass any value
+        //              and angle 0; the math collapses to identity.
+        //   angleX   — pitch around X axis. + tilts the mesh's top
+        //              backwards (-Z), - tilts it forwards (+Z).
+        private void DrawSkinCuboid(SkinCuboidMesh mesh, Vector3 footPos,
+            Vector3 pivot, float angleX, Matrix4 rigToWorld, Matrix4 vp)
+        {
+            // mesh-local → rig-local: place at footPos, then rotate
+            // around the (rig-local) pivot. Row-vector convention so
+            // "rotate about pivot" composes as T(-pivot) * R * T(pivot)
+            // in the chain.
+            var place     = Matrix4.CreateTranslation(footPos);
+            var toPivot   = Matrix4.CreateTranslation(-pivot);
+            var rotate    = Matrix4.CreateRotationX(angleX);
+            var fromPivot = Matrix4.CreateTranslation(pivot);
+            var model = place * toPivot * rotate * fromPivot * rigToWorld;
+            _skinShader.SetMatrix4("uMVP", model * vp);
+            mesh.Draw();
+        }
+
+        // Original procedural-cuboid Steve rig — flat-coloured body
+        // parts using the existing _overlayShader + _breakCubeMesh.
+        // Kept as a fallback for the case where SteveSkin.CreateTexture()
+        // fails (e.g. busted base64, GDI+ unavailable). Reaching this
+        // path means the embedded skin asset is broken; the player still
+        // sees a recognisable Steve rather than an invisible / crashed
+        // model.
+        private void DrawSteveRigProcedural(Vector3 pos, float cameraYaw, float cameraPitch,
+            float walkPhase, float walkFrac, float swingArc, float hurt)
+        {
+            var vp = _frameVp;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            var hurtRed = new Vector3(1.00f, 0.30f, 0.30f);
+
+            float rigYaw = (float)Math.PI - cameraYaw;
+            var rot = Matrix4.CreateRotationY(rigYaw);
+            var trans = Matrix4.CreateTranslation(pos);
+            var rigToWorld = rot * trans;
+
+            const float WalkAmplitude = 0.55f;
+            float legSwing = (float)Math.Sin(walkPhase) * WalkAmplitude * walkFrac;
+            float armSwing = -legSwing;
+
             var skin    = Vector3.Lerp(new Vector3(0.96f, 0.80f, 0.60f), hurtRed, hurt);
             var hair    = Vector3.Lerp(new Vector3(0.30f, 0.18f, 0.10f), hurtRed, hurt);
             var shirt   = Vector3.Lerp(new Vector3(0.10f, 0.65f, 0.85f), hurtRed, hurt);
@@ -9832,64 +10209,30 @@ void main()
             var eyeCol  = new Vector3(0.05f, 0.05f, 0.10f);
             var mouthCol = new Vector3(0.55f, 0.25f, 0.20f);
 
-            // Rig dimensions (sized to fill the 1.80 m AABB exactly):
-            //   legs    0.00 .. 0.75   (hip pivot Y = 0.75)
-            //   torso   0.75 .. 1.35
-            //   arms    0.75 .. 1.35   (shoulder pivot Y = 1.35)
-            //   head    1.35 .. 1.80
-            //   hair      slab on the top 5 cm of the head (1.75 .. 1.80)
-            // Total = 1.80 m, no overflow above the AABB top.
-
-            // ---- Legs (pivoted at hip = top of leg) ----
-            // 0.20 × 0.75 × 0.20, hips at Y = 0.75.
             var legSize = new Vector3(0.20f, 0.75f, 0.20f);
             DrawPivotedCuboid(new Vector3(+0.12f, 0.375f, 0f), legSize, +legSwing, rigToWorld, vp, pants);
             DrawPivotedCuboid(new Vector3(-0.12f, 0.375f, 0f), legSize, -legSwing, rigToWorld, vp, pants);
-            // Boots — small darker cap at the foot of each leg. Pivots
-            // at the HIP (Y=0.75), not the boot's own top, so they ride
-            // the arc of the leg's foot instead of spinning in place
-            // around the ankle.
             var bootSize = new Vector3(0.21f, 0.10f, 0.21f);
             var hipR = new Vector3(+0.12f, 0.75f, 0f);
             var hipL = new Vector3(-0.12f, 0.75f, 0f);
             DrawPivotedAtCuboid(new Vector3(+0.12f, 0.05f, 0f), bootSize, hipR, +legSwing, rigToWorld, vp, boots);
             DrawPivotedAtCuboid(new Vector3(-0.12f, 0.05f, 0f), bootSize, hipL, -legSwing, rigToWorld, vp, boots);
 
-            // ---- Torso (static) ----
-            // 0.50 wide × 0.60 tall × 0.30 deep, sat between hip (0.75)
-            // and shoulder (1.35).
             var torsoSize = new Vector3(0.50f, 0.60f, 0.30f);
             DrawPigCuboid(new Vector3(0f, 1.05f, 0f), torsoSize, rigToWorld, vp, shirt);
 
-            // ---- Arms (pivoted at shoulder = Y 1.35) ----
-            // 0.20 × 0.60 × 0.20. Offset Y is cuboid centre, so for a
-            // 0.60-tall arm hanging from shoulder Y=1.35, centre =
-            // 1.35 - 0.30 = 1.05. DrawPivotedCuboid then lifts the
-            // pivot to offset.Y + size.Y/2 = 1.35 (the shoulder).
             var armSize = new Vector3(0.20f, 0.60f, 0.20f);
-            // Right arm carries the swing-arc bonus; left arm just does
-            // the walk-cycle counter-swing.
             DrawPivotedCuboid(new Vector3(+0.35f, 1.05f, 0f), armSize, +armSwing + swingArc, rigToWorld, vp, shirt);
             DrawPivotedCuboid(new Vector3(-0.35f, 1.05f, 0f), armSize, -armSwing,            rigToWorld, vp, shirt);
 
-            // ---- Head (pitched only — body stays upright) ----
-            // 0.45 cube on top of torso, range Y 1.35..1.80. Extra X-
-            // rotation around the neck pivot reads as "Steve looking
-            // up/down" without tipping the whole body. DrawHeadCuboid
-            // uses a fixed neck pivot at (0, 1.35, 0) so the whole face
-            // package rotates as one unit.
-            float headPitch = -cameraPitch * 0.8f;   // dampened so the head doesn't snap fully vertical
+            float headPitch = -cameraPitch * 0.8f;
             var headSize = new Vector3(0.45f, 0.45f, 0.45f);
             DrawHeadCuboid(new Vector3(0f, 1.575f, 0f), headSize, headPitch, rigToWorld, vp, skin);
-            // Hair — a thin slab embedded in the top 5 cm of the head
-            // (range 1.75..1.80) so the rig stays inside the AABB.
             var hairSize = new Vector3(0.46f, 0.05f, 0.46f);
             DrawHeadCuboid(new Vector3(0f, 1.775f, 0f), hairSize, headPitch, rigToWorld, vp, hair);
-            // Eyes (two small dark squares on the head front).
             var eyeSize = new Vector3(0.08f, 0.08f, 0.04f);
             DrawHeadCuboid(new Vector3(+0.10f, 1.63f, +0.225f), eyeSize, headPitch, rigToWorld, vp, eyeCol);
             DrawHeadCuboid(new Vector3(-0.10f, 1.63f, +0.225f), eyeSize, headPitch, rigToWorld, vp, eyeCol);
-            // Mouth — wider but shorter strip below the eyes.
             var mouthSize = new Vector3(0.18f, 0.04f, 0.04f);
             DrawHeadCuboid(new Vector3(0f, 1.51f, +0.225f), mouthSize, headPitch, rigToWorld, vp, mouthCol);
         }
@@ -13475,12 +13818,19 @@ void main()
             _unitQuadMesh?.Dispose();
             _breakCubeMesh?.Dispose();
             _paintingQuadMesh?.Dispose();
+            _steveHeadMesh?.Dispose();
+            _steveBodyMesh?.Dispose();
+            _steveArmRMesh?.Dispose();
+            _steveArmLMesh?.Dispose();
+            _steveLegRMesh?.Dispose();
+            _steveLegLMesh?.Dispose();
             _shader?.Dispose();
             _overlayShader?.Dispose();
             _spriteShader?.Dispose();
             _spriteArrayShader?.Dispose();
             _crackShader?.Dispose();
             _multiFaceCubeShader?.Dispose();
+            _skinShader?.Dispose();
             _sky?.Dispose();
             _sky = null;
             _weather?.Dispose();
@@ -13524,6 +13874,11 @@ void main()
             {
                 GL.DeleteTexture(_crackTexture);
                 _crackTexture = 0;
+            }
+            if (_steveSkinTexture != 0)
+            {
+                GL.DeleteTexture(_steveSkinTexture);
+                _steveSkinTexture = 0;
             }
         }
     }

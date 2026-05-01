@@ -88,7 +88,26 @@ namespace VStudioCraft.Game
         //       through the existing v9 path). MP-aware code (ServerHub
         //       login) consults the v13 table by username; missing
         //       entries spawn fresh.
-        private const byte CurrentVersion = 13;
+        // v14 = Tier 8 #44 sign tile entities. Trailing block appended
+        //       after the v13 player table so a v13 reader stops at
+        //       EOF without seeing the new section. Layout:
+        //
+        //         int  signCount
+        //         per sign:
+        //           int    X, Y, Z
+        //           string Line0, Line1, Line2, Line3 (length-prefixed
+        //                                              UTF-8 — same shape
+        //                                              the v13 username
+        //                                              uses)
+        //
+        //       Pre-v14 saves had no signs in the BlockType enum, so
+        //       legacy worlds load with an empty sign dict — same
+        //       legacy-empty pattern furnaces (v5), chests (v7) and
+        //       jukeboxes (v11) used. Facing isn't stored separately:
+        //       it lives in the chunk's metadata byte alongside the
+        //       block id, so it persists through the existing v2+
+        //       chunk-byte block.
+        private const byte CurrentVersion = 14;
 
         // Phase 8 — one entry per known player in the v13 multiplayer
         // player table. Captured at save time from `ServerHub` (or the
@@ -323,6 +342,32 @@ namespace VStudioCraft.Game
                         {
                             WriteStack(w, s < inv.Length ? inv[s] : ItemStack.Empty);
                         }
+                    }
+                }
+
+                // v14: Tier 8 #44 — sign tile entities. Trailing block
+                // appended past the v13 player table so a v13 reader
+                // stops cleanly at EOF without seeing the new section.
+                // Each sign carries its 4 lines of typed text; facing
+                // is in the chunk meta (already persisted via the v2+
+                // chunk byte block) so we don't write it twice. Empty
+                // sign dict (no signs in the world) serialises as just
+                // an int 0 — costs 4 bytes per save.
+                int signCount = 0;
+                foreach (var _ in world.SignEntities) signCount++;
+                w.Write(signCount);
+                foreach (var kv in world.SignEntities)
+                {
+                    w.Write(kv.Key.x);
+                    w.Write(kv.Key.y);
+                    w.Write(kv.Key.z);
+                    var lines = kv.Value.Lines ?? new string[4];
+                    for (int i = 0; i < 4; i++)
+                    {
+                        // Defensive — a corrupt or hand-edited entity
+                        // could have a null line; emit empty so
+                        // ReadString sees a 0-length prefix.
+                        w.Write(i < lines.Length && lines[i] != null ? lines[i] : string.Empty);
                     }
                 }
             }
@@ -768,6 +813,38 @@ namespace VStudioCraft.Game
                         if (!string.IsNullOrEmpty(p.Username))
                         {
                             players[p.Username] = p;
+                        }
+                    }
+                }
+
+                // v14: Tier 8 #44 — sign tile entities. Pre-v14 saves
+                // had no signs in the BlockType enum so legacy worlds
+                // load with an empty sign dict and the (cx, cz) chunks
+                // simply don't reference the SignPost / WallSign ids.
+                // Each record carries the world coord + 4 typed lines;
+                // facing comes from the chunk meta byte, which the
+                // v2+ chunk-byte block already restored above before
+                // we got here. If the entity's coord points at a cell
+                // that ISN'T currently a sign block (e.g. a hand-edited
+                // save), we still install the entity — the next remesh
+                // simply won't display it, and a future placement at
+                // that cell would inherit the orphan text. Cheaper than
+                // a per-record block-id sanity check, and defensive
+                // saves should always survive load.
+                if (version >= 14)
+                {
+                    int signCount = r.ReadInt32();
+                    if (signCount < 0 || signCount > 1_000_000)
+                        throw new InvalidDataException($"v14 signCount {signCount} out of expected range");
+                    for (int i = 0; i < signCount; i++)
+                    {
+                        int wx = r.ReadInt32();
+                        int wy = r.ReadInt32();
+                        int wz = r.ReadInt32();
+                        var se = world.GetOrCreateSignEntity(wx, wy, wz);
+                        for (int line = 0; line < 4; line++)
+                        {
+                            se.Lines[line] = r.ReadString();
                         }
                     }
                 }

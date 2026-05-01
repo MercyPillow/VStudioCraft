@@ -90,8 +90,61 @@ state). When hosting, a green chip top-right shows `HOSTING :PORT  N PLAYERS`.
 
 ## Open work
 
-(none — multiplayer feature shipped end-to-end. Backlog items below
-are explicitly deferred-by-design.)
+### Tier 8 #44 — Signs (foundation V1 shipped; editor + 3D text + MP sync remain)
+
+Foundation landed: SignPost + WallSign block types (155, 156),
+SignItem (157), SignTileEntity carrying 4 lines of text, World
+accessors mirroring the furnace/chest/jukebox pattern, mesher
+emitters (`EmitSignPost`, `EmitWallSign`, shared `EmitBoardBox`)
+using the existing TilePlanks atlas tile per the user's "use the
+wooden plank texture" direction. Crafting recipe (6 planks + 1
+stick → 1 sign, Alpha-faithful 1-yield). Top-face place →
+SignPost with player-yaw facing; side-face place → WallSign with
+hit-normal facing; bottom-face rejected. Facing stored in chunk
+meta low 2 bits (mirrors door pattern). Break drops a SignItem;
+sign text discarded on break (Alpha-faithful). Save format
+bumped to **v14** with a trailing per-sign block (int X/Y/Z + 4
+length-prefixed strings); pre-v14 saves load with empty sign
+dict.
+
+Selftest:
+```
+src\VStudioCraft.Server\bin\Debug\net472\VStudioCraft.Server.exe --selftest
+```
+…still passes after the v13 → v14 bump (legacy world.voxworld
+loads cleanly via the version-gated v14 read block).
+
+**Remaining V2 work:**
+
+1. **Editor HUD overlay** — place-only, 4-line text input, ENTER
+   seals to the just-allocated SignTileEntity, ESC discards. No
+   text-input infrastructure exists today; needs new plumbing in
+   `InputState` (a typed-char queue drained per frame) plus a
+   WPF `TextInput` event hook in `GameHostControl.xaml.cs` so the
+   shifted-char mapping is OS-correct (rather than reimplementing
+   the layout in code). Editor opens automatically the first
+   tick after a successful `TryPlaceSign` — store the just-placed
+   sign coord on `GameRenderer` and gate input until the player
+   commits or escapes.
+2. **3D text rendering on sign face** — emit one quad per glyph
+   on the sign's front face, sampling `_fontTexture` at the same
+   UV offsets `DrawString` uses for HUD. Anchor the text grid in
+   the sign's local frame (centred on the board, clamped to the
+   12×7 plank patch), rotate by the chunk-meta facing. Hook into
+   `EmitBoardBox`'s `fnx/fnz` parameter (already plumbed and
+   `_ = fnx; _ = fnz;`'d as a future hook) so the front face
+   gets glyph quads after the plank quad.
+3. **MP sync** — wire `PacketIds.TileEntityData = 0x60` for sign
+   text. On place, the server (or open-to-LAN host) emits a
+   TileEntityData packet to all viewers tracking the chunk; on
+   chunk load, also emit the existing signs in that chunk so
+   late-joining clients see the writing. Editor commits on the
+   client should ship a `PlayerEditSign` intent (new C→S packet)
+   so the server is the authority on the persisted text.
+
+Editor, text rendering, and MP sync are independent — pick any
+order. No protocol bumps needed for #1 + #2 (single-player
+only); #3 needs a small `ProtocolVersion` bump in `PacketIds.cs`.
 
 ## Backlog
 

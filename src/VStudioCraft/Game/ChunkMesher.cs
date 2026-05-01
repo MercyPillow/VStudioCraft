@@ -453,6 +453,21 @@ namespace VStudioCraft.Game
                     // crossed quads showed the same flat sprite).
                     EmitTorchBox(x + baseX, y, z + baseZ, lightPacked);
                 }
+                else if (t == BlockType.SignPost)
+                {
+                    // Tier 8 #44 — Post sign. Read facing from the
+                    // chunk's metadata byte (low 2 bits → cardinal
+                    // direction the writing faces). The placement
+                    // path stamps the meta from player yaw the same
+                    // way doors and pumpkins do.
+                    byte signMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
+                    EmitSignPost(x + baseX, y, z + baseZ, signMeta, lightPacked);
+                }
+                else if (t == BlockType.WallSign)
+                {
+                    byte signMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
+                    EmitWallSign(x + baseX, y, z + baseZ, signMeta, lightPacked);
+                }
                 else
                 {
                     EmitCrossSprite(x + baseX, y, z + baseZ, layer, lightPacked);
@@ -693,111 +708,127 @@ namespace VStudioCraft.Game
             float y0 = wy + 0f;
             float y1 = wy + 1f;
 
-            // Six box faces. UVs sample the full tile [0..1] on the two
-            // broad faces (1×1 in world space); the four thin edges
-            // sample a 3/16-wide UV strip from the door tile's hinge
-            // edge so they read as a solid wood strip rather than a
-            // stretched copy of the windows / knob art. Without this
-            // narrowing the side / top / bottom faces of the slab
-            // showed the full door artwork crammed into a 3/16-thick
-            // strip — visually reads as "the door texture appears on
-            // the inside faces of the slab."
+            // Six box faces with proper outward CCW winding (matches
+            // the cube mesher's EmitQuad dir>0 / dir<0 split + the
+            // snow-slab pattern). Earlier revisions used the dir>0
+            // order on every face — the comment in EmitSnowLayer
+            // calls this out explicitly: with back-face culling on,
+            // the broad faces ended up CW from the outside view and
+            // GL silently culled them, so the player saw THROUGH the
+            // outer face onto the now-front-facing back face — the
+            // canonical "door texture visible on the inside" bug.
             //
-            // Broad/thin face assignment depends on which wall the
-            // slab is pinned to: N/S-pinned slabs (z range = thick)
-            // make ±Z the broad faces and ±X / ±Y the thin edges;
-            // E/W-pinned slabs (x range = thick) flip that. We pick
-            // the strip from the LEFT/HINGE side of the source tile
-            // (U ∈ [0, 3/16]) for vertical edges and from the TOP
-            // strip (V ∈ [1−3/16, 1] — the door's top frame) for
-            // horizontal edges. After the CopyTile flip those map to
-            // PNG row 0 (top of source = solid frame band on both
-            // wood and iron tiles), so the slim edges read as plain
-            // wood/iron rather than mid-door art.
+            // UVs: broad faces (1×1 in world space) sample the full
+            // door tile [0..1]. Thin edges sample a 3/16-wide strip
+            // — vertical edges pick the hinge column (U ∈ [0, 3/16],
+            // a solid wood post on both wood + iron tiles), top /
+            // bottom edges pick the frame band at the top of the
+            // tile (V ∈ [1 − 3/16, 1] — PNG row 0 after CopyTile
+            // flip = canonical Alpha door-frame band).
+            //
+            // Broad / thin assignment depends on slabWall:
+            //   N/S-pinned (z range = thick) → ±Z broad, ±X / ±Y thin
+            //   E/W-pinned (x range = thick) → ±X broad, ±Z / ±Y thin
             const float u3 = 3f / 16f;
             bool nsPinned = slabWall == BlockFacing.North || slabWall == BlockFacing.South;
 
             if (nsPinned)
             {
-                // ±Z are BROAD (1×1) — full tile UVs.
+                // -Z broad face (dir<0): (X_min,Y_min) → (X_min,Y_max)
+                // → (X_max,Y_max) → (X_max,Y_min)
                 EmitCrossQuad(
                     x0, y0, z0, 0f, 0f,
-                    x1, y0, z0, 1f, 0f,
-                    x1, y1, z0, 1f, 1f,
                     x0, y1, z0, 0f, 1f,
+                    x1, y1, z0, 1f, 1f,
+                    x1, y0, z0, 1f, 0f,
                     0f, 0f, -1f, layer, lightPacked);
+                // +Z broad face (dir>0): (X_min,Y_min) → (X_max,Y_min)
+                // → (X_max,Y_max) → (X_min,Y_max)
                 EmitCrossQuad(
-                    x1, y0, z1, 0f, 0f,
-                    x0, y0, z1, 1f, 0f,
-                    x0, y1, z1, 1f, 1f,
-                    x1, y1, z1, 0f, 1f,
+                    x0, y0, z1, 0f, 0f,
+                    x1, y0, z1, 1f, 0f,
+                    x1, y1, z1, 1f, 1f,
+                    x0, y1, z1, 0f, 1f,
                     0f, 0f, +1f, layer, lightPacked);
-                // ±X are THIN (thick×1) — vertical hinge strip.
+                // -X thin edge (dir<0): (Y_min,Z_min) → (Y_min,Z_max)
+                // → (Y_max,Z_max) → (Y_max,Z_min). U axis = slab depth (Z),
+                // V axis = vertical (Y) — full V, narrow U from hinge column.
                 EmitCrossQuad(
-                    x0, y0, z1, 0f,  0f,
-                    x0, y0, z0, u3,  0f,
-                    x0, y1, z0, u3,  1f,
-                    x0, y1, z1, 0f,  1f,
+                    x0, y0, z0, 0f, 0f,
+                    x0, y0, z1, u3, 0f,
+                    x0, y1, z1, u3, 1f,
+                    x0, y1, z0, 0f, 1f,
                     -1f, 0f, 0f, layer, lightPacked);
+                // +X thin edge (dir>0): (Y_min,Z_min) → (Y_max,Z_min)
+                // → (Y_max,Z_max) → (Y_min,Z_max)
                 EmitCrossQuad(
-                    x1, y0, z0, 0f,  0f,
-                    x1, y0, z1, u3,  0f,
-                    x1, y1, z1, u3,  1f,
-                    x1, y1, z0, 0f,  1f,
+                    x1, y0, z0, 0f, 0f,
+                    x1, y1, z0, 0f, 1f,
+                    x1, y1, z1, u3, 1f,
+                    x1, y0, z1, u3, 0f,
                     +1f, 0f, 0f, layer, lightPacked);
-                // ±Y are THIN (1×thick) — horizontal top-frame strip.
+                // +Y thin edge (top of slab, dir>0): U axis = X (full),
+                // V axis = slab depth (Z mapped to a narrow top-frame strip).
                 EmitCrossQuad(
                     x0, y1, z1, 0f, 1f - u3,
                     x1, y1, z1, 1f, 1f - u3,
                     x1, y1, z0, 1f, 1f,
                     x0, y1, z0, 0f, 1f,
                     0f, +1f, 0f, layer, lightPacked);
+                // -Y thin edge (bottom of slab, dir<0)
                 EmitCrossQuad(
-                    x0, y0, z0, 0f, 1f - u3,
-                    x1, y0, z0, 1f, 1f - u3,
-                    x1, y0, z1, 1f, 1f,
-                    x0, y0, z1, 0f, 1f,
+                    x0, y0, z0, 0f, 1f,
+                    x1, y0, z0, 1f, 1f,
+                    x1, y0, z1, 1f, 1f - u3,
+                    x0, y0, z1, 0f, 1f - u3,
                     0f, -1f, 0f, layer, lightPacked);
             }
             else
             {
-                // E/W-pinned: ±X are BROAD (1×1) — full tile UVs.
+                // E/W-pinned: ±X broad. -X face (dir<0) — door front when
+                // slabWall=West. (Y_min,Z_min) → (Y_min,Z_max) → (Y_max,Z_max)
+                // → (Y_max,Z_min) with U=Z, V=Y for full upright tile.
                 EmitCrossQuad(
-                    x0, y0, z1, 0f, 0f,
-                    x0, y0, z0, 1f, 0f,
-                    x0, y1, z0, 1f, 1f,
-                    x0, y1, z1, 0f, 1f,
+                    x0, y0, z0, 0f, 0f,
+                    x0, y0, z1, 1f, 0f,
+                    x0, y1, z1, 1f, 1f,
+                    x0, y1, z0, 0f, 1f,
                     -1f, 0f, 0f, layer, lightPacked);
+                // +X broad face (dir>0)
                 EmitCrossQuad(
                     x1, y0, z0, 0f, 0f,
-                    x1, y0, z1, 1f, 0f,
-                    x1, y1, z1, 1f, 1f,
                     x1, y1, z0, 0f, 1f,
+                    x1, y1, z1, 1f, 1f,
+                    x1, y0, z1, 1f, 0f,
                     +1f, 0f, 0f, layer, lightPacked);
-                // ±Z are THIN (thick×1) — vertical hinge strip.
+                // -Z thin edge (dir<0): U axis = X (slab depth, narrow),
+                // V axis = Y (full).
                 EmitCrossQuad(
-                    x0, y0, z0, 0f,  0f,
-                    x1, y0, z0, u3,  0f,
-                    x1, y1, z0, u3,  1f,
-                    x0, y1, z0, 0f,  1f,
-                    0f, 0f, -1f, layer, lightPacked);
-                EmitCrossQuad(
-                    x1, y0, z1, 0f,  0f,
-                    x0, y0, z1, u3,  0f,
-                    x0, y1, z1, u3,  1f,
-                    x1, y1, z1, 0f,  1f,
-                    0f, 0f, +1f, layer, lightPacked);
-                // ±Y are THIN (thick×1) — horizontal top-frame strip.
-                EmitCrossQuad(
-                    x0, y1, z1, 0f, 1f - u3,
-                    x1, y1, z1, 1f, 1f - u3,
-                    x1, y1, z0, 1f, 1f,
+                    x0, y0, z0, 0f, 0f,
                     x0, y1, z0, 0f, 1f,
-                    0f, +1f, 0f, layer, lightPacked);
+                    x1, y1, z0, u3, 1f,
+                    x1, y0, z0, u3, 0f,
+                    0f, 0f, -1f, layer, lightPacked);
+                // +Z thin edge (dir>0)
                 EmitCrossQuad(
-                    x0, y0, z0, 0f, 1f - u3,
+                    x0, y0, z1, 0f, 0f,
+                    x1, y0, z1, u3, 0f,
+                    x1, y1, z1, u3, 1f,
+                    x0, y1, z1, 0f, 1f,
+                    0f, 0f, +1f, layer, lightPacked);
+                // +Y thin edge (top of slab, dir>0): U axis = Z (full),
+                // V axis = X mapped to a top-frame strip.
+                EmitCrossQuad(
+                    x0, y1, z1, 0f, 1f,
+                    x1, y1, z1, 0f, 1f - u3,
+                    x1, y1, z0, 1f, 1f - u3,
+                    x0, y1, z0, 1f, 1f,
+                    0f, +1f, 0f, layer, lightPacked);
+                // -Y thin edge (bottom of slab, dir<0)
+                EmitCrossQuad(
+                    x0, y0, z0, 1f, 1f,
                     x1, y0, z0, 1f, 1f - u3,
-                    x1, y0, z1, 1f, 1f,
+                    x1, y0, z1, 0f, 1f - u3,
                     x0, y0, z1, 0f, 1f,
                     0f, -1f, 0f, layer, lightPacked);
             }
@@ -1186,6 +1217,268 @@ namespace VStudioCraft.Game
                 x1, y0, z0, uColHi, vBotLo,
                 x1, y0, z1, uColHi, vBotHi,
                 x0, y0, z1, uColLo, vBotHi,
+                0f, -1f, 0f, layer, lightPacked);
+        }
+
+        // Tier 8 #44 — Sign-post geometry. Two sub-cell volumes:
+        //   1. A 2×9×2 wood pole rising from cell bottom to roughly
+        //      the cell's vertical midpoint (9/16). The pole sits on
+        //      whatever solid block the sign was placed atop.
+        //   2. A 12×7×1.5 board occupying the upper-back of the cell.
+        //      The 1.5/16 thickness matches Alpha's near-flat sign
+        //      profile; 12 wide × 7 tall is the plank-bearing area
+        //      the player's typed text overlays onto.
+        //
+        // Both volumes sample the existing PlanksOak tile (per the
+        // user's "use the wooden plank texture for the sign" choice).
+        // Front-face UV on the board is reserved for the future text
+        // overlay pass — for now the plank face shows through both
+        // sides until the editor + 3D-text emitter ship.
+        //
+        // Facing comes from the low 2 bits of `meta`:
+        //   0 = North (text faces -Z)
+        //   1 = South (text faces +Z)
+        //   2 = East  (text faces +X)
+        //   3 = West  (text faces -X)
+        //
+        // Light: sample the cell's own packed sky+block byte for all
+        // faces. The pole + board are tiny vs the cell so per-face
+        // neighbour-sampling (the cube mesher's approach) would over-
+        // dim them next to a shaded wall; falling back to the cell's
+        // own lighting matches what EmitTorchBox does and reads as
+        // "the sign is lit by the same air the player sees it through".
+        private void EmitSignPost(float wx, float wy, float wz, byte meta, int lightPacked)
+        {
+            int facing = meta & 0x03;
+            int layer = BlockTextures.TilePlanks;
+
+            // ---- Pole (2×9×2 wood column) ----
+            const float poleHalf = 1f / 16f;     // 2px square → 1px each side of cell-centre
+            const float poleTop  = 9f / 16f;     // 9px tall → top edge sits at cell mid-Y
+            float pcx = wx + 0.5f;
+            float pcz = wz + 0.5f;
+            float px0 = pcx - poleHalf;
+            float px1 = pcx + poleHalf;
+            float pz0 = pcz - poleHalf;
+            float pz1 = pcz + poleHalf;
+            float py0 = wy + 0f;
+            float py1 = wy + poleTop;
+
+            // Pole UVs: pick a 2×9-pixel slice of the plank tile so
+            // the column shows wood grain. U=7..9 (centre pair),
+            // V=0..9. Same convention EmitTorchBox uses.
+            const float pUlo = 7f / 16f;
+            const float pUhi = 9f / 16f;
+            const float pVlo = 0f;
+            const float pVhi = 9f / 16f;
+
+            EmitCrossQuad(
+                px0, py0, pz0, pUlo, pVlo,
+                px0, py0, pz1, pUhi, pVlo,
+                px0, py1, pz1, pUhi, pVhi,
+                px0, py1, pz0, pUlo, pVhi,
+                -1f, 0f, 0f, layer, lightPacked);
+            EmitCrossQuad(
+                px1, py0, pz0, pUlo, pVlo,
+                px1, py1, pz0, pUlo, pVhi,
+                px1, py1, pz1, pUhi, pVhi,
+                px1, py0, pz1, pUhi, pVlo,
+                +1f, 0f, 0f, layer, lightPacked);
+            EmitCrossQuad(
+                px0, py0, pz0, pUlo, pVlo,
+                px0, py1, pz0, pUlo, pVhi,
+                px1, py1, pz0, pUhi, pVhi,
+                px1, py0, pz0, pUhi, pVlo,
+                0f, 0f, -1f, layer, lightPacked);
+            EmitCrossQuad(
+                px0, py0, pz1, pUlo, pVlo,
+                px1, py0, pz1, pUhi, pVlo,
+                px1, py1, pz1, pUhi, pVhi,
+                px0, py1, pz1, pUlo, pVhi,
+                0f, 0f, +1f, layer, lightPacked);
+
+            // ---- Board (12×7×1.5 wood plate) ----
+            // Built in canonical "facing North" coordinates (board
+            // wide along X, thin along Z, top half of cell), then
+            // rotated by `facing` into the cell's actual orientation.
+            // The 1.5/16 thickness is centered on the pole's Z mid-
+            // line so the board straddles the pole symmetrically —
+            // this is what Alpha does; the pole is part of the same
+            // wood mass as the board.
+            const float boardWideHalf = 6f / 16f;   // 12px wide → 6px each side of pole
+            const float boardThickHalf = 0.75f / 16f;   // 1.5px thick → 0.75px each side
+            const float boardTop = 16f / 16f;       // top of cell
+            const float boardBot = 9f / 16f;        // continuous with pole top
+            float bcx = wx + 0.5f;
+            float bcz = wz + 0.5f;
+
+            // Per-facing pre-rotated AABB. Picking the local axes
+            // explicitly (instead of running a sin/cos rotation on
+            // each vertex) keeps the emitter free of trig and easy
+            // to read; for 4 cardinal facings the case-table is
+            // strictly cheaper than a matrix multiply.
+            float bx0, bx1, bz0, bz1;
+            float fnx, fnz;             // outward normal of the FRONT face (where text goes)
+            switch (facing)
+            {
+                case 1: // South — text faces +Z
+                    bx0 = bcx - boardWideHalf;  bx1 = bcx + boardWideHalf;
+                    bz0 = bcz - boardThickHalf; bz1 = bcz + boardThickHalf;
+                    fnx = 0f; fnz = +1f;
+                    break;
+                case 2: // East — text faces +X
+                    bx0 = bcx - boardThickHalf; bx1 = bcx + boardThickHalf;
+                    bz0 = bcz - boardWideHalf;  bz1 = bcz + boardWideHalf;
+                    fnx = +1f; fnz = 0f;
+                    break;
+                case 3: // West — text faces -X
+                    bx0 = bcx - boardThickHalf; bx1 = bcx + boardThickHalf;
+                    bz0 = bcz - boardWideHalf;  bz1 = bcz + boardWideHalf;
+                    fnx = -1f; fnz = 0f;
+                    break;
+                default: // North (0) — text faces -Z
+                    bx0 = bcx - boardWideHalf;  bx1 = bcx + boardWideHalf;
+                    bz0 = bcz - boardThickHalf; bz1 = bcz + boardThickHalf;
+                    fnx = 0f; fnz = -1f;
+                    break;
+            }
+            float by0 = wy + boardBot;
+            float by1 = wy + boardTop;
+
+            EmitBoardBox(bx0, by0, bz0, bx1, by1, bz1, layer, lightPacked, fnx, fnz);
+        }
+
+        // Tier 8 #44 — Wall-sign geometry. A 12×7×1.5 board hugging
+        // one of the four cell walls, oriented so the writing faces
+        // OUTWARD (i.e. away from the wall it's mounted on). The
+        // sign sits at the vertical midpoint of the cell (Y 4..11)
+        // — Alpha's wall-sign placement.
+        //
+        // Facing semantics match the post sign (low 2 bits of meta):
+        //   0 = North → mounted on +Z wall, text faces -Z
+        //   1 = South → mounted on -Z wall, text faces +Z
+        //   2 = East  → mounted on -X wall, text faces +X
+        //   3 = West  → mounted on +X wall, text faces -X
+        // (The placement path stores "facing of the WRITING" so the
+        // wall and post variants share one facing convention.)
+        private void EmitWallSign(float wx, float wy, float wz, byte meta, int lightPacked)
+        {
+            int facing = meta & 0x03;
+            int layer = BlockTextures.TilePlanks;
+
+            // Board AABB inside the cell. Width spans most of the
+            // cell along the wall; thickness pins to the wall face;
+            // height is the canonical Alpha 7-pixel band centred on
+            // cell midline.
+            const float thick = 1.5f / 16f;
+            const float wideHalf = 6f / 16f;
+            const float yLo = 4f / 16f;
+            const float yHi = 12f / 16f;
+            float cx = wx + 0.5f;
+            float cz = wz + 0.5f;
+
+            float bx0, bx1, bz0, bz1;
+            float fnx, fnz;
+            switch (facing)
+            {
+                case 1: // South — wall on -Z, board pinned to z=0..thick
+                    bx0 = cx - wideHalf;  bx1 = cx + wideHalf;
+                    bz0 = wz + 0f;        bz1 = wz + thick;
+                    fnx = 0f; fnz = +1f;
+                    break;
+                case 2: // East — wall on -X, board pinned to x=0..thick
+                    bx0 = wx + 0f;        bx1 = wx + thick;
+                    bz0 = cz - wideHalf;  bz1 = cz + wideHalf;
+                    fnx = +1f; fnz = 0f;
+                    break;
+                case 3: // West — wall on +X, board pinned to x=1-thick..1
+                    bx0 = wx + (1f - thick); bx1 = wx + 1f;
+                    bz0 = cz - wideHalf;     bz1 = cz + wideHalf;
+                    fnx = -1f; fnz = 0f;
+                    break;
+                default: // North — wall on +Z, board pinned to z=1-thick..1
+                    bx0 = cx - wideHalf;     bx1 = cx + wideHalf;
+                    bz0 = wz + (1f - thick); bz1 = wz + 1f;
+                    fnx = 0f; fnz = -1f;
+                    break;
+            }
+            float by0 = wy + yLo;
+            float by1 = wy + yHi;
+
+            EmitBoardBox(bx0, by0, bz0, bx1, by1, bz1, layer, lightPacked, fnx, fnz);
+        }
+
+        // Helper — six-faced box with a known "front" direction.
+        // Used by both EmitSignPost and EmitWallSign for the wood
+        // board. UVs sample a 12×7-pixel patch of the plank tile
+        // for the broad faces (visually a slice of plank wood that
+        // reads as the board's grain) and a 12×1.5 / 1.5×7 strip for
+        // the four thin edges. fnx/fnz aren't used to flip UVs (the
+        // plank texture is symmetric), but documenting the front
+        // direction in the signature keeps EmitSignPost / EmitWallSign
+        // call sites self-explanatory and gives the future text-
+        // overlay pass an obvious place to hook the front face.
+        private void EmitBoardBox(
+            float x0, float y0, float z0, float x1, float y1, float z1,
+            int layer, int lightPacked, float fnx, float fnz)
+        {
+            // 12×7 plank patch UVs. Centred on the tile so the grain
+            // visually frames the board. Fixed across all 4 facings
+            // — plank texture is rotation-invariant, so re-mapping
+            // would gain nothing.
+            const float uLo = 2f / 16f;
+            const float uHi = 14f / 16f;
+            const float vLo = 4f / 16f;
+            const float vHi = 11f / 16f;
+
+            // Six box faces. CCW outward winding to play nicely with
+            // back-face culling — same convention as EmitDoorSlab and
+            // EmitCactusBox. The fnx/fnz parameter is informational
+            // for now (no UV flip needed); the future text pass will
+            // consult it to anchor glyph quads on the correct face.
+            _ = fnx; _ = fnz;
+
+            // -X face (dir<0)
+            EmitCrossQuad(
+                x0, y0, z0, uLo, vLo,
+                x0, y0, z1, uHi, vLo,
+                x0, y1, z1, uHi, vHi,
+                x0, y1, z0, uLo, vHi,
+                -1f, 0f, 0f, layer, lightPacked);
+            // +X face (dir>0)
+            EmitCrossQuad(
+                x1, y0, z0, uLo, vLo,
+                x1, y1, z0, uLo, vHi,
+                x1, y1, z1, uHi, vHi,
+                x1, y0, z1, uHi, vLo,
+                +1f, 0f, 0f, layer, lightPacked);
+            // -Z face (dir<0)
+            EmitCrossQuad(
+                x0, y0, z0, uLo, vLo,
+                x0, y1, z0, uLo, vHi,
+                x1, y1, z0, uHi, vHi,
+                x1, y0, z0, uHi, vLo,
+                0f, 0f, -1f, layer, lightPacked);
+            // +Z face (dir>0)
+            EmitCrossQuad(
+                x0, y0, z1, uLo, vLo,
+                x1, y0, z1, uHi, vLo,
+                x1, y1, z1, uHi, vHi,
+                x0, y1, z1, uLo, vHi,
+                0f, 0f, +1f, layer, lightPacked);
+            // +Y face (top)
+            EmitCrossQuad(
+                x0, y1, z1, uLo, vLo,
+                x1, y1, z1, uHi, vLo,
+                x1, y1, z0, uHi, vHi,
+                x0, y1, z0, uLo, vHi,
+                0f, +1f, 0f, layer, lightPacked);
+            // -Y face (bottom)
+            EmitCrossQuad(
+                x0, y0, z0, uLo, vLo,
+                x1, y0, z0, uHi, vLo,
+                x1, y0, z1, uHi, vHi,
+                x0, y0, z1, uLo, vHi,
                 0f, -1f, 0f, layer, lightPacked);
         }
 
