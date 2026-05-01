@@ -678,7 +678,7 @@ namespace VStudioCraft.UI
                                 // matching CaptureMouseLook on close runs
                                 // from the UI Esc handler in CloseCrafting /
                                 // CloseFurnace.
-                                if ((_renderer.IsCraftingOpen || _renderer.IsFurnaceOpen || _renderer.IsChestOpen) && _mouseCaptured)
+                                if ((_renderer.IsCraftingOpen || _renderer.IsFurnaceOpen || _renderer.IsChestOpen || _renderer.IsEditingSign) && _mouseCaptured)
                                 {
                                     Dispatcher.BeginInvoke(new Action(() =>
                                     {
@@ -1036,6 +1036,86 @@ namespace VStudioCraft.UI
         {
             _input.KeyDown(e.KeyCode);
 
+            // Tier 8 #44 V2 — Sign editor structural keys. Runs
+            // ahead of every other handler so a sign editor in the
+            // foreground takes priority over any game shortcut
+            // (a hotbar 1..9 wouldn't do anything useful while the
+            // editor is showing, and the player explicitly opened
+            // a typing context).
+            //   Enter      → advance to next line, or commit if on
+            //                the last line
+            //   Tab / Down → advance to next line (no commit)
+            //   Up         → previous line
+            //   Backspace  → pop char from active line (routes via
+            //                FocusedField → InputState.Backspace)
+            //   Escape     → commit whatever's typed (Alpha-faithful;
+            //                the editor doesn't have a separate
+            //                cancel — the player can break the sign
+            //                afterwards if they want it gone)
+            //   Anything else (printable) → falls through to KeyPress
+            //                where AppendChar(c, 15) routes to the
+            //                active line. We e.Handled=true on the
+            //                structural keys so they don't double-
+            //                fire game shortcuts; printable keys are
+            //                allowed through so KeyPress sees them.
+            if (_renderer != null && _renderer.IsEditingSign)
+            {
+                switch (e.KeyCode)
+                {
+                    case Keys.Enter:
+                        if (_input.SignEditorActiveLine < _input.SignEditorLines.Length - 1)
+                        {
+                            _input.SignEditorActiveLine++;
+                        }
+                        else
+                        {
+                            _renderer.CommitSignEdit();
+                            // Recapture mouse-look so the player drops
+                            // straight back into the game without an
+                            // extra click — same convention TogglePause
+                            // and the chest/crafting close paths use.
+                            CaptureMouseLook();
+                        }
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.Tab:
+                    case Keys.Down:
+                        if (_input.SignEditorActiveLine < _input.SignEditorLines.Length - 1)
+                            _input.SignEditorActiveLine++;
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.Up:
+                        if (_input.SignEditorActiveLine > 0)
+                            _input.SignEditorActiveLine--;
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.Back:
+                        _input.Backspace();
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.Escape:
+                        _renderer.CommitSignEdit();
+                        CaptureMouseLook();
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                }
+                // Suppress every other non-printable key so game
+                // shortcuts (F3, hotbar 1-9, P, E…) don't fire while
+                // editing. KeyPress still gets the printable chars
+                // because we don't set Handled here for those.
+                if (!IsTextProducingKey(e.KeyCode))
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+                return;
+            }
+
             // Tier 6 #47 — Title-screen text-field key handling.
             // Backspace pops a char from the focused field; Escape
             // walks back one navigation level. Every other key
@@ -1257,6 +1337,19 @@ namespace VStudioCraft.UI
                 return;
             }
 
+            // Tier 8 #44 V2 — Sign editor. Same KeyPress flow the
+            // title-screen text fields use, but per-line capped at 15
+            // chars (Alpha 1.0.16's sign-line limit). The active line
+            // (Input.SignEditorActiveLine) was set by KeyDown's
+            // Enter/Tab/Up/Down handling above; AppendChar's switch
+            // routes the keystroke to the right line.
+            if (_renderer.IsEditingSign && _input.FocusedField == InputState.TextField.SignEditor)
+            {
+                _input.AppendChar(c, /*maxLen*/15);
+                e.Handled = true;
+                return;
+            }
+
             // In-game creative-inventory search bar (existing path).
             if (!_renderer.IsInventoryOpen) return;
             if (_renderer.GameMode != GameMode.Creative) return;
@@ -1440,6 +1533,34 @@ namespace VStudioCraft.UI
         {
             _input.KeyUp(e.KeyCode);
             e.Handled = true;
+        }
+
+        // Tier 8 #44 V2 — Heuristic for "is this key likely to fire a
+        // matching KeyPress event with a printable char". Used by the
+        // sign-editor KeyDown gate so non-text keys (F3, function
+        // keys, modifiers, navigation keys we already handled above)
+        // get suppressed, while letters / digits / space / punctuation
+        // are allowed through to KeyPress where they land in the
+        // active line via AppendChar.
+        //
+        // Conservative whitelist — letters, digits, space, OEM
+        // punctuation rows. Anything else returns false and the
+        // editor swallows it. The KeyPress filter (`<32 || ==127`)
+        // catches any control chars that slip through.
+        private static bool IsTextProducingKey(System.Windows.Forms.Keys k)
+        {
+            if (k >= Keys.A && k <= Keys.Z) return true;
+            if (k >= Keys.D0 && k <= Keys.D9) return true;
+            if (k >= Keys.NumPad0 && k <= Keys.NumPad9) return true;
+            if (k == Keys.Space) return true;
+            // OEM rows cover the standard US layout's punctuation
+            // (`-=[]\;',./` and shift variants). Layouts other than
+            // US-QWERTY may map these differently, but the KeyPress
+            // event resolves the actual character so our whitelist
+            // just needs to NOT swallow these — KeyPress does the
+            // OS-correct char mapping.
+            if (k >= Keys.Oem1 && k <= Keys.Oem102) return true;
+            return false;
         }
 
         private void GlOnMouseDown(object sender, MouseEventArgs e)

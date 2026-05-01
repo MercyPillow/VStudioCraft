@@ -264,6 +264,37 @@ void main()
 }
 ";
 
+        // Tier 8 #44 V2 — Sign text shader. World-space pos+UV vert,
+        // alpha-keyed black fragment that samples the existing HUD
+        // font texture (a regular sampler2D, NOT the chunk's
+        // Texture2DArray). The font sheet stores white-on-transparent
+        // glyphs; we discard transparent pixels and output solid
+        // black for opaque ones — Alpha 1.0.16 sign writing is
+        // single-colour black on the plank background.
+        private const string SignTextVertexSrc = @"#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUV;
+out vec2 vUV;
+uniform mat4 uMVP;
+void main()
+{
+    vUV = aUV;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+";
+
+        private const string SignTextFragmentSrc = @"#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2D uFont;
+void main()
+{
+    float a = texture(uFont, vUV).a;
+    if (a < 0.1) discard;
+    FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+}
+";
+
         // Variant of the sprite shader that samples from the block-atlas
         // Texture2DArray. Same vertex shader; the fragment picks a layer
         // from a uniform so a single draw can pick out any tile in the atlas.
@@ -380,6 +411,21 @@ void main()
         private Shader _shader;
         private Shader _overlayShader;
         private Shader _spriteShader;
+        // Tier 8 #44 V2 — Sign-text 3D pass. Shader + dynamic VBO/EBO/VAO
+        // rebuilt each frame from the live SignEntities dictionary;
+        // scratch float / uint buffers grow as needed and are reused
+        // across frames to avoid per-frame allocation.
+        private Shader _signTextShader;
+        private int _signTextVao;
+        private int _signTextVbo;
+        private int _signTextEbo;
+        // pos(3) + uv(2) = 5 floats per vertex, 4 verts per glyph quad,
+        // 6 indices per glyph. Capacity grows on demand the first time
+        // a frame exceeds it, then stays at the high-water mark.
+        private float[] _signTextVerts = new float[1024];
+        private uint[]  _signTextIdx   = new uint[1536];
+        private int _signTextVertFloats;
+        private int _signTextIndexCount;
         private Shader _spriteArrayShader; // sampler2DArray variant for block-atlas icons
         private Shader _backgroundShader;  // passthrough sampler2DArray for animated-GIF background — no discard, no shading
         private Shader _crackShader;       // pos+uv -> sampler2DArray for break overlay
@@ -694,12 +740,27 @@ void main()
             set => _hungerEnabled = value;
         }
 
+        // Tier 8 #44 V2 — Sign editor state. Set by BeginSignEdit
+        // when a fresh sign placement opens the editor; cleared by
+        // CommitSignEdit once the player presses Enter on the last
+        // line or hits Escape. The host's KeyPress / KeyDown routing
+        // checks IsEditingSign to decide whether keystrokes flow into
+        // the editor or into the normal game-input pipeline. Caret
+        // blink is driven directly off Environment.TickCount inside
+        // RenderSignEditor (no per-frame timer field needed).
+        private bool _isEditingSign;
+        public bool IsEditingSign => _isEditingSign;
+        private (int x, int y, int z) _editingSignPos;
+
         // Convenience for the host: any modal UI that should freeze the
         // world. New modals (chat overlay, world-creation dialog…) just
         // OR themselves in here and the rest of the loop gates on this
         // single flag. Options doesn't add to this list because it only
         // ever opens on top of the pause menu (which is already halted).
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None || _isLoadingWorld;
+        // Sign editor halts the world for the same reason the inventory
+        // does — typing a sign mid-mine shouldn't drop a torch on the
+        // player's head when ENTER finishes the message.
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None || _isLoadingWorld || _isEditingSign;
 
         // Tier 6 — Loading-screen state. Set when a world transition
         // begins (StartNewWorld / LoadFromFile / ConnectToServer);
@@ -1217,6 +1278,7 @@ void main()
             _crackShader = new Shader(CrackVertexSrc, CrackFragmentSrc);
             _multiFaceCubeShader = new Shader(MultiFaceCubeVertexSrc, MultiFaceCubeFragmentSrc);
             _skinShader = new Shader(SkinVertexSrc, SkinFragmentSrc);
+            _signTextShader = new Shader(SignTextVertexSrc, SignTextFragmentSrc);
             BuildSteveSkin();
             _crosshairMesh = BuildCrosshairMesh();
             _wireCubeMesh = BuildWireCubeMesh();
@@ -5144,11 +5206,64 @@ void main()
                 _world.RecordMetaChange(px, py, pz);
             }
 
-            // Allocate the tile entity so the editor (when it ships)
-            // has a stable slot to write into. Empty Lines render as
-            // a blank board until the player types and commits.
+            // Allocate the tile entity so the editor has a stable
+            // slot to write into. Empty Lines render as a blank board
+            // until the player types and commits.
             _world.GetOrCreateSignEntity(px, py, pz);
+            // Tier 8 #44 V2 — Open the editor immediately on a
+            // successful place. Alpha-faithful: the editor only ever
+            // opens at placement; once committed, the sign is sealed.
+            BeginSignEdit(px, py, pz);
             return true;
+        }
+
+        // Tier 8 #44 V2 — Open the sign editor on the just-placed
+        // sign at (x,y,z). Resets the editor buffers so the player
+        // starts with 4 blank lines, focuses the SignEditor text
+        // field so the host's KeyPress flow appends to those buffers,
+        // and clears any held movement keys (same hygiene as
+        // TogglePause / ToggleInventory — without it, a held W
+        // would carry through into the editor and the player would
+        // start walking the moment they commit).
+        public void BeginSignEdit(int x, int y, int z)
+        {
+            if (Input == null) return;
+            _isEditingSign = true;
+            _editingSignPos = (x, y, z);
+            Input.ResetSignEditor();
+            Input.FocusedField = InputState.TextField.SignEditor;
+            Input.Clear();
+        }
+
+        // Tier 8 #44 V2 — Seal the typed buffers into the
+        // SignTileEntity at the editing coord and close the editor.
+        // Called from the host on Enter (past the last line) or
+        // Escape. Safe to call when no editor is active (early-out
+        // on _isEditingSign keeps the API forgiving for the host's
+        // structural-key handler).
+        public void CommitSignEdit()
+        {
+            if (!_isEditingSign) return;
+            if (_world != null && Input != null)
+            {
+                var se = _world.GetOrCreateSignEntity(
+                    _editingSignPos.x, _editingSignPos.y, _editingSignPos.z);
+                for (int i = 0; i < se.Lines.Length && i < Input.SignEditorLines.Length; i++)
+                {
+                    se.Lines[i] = Input.SignEditorLines[i] ?? string.Empty;
+                }
+                // No chunk-dirty mark needed: the sign-text 3D pass
+                // (RenderSignTexts) reads entity.Lines fresh each
+                // frame, so the freshly-committed text picks up on
+                // the very next render without rebuilding the chunk
+                // mesh. If a future refactor bakes the text into the
+                // chunk mesh, this is where the dirty kick belongs.
+            }
+            _isEditingSign = false;
+            if (Input != null)
+            {
+                Input.FocusedField = InputState.TextField.None;
+            }
         }
 
         // Tier 4 #24 — Painting placement. Mounts a 1×1 Painting onto
@@ -8896,6 +9011,11 @@ void main()
             // occludes correctly. Paintings are world-fixed surfaces;
             // their depth values participate normally in entity layering.
             RenderPaintings(width, height);
+            // Tier 8 #44 V2 — Sign text. Same render-slot as paintings:
+            // after chunks (so the sign board's depth is in the buffer),
+            // before entities (so a player walking in front of the sign
+            // occludes the text correctly).
+            RenderSignTexts();
             RenderDrops(width, height);
             // Tier 4 #17 — In-flight bow arrows. Drawn right after drops
             // so they layer the same as a tossed item entity (occluded
@@ -8998,6 +9118,7 @@ void main()
             // we still gate on _isInventoryOpen first so a stuck flag
             // can't double-stack the dim wash.
             if (_isDeathScreenOpen) RenderDeathScreen(width, height);
+            else if (_isEditingSign) RenderSignEditor(width, height);
             else if (_isInventoryOpen) RenderInventory(width, height);
             else if (_isCraftingOpen) RenderCrafting(width, height);
             else if (_isFurnaceOpen) RenderFurnace(width, height);
@@ -9333,6 +9454,278 @@ void main()
 
             GL.Enable(EnableCap.CullFace);
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Tier 8 #44 V2 — Per-frame world-space text pass. Iterates
+        // every SignTileEntity, computes its front-face plane (block
+        // type chooses post vs wall geometry; chunk-meta low 2 bits
+        // give the cardinal facing), and emits one glyph quad per
+        // typed character into the dynamic VBO. Single draw call
+        // shipping every visible glyph at once.
+        //
+        // Reuses the existing HUD font texture + glyph UV table. The
+        // SignTextShader samples that texture and outputs solid black
+        // wherever the glyph alpha is opaque — sign writing in Alpha
+        // 1.0.16 is single-colour black.
+        //
+        // Depth test stays ON (text is hidden by walls between the
+        // player and the sign), cull face stays ON (back of the sign
+        // never shows text). The glyph plane is inset 0.005 in front
+        // of the wood-board face to avoid z-fighting with the planks.
+        private void RenderSignTexts()
+        {
+            if (_world == null) return;
+            // Early-out: no entries means nothing to do, no GL state
+            // change. The IEnumerable surface doesn't expose Count
+            // directly so we peek the first entry instead.
+            bool any = false;
+            foreach (var _ in _world.SignEntities) { any = true; break; }
+            if (!any) return;
+
+            _signTextVertFloats = 0;
+            _signTextIndexCount = 0;
+
+            foreach (var kv in _world.SignEntities)
+            {
+                var pos = kv.Key;
+                var entity = kv.Value;
+                if (entity == null || entity.IsEmpty) continue;
+
+                int wx = pos.x, wy = pos.y, wz = pos.z;
+                BlockType blockHere = _world.GetBlock(wx, wy, wz);
+                if (blockHere != BlockType.SignPost && blockHere != BlockType.WallSign) continue;
+
+                // Read meta facing. Chunk lookup may fail if the
+                // sign's chunk got unloaded between the entity's
+                // existence and this frame; skip that orphan.
+                int chCx = wx >> 4, chCz = wz >> 4;
+                var chunk = _world.GetChunk(chCx, chCz);
+                if (chunk == null) continue;
+                int lx = wx - (chCx << 4);
+                int lz = wz - (chCz << 4);
+                byte meta = chunk.GetMeta(lx, wy, lz);
+                int facing = meta & 0x03;
+
+                // Geometry constants mirror the EmitSignPost /
+                // EmitWallSign emitters so the text floats just in
+                // front of the wood plank face the mesher already
+                // draws.
+                float boardThickHalf = 0.75f / 16f; // 1.5 px thick
+                float inset = 0.005f;               // z-fight safety
+                float boardHeight = 7f / 16f;
+                float boardCenterY = (blockHere == BlockType.SignPost)
+                    ? wy + 12.5f / 16f
+                    : wy + 7.5f / 16f;
+
+                float originX, originZ;
+                float rightX, rightZ;       // right axis (horizontal)
+
+                switch (facing)
+                {
+                    case 1: // South — text faces +Z
+                        rightX = -1f; rightZ = 0f;
+                        if (blockHere == BlockType.SignPost)
+                        {
+                            originX = wx + 0.5f;
+                            originZ = wz + 0.5f + boardThickHalf + inset;
+                        }
+                        else
+                        {
+                            originX = wx + 0.5f;
+                            originZ = wz + 2f * boardThickHalf + inset;
+                        }
+                        break;
+                    case 2: // East — text faces +X
+                        rightX = 0f; rightZ = +1f;
+                        if (blockHere == BlockType.SignPost)
+                        {
+                            originX = wx + 0.5f + boardThickHalf + inset;
+                            originZ = wz + 0.5f;
+                        }
+                        else
+                        {
+                            originX = wx + 2f * boardThickHalf + inset;
+                            originZ = wz + 0.5f;
+                        }
+                        break;
+                    case 3: // West — text faces -X
+                        rightX = 0f; rightZ = -1f;
+                        if (blockHere == BlockType.SignPost)
+                        {
+                            originX = wx + 0.5f - boardThickHalf - inset;
+                            originZ = wz + 0.5f;
+                        }
+                        else
+                        {
+                            originX = wx + 1f - 2f * boardThickHalf - inset;
+                            originZ = wz + 0.5f;
+                        }
+                        break;
+                    default: // North (0) — text faces -Z
+                        rightX = +1f; rightZ = 0f;
+                        if (blockHere == BlockType.SignPost)
+                        {
+                            originX = wx + 0.5f;
+                            originZ = wz + 0.5f - boardThickHalf - inset;
+                        }
+                        else
+                        {
+                            originX = wx + 0.5f;
+                            originZ = wz + 1f - 2f * boardThickHalf - inset;
+                        }
+                        break;
+                }
+
+                // Per-line geometry. Four lines, top-to-bottom.
+                // Glyph height ≈ 1/4 of the board minus padding;
+                // glyph width follows the bitmap font's 6:8 cell
+                // aspect ratio.
+                float lineHeight = boardHeight * 0.22f;     // 22% of board per line, leaving margin
+                float glyphWorldH = lineHeight * 0.75f;     // 75% inside the line
+                float glyphWorldW = glyphWorldH * (HotbarTextures.GlyphCellW / (float)HotbarTextures.GlyphCellH);
+
+                // Top of the writing area = top of the board minus
+                // a small top-margin so line 0 doesn't kiss the edge.
+                float topY = boardCenterY + boardHeight * 0.5f - lineHeight * 0.6f;
+
+                for (int li = 0; li < entity.Lines.Length && li < 4; li++)
+                {
+                    string line = entity.Lines[li];
+                    if (string.IsNullOrEmpty(line)) continue;
+
+                    // Centre the line horizontally on the board.
+                    float totalW = line.Length * glyphWorldW;
+                    float startOffset = -totalW * 0.5f;
+                    float lineCenterY = topY - li * lineHeight;
+
+                    for (int ci = 0; ci < line.Length; ci++)
+                    {
+                        char c = line[ci];
+                        // Upper-case the character — the bitmap font
+                        // doesn't have lower-case glyphs (matches
+                        // Alpha 1.0.16's all-caps sign font).
+                        if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+                        int gi = HotbarTextures.GlyphIndex(c);
+                        if (gi < 0) continue; // unsupported glyph (e.g. non-ASCII)
+
+                        HotbarTextures.GlyphUv(gi, out float u, out float v);
+                        float u0 = u, u1 = u + HotbarTextures.GlyphUvW;
+                        float v0 = v, v1 = v + HotbarTextures.GlyphUvH;
+
+                        // Glyph local rect: x runs along `right`,
+                        // y is +Y. Compute world corners of the
+                        // glyph quad and append.
+                        float xL = startOffset + ci * glyphWorldW;
+                        float xR = xL + glyphWorldW;
+                        float yB = lineCenterY - glyphWorldH * 0.5f;
+                        float yT = yB + glyphWorldH;
+
+                        // World-space corner = origin + xLocal*right + yLocal*up.
+                        // up is +Y so the y component just adds yLocal.
+                        float blX = originX + xL * rightX;
+                        float blZ = originZ + xL * rightZ;
+                        float brX = originX + xR * rightX;
+                        float brZ = originZ + xR * rightZ;
+
+                        EmitSignGlyphQuad(
+                            blX, yB, blZ,  u0, v1,   // bottom-left
+                            brX, yB, brZ,  u1, v1,   // bottom-right
+                            brX, yT, brZ,  u1, v0,   // top-right
+                            blX, yT, blZ,  u0, v0);  // top-left
+                    }
+                }
+            }
+
+            if (_signTextIndexCount == 0) return;
+
+            // Lazy GL handle creation. First-frame allocation only.
+            if (_signTextVao == 0)
+            {
+                _signTextVao = GL.GenVertexArray();
+                _signTextVbo = GL.GenBuffer();
+                _signTextEbo = GL.GenBuffer();
+                GL.BindVertexArray(_signTextVao);
+                GL.BindBuffer(BufferTarget.ArrayBuffer, _signTextVbo);
+                GL.BindBuffer(BufferTarget.ElementArrayBuffer, _signTextEbo);
+                int stride = 5 * sizeof(float);
+                GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+                GL.EnableVertexAttribArray(0);
+                GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+                GL.EnableVertexAttribArray(1);
+                GL.BindVertexArray(0);
+            }
+
+            // Orphan + refill the dynamic streams (same trick the
+            // chunk-mesh upload uses to avoid GPU stalls when the
+            // VBO was just sampled in the previous draw).
+            GL.BindVertexArray(_signTextVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _signTextVbo);
+            int vbBytes = _signTextVertFloats * sizeof(float);
+            GL.BufferData(BufferTarget.ArrayBuffer, vbBytes, IntPtr.Zero, BufferUsageHint.DynamicDraw);
+            GL.BufferData(BufferTarget.ArrayBuffer, vbBytes, _signTextVerts, BufferUsageHint.DynamicDraw);
+
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _signTextEbo);
+            int ibBytes = _signTextIndexCount * sizeof(uint);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, ibBytes, IntPtr.Zero, BufferUsageHint.DynamicDraw);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, ibBytes, _signTextIdx, BufferUsageHint.DynamicDraw);
+
+            // Single draw of all glyphs in the world. Depth test
+            // stays on; alpha discard handled in fragment.
+            _signTextShader.Use();
+            _signTextShader.SetInt("uFont", 0);
+            _signTextShader.SetMatrix4("uMVP", _frameVp);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, _fontTexture);
+            GL.DrawElements(PrimitiveType.Triangles, _signTextIndexCount, DrawElementsType.UnsignedInt, 0);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindVertexArray(0);
+        }
+
+        // Append a single glyph quad to the sign-text scratch buffers.
+        // Grows the buffers in 2× doublings if capacity runs out — the
+        // first-frame upper bound is hit once and we stay there. Each
+        // quad is 4 verts × 5 floats + 6 indices.
+        private void EmitSignGlyphQuad(
+            float ax, float ay, float az, float au, float av,
+            float bx, float by, float bz, float bu, float bv,
+            float cx, float cy, float cz, float cu, float cv,
+            float dx, float dy, float dz, float du, float dv)
+        {
+            int needFloats = _signTextVertFloats + 4 * 5;
+            if (_signTextVerts.Length < needFloats)
+            {
+                int cap = _signTextVerts.Length * 2;
+                while (cap < needFloats) cap *= 2;
+                var grown = new float[cap];
+                System.Array.Copy(_signTextVerts, grown, _signTextVertFloats);
+                _signTextVerts = grown;
+            }
+            int needIdx = _signTextIndexCount + 6;
+            if (_signTextIdx.Length < needIdx)
+            {
+                int cap = _signTextIdx.Length * 2;
+                while (cap < needIdx) cap *= 2;
+                var grown = new uint[cap];
+                System.Array.Copy(_signTextIdx, grown, _signTextIndexCount);
+                _signTextIdx = grown;
+            }
+
+            uint baseIdx = (uint)(_signTextVertFloats / 5);
+            int p = _signTextVertFloats;
+            _signTextVerts[p++] = ax; _signTextVerts[p++] = ay; _signTextVerts[p++] = az; _signTextVerts[p++] = au; _signTextVerts[p++] = av;
+            _signTextVerts[p++] = bx; _signTextVerts[p++] = by; _signTextVerts[p++] = bz; _signTextVerts[p++] = bu; _signTextVerts[p++] = bv;
+            _signTextVerts[p++] = cx; _signTextVerts[p++] = cy; _signTextVerts[p++] = cz; _signTextVerts[p++] = cu; _signTextVerts[p++] = cv;
+            _signTextVerts[p++] = dx; _signTextVerts[p++] = dy; _signTextVerts[p++] = dz; _signTextVerts[p++] = du; _signTextVerts[p++] = dv;
+            _signTextVertFloats = p;
+
+            int ip = _signTextIndexCount;
+            _signTextIdx[ip++] = baseIdx + 0;
+            _signTextIdx[ip++] = baseIdx + 1;
+            _signTextIdx[ip++] = baseIdx + 2;
+            _signTextIdx[ip++] = baseIdx + 0;
+            _signTextIdx[ip++] = baseIdx + 2;
+            _signTextIdx[ip++] = baseIdx + 3;
+            _signTextIndexCount = ip;
         }
 
         // Draw every loose dropped item as a small spinning textured cube
@@ -10133,10 +10526,21 @@ void main()
             // 0.25, so arm centerline at body_half + arm_half = 0.375.
             // Arms hang DOWN from the shoulder, so feet of the arm
             // mesh sit at HipY (same as legs); shoulder is at top.
+            //
+            // Swing-arc handedness: the rig is yawed by π−cameraYaw so
+            // the camera looks at the player's BACK in third-person,
+            // which means the rig's anatomical right arm (mesh +X)
+            // projects to the LEFT of the screen. Players reading the
+            // third-person view expect the swing to appear on their
+            // screen-right, so the chop swingArc is applied to the
+            // mesh −X arm (which projects to screen-right under that
+            // back-camera angle). The walk-cycle counter-swing
+            // (±armSwing) keeps the standard cross-pattern: right leg
+            // forward ↔ right arm back.
             DrawSkinCuboid(_steveArmRMesh, new Vector3(+0.375f, HipY, 0f),
-                new Vector3(+0.375f, ShoulderY, 0f), +armSwing + swingArc, rigToWorld, vp);
+                new Vector3(+0.375f, ShoulderY, 0f), +armSwing, rigToWorld, vp);
             DrawSkinCuboid(_steveArmLMesh, new Vector3(-0.375f, HipY, 0f),
-                new Vector3(-0.375f, ShoulderY, 0f), -armSwing, rigToWorld, vp);
+                new Vector3(-0.375f, ShoulderY, 0f), -armSwing + swingArc, rigToWorld, vp);
 
             // Head — pitch around the neck point. Damped pitch so
             // looking straight up/down doesn't fully vertical-flip
@@ -10710,9 +11114,22 @@ void main()
             // Arm first — sits behind the held item so a held block
             // overlaps the wrist naturally, just like Alpha. Also covers
             // the empty-hand case where the held-item branch is a no-op.
-            // RenderPlayerArm captures + restores CullFace internally so
-            // it returns with cull still off (we already disabled above).
-            RenderPlayerArm(width, height, swingPhase, ortho);
+            //
+            // Two paths: when the canonical Steve skin loaded successfully
+            // we draw a real 3D textured arm cuboid in view-space (mirrors
+            // Alpha's "arm extending into the scene from the bottom-right"
+            // behaviour). If the skin failed to decode, fall back to the
+            // 2D-quad placeholder that pre-dated the skin work.
+            // Both helpers leave CullFace disabled on exit so the rest of
+            // the HUD pass can rely on the same baseline state.
+            if (_steveSkinTexture != 0 && _steveArmRMesh != null)
+            {
+                RenderFirstPersonArm(swingPhase);
+            }
+            else
+            {
+                RenderPlayerArm(width, height, swingPhase, ortho);
+            }
 
             if (stack.IsEmpty)
             {
@@ -10860,6 +11277,117 @@ void main()
             DrawArmLayer(sleeveLen, skinLen, 0, skinColor);
 
             if (cullWasEnabled) GL.Enable(EnableCap.CullFace);
+        }
+
+        // Textured 3D first-person arm — draws _steveArmRMesh (the same
+        // pixel-accurate right-arm cuboid the third-person rig uses) in
+        // view-space, anchored at the bottom-right of the screen and
+        // extending up-and-into-screen toward the centre. This matches
+        // Alpha's "arm reaches into the scene from the bottom-right
+        // corner" behaviour, and replaces the pre-skin 2D-quad placeholder
+        // (RenderPlayerArm above) — which only existed because the skin
+        // wasn't loaded yet at that point in the project's history.
+        //
+        // The arm follows the camera, so we skip the view transform
+        // entirely: vertices go mesh-local → view-space → clip directly.
+        // _frameProj is the same projection used for the world pass, so
+        // the arm's perspective scaling matches whatever FOV is in use.
+        //
+        // Depth handling: the arm must NOT be occluded by world geometry
+        // (a wall in front of you doesn't hide your hand) but its own six
+        // faces still need to self-occlude correctly so the visible side
+        // faces shade as a 3D solid. We clear the depth buffer before
+        // drawing, then leave depth test on for the cube. The HUD pass
+        // that follows turns depth test back off as part of its setup.
+        private void RenderFirstPersonArm(float swingPhase)
+        {
+            // Re-enable the world-pass GL state baseline (the caller
+            // disabled depth + cull for the HUD ortho pass; we want them
+            // back on for the 3D arm draw). Restore it again before we
+            // return so the rest of RenderHeldItem keeps working.
+            GL.Enable(EnableCap.DepthTest);
+            GL.Enable(EnableCap.CullFace);
+            GL.CullFace(CullFaceMode.Back);
+            GL.FrontFace(FrontFaceDirection.Ccw);
+            // Clear ONLY the depth buffer — we want to keep the world
+            // colour underneath the arm. This is the standard MC
+            // technique: world draws first into colour + depth, then
+            // depth is wiped so the held-item layer can write fresh
+            // depth without world geometry occluding it.
+            GL.Clear(ClearBufferMask.DepthBufferBit);
+
+            // Pose. The mesh has shoulder at Y=0.75, hand at Y=0 in
+            // mesh-local space. We want the SHOULDER anchored at the
+            // bottom-right of the screen and the HAND extending
+            // forward (-Z view) — i.e. the player is "holding the arm
+            // out pointing straight ahead."
+            //
+            // Recipe (row-vector OpenTK, where R_x(θ) sends y'=y*cosθ
+            // − z*sinθ and z'=y*sinθ + z*cosθ):
+            //   1. T(0, -0.75, 0): translate so the shoulder sits at
+            //      the origin. The hand point (mesh y=0) is now at
+            //      (0, -0.75, 0).
+            //   2. R_x(+π/2 + chop): pitch around X. With +π/2, point
+            //      (0, -0.75, 0) maps to (0, 0, -0.75) — the hand is
+            //      now in front of the camera (-Z is forward in view
+            //      space). The previous version of this code used
+            //      −π/2 by mistake, which sent the hand to (0, 0,
+            //      +0.75) — *behind* the camera, where the near
+            //      plane clips it and the arm becomes invisible.
+            //      Adding `chop` (small NEGATIVE on swing) pulls the
+            //      hand down + back from "straight forward", reading
+            //      as a downward chop motion.
+            //   3. T(shoulder): translate the now-rotated arm to its
+            //      view-space anchor near the bottom-right of the
+            //      viewport.
+            //
+            // The arm becomes a horizontal cuboid extending from the
+            // anchor straight forward into the scene, with the chop
+            // pulling the hand down + back at the swing's peak.
+            float pointForward = (float)Math.PI / 2f;
+            float chopAngle    = -swingPhase * 0.55f; // ~32° down-chop at peak
+            float armPitch     = pointForward + chopAngle;
+            // Anchor: lower-right of the viewport, just in front of
+            // the near plane. View-space is right-handed (+X right,
+            // +Y up, -Z forward). With Camera.Fov = 70° vertical, the
+            // visible vertical half-extent at depth z is tan(35°)·|z|
+            // ≈ 0.7·|z|. At z=-0.45 that's 0.315, so a shoulder.y of
+            // -0.30 sits just above the bottom of the screen, with
+            // the arm cuboid (±0.125 m around the rotated axis)
+            // entirely inside the frustum. shoulder.x of 0.20 keeps
+            // the arm towards the right side without falling off the
+            // edge on a 4:3 viewport. The hand then extends ~0.75 m
+            // forward to around z ≈ -1.20.
+            var shoulder = new Vector3(0.20f, -0.30f, -0.45f);
+
+            var moveShoulderToOrigin = Matrix4.CreateTranslation(0f, -0.75f, 0f);
+            var pitch                = Matrix4.CreateRotationX(armPitch);
+            var place                = Matrix4.CreateTranslation(shoulder);
+            var armToView            = moveShoulderToOrigin * pitch * place;
+            var mvp                  = armToView * _frameProj;
+
+            // Hurt flash: same red lerp as the third-person rig. The
+            // skin shader's uTint mixes texture rgb toward uTint.rgb by
+            // uTint.a — a=0 means no tint.
+            float hurt = Player != null && Player.HurtTimer > 0f
+                ? Player.HurtTimer / Player.HurtFlashSeconds
+                : 0f;
+
+            _skinShader.Use();
+            _skinShader.SetInt("uSkin", 0);
+            _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
+            _skinShader.SetMatrix4("uMVP", mvp);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, _steveSkinTexture);
+            _steveArmRMesh.Draw();
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+
+            // Restore the HUD pass baseline so the held-item icon /
+            // hotbar / etc. that follow see the same state they did
+            // before we ran. The caller (RenderHeldItem) has already
+            // configured these once — we mirror that config on exit.
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
         }
 
         // Render a 3-face block icon (top + two sides) into a pixel
@@ -11403,6 +11931,92 @@ void main()
         // like one chrome family) and uses the shared DeathScreen
         // layout so click hit-tests on the host always match the
         // drawn rectangles. Drawn by the main render path when
+        // Tier 8 #44 V2 — Sign editor HUD. Centred 4-line text input,
+        // shown while _isEditingSign. The world still renders behind
+        // it (caller is RenderHud, which runs after the 3D world
+        // pass) — we just dim the wash and stack the input boxes in
+        // the middle. Caret blink is driven off Environment.TickCount
+        // so we don't need a per-frame dt; the 1 Hz rate matches the
+        // canonical Alpha caret feel.
+        private void RenderSignEditor(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            // Dim wash so the world reads as background. Lighter than
+            // the pause menu (0.55) so the player can still see the
+            // sign they're editing through the overlay; the editor is
+            // less "modal stop everything" than pause/death.
+            DrawSolidQuad(0, 0, width, height, new Vector3(0f, 0f, 0f), 0.4f, ortho);
+
+            // Layout. UiScale keeps the editor proportional across
+            // resolutions — same convention every other modal uses.
+            int boxW = UiScale.S(240, width, height);
+            int boxH = UiScale.S(28, width, height);
+            int gap  = UiScale.S(4, width, height);
+            int totalH = boxH * 4 + gap * 3;
+            int boxX = (width - boxW) / 2;
+            int firstBoxY = (height - totalH) / 2;
+            int border = UiScale.S(2, width, height);
+            int textScale = System.Math.Max(1, UiScale.S(2, width, height));
+
+            // Title above the boxes.
+            int titleScale = System.Math.Max(1, UiScale.S(2, width, height));
+            int titleY = firstBoxY - HotbarTextures.GlyphCellH * titleScale - UiScale.S(12, width, height);
+            DrawString("TYPE YOUR MESSAGE", titleScale, width / 2, titleY,
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            // 1 Hz blink (caret visible during the first half of every
+            // second). Independent of frame rate / per-frame dt so the
+            // caret doesn't speed up or skip on a hitch.
+            bool caretOn = (System.Environment.TickCount % 1000) < 500;
+
+            var lines = Input?.SignEditorLines ?? new string[4];
+            int active = Input?.SignEditorActiveLine ?? 0;
+            for (int i = 0; i < 4; i++)
+            {
+                int by = firstBoxY + i * (boxH + gap);
+
+                // Box: dark fill + 1px border. Active line gets a
+                // brighter border so the player can see where their
+                // typing is going at a glance.
+                DrawSolidQuad(boxX, by, boxW, boxH, new Vector3(0f, 0f, 0f), 0.7f, ortho);
+                Vector3 brd = (i == active)
+                    ? new Vector3(1f, 1f, 1f)
+                    : new Vector3(0.55f, 0.55f, 0.55f);
+                DrawSolidQuad(boxX, by, boxW, border, brd, 1f, ortho);
+                DrawSolidQuad(boxX, by + boxH - border, boxW, border, brd, 1f, ortho);
+                DrawSolidQuad(boxX, by, border, boxH, brd, 1f, ortho);
+                DrawSolidQuad(boxX + boxW - border, by, border, boxH, brd, 1f, ortho);
+
+                // Line text + caret. Caret only renders on the active
+                // line; appended as a literal `_` glyph because the
+                // bitmap font already includes it. Using a glyph (vs
+                // a thin rect) means the caret animates at the same
+                // sub-pixel offset as the text, which reads cleaner
+                // across resolutions.
+                string txt = lines != null && i < lines.Length ? (lines[i] ?? string.Empty) : string.Empty;
+                string render = (i == active && caretOn) ? txt + "_" : txt;
+                int textTopY = by + (boxH - HotbarTextures.GlyphCellH * textScale) / 2;
+                DrawString(render, textScale, width / 2, textTopY,
+                    new Vector4(1f, 1f, 1f, 1f), ortho);
+            }
+
+            // Hint below the boxes.
+            int hintScale = System.Math.Max(1, UiScale.S(1, width, height));
+            int hintY = firstBoxY + totalH + UiScale.S(8, width, height);
+            DrawString("ENTER NEXT LINE   ESC FINISH", hintScale, width / 2, hintY,
+                new Vector4(0.75f, 0.75f, 0.75f, 1f), ortho);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
         // _isDeathScreenOpen is true.
         private void RenderDeathScreen(int width, int height)
         {

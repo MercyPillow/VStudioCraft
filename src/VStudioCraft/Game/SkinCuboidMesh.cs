@@ -172,21 +172,33 @@ namespace VStudioCraft.Game
             // RIGHT face (+X) — the rig's right side. Viewed from +X,
             // +Z (front) is to the viewer's LEFT. UV +U maps to -Z (so
             // texture goes back-to-front).
-            // Actually canonical: right side UV +U direction is from
-            // back→front (i.e. -Z to +Z). So:
-            //   top-left → (+X,+Y,-Z), top-right → (+X,+Y,+Z).
-            Put(+hx, y1, -hz, rtU0, rtV0); // 8
-            Put(+hx, y0, -hz, rtU0, rtV1); // 9
-            Put(+hx, y0, +hz, rtU1, rtV1); // 10
-            Put(+hx, y1, +hz, rtU1, rtV0); // 11
+            // RIGHT face (+X). Viewed from outside (+X side, looking
+            // toward −X) with up=+Y, the right-hand-rule view basis
+            // gives viewer-right = forward × up = −X × +Y = −Z. So
+            // viewer-right = world −Z, viewer-left = world +Z.
+            // Texture orientation:
+            //   top-left  (uMin,vMin) → viewer-left+up   = (+X,+Y,+Z)
+            //   top-right (uMax,vMin) → viewer-right+up  = (+X,+Y,−Z)
+            //   bot-left  (uMin,vMax) → viewer-left+down = (+X, 0,+Z)
+            //   bot-right (uMax,vMax) → viewer-right+down= (+X, 0,−Z)
+            // For CCW-from-outside winding, list vertices in increasing
+            // 2D-screen-angle order: TR(45°)→TL(135°)→BL(225°)→BR(315°).
+            Put(+hx, y1, -hz, rtU1, rtV0); //  8: TR
+            Put(+hx, y1, +hz, rtU0, rtV0); //  9: TL
+            Put(+hx, y0, +hz, rtU0, rtV1); // 10: BL
+            Put(+hx, y0, -hz, rtU1, rtV1); // 11: BR
 
-            // LEFT face (-X). Viewed from -X, +Z (front) is to the
-            // viewer's RIGHT. UV +U maps to +Z → -Z (front to back).
-            //   top-left → (-X,+Y,+Z), top-right → (-X,+Y,-Z).
-            Put(-hx, y1, +hz, ltU0, ltV0); // 12
-            Put(-hx, y0, +hz, ltU0, ltV1); // 13
-            Put(-hx, y0, -hz, ltU1, ltV1); // 14
-            Put(-hx, y1, -hz, ltU1, ltV0); // 15
+            // LEFT face (−X). Viewed from outside (−X side, looking +X)
+            // with up=+Y, viewer-right = forward × up = +X × +Y = +Z.
+            // So viewer-right = world +Z, viewer-left = world −Z.
+            // Texture orientation:
+            //   top-left  → (−X,+Y,−Z), top-right → (−X,+Y,+Z)
+            //   bot-left  → (−X, 0,−Z), bot-right → (−X, 0,+Z)
+            // Same CCW-from-outside ordering as the right face.
+            Put(-hx, y1, +hz, ltU1, ltV0); // 12: TR
+            Put(-hx, y1, -hz, ltU0, ltV0); // 13: TL
+            Put(-hx, y0, -hz, ltU0, ltV1); // 14: BL
+            Put(-hx, y0, +hz, ltU1, ltV1); // 15: BR
 
             // TOP face (+Y). Viewed from above looking down, +X is
             // right and +Z (front) points TOWARD the viewer's chin

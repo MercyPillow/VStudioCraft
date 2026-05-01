@@ -121,6 +121,16 @@ namespace VStudioCraft.Game
             WorldSeed,
             ServerAddress,
             ServerUsername,
+            // Tier 8 #44 V2 — Sign editor. One enum value, NOT four
+            // (one per line) — the active line is tracked separately
+            // in SignEditorActiveLine so the existing AppendChar /
+            // Backspace switch only needs a single new case. The
+            // host's KeyDown routes Enter / Tab / Up / Down to bump
+            // SignEditorActiveLine; KeyPress + Backspace flow into
+            // whichever line is currently active. Editor commits to
+            // a SignTileEntity in the world on Enter (last line) or
+            // Escape — see GameRenderer.CommitSignEdit.
+            SignEditor,
         }
 
         public TextField FocusedField;
@@ -130,6 +140,30 @@ namespace VStudioCraft.Game
         public string ServerUsernameText = "Player";
         public string MultiplayerErrorText = string.Empty;
         public int WorldSelectScroll;
+
+        // Tier 8 #44 V2 — Sign editor buffers. Four lines of typed
+        // text, top-to-bottom, that the host's KeyPress handler
+        // appends to via AppendChar (gated on FocusedField=SignEditor).
+        // GameRenderer owns the lifecycle: BeginSignEdit zeroes
+        // these out + sets focus; CommitSignEdit copies them into
+        // the SignTileEntity at the editing coord and clears focus.
+        // The 4-line layout matches Alpha 1.0.16's sign-edit GUI.
+        public string[] SignEditorLines = new string[4] { string.Empty, string.Empty, string.Empty, string.Empty };
+        // Which line keystrokes append to right now. 0..3 — the
+        // editor advances on Enter (or Tab / Down), retreats on Up,
+        // and commits on Enter past the last line or on Escape.
+        public int SignEditorActiveLine;
+
+        // Reset the sign-editor buffers to empty + re-anchor the
+        // active line at 0. Called by GameRenderer.BeginSignEdit when
+        // a fresh sign placement opens the editor; safe to call when
+        // no editor is active (it just zeros buffers that were
+        // already empty).
+        public void ResetSignEditor()
+        {
+            for (int i = 0; i < SignEditorLines.Length; i++) SignEditorLines[i] = string.Empty;
+            SignEditorActiveLine = 0;
+        }
 
         // Append a printable character to the focused text field, capped
         // at maxLen. Routes via FocusedField so call sites don't have to
@@ -152,6 +186,19 @@ namespace VStudioCraft.Game
                     break;
                 case TextField.ServerUsername:
                     if (ServerUsernameText.Length < maxLen) ServerUsernameText += c;
+                    break;
+                case TextField.SignEditor:
+                    // Per-line cap. SignEditorActiveLine is bounded
+                    // by the host's Enter/Tab/Up/Down handling — it
+                    // can't escape 0..3 — but a defensive guard here
+                    // would be cheap if a bug ever lets it; we just
+                    // append to the active line.
+                    {
+                        int idx = SignEditorActiveLine;
+                        if ((uint)idx >= (uint)SignEditorLines.Length) idx = 0;
+                        if (SignEditorLines[idx].Length < maxLen)
+                            SignEditorLines[idx] += c;
+                    }
                     break;
             }
         }
@@ -181,6 +228,26 @@ namespace VStudioCraft.Game
                 case TextField.ServerUsername:
                     if (ServerUsernameText.Length > 0)
                         ServerUsernameText = ServerUsernameText.Substring(0, ServerUsernameText.Length - 1);
+                    break;
+                case TextField.SignEditor:
+                    // Backspace pops from the active line. If the
+                    // active line is empty AND we're not on line 0,
+                    // bubble up to the previous line so a held
+                    // Backspace can walk back across lines (matches
+                    // the Alpha sign editor's intuitive single-key
+                    // behaviour).
+                    {
+                        int idx = SignEditorActiveLine;
+                        if ((uint)idx >= (uint)SignEditorLines.Length) idx = 0;
+                        if (SignEditorLines[idx].Length > 0)
+                        {
+                            SignEditorLines[idx] = SignEditorLines[idx].Substring(0, SignEditorLines[idx].Length - 1);
+                        }
+                        else if (idx > 0)
+                        {
+                            SignEditorActiveLine = idx - 1;
+                        }
+                    }
                     break;
             }
         }
