@@ -58,6 +58,13 @@ uniform float uSkyLightLevel;
 uniform vec3 uFogColor;
 uniform float uFogStart;
 uniform float uFogEnd;
+// Cap on the fog factor (clamped against the fade ratio). Set to
+// 1.0 for surface rendering so fog reaches full opacity at fogEnd
+// and the chunk-unload cliff is hidden. Underwater drops it to
+// 0.8 so distant chunks retain some of their original colour at
+// the far edge of the gradient instead of dissolving into a
+// solid wall of fog colour.
+uniform float uFogMaxAlpha;
 void main()
 {
     // Greedy quads emit UVs that span the merged area (e.g. 0..w, 0..h); we
@@ -102,6 +109,7 @@ void main()
     // fade in/out instead of popping. uFogEnd is tuned to sit just inside the
     // chunk-unload radius so the terminating cliff never reveals itself.
     float fog = clamp((vViewDist - uFogStart) / max(uFogEnd - uFogStart, 0.0001), 0.0, 1.0);
+    fog = min(fog, uFogMaxAlpha);
     FragColor = vec4(mix(lit, uFogColor, fog), tex.a);
 }
 ";
@@ -8222,10 +8230,71 @@ void main()
             Vector3 antiSun = -sun;
             _sky.RenderCelestial(proj, view, Camera.Position, sunAngle, sun, antiSun);
 
-            // Fog end sits 8 blocks inside the unload radius so the boundary
-            // cliff is fully hidden even while a chunk is being streamed out.
+            // Tier 7 #40 — Detect camera-in-fluid state up-front so the
+            // chunk-pass fog uniforms can swap to a deep underwater
+            // colour + much tighter fog range. The previous code only
+            // painted a full-screen tint on top of the world after
+            // drawing it; terrain at distance still faded to SKY-blue
+            // through the regular fog pass. Now the fog itself fades
+            // to fluid-blue / lava-orange, so swimming reads as a
+            // proper short-visibility underwater scene rather than a
+            // sky-tinted overworld with a colour gel pasted on top.
+            bool cameraInFluid = false;
+            bool cameraInLava = false;
+            if (_world != null)
+            {
+                int cx = (int)Math.Floor(Camera.Position.X);
+                int cy = (int)Math.Floor(Camera.Position.Y);
+                int cz = (int)Math.Floor(Camera.Position.Z);
+                var inBlock = _world.GetBlock(cx, cy, cz);
+                cameraInLava = inBlock == BlockType.Lava || inBlock == BlockType.FlowingLava;
+                cameraInFluid = cameraInLava
+                    || inBlock == BlockType.Water || inBlock == BlockType.FlowingWater;
+            }
+
+            // Default fog: end 8 blocks inside the unload radius so the
+            // chunk-streaming cliff is fully hidden even while a chunk
+            // is being streamed out. ~3 chunks of fade in front of that
+            // matches the Alpha feel.
             float fogEnd = (UnloadDistanceChunks * Chunk.SizeX) - 8f;
-            float fogStart = fogEnd - 48f; // ~3 chunks of fade, matches Alpha feel
+            float fogStart = fogEnd - 48f;
+            Vector3 fogColor = sky;
+            // Default cap = 1.0: surface fog reaches full opacity at
+            // fogEnd so the chunk-streaming boundary is fully hidden.
+            float fogMaxAlpha = 1.0f;
+
+            // Submerged overrides — colour matches the canonical
+            // overlay tint; range is dramatically shorter because
+            // underwater you can barely see across a pool, and lava
+            // is essentially opaque past your nose.
+            if (cameraInFluid)
+            {
+                if (cameraInLava)
+                {
+                    fogColor = new Vector3(0.55f, 0.18f, 0.03f);  // dim red-orange
+                    fogStart = 0.5f;
+                    fogEnd   = 3.0f;
+                }
+                else
+                {
+                    fogColor = new Vector3(0.10f, 0.20f, 0.45f);  // deep cool blue
+                    fogStart = 1.0f;
+                    // Long fade keeps the same near-water clarity but
+                    // stretches the falloff so distant chunks don't
+                    // read as a solid dark-blue wall once they cross
+                    // fogEnd. Real water visibility doesn't have a
+                    // hard edge — it gradually murks out — and this
+                    // gives the player a multi-chunk gradient instead
+                    // of a tight hard cutoff.
+                    fogEnd   = 51.0f;
+                    // Cap the fog mix at 80 % so distant chunks retain
+                    // 20 % of their real colour at the far edge of the
+                    // gradient — reads as "deeply tinted" rather than
+                    // "solid murk wall". The shader's `fog` factor is
+                    // clamped against this cap before the colour mix.
+                    fogMaxAlpha = 0.8f;
+                }
+            }
 
             _shader.Use();
             _shader.SetMatrix4("uProjection", proj);
@@ -8234,9 +8303,10 @@ void main()
             _shader.SetVector3("uSunColor", sunColor);
             _shader.SetFloat("uAmbient", ambient);
             _shader.SetFloat("uSkyLightLevel", skyLightLevel);
-            _shader.SetVector3("uFogColor", sky);
+            _shader.SetVector3("uFogColor", fogColor);
             _shader.SetFloat("uFogStart", fogStart);
             _shader.SetFloat("uFogEnd", fogEnd);
+            _shader.SetFloat("uFogMaxAlpha", fogMaxAlpha);
             _shader.SetInt("uAtlas", 0);
 
             GL.ActiveTexture(TextureUnit.Texture0);
@@ -8260,18 +8330,6 @@ void main()
             // through it. Skip if the player's camera is inside a fluid cell
             // of either family — avoids the single big near-plane quad
             // covering the view.
-            bool cameraInFluid = false;
-            bool cameraInLava = false;
-            if (_world != null)
-            {
-                int cx = (int)Math.Floor(Camera.Position.X);
-                int cy = (int)Math.Floor(Camera.Position.Y);
-                int cz = (int)Math.Floor(Camera.Position.Z);
-                var inBlock = _world.GetBlock(cx, cy, cz);
-                cameraInLava = inBlock == BlockType.Lava || inBlock == BlockType.FlowingLava;
-                cameraInFluid = cameraInLava
-                    || inBlock == BlockType.Water || inBlock == BlockType.FlowingWater;
-            }
             if (!cameraInFluid)
             {
                 GL.Enable(EnableCap.Blend);
