@@ -55,6 +55,10 @@ uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform float uAmbient;
 uniform float uSkyLightLevel;
+// Per-dimension minimum-light floor. Overworld passes
+// (0.06, 0.06, 0.06); Nether passes a red-orange so unlit
+// netherrack reads as a dim glow rather than pitch black.
+uniform vec3 uMinLight;
 uniform vec3 uFogColor;
 uniform float uFogStart;
 uniform float uFogEnd;
@@ -87,9 +91,8 @@ void main()
     vec3 blockLit = vBlockLight * vec3(1.0, 0.78, 0.45);
     vec3 light = max(skyLit, blockLit);
 
-    // Floor so totally dark areas aren't pure black (matches Alpha's
-    // 'minimum brightness' minimum so you can still navigate caves dimly).
-    light = max(light, vec3(0.06));
+    // Per-dimension minimum-brightness floor.
+    light = max(light, uMinLight);
 
     // Light-coloured face shading: top brighter, bottom darker, sides middling.
     // Approximates Alpha's per-axis fixed shading without the sun-direction
@@ -3060,15 +3063,34 @@ void main()
                     : World.Generate(_world.Seed);
             }
             _dormantWorld = _world;
-            _world = next;
 
-            // Drop the chunk-mesh cache so the renderer rebuilds
-            // meshes for the new dimension. The old meshes still
-            // belong to the dormant World's chunks; when we swap
-            // back, ProcessDirtyChunks will rebuild them on demand.
+            // Tear down the old job system FIRST so any in-flight
+            // chunk-gen workers finish against the OUTGOING world and
+            // don't deliver stale (cross-dimension) chunks into the
+            // new one. Without this, an overworld → nether swap can
+            // leak overworld terrain into the nether's _chunks dict
+            // because the worker pool was mid-flight when we swapped.
+            _jobs?.Dispose();
+            _jobs = null;
+
+            // Drop chunk-mesh cache before swapping _world so the
+            // disposal walks the OUTGOING dimension's mesh set
+            // (the keys are (cx, cz) coordinate pairs that overlap
+            // both dimensions, so leaving a stale mesh dict around
+            // would cause the destination dimension to render the
+            // OUTGOING dimension's geometry until ProcessDirtyChunks
+            // got around to rebuilding each chunk).
             foreach (var m in _chunkMeshes.Values) m.Dispose();
             _chunkMeshes.Clear();
+
+            _world = next;
             _world.MarkAllDirty();
+
+            // Spin up a fresh job system pointing at the new world.
+            // Worker count matches SetWorld so dimension swaps don't
+            // change the chunk-gen throughput.
+            int workerCount = Math.Max(1, Math.Min(3, Environment.ProcessorCount - 2));
+            _jobs = new ChunkJobSystem(_world, workerCount);
 
             // Restore or spawn the player in the new dimension.
             // Velocity is zeroed in every branch so the player
@@ -3166,12 +3188,58 @@ void main()
         public void SaveToFile(string path)
         {
             if (_world == null) return;
+
+            // Tier 8 #51 V4 — Always save the OVERWORLD (never the
+            // nether) as the main file content. Pre-fix, saving while
+            // in the nether wrote nether chunks to the overworld
+            // file's chunk section, so a reload would land the player
+            // in netherrack-on-overworld and they had to walk into
+            // unstreamed chunks to see real terrain.
+            //
+            // The nether is ephemeral in V4 — not persisted to disk
+            // at all. Reload regenerates the netherrack pocket fresh
+            // on the next portal entry. V5 polish will add a v16
+            // trailing nether-chunks section that round-trips the
+            // nether across save/load too.
+            //
+            // Player position + camera angles in the header are also
+            // taken from the OVERWORLD slot so a reload places the
+            // player back in the overworld even if they pressed Save
+            // & Quit while standing in the nether.
+            World saveWorld = _world;
+            Vector3 savePos = Player.Position;
+            float saveYaw = Camera.Yaw;
+            float savePitch = Camera.Pitch;
+            if (_world.Dimension != Dimension.Overworld)
+            {
+                if (_dormantWorld != null && _dormantWorld.Dimension == Dimension.Overworld)
+                {
+                    saveWorld = _dormantWorld;
+                    // Use the saved-on-swap overworld coords (where
+                    // the player was when they entered the portal),
+                    // not the current nether coords.
+                    if (_overworldPlayerPos != Vector3.Zero)
+                    {
+                        savePos   = _overworldPlayerPos;
+                        saveYaw   = _overworldYaw;
+                        savePitch = _overworldPitch;
+                    }
+                }
+                else
+                {
+                    // Defensive: shouldn't happen — the overworld is
+                    // always primary in V4 — but if for some reason
+                    // there's no dormant overworld, refuse to save
+                    // rather than overwrite the file with nether data.
+                    return;
+                }
+            }
             var header = new WorldSaveFormat.Header
             {
-                Seed = _world.Seed,
-                CameraPos = Player.Position,
-                CameraYaw = Camera.Yaw,
-                CameraPitch = Camera.Pitch,
+                Seed = saveWorld.Seed,
+                CameraPos = savePos,
+                CameraYaw = saveYaw,
+                CameraPitch = savePitch,
                 GameMode = GameMode,
                 Health = Player.Health,
                 HungerEnabled = HungerEnabled,
@@ -3190,7 +3258,7 @@ void main()
             // they get their inventory back on rejoin. SP saves get a
             // 0-count v13 block (~4 bytes overhead).
             var players = _serverHub?.SnapshotPlayers();
-            WorldSaveFormat.Save(path, header, _world, players);
+            WorldSaveFormat.Save(path, header, saveWorld, players);
         }
 
         public void UpdatePlayer(float dt, Vector3 wishHorizVel, bool wantJump)
@@ -9882,6 +9950,15 @@ void main()
             _shader.SetVector3("uSunColor", sunColor);
             _shader.SetFloat("uAmbient", ambient);
             _shader.SetFloat("uSkyLightLevel", skyLightLevel);
+            // Tier 8 #51 V4 — Minimum-light floor. Default to the
+            // long-standing 0.06 grey; Nether overrides to a dim
+            // red-orange so unlit netherrack reads as a glow rather
+            // than pitch black even when the player is far from
+            // glowstone / lava.
+            Vector3 minLight = (_world != null && _world.Dimension == Dimension.Nether)
+                ? new Vector3(0.30f, 0.10f, 0.05f)
+                : new Vector3(0.06f, 0.06f, 0.06f);
+            _shader.SetVector3("uMinLight", minLight);
             _shader.SetVector3("uFogColor", fogColor);
             _shader.SetFloat("uFogStart", fogStart);
             _shader.SetFloat("uFogEnd", fogEnd);
