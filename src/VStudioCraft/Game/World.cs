@@ -65,6 +65,12 @@ namespace VStudioCraft.Game
         // dicts are tiny — order of dozens of entries in a typical world).
         private readonly System.Collections.Concurrent.ConcurrentDictionary<(int x, int y, int z), ChestTileEntity> _chestEntities
             = new System.Collections.Concurrent.ConcurrentDictionary<(int x, int y, int z), ChestTileEntity>();
+        // Tier 8 #49 V1 — Dispenser tile entities. Same lifetime model
+        // as chests: created on demand (placement stamps facing into
+        // a fresh entity), removed when the block breaks. Persisted
+        // alongside chests in the v15+ save tail.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<(int x, int y, int z), DispenserTileEntity> _dispenserEntities
+            = new System.Collections.Concurrent.ConcurrentDictionary<(int x, int y, int z), DispenserTileEntity>();
         // Jukebox tile entities — same lifetime model as furnaces /
         // chests. Created when a disc is first inserted (a freshly
         // placed empty jukebox doesn't allocate one until interact);
@@ -832,6 +838,33 @@ namespace VStudioCraft.Game
         // player at 10 cells/sec and avoids spawning short-lived
         // entities that we'd then have to net-replicate.
         private readonly HashSet<(int x, int y, int z)> _pendingFallChecks = new HashSet<(int, int, int)>();
+        // Tier 8 #49 V1 — Pending dispenser ejections. The redstone
+        // tick runs in World context but the DroppedItem entity list
+        // lives on GameRenderer; the renderer drains this queue once
+        // per frame via DrainPendingDispenserDrops and spawns each as
+        // a regular DroppedItem.
+        public readonly struct PendingDispenserDrop
+        {
+            public readonly float X, Y, Z;
+            public readonly float Vx, Vy, Vz;
+            public readonly ItemStack Stack;
+            public PendingDispenserDrop(float x, float y, float z, float vx, float vy, float vz, ItemStack s)
+            {
+                X = x; Y = y; Z = z; Vx = vx; Vy = vy; Vz = vz; Stack = s;
+            }
+        }
+        private readonly List<PendingDispenserDrop> _pendingDispenserDrops = new List<PendingDispenserDrop>();
+        public void SpawnDispenserDrop(float x, float y, float z, float vx, float vy, float vz, ItemStack stack)
+        {
+            if (stack.IsEmpty) return;
+            _pendingDispenserDrops.Add(new PendingDispenserDrop(x, y, z, vx, vy, vz, stack));
+        }
+        public List<PendingDispenserDrop> DrainPendingDispenserDrops()
+        {
+            var drained = new List<PendingDispenserDrop>(_pendingDispenserDrops);
+            _pendingDispenserDrops.Clear();
+            return drained;
+        }
         private float _fallStepTimer;
         public const float FallStepInterval = 0.10f;  // candidate-scan cadence; the entity itself moves continuously
 
@@ -1722,9 +1755,41 @@ namespace VStudioCraft.Game
             return ce;
         }
 
+        // Tier 8 #49 V1 — Dispenser tile-entity accessors. Same
+        // shape as the chest helpers above: get-or-create installs
+        // a fresh entity, try-get returns null if absent, remove
+        // pulls one out of the dict atomically (used by the break
+        // path so contents can be spilled).
+        public DispenserTileEntity GetOrCreateDispenserEntity(int wx, int wy, int wz)
+        {
+            var key = (wx, wy, wz);
+            if (!_dispenserEntities.TryGetValue(key, out var de))
+            {
+                de = new DispenserTileEntity();
+                _dispenserEntities[key] = de;
+            }
+            return de;
+        }
+
+        public DispenserTileEntity TryGetDispenserEntity(int wx, int wy, int wz)
+        {
+            _dispenserEntities.TryGetValue((wx, wy, wz), out var de);
+            return de;
+        }
+
+        public DispenserTileEntity RemoveDispenserEntity(int wx, int wy, int wz)
+        {
+            _dispenserEntities.TryRemove((wx, wy, wz), out var de);
+            return de;
+        }
+
         // Iterate all (coord, entity) pairs — used by save/load.
         public IEnumerable<KeyValuePair<(int x, int y, int z), ChestTileEntity>> ChestEntities
             => _chestEntities;
+
+        // Tier 8 #49 V1 — Same iterator hook for dispensers.
+        public IEnumerable<KeyValuePair<(int x, int y, int z), DispenserTileEntity>> DispenserEntities
+            => _dispenserEntities;
 
         // ---- Jukebox tile entities ----
 

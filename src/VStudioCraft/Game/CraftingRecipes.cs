@@ -306,6 +306,21 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.CobblestoneStairs, 4)));
 
+            // Tier 8 #49 V1 — Dispenser. 7 cobblestone (U-shape ring),
+            // 1 bow in the centre, 1 redstone dust at the bottom-
+            // centre. Canonical Alpha 1.0.16 recipe. Output is 1
+            // dispenser. The bow is consumed (Alpha didn't return
+            // it), and the dust is the redstone-input that wires
+            // the dispenser into the power network.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Cobblestone,  BlockType.Cobblestone,  BlockType.Cobblestone },
+                    { BlockType.Cobblestone,  BlockType.Bow,          BlockType.Cobblestone },
+                    { BlockType.Cobblestone,  BlockType.RedstoneDust, BlockType.Cobblestone },
+                },
+                new ItemStack(BlockType.Dispenser, 1)));
+
             // Tier 8 #51 — Glowstone block from 4 dust in a 2×2.
             // Canonical Alpha 1.1.2_01 recipe; not actually craftable
             // in vanilla Alpha (glowstone dust drops were nether-only

@@ -87,6 +87,11 @@ namespace VStudioCraft.Game
                 case BlockType.IronDoorBlockBottom:
                 case BlockType.IronDoorBlockTop:
                 case BlockType.NoteBlock:
+                // Tier 8 #49 V1 — Dispenser is a redstone sink: when
+                // any adjacent cell becomes powered, the rising edge
+                // triggers a single-item ejection toward the
+                // dispenser's facing direction.
+                case BlockType.Dispenser:
                     return true;
                 default:
                     return false;
@@ -325,9 +330,54 @@ namespace VStudioCraft.Game
                     case BlockType.NoteBlock:
                         DriveNoteBlockSink(world, wx, wy, wz);
                         break;
+                    case BlockType.Dispenser:
+                        DriveDispenserSink(world, wx, wy, wz);
+                        break;
                 }
             }
         }
+
+        // Tier 8 #49 V1 — Dispenser activation. Rising-edge trigger:
+        // we track the last-seen powered state per-cell in
+        // _dispenserLastPowered, and only eject on the false → true
+        // transition. Without this, holding a lever ON would dispense
+        // an item every redstone tick (10 Hz) and drain the inventory
+        // in seconds. Canonical Alpha behaviour is one eject per
+        // signal pulse, matching what we get from rising-edge gating.
+        private static readonly System.Collections.Generic.Dictionary<(int x, int y, int z), bool> _dispenserLastPowered
+            = new System.Collections.Generic.Dictionary<(int x, int y, int z), bool>();
+
+        private static void DriveDispenserSink(World world, int wx, int wy, int wz)
+        {
+            bool nowPowered = AnyAdjacentPowered(wx, wy, wz);
+            var key = (wx, wy, wz);
+            _dispenserLastPowered.TryGetValue(key, out bool wasPowered);
+            _dispenserLastPowered[key] = nowPowered;
+            if (!nowPowered || wasPowered) return; // not a rising edge
+
+            var de = world.TryGetDispenserEntity(wx, wy, wz);
+            if (de == null) return;
+            var taken = de.TakeRandomOne(_dispenserRng);
+            if (taken.IsEmpty) return;
+
+            // Spawn the item one cell in front of the dispenser
+            // (toward its facing direction) so it pops out the muzzle
+            // rather than spawning inside the dispenser block. The
+            // velocity also points along the muzzle so it visibly
+            // shoots forward.
+            float fx = 0f, fz = 0f;
+            switch (de.Facing)
+            {
+                case BlockFacing.East:  fx = +1f; break;
+                case BlockFacing.West:  fx = -1f; break;
+                case BlockFacing.South: fz = +1f; break;
+                default: /*North*/      fz = -1f; break;
+            }
+            world.SpawnDispenserDrop(wx + 0.5f + fx * 0.6f, wy + 0.5f, wz + 0.5f + fz * 0.6f,
+                fx * 4f, 1f, fz * 4f, taken);
+        }
+
+        private static readonly System.Random _dispenserRng = new System.Random(0xD15);
 
         private static bool AnyAdjacentPowered(int wx, int wy, int wz)
         {

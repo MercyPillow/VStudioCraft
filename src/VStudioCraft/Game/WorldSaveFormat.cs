@@ -107,7 +107,7 @@ namespace VStudioCraft.Game
         //       it lives in the chunk's metadata byte alongside the
         //       block id, so it persists through the existing v2+
         //       chunk-byte block.
-        private const byte CurrentVersion = 14;
+        private const byte CurrentVersion = 15;
 
         // Phase 8 — one entry per known player in the v13 multiplayer
         // player table. Captured at save time from `ServerHub` (or the
@@ -369,6 +369,26 @@ namespace VStudioCraft.Game
                         // ReadString sees a 0-length prefix.
                         w.Write(i < lines.Length && lines[i] != null ? lines[i] : string.Empty);
                     }
+                }
+
+                // v15: Tier 8 #49 — Dispenser tile entities. Trailing
+                // block past v14 signs; same shape as the v7 chest
+                // section but with 9 slots instead of 27. Pre-v15
+                // saves had no dispensers in the BlockType enum so
+                // legacy worlds load with an empty dispenser dict —
+                // matches the legacy-empty pattern every appended
+                // tile-entity section uses.
+                int deCount = 0;
+                foreach (var _ in world.DispenserEntities) deCount++;
+                w.Write(deCount);
+                foreach (var kv in world.DispenserEntities)
+                {
+                    w.Write(kv.Key.x);
+                    w.Write(kv.Key.y);
+                    w.Write(kv.Key.z);
+                    w.Write((byte)kv.Value.Facing);
+                    for (int i = 0; i < DispenserTileEntity.SlotCount; i++)
+                        WriteStack(w, kv.Value.Slots[i]);
                 }
             }
             if (File.Exists(path)) File.Delete(path);
@@ -846,6 +866,29 @@ namespace VStudioCraft.Game
                         {
                             se.Lines[line] = r.ReadString();
                         }
+                    }
+                }
+
+                // v15: Tier 8 #49 — Dispenser tile entities. Pre-v15
+                // saves had no dispensers in the BlockType enum so
+                // legacy worlds load with an empty dispenser dict.
+                // Same shape as the v7 chest section (coord + facing
+                // + slots) just with the smaller 9-slot count.
+                if (version >= 15)
+                {
+                    int deCount = r.ReadInt32();
+                    if (deCount < 0 || deCount > 1_000_000)
+                        throw new InvalidDataException($"v15 dispenserCount {deCount} out of expected range");
+                    for (int i = 0; i < deCount; i++)
+                    {
+                        int wx = r.ReadInt32();
+                        int wy = r.ReadInt32();
+                        int wz = r.ReadInt32();
+                        byte facing = r.ReadByte();
+                        var de = world.GetOrCreateDispenserEntity(wx, wy, wz);
+                        de.Facing = (BlockFacing)facing;
+                        for (int s = 0; s < DispenserTileEntity.SlotCount; s++)
+                            de.Slots[s] = ReadStack(r);
                     }
                 }
 

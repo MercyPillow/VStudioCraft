@@ -3922,6 +3922,7 @@ void main()
                 FurnaceTileEntity spilled = null;
                 ChestTileEntity spilledChest = null;
                 JukeboxTileEntity spilledJukebox = null;
+                DispenserTileEntity spilledDispenser = null;
                 if (brokenType == BlockType.Furnace || brokenType == BlockType.LitFurnace)
                 {
                     spilled = _world.RemoveFurnaceEntity(bx, by, bz);
@@ -3942,6 +3943,16 @@ void main()
                     {
                         _isChestOpen = false;
                     }
+                }
+                else if (brokenType == BlockType.Dispenser)
+                {
+                    // Tier 8 #49 V1 — Dispenser break in survival:
+                    // pop the entity so any items in its 9 slots
+                    // spill as drops alongside the dispenser block
+                    // itself. No UI to close (V2 ships the inventory
+                    // panel; for now the dispenser only sees inputs
+                    // from creative item-spawn or future hopper).
+                    spilledDispenser = _world.RemoveDispenserEntity(bx, by, bz);
                 }
                 else if (brokenType == BlockType.Jukebox)
                 {
@@ -4002,6 +4013,13 @@ void main()
                 if (spilledChest != null)
                 {
                     foreach (var stack in spilledChest.SpillContents())
+                    {
+                        SpawnBreakDropStack(bx, by, bz, stack);
+                    }
+                }
+                if (spilledDispenser != null)
+                {
+                    foreach (var stack in spilledDispenser.SpillContents())
                     {
                         SpawnBreakDropStack(bx, by, bz, stack);
                     }
@@ -5226,6 +5244,17 @@ void main()
                     // correct facing, no flicker on the first open.
                     var ce = _world.GetOrCreateChestEntity(px, py, pz);
                     ce.Facing = FacingTowardPlayer(Camera.Forward);
+                }
+                else if (t == BlockType.Dispenser)
+                {
+                    // Tier 8 #49 V1 — Dispenser muzzle points TOWARD
+                    // the placer (so RMB-eject pops items at the player
+                    // who armed it). Allocating the entity on place
+                    // means the mesher's GetTileIndexForOriented
+                    // dispatch sees the right facing on the first mesh
+                    // build with no first-frame flicker.
+                    var de = _world.GetOrCreateDispenserEntity(px, py, pz);
+                    de.Facing = FacingTowardPlayer(Camera.Forward);
                 }
                 SfxBank.PlayPlace(t);
             }
@@ -7578,6 +7607,24 @@ void main()
                 int pcy = (int)Math.Floor(Player.Position.Y);
                 int pcz = (int)Math.Floor(Player.Position.Z);
                 _world.TickRedstone(dt, pcx, pcy, pcz);
+            }
+
+            // Tier 8 #49 V1 — Drain dispenser-eject queue. Each
+            // pending entry becomes a real DroppedItem with the
+            // launch velocity set in the redstone sink. Empty stacks
+            // are filtered upstream so we just blindly add them.
+            var pendingDispenser = _world.DrainPendingDispenserDrops();
+            for (int i = 0; i < pendingDispenser.Count; i++)
+            {
+                var p = pendingDispenser[i];
+                _drops.Add(new DroppedItem
+                {
+                    Position = new Vector3(p.X, p.Y, p.Z),
+                    Velocity = new Vector3(p.Vx, p.Vy, p.Vz),
+                    Stack = p.Stack,
+                    AgeSec = 0f,
+                    PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+                });
             }
         }
 

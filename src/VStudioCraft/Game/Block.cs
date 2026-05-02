@@ -663,6 +663,26 @@ namespace VStudioCraft.Game
         // smoothly without the player having to jump on each step.
         WoodStairs         = 169, // Alpha 53
         CobblestoneStairs  = 170, // Alpha 67
+
+        // Tier 8 #49 V1 — Dispenser. 9-slot tile entity facing
+        // outward; redstone signal pops one item from a random
+        // non-empty slot and ejects it as a DroppedItem in the
+        // facing direction. Reuses the chest tile-entity dictionary
+        // pattern (per-position persistent state on World) plus
+        // furnace-style facing on the entity (mesher reads facing
+        // for the front-face tile via GetTileIndexForOriented).
+        //
+        // Texture: front face = canonical Alpha terrain.png (14, 2)
+        // (the "loaded crossbow" silhouette); 3 lateral sides
+        // reuse the furnace side panel; top + bottom reuse the
+        // furnace top tile (stone cap with iron vent).
+        //
+        // V1 ships block + facing + crafting + redstone-driven
+        // ejection + drop-on-break (with inventory spill). V2
+        // polish: a 3×3 inventory UI so the player can manually
+        // load items rather than relying on creative + future
+        // hopper-equivalent tiers.
+        Dispenser          = 171, // Alpha 23
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -2439,6 +2459,17 @@ namespace VStudioCraft.Game
                     return BlockTextures.TilePlanks;
                 case BlockType.CobblestoneStairs:
                     return BlockTextures.TileCobblestone;
+                // Tier 8 #49 V1 — Un-oriented Dispenser lookup. Used
+                // by inventory icons / drop sprites where facing
+                // isn't meaningful: top + bottom = furnace top
+                // (stone cap), all four sides default to the
+                // dispenser front so the held / dropped item reads
+                // distinctively (the in-world block uses the
+                // oriented lookup so only ONE side shows the front
+                // tile, matching canonical Alpha).
+                case BlockType.Dispenser:
+                    if (faceKind == 0 || faceKind == 1) return BlockTextures.TileFurnaceTop;
+                    return BlockTextures.TileDispenserFront;
                 // Tier 8 #51 — Glowstone Dust item icon. Procedural;
                 // a small pile of bright yellow grain, similar in
                 // shape to bone meal but in glowstone-yellow tones.
@@ -2736,6 +2767,18 @@ namespace VStudioCraft.Game
                 return IsFacingFront(axis, dir, facing)
                     ? BlockTextures.TileJackOLanternFront
                     : BlockTextures.TilePumpkinSide;
+            }
+            // Tier 8 #49 V1 — Dispenser. Top + bottom = furnace top
+            // (stone cap with iron vent); 3 of the 4 lateral faces
+            // reuse the furnace side panel; the face matching
+            // `facing` shows the dispenser-front tile (canonical
+            // Alpha "loaded crossbow" silhouette).
+            if (t == BlockType.Dispenser)
+            {
+                if (axis == 1) return BlockTextures.TileFurnaceTop;
+                return IsFacingFront(axis, dir, facing)
+                    ? BlockTextures.TileDispenserFront
+                    : BlockTextures.TileFurnaceSide;
             }
             return GetTileIndex(t, ChunkMesherFaceKind(axis, dir));
         }

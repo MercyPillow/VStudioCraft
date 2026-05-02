@@ -2083,6 +2083,21 @@ namespace VStudioCraft.Game
                             BlockFacing facing = (BlockFacing)(jolMeta & 0x03);
                             layer = BlockData.GetTileIndexForOriented((BlockType)a, axis, dir, facing);
                         }
+                        else if (a == (byte)BlockType.Dispenser)
+                        {
+                            // Tier 8 #49 V1 — Dispenser facing lives
+                            // on the tile entity (same as chest /
+                            // furnace) so a placed dispenser without
+                            // an entity yet (legacy save) defaults
+                            // to North-facing.
+                            int wx = cx + baseX;
+                            int wy = cy;
+                            int wz = cz + baseZ;
+                            BlockFacing facing = BlockFacing.North;
+                            var de = world.TryGetDispenserEntity(wx, wy, wz);
+                            if (de != null) facing = de.Facing;
+                            layer = BlockData.GetTileIndexForOriented((BlockType)a, axis, dir, facing);
+                        }
                         else
                         {
                             layer = BlockData.GetTileIndex((BlockType)a, faceKind);

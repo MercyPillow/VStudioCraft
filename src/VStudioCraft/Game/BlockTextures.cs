@@ -271,7 +271,10 @@ namespace VStudioCraft.Game
         // Tier 8 #51 — Glowstone block tile + dust item icon.
         public const int FirstTailGlowstoneLayer  = FirstTailJackLayer + TailJackLayerCount;            // 175
         public const int TailGlowstoneLayerCount  = 2;
-        public const int LayerCount = FirstTailGlowstoneLayer + TailGlowstoneLayerCount;                // 177
+        // Tier 8 #49 V1 — Dispenser front face.
+        public const int FirstTailDispenserLayer  = FirstTailGlowstoneLayer + TailGlowstoneLayerCount;  // 177
+        public const int TailDispenserLayerCount  = 1;
+        public const int LayerCount = FirstTailDispenserLayer + TailDispenserLayerCount;                // 178
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -492,6 +495,12 @@ namespace VStudioCraft.Game
         // Tier 8 #51 — Glowstone Dust item icon. Procedural; small
         // pile of bright yellow grain similar in shape to bone meal.
         public const int TileGlowstoneDust       = 176;
+        // Tier 8 #49 V1 — Dispenser front face. Sliced from
+        // terrain.png at canonical Alpha (14, 2) — the furnace-side
+        // stone panel with a circular crossbow-port silhouette in
+        // the centre. Procedural fallback paints the same shape
+        // over the furnace-side palette.
+        public const int TileDispenserFront      = 177;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -810,6 +819,9 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileGlowstone,     GenerateGlowstone);
             UploadLayer(layerPixels, TileGlowstoneDust, GenerateGlowstoneDust);
 
+            // Tier 8 #49 V1 — Dispenser front (procedural).
+            UploadLayer(layerPixels, TileDispenserFront, GenerateDispenserFront);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -960,7 +972,9 @@ namespace VStudioCraft.Game
                 // Tier 8 #51 — Jack-o-lantern lit face from terrain.png.
                 || layer == TileJackOLanternFront
                 // Tier 8 #51 — Glowstone block tile from terrain.png.
-                || layer == TileGlowstone;
+                || layer == TileGlowstone
+                // Tier 8 #49 V1 — Dispenser front from terrain.png.
+                || layer == TileDispenserFront;
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3789,6 +3803,9 @@ namespace VStudioCraft.Game
             // Tier 8 #51 — Glowstone Dust item icon. Procedural-only
             // (no PNG-source slicer wired in either atlas path).
             /* TileGlowstoneDust       */ (-1, -1),
+            // Tier 8 #49 V1 — Dispenser front from terrain.png at
+            // canonical Alpha (14, 2).
+            /* TileDispenserFront      */ (14, 2),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4044,6 +4061,10 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileGlowstone,     GenerateGlowstone);
             UploadLayer(layerPixels, TileGlowstoneDust, GenerateGlowstoneDust);
 
+            // Tier 8 #49 V1 — Dispenser front. Procedural fallback;
+            // overlaid from terrain.png (14, 2) by the biome loop below.
+            UploadLayer(layerPixels, TileDispenserFront, GenerateDispenserFront);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4066,6 +4087,8 @@ namespace VStudioCraft.Game
                 TileJackOLanternFront,
                 // Tier 8 #51 — Glowstone block tile.
                 TileGlowstone,
+                // Tier 8 #49 V1 — Dispenser front.
+                TileDispenserFront,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
@@ -6837,6 +6860,51 @@ namespace VStudioCraft.Game
             int[] gy = { 7, 7, 9, 9, 10, 10, 11, 11, 11 };
             for (int i = 0; i < gx.Length; i++)
                 SetPixel(pixels, gx[i], gy[i], hi.r, hi.g, hi.b);
+        }
+
+        // Tier 8 #49 V1 — Dispenser front. Furnace-side stone panel
+        // with a dark circular crossbow port silhouette in the
+        // centre. Procedural fallback; the alpha-textures atlas
+        // overlays from terrain.png (14, 2) on top.
+        private static void GenerateDispenserFront(byte[] pixels)
+        {
+            (byte r, byte g, byte b) panel = (115, 115, 115); // furnace stone grey
+            (byte r, byte g, byte b) bandHi = (155, 155, 155);
+            (byte r, byte g, byte b) bandLo = ( 75,  75,  75);
+            (byte r, byte g, byte b) port  = ( 35,  30,  30); // dark muzzle
+            (byte r, byte g, byte b) portHi = ( 65,  60,  60);
+
+            // Solid stone-grey background.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, panel.r, panel.g, panel.b);
+
+            // Iron-band trim along the top + bottom edges (matches
+            // the furnace-side aesthetic so the dispenser reads as
+            // part of the same family).
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 1,  bandHi.r, bandHi.g, bandHi.b);
+                SetPixel(pixels, x, 14, bandLo.r, bandLo.g, bandLo.b);
+                SetPixel(pixels, x, 0,  bandLo.r, bandLo.g, bandLo.b);
+                SetPixel(pixels, x, 15, bandLo.r, bandLo.g, bandLo.b);
+            }
+
+            // Circular crossbow port in the centre — 6×4 dark oval
+            // at rows 6..9 / cols 5..10, with two highlight pips
+            // at the upper-left of the port to suggest interior
+            // depth.
+            for (int y = 6; y <= 9; y++)
+            for (int x = 5; x <= 10; x++)
+                SetPixel(pixels, x, y, port.r, port.g, port.b);
+            // Round the corners of the port silhouette.
+            SetPixel(pixels, 5,  6, panel.r, panel.g, panel.b);
+            SetPixel(pixels, 10, 6, panel.r, panel.g, panel.b);
+            SetPixel(pixels, 5,  9, panel.r, panel.g, panel.b);
+            SetPixel(pixels, 10, 9, panel.r, panel.g, panel.b);
+            // Interior highlight (upper-left of port).
+            SetPixel(pixels, 6, 7, portHi.r, portHi.g, portHi.b);
+            SetPixel(pixels, 7, 7, portHi.r, portHi.g, portHi.b);
         }
 
         // Helmet silhouette — a hooded square spanning the top half of
