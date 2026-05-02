@@ -1229,15 +1229,30 @@ namespace VStudioCraft.Game
                     // a low extinguish chance; fire on non-flammable
                     // (or air below) gets a higher one. Without rain /
                     // age tracking we just stochastically sunset.
+                    //
+                    // Tier 8 #51 V2 — Fire on netherrack NEVER burns
+                    // out (canonical Alpha "eternal flame" behaviour).
+                    // Skip the die-out roll entirely when the
+                    // supporting cell is netherrack — the spread roll
+                    // below still runs, so eternal fire still spreads
+                    // to flammable neighbours, but the source flame
+                    // itself persists indefinitely.
                     var below = ly > 0
                         ? (BlockType)chunk.RawBlocks[Chunk.Index(lx, ly - 1, lz)]
                         : BlockType.Air;
-                    bool standsOnFlammable = IsFlammable(below);
-                    int dieDenom = standsOnFlammable ? 40 : 8;
-                    if (_fireRng.Next(dieDenom) == 0)
+                    if (below == BlockType.Netherrack)
                     {
-                        SetBlock(wx, wy, wz, BlockType.Air);
-                        continue;
+                        // No die-out — fall through to spread roll.
+                    }
+                    else
+                    {
+                        bool standsOnFlammable = IsFlammable(below);
+                        int dieDenom = standsOnFlammable ? 40 : 8;
+                        if (_fireRng.Next(dieDenom) == 0)
+                        {
+                            SetBlock(wx, wy, wz, BlockType.Air);
+                            continue;
+                        }
                     }
 
                     // Spread roll. Pick one of the 6 axis-aligned

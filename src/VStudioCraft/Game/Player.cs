@@ -48,6 +48,13 @@ namespace VStudioCraft.Game
         // movement to ~40% on soul sand, the signature gameplay
         // beat that pairs with the visual sub-cube subsidence.
         public const float SoulSandMoveScale = 0.4f;
+        // Tier 8 #51 V2 — Fall-distance scale when landing on Soul
+        // Sand. Halves the recorded fall distance, which feeds into
+        // the existing damage formula — a 12-block fall reads as 6,
+        // dropping the damage from ~9 hearts to ~3. Same gate as
+        // the slowdown (cell directly under the foot AABB), shared
+        // helper IsStandingOnSoulSand.
+        public const float SoulSandFallDamageScale = 0.5f;
 
         // Tier 8 #46 — Ladder climb. Gravity is suppressed while the
         // player is on a ladder; vertical motion comes straight from
@@ -381,8 +388,19 @@ namespace VStudioCraft.Game
                 // water from above still cancels: WasInWater snapshots BEFORE
                 // we moved this tick, and falls fast enough to clear the
                 // surface in a single sub-step would otherwise still hurt.
+                //
+                // Tier 8 #51 V2 — Soul Sand softens fall damage. Half the
+                // recorded distance when the supporting cell is Soul Sand
+                // (canonical Alpha — landing on soul sand still hurts but
+                // a 12-block fall reads as 6, dropping the damage from 9
+                // hearts to 3). Same rule as water but a partial cushion
+                // rather than a full cancel.
                 float dist = _fallPeakY - Position.Y;
-                if (dist > 0f && !IsInWater(world)) LastFallDistance = dist;
+                if (dist > 0f && !IsInWater(world))
+                {
+                    if (IsStandingOnSoulSand(world)) dist *= SoulSandFallDamageScale;
+                    LastFallDistance = dist;
+                }
             }
             _fallPeakY = Position.Y;
         }
