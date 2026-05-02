@@ -537,6 +537,21 @@ namespace VStudioCraft.Game
         SignPost           = 155, // Alpha 63
         WallSign           = 156, // Alpha 68
         SignItem           = 157, // Alpha 323
+
+        // Tier 8 #50 — Bone + Bone Meal. Skeleton drop + crafted
+        // dye. Bone is the canonical Alpha 1.0.14 skeleton drop
+        // (1..2 per kill); 1 Bone crafts shapelessly into 3 Bone
+        // Meal. Right-clicking a wheat block / sapling with Bone
+        // Meal advances its growth stage — wheat ticks one stage
+        // closer to ripe; saplings have a 50% chance to grow into
+        // a tree immediately.
+        //
+        // Both are pure inventory items (no in-world block form),
+        // so they fold into the existing IsItem range past
+        // SignItem with no per-block IsCube / IsSolid / IsOpaque
+        // branches needed.
+        Bone               = 158, // Alpha 352
+        BoneMeal           = 159, // Alpha 351 (variant 15)
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -676,6 +691,14 @@ namespace VStudioCraft.Game
         // SignItem alias is the only sign-shaped name code outside
         // the placement path needs to know.
         public const BlockType SignItem            = BlockType.SignItem;
+        // Tier 8 #50 — Bone + Bone Meal. Both are inventory-only
+        // items (no in-world block form). Bone drops from skeletons
+        // 1..2 per kill; 1 Bone crafts shapelessly to 3 Bone Meal;
+        // Bone Meal right-click on a wheat block advances its
+        // growth stage, on a sapling rolls a 50% chance to grow it
+        // into a tree on the spot.
+        public const BlockType Bone                = BlockType.Bone;
+        public const BlockType BoneMeal            = BlockType.BoneMeal;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -786,6 +809,13 @@ namespace VStudioCraft.Game
                 // aren't items so they never reach AlphaId; only the
                 // SignItem alias does.
                 case BlockType.SignItem:            return 323;
+                // Tier 8 #50 — Bone (canonical Alpha 352) and Bone
+                // Meal (canonical Alpha 351:15 — same id 351 with
+                // metadata 15 in real Alpha, but our codebase
+                // doesn't represent dye-meta variants, so Bone Meal
+                // gets its own id and we expose 351 here).
+                case BlockType.Bone:                return 352;
+                case BlockType.BoneMeal:            return 351;
                 default:                       return -1;
             }
         }
@@ -887,6 +917,10 @@ namespace VStudioCraft.Game
                 // item form, so the inventory shows the same name
                 // regardless of which face the player ends up using).
                 case BlockType.SignItem:            return "Sign";
+                // Tier 8 #50 — Bone Meal needs the space inserted
+                // explicitly; Bone reads fine as a single word
+                // and falls through to the ToString default.
+                case BlockType.BoneMeal:            return "Bone Meal";
                 default:                       return t.ToString();
             }
         }
@@ -1219,7 +1253,12 @@ namespace VStudioCraft.Game
             // mesher / collision branches still catch the two block
             // ids correctly. The two block ids never appear in the
             // player's inventory, only the SignItem alias does.
-            || t == BlockType.SignItem;
+            || t == BlockType.SignItem
+            // Tier 8 #50 — Bone + Bone Meal. Pure items appended
+            // past SignItem; no in-world block form so they fold
+            // straight into the IsItem slice.
+            || t == BlockType.Bone
+            || t == BlockType.BoneMeal;
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -2073,6 +2112,17 @@ namespace VStudioCraft.Game
                 case BlockType.WallSign:
                 case BlockType.SignItem:
                     return BlockTextures.TilePlanks;
+                // Tier 8 #50 — Bone + Bone Meal item icons. Both
+                // procedural; no terrain.png / alpha_tools.png slot
+                // wired up yet (their canonical Alpha tile coords
+                // are on alpha_tools.png at items col 9..10 / row 1
+                // but those slots overlap existing food sprites in
+                // this build's bundled atlas — we ship procedural
+                // sprites instead).
+                case BlockType.Bone:
+                    return BlockTextures.TileBone;
+                case BlockType.BoneMeal:
+                    return BlockTextures.TileBoneMeal;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
                     // Bottom shares the side tile (the bottom of a

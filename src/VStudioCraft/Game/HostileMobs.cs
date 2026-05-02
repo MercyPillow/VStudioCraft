@@ -89,9 +89,8 @@ namespace VStudioCraft.Game
     // collectibles per the roadmap entry.
     //
     // Drop quantities pulled from Alpha 1.1.2_01: 0..2 arrows, 0..2
-    // bones (we don't have Bone yet — added with later mobs); we ship
-    // Bow as a 1-in-N drop to match Alpha rarity. Bone is dropped as
-    // 1..2 arrows for V1 since arrows are the closer-themed alternative.
+    // bones (Tier 8 #50 ships Bone — see SpawnDeathDrops below); we
+    // ship Bow as a 1-in-N drop to match Alpha rarity.
     internal sealed class Skeleton : HostileMob
     {
         public const float HitboxHalfWidth = 0.3f;
@@ -127,6 +126,20 @@ namespace VStudioCraft.Game
                 drops.SpawnDrop(
                     Position + new Vector3(0, 0.5f, 0),
                     BlockType.Bow, 1,
+                    RandomScatterVelocity());
+            }
+
+            // Tier 8 #50 — 0..2 bones per kill. Same drop range as
+            // arrows in canonical Alpha 1.0.14+; the player can
+            // craft each bone shapelessly into 3 bone-meal at the
+            // crafting table, or use bones directly as a tameable-
+            // wolf treat once wolves ship.
+            int bones = _rng.Next(0, 3);
+            for (int i = 0; i < bones; i++)
+            {
+                drops.SpawnDrop(
+                    Position + new Vector3(0, 0.5f, 0),
+                    BlockType.Bone, 1,
                     RandomScatterVelocity());
             }
 

@@ -4608,6 +4608,46 @@ void main()
                 // crafting table still opens the crafting screen,
                 // which matches the Alpha behaviour where the tool
                 // didn't suppress block interactions.
+                // Tier 8 #50 — Bone Meal. RMB on a wheat block
+                // advances its growth stage by one (mirrors the
+                // canonical Alpha 1.0.14+ accelerator). Stage 7 is
+                // already-ripe wheat — clicking on it is a no-op so
+                // the player doesn't waste bone meal on something
+                // already grown. Sapling support is parked behind
+                // a sapling-growth-tick subsystem that doesn't exist
+                // yet (saplings currently sit forever); when that
+                // ships, this same branch grows-or-rolls.
+                else if (held == BlockType.BoneMeal)
+                {
+                    var bmHitT = _world.GetBlock(hit.X, hit.Y, hit.Z);
+                    if (bmHitT == BlockType.Wheat)
+                    {
+                        int bcx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
+                        int bcz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
+                        var bch = _world.GetChunk(bcx, bcz);
+                        if (bch != null)
+                        {
+                            int blx = hit.X - bcx * Chunk.SizeX;
+                            int blz = hit.Z - bcz * Chunk.SizeZ;
+                            byte bmeta = bch.GetMeta(blx, hit.Y, blz);
+                            int stage = bmeta & 0x0F;
+                            if (stage < 7)
+                            {
+                                stage += 1;
+                                bmeta = (byte)((bmeta & 0xF0) | (stage & 0x0F));
+                                bch.SetMeta(blx, hit.Y, blz, bmeta);
+                                _world.DirtyChunks.Add((bcx, bcz));
+                                if (GameMode == GameMode.Survival)
+                                    Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                                SfxBank.PlayClick();
+                                return true;
+                            }
+                        }
+                    }
+                    // Other plant types (sapling, sugar cane) fall
+                    // through to standard RMB handling — no growth
+                    // boost yet.
+                }
                 else if (held == BlockType.FlintAndSteel)
                 {
                     // Tier 8 #43 — TNT priming. RMB Flint+Steel on a

@@ -95,6 +95,15 @@ namespace VStudioCraft.Game
             list.Add(new ShapelessRecipe(
                 new[] { BlockType.Paper, BlockType.Paper, BlockType.Paper },
                 new ItemStack(BlockType.Book, 1)));
+            // Tier 8 #50 — 1 Bone → 3 Bone Meal. Shapeless (the
+            // player drops a single bone anywhere in the grid).
+            // Canonical Alpha: bone meal stacks to 64, so the
+            // single-bone craft gives 3 — three crafts net 9 bone
+            // meal, enough to fully grow a sapling and have some
+            // left for wheat.
+            list.Add(new ShapelessRecipe(
+                new[] { BlockType.Bone },
+                new ItemStack(BlockType.BoneMeal, 3)));
             return list;
         }
 

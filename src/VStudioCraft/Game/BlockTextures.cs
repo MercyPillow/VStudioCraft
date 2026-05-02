@@ -255,7 +255,11 @@ namespace VStudioCraft.Game
         // button silhouette instead of a plain stone cube.
         public const int FirstTailButtonItemLayer = FirstTailWireLayer + TailWireLayerCount;            // 170
         public const int TailButtonItemLayerCount = 1;
-        public const int LayerCount = FirstTailButtonItemLayer + TailButtonItemLayerCount;              // 171
+        // Tier 8 #50 — Bone + Bone Meal item-icon layers. Procedural
+        // (no PNG-source slicer wired in either atlas path).
+        public const int FirstTailBoneLayer       = FirstTailButtonItemLayer + TailButtonItemLayerCount;// 171
+        public const int TailBoneLayerCount       = 2;
+        public const int LayerCount = FirstTailBoneLayer + TailBoneLayerCount;                          // 173
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -450,6 +454,13 @@ namespace VStudioCraft.Game
         // its TileStone face while the held / inventory icon shows
         // the canonical Alpha button sprite.
         public const int TileStoneButtonItem     = 170;
+        // Tier 8 #50 — Bone + Bone Meal inventory icons. Procedural
+        // (the alpha_tools.png slots that hold these in canon Alpha
+        // overlap food sprites in this build's bundled atlas, so we
+        // synthesise instead — the icons read clearly enough at
+        // hotbar size).
+        public const int TileBone                = 171;
+        public const int TileBoneMeal            = 172;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -753,6 +764,10 @@ namespace VStudioCraft.Game
 
             // Stone Button inventory icon (procedural pill fallback).
             UploadLayer(layerPixels, TileStoneButtonItem, GenerateStoneButtonItem);
+
+            // Tier 8 #50 — Bone + Bone Meal item icons (procedural).
+            UploadLayer(layerPixels, TileBone,     GenerateBoneItem);
+            UploadLayer(layerPixels, TileBoneMeal, GenerateBoneMealItem);
 
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
@@ -3710,6 +3725,11 @@ namespace VStudioCraft.Game
             // from that whitelist so UploadTailItemsFromAlphaTools
             // picks it up).
             /* TileStoneButtonItem     */ (6, 4),
+            // Tier 8 #50 — Bone + Bone Meal item icons.
+            // Procedural-only; sentinel coords skip both the
+            // terrain.png and alpha_tools.png slicer paths.
+            /* TileBone                */ (-1, -1),
+            /* TileBoneMeal            */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3946,6 +3966,10 @@ namespace VStudioCraft.Game
             // Stone Button inventory icon. Procedural fallback;
             // overlaid below from terrain.png (6, 4) when present.
             UploadLayer(layerPixels, TileStoneButtonItem, GenerateStoneButtonItem);
+
+            // Tier 8 #50 — Bone + Bone Meal item icons (procedural).
+            UploadLayer(layerPixels, TileBone,     GenerateBoneItem);
+            UploadLayer(layerPixels, TileBoneMeal, GenerateBoneMealItem);
 
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
@@ -6468,6 +6492,90 @@ namespace VStudioCraft.Game
             }
             Clear(x0, y0); Clear(x1, y0);
             Clear(x0, y1); Clear(x1, y1);
+        }
+
+        // Tier 8 #50 — Bone item icon. Diagonal long-bone silhouette
+        // running from upper-left to lower-right with two knobby
+        // joint heads on either end. Off-white body with a soft
+        // grey shadow on the lower-right edge so the bone reads as
+        // a 3D cylinder rather than a flat strip. Fully procedural —
+        // no terrain.png / alpha_tools.png slot wired in.
+        private static void GenerateBoneItem(byte[] pixels)
+        {
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            (byte r, byte g, byte b) body = (240, 235, 215); // bone ivory
+            (byte r, byte g, byte b) hi   = (255, 252, 240); // chalk highlight
+            (byte r, byte g, byte b) lo   = (175, 168, 145); // shadow
+
+            // Diagonal shaft 8 cells long — every step moves both
+            // x and y by 1, so the bone leans 45° (visually reads
+            // like a bone resting on a table).
+            int[] sx = { 4, 5, 6, 7, 8, 9, 10, 11 };
+            int[] sy = { 4, 5, 6, 7, 8, 9, 10, 11 };
+            for (int i = 0; i < sx.Length; i++)
+            {
+                SetPixel(pixels, sx[i],     sy[i],     body.r, body.g, body.b);
+                SetPixel(pixels, sx[i] - 1, sy[i],     body.r, body.g, body.b);
+                SetPixel(pixels, sx[i],     sy[i] - 1, hi.r,   hi.g,   hi.b);
+                SetPixel(pixels, sx[i],     sy[i] + 1, lo.r,   lo.g,   lo.b);
+            }
+            // Knob at the upper-left end (4 pixel cluster at (3..4, 3..4)).
+            for (int dy = 0; dy <= 1; dy++)
+            for (int dx = 0; dx <= 1; dx++)
+                SetPixel(pixels, 3 + dx, 3 + dy, body.r, body.g, body.b);
+            SetPixel(pixels, 3, 3, hi.r, hi.g, hi.b);
+            // Knob at the lower-right end (4 pixel cluster at (11..12, 11..12)).
+            for (int dy = 0; dy <= 1; dy++)
+            for (int dx = 0; dx <= 1; dx++)
+                SetPixel(pixels, 11 + dx, 11 + dy, body.r, body.g, body.b);
+            SetPixel(pixels, 12, 12, lo.r, lo.g, lo.b);
+        }
+
+        // Tier 8 #50 — Bone Meal item icon. Loose pile of white
+        // powder with a flat base and a rounded top. Same off-white
+        // body palette as the bone but textured with stippled bright
+        // pixels so it reads as granular rather than solid.
+        private static void GenerateBoneMealItem(byte[] pixels)
+        {
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            (byte r, byte g, byte b) body  = (245, 240, 222);
+            (byte r, byte g, byte b) hi    = (255, 253, 245);
+            (byte r, byte g, byte b) lo    = (180, 172, 150);
+
+            // Pile silhouette — wider at the base, tapered toward
+            // the top. Centred at x=8 with rows growing from 5 wide
+            // (top) to 11 wide (base).
+            int[] rowHalfWidths = { 1, 2, 3, 4, 5, 5 };  // y=6..11 widths halved
+            int yTop = 6;
+            for (int yi = 0; yi < rowHalfWidths.Length; yi++)
+            {
+                int y  = yTop + yi;
+                int hw = rowHalfWidths[yi];
+                for (int dx = -hw; dx <= hw; dx++)
+                    SetPixel(pixels, 8 + dx, y, body.r, body.g, body.b);
+                // Highlight pixel near the centre-top of each row.
+                SetPixel(pixels, 8 - 1, y, hi.r, hi.g, hi.b);
+                // Shadow pixel along the right slope.
+                SetPixel(pixels, 8 + hw, y, lo.r, lo.g, lo.b);
+            }
+            // Stippled grain — random bright dots scattered through
+            // the pile so it reads granular instead of solid.
+            int[] gx = { 6, 9, 7, 10, 8, 6, 11, 7 };
+            int[] gy = { 7, 8, 9, 9, 10, 10, 11, 11 };
+            for (int i = 0; i < gx.Length; i++)
+                SetPixel(pixels, gx[i], gy[i], hi.r, hi.g, hi.b);
         }
 
         // Helmet silhouette — a hooded square spanning the top half of
