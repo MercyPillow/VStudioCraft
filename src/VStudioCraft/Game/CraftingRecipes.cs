@@ -222,6 +222,21 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Stick, 4)));
 
+            // Tier 8 #46 — Ladder. 7 sticks in an H pattern (rails on
+            // cols 0 + 2, rungs on col 1 rows 0 + 1 + 2 — actually
+            // canonical Alpha is "S.S / SSS / S.S", 7 sticks total) →
+            // 3 ladders. Stick is the only ingredient so the recipe
+            // bypasses the planks-vs-other-wood debate that comes with
+            // multi-wood-type variants in later versions.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Stick, BlockType.Air,   BlockType.Stick },
+                    { BlockType.Stick, BlockType.Stick, BlockType.Stick },
+                    { BlockType.Stick, BlockType.Air,   BlockType.Stick },
+                },
+                new ItemStack(BlockType.Ladder, 3)));
+
             // Crafting Table: 2×2 planks → 1 crafting table.
             list.Add(new ShapedRecipe(
                 new BlockType[,]

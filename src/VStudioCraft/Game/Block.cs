@@ -552,6 +552,18 @@ namespace VStudioCraft.Game
         // branches needed.
         Bone               = 158, // Alpha 352
         BoneMeal           = 159, // Alpha 351 (variant 15)
+
+        // Tier 8 #46 — Ladder. Wall-mounted climbing block placed
+        // on the side face of a solid block. Per-cell metadata
+        // low-2-bits stores the BlockFacing of the wall the ladder
+        // is attached to (0=North, 1=East, 2=South, 3=West) — same
+        // packing convention every other facing-aware block uses.
+        // Player physics overrides gravity when the player AABB
+        // overlaps a ladder cell: hold Space → climb up, hold
+        // Sneak → climb down, neither → slow descent. Drops as a
+        // Ladder block on break and crafts from 7 sticks in an
+        // H-shape (rails on cols 0 + 2, rungs on col 1 rows 0-2).
+        Ladder             = 160, // Alpha 65
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -994,6 +1006,12 @@ namespace VStudioCraft.Game
                 // glides past.
                 case BlockType.SignPost:
                 case BlockType.WallSign:
+                // Tier 8 #46 — Ladder. Walk-through (you can stand
+                // INSIDE the ladder cell while climbing) — collision
+                // is gated entirely by the climb path in player
+                // physics, not by the cell being solid. The ladder
+                // cell still raycast-targets so LMB breaks it.
+                case BlockType.Ladder:
                 // Tier 6 #34 — Fire is non-solid; the player walks
                 // straight through it (taking damage via the
                 // per-tick fluid-contact check pattern rather than
@@ -1480,6 +1498,9 @@ namespace VStudioCraft.Game
                 // mesher dispatches to EmitSignPost / EmitWallSign.
                 case BlockType.SignPost:
                 case BlockType.WallSign:
+                // Tier 8 #46 — Ladder is a thin wall-hugging quad,
+                // routed through EmitLadder in the EmitModels pass.
+                case BlockType.Ladder:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1576,6 +1597,11 @@ namespace VStudioCraft.Game
                 // cube were there).
                 case BlockType.SignPost:
                 case BlockType.WallSign:
+                // Tier 8 #46 — Ladder is a thin wall-hugging quad,
+                // doesn't occlude the supporting wall face behind
+                // it (otherwise the wall would punch a square
+                // shadow through the ladder's open silhouette).
+                case BlockType.Ladder:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -1706,6 +1732,10 @@ namespace VStudioCraft.Game
                 // adjacent ground.
                 case BlockType.SignPost:
                 case BlockType.WallSign:
+                // Tier 8 #46 — Ladder: thin wall-hugging quad,
+                // light passes through everything except the
+                // single rung-pattern face.
+                case BlockType.Ladder:
                 // Tier 6 #37 — Ice is translucent (matches Alpha — a
                 // pond covered in ice still has the bed visible
                 // through the surface). SnowBlock is a 1/8 slab so
@@ -2123,6 +2153,11 @@ namespace VStudioCraft.Game
                     return BlockTextures.TileBone;
                 case BlockType.BoneMeal:
                     return BlockTextures.TileBoneMeal;
+                // Tier 8 #46 — Ladder uses the canonical Alpha
+                // ladder tile from terrain.png at (3, 5) — see
+                // BlockTextures.TileLadder.
+                case BlockType.Ladder:
+                    return BlockTextures.TileLadder;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
                     // Bottom shares the side tile (the bottom of a

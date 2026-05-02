@@ -259,7 +259,12 @@ namespace VStudioCraft.Game
         // (no PNG-source slicer wired in either atlas path).
         public const int FirstTailBoneLayer       = FirstTailButtonItemLayer + TailButtonItemLayerCount;// 171
         public const int TailBoneLayerCount       = 2;
-        public const int LayerCount = FirstTailBoneLayer + TailBoneLayerCount;                          // 173
+        // Tier 8 #46 — Ladder block-tile layer. Sliced from terrain.png
+        // at canonical Alpha (3, 5); procedural fallback paints the
+        // same H-silhouette in plank colours.
+        public const int FirstTailLadderLayer     = FirstTailBoneLayer + TailBoneLayerCount;            // 173
+        public const int TailLadderLayerCount     = 1;
+        public const int LayerCount = FirstTailLadderLayer + TailLadderLayerCount;                      // 174
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -461,6 +466,12 @@ namespace VStudioCraft.Game
         // hotbar size).
         public const int TileBone                = 171;
         public const int TileBoneMeal            = 172;
+        // Tier 8 #46 — Ladder block. Sliced from terrain.png at
+        // canonical Alpha (3, 5) — wood-frame rails on the left + right
+        // edges with three rungs across the middle, alpha-cut between
+        // rails so the wall behind the ladder shows through. Procedural
+        // fallback paints the same H-shape silhouette in plank colours.
+        public const int TileLadder              = 173;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -769,6 +780,9 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileBone,     GenerateBoneItem);
             UploadLayer(layerPixels, TileBoneMeal, GenerateBoneMealItem);
 
+            // Tier 8 #46 — Ladder block tile (procedural fallback).
+            UploadLayer(layerPixels, TileLadder, GenerateLadder);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -913,7 +927,9 @@ namespace VStudioCraft.Game
                 || layer == TileNoteBlock
                 || layer == TileRedstoneTorchOn
                 || layer == TileRedstoneTorchOff
-                || layer == TileRedstoneWire;
+                || layer == TileRedstoneWire
+                // Tier 8 #46 — Ladder block tile from terrain.png.
+                || layer == TileLadder;
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3730,6 +3746,9 @@ namespace VStudioCraft.Game
             // terrain.png and alpha_tools.png slicer paths.
             /* TileBone                */ (-1, -1),
             /* TileBoneMeal            */ (-1, -1),
+            // Tier 8 #46 — Ladder block tile from terrain.png at
+            // canonical Alpha (3, 5).
+            /* TileLadder              */ (3, 5),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3971,6 +3990,10 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileBone,     GenerateBoneItem);
             UploadLayer(layerPixels, TileBoneMeal, GenerateBoneMealItem);
 
+            // Tier 8 #46 — Ladder block tile. Procedural fallback;
+            // overlaid from terrain.png (3, 5) by the biome loop below.
+            UploadLayer(layerPixels, TileLadder, GenerateLadder);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -3987,6 +4010,8 @@ namespace VStudioCraft.Game
                 TileNoteBlock,
                 TileRedstoneTorchOn, TileRedstoneTorchOff,
                 TileRedstoneWire,
+                // Tier 8 #46 — Ladder block tile.
+                TileLadder,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
@@ -6576,6 +6601,47 @@ namespace VStudioCraft.Game
             int[] gy = { 7, 8, 9, 9, 10, 10, 11, 11 };
             for (int i = 0; i < gx.Length; i++)
                 SetPixel(pixels, gx[i], gy[i], hi.r, hi.g, hi.b);
+        }
+
+        // Tier 8 #46 — Ladder block tile. Procedural fallback drawn as
+        // two vertical wood rails on the left + right edges and four
+        // horizontal rungs evenly spaced down the centre. The wide
+        // gaps between rails are alpha=0 so the wall behind the ladder
+        // shows through, matching how the canonical Alpha terrain.png
+        // tile uses transparent pixels for the climb-through area.
+        private static void GenerateLadder(byte[] pixels)
+        {
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            (byte r, byte g, byte b) wood   = (140,  95,  50);
+            (byte r, byte g, byte b) hi     = (180, 130,  80);
+            (byte r, byte g, byte b) lo     = ( 95,  60,  30);
+            // Left rail (cols 1..2, full height).
+            for (int y = 0; y < TileSize; y++)
+            {
+                SetPixel(pixels, 1, y, hi.r, hi.g, hi.b);
+                SetPixel(pixels, 2, y, wood.r, wood.g, wood.b);
+            }
+            // Right rail (cols 13..14, full height).
+            for (int y = 0; y < TileSize; y++)
+            {
+                SetPixel(pixels, 13, y, wood.r, wood.g, wood.b);
+                SetPixel(pixels, 14, y, lo.r, lo.g, lo.b);
+            }
+            // Four rungs spanning between the rails (rows 1, 5, 9, 13).
+            int[] rungRows = { 1, 5, 9, 13 };
+            foreach (int ry in rungRows)
+            {
+                for (int x = 3; x <= 12; x++)
+                    SetPixel(pixels, x, ry, wood.r, wood.g, wood.b);
+                SetPixel(pixels, 3,  ry, hi.r, hi.g, hi.b);
+                SetPixel(pixels, 12, ry, lo.r, lo.g, lo.b);
+            }
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

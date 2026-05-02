@@ -42,6 +42,17 @@ namespace VStudioCraft.Game
         public const float SwimUpAccel = 22f;       // m/s² applied while Space held
         public const float WaterMoveScale = 0.5f;   // horizontal velocity multiplier
 
+        // Tier 8 #46 — Ladder climb. Gravity is suppressed while the
+        // player is on a ladder; vertical motion comes straight from
+        // jump (up) / sneak (down) input at a constant climb speed.
+        // With neither held, the player slides down slowly so they
+        // don't get stuck mid-climb if they release the keys but
+        // also don't free-fall off the ladder. Values are tuned so
+        // a 16-block climb reads as a "deliberate climb" rather than
+        // the modern Minecraft hold-to-warp speed.
+        public const float LadderClimbSpeed = 3.0f;  // m/s up or down with input
+        public const float LadderSlideSpeed = 1.5f;  // m/s passive descent (no input)
+
         // Bobbing: pure visual offset added to the camera Y when in water. The
         // amplitude is small (Alpha's bob is similarly subtle) and the cadence
         // is tied to the swim cycle so head-strokes read as the bob beats.
@@ -241,12 +252,28 @@ namespace VStudioCraft.Game
             // pool. Holding Space accelerates upward while submerged — the
             // continuous accel with a soft terminal feels closer to Alpha's
             // "tap-tap-tap to surface" than a single jump impulse would.
+            //
+            // Tier 8 #46 — Ladder takes priority over the standard
+            // air branch (water still wins because ladders inside
+            // water are unusual): when the player AABB overlaps a
+            // ladder cell, gravity is suppressed and vertical motion
+            // is driven directly by jump (climb up) / sneak (climb
+            // down). With no input, the player descends at a slow
+            // ladder-friction terminal so they don't get stuck mid-
+            // climb but also don't fall off the moment they pause.
+            bool onLadder = !inWater && IsOnLadder(world);
             if (inWater)
             {
                 Velocity.Y -= WaterGravity * dt;
                 if (wantJump) Velocity.Y += SwimUpAccel * dt;
                 if (Velocity.Y < -WaterMaxFall) Velocity.Y = -WaterMaxFall;
                 if (Velocity.Y >  WaterMaxRise) Velocity.Y =  WaterMaxRise;
+            }
+            else if (onLadder)
+            {
+                if (wantJump)         Velocity.Y =  LadderClimbSpeed;
+                else if (IsSneaking)  Velocity.Y = -LadderClimbSpeed;
+                else                  Velocity.Y = -LadderSlideSpeed;
             }
             else
             {
@@ -346,6 +373,31 @@ namespace VStudioCraft.Game
 
         public bool IsInWater(World world) =>
             ScanInWater(world, Position.Y, Position.Y + Height);
+
+        // Tier 8 #46 — True when the player AABB overlaps any ladder
+        // cell. Drives the climb-physics override in Update: gravity
+        // is suppressed and vertical motion is set by jump/sneak
+        // input rather than by the integrator. Same scan shape as
+        // ScanInWater so both checks share the AABB-cell iteration
+        // pattern; cheap (≤ ~8 cell reads on a standing player).
+        public bool IsOnLadder(World world)
+        {
+            float minX = Position.X - HalfWidth, maxX = Position.X + HalfWidth;
+            float minZ = Position.Z - HalfWidth, maxZ = Position.Z + HalfWidth;
+            int bx0 = (int)Math.Floor(minX);
+            int bx1 = (int)Math.Floor(maxX - 1e-5f);
+            int by0 = (int)Math.Floor(Position.Y);
+            int by1 = (int)Math.Floor(Position.Y + Height - 1e-5f);
+            int bz0 = (int)Math.Floor(minZ);
+            int bz1 = (int)Math.Floor(maxZ - 1e-5f);
+            for (int y = by0; y <= by1; y++)
+            for (int x = bx0; x <= bx1; x++)
+            for (int z = bz0; z <= bz1; z++)
+            {
+                if (world.GetBlock(x, y, z) == BlockType.Ladder) return true;
+            }
+            return false;
+        }
 
         // Scans the AABB at a given Y range for any water cell (source or
         // flowing — both count for buoyancy and breathing). Water reach was

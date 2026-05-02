@@ -468,6 +468,14 @@ namespace VStudioCraft.Game
                     byte signMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
                     EmitWallSign(x + baseX, y, z + baseZ, signMeta, lightPacked);
                 }
+                else if (t == BlockType.Ladder)
+                {
+                    // Tier 8 #46 — Ladder is a thin wall-hugging
+                    // double-sided quad. Meta low-2-bits = facing
+                    // (which wall the ladder is attached to).
+                    byte ladderMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
+                    EmitLadder(x + baseX, y, z + baseZ, ladderMeta, layer, lightPacked);
+                }
                 else
                 {
                     EmitCrossSprite(x + baseX, y, z + baseZ, layer, lightPacked);
@@ -643,6 +651,102 @@ namespace VStudioCraft.Game
         // is emitted ONCE — back-face culling + the meshed slab being
         // a closed box means the player only ever sees the outward
         // faces.
+        // Tier 8 #46 — Ladder. Thin (1/16) double-sided quad pinned
+        // to whichever wall the ladder's facing-meta says it hugs.
+        // Single tile (TileLadder); the wood-frame rails + rungs are
+        // alpha-cut on the source so the wall behind the ladder shows
+        // through. Emit one quad on each side of the ladder plane so
+        // the climber sees the rungs from inside the cell AND the
+        // player on the far side of a thin wall would see them too.
+        // (Cheaper than a 6-face box and avoids the back-face culling
+        // gotcha the door slab originally tripped over.)
+        private void EmitLadder(float wx, float wy, float wz, byte meta, int layer, int lightPacked)
+        {
+            BlockFacing f = (BlockFacing)(meta & 0x03);
+            // Inset away from the wall by 1/16 so z-fighting doesn't
+            // chase the wall texture through the alpha-cut gaps.
+            const float pad = 1f / 16f;
+
+            // Pick the plane the ladder sits on, and the two
+            // outward-normal directions for the front + back quads.
+            // The ladder plane is parallel to the wall — for an East-
+            // facing ladder (mounted on the WEST wall of the cell, so
+            // the climber faces East away from the wall), the plane
+            // sits at x = wx + pad and the front-face normal points
+            // +X (away from the wall). The back face's normal points
+            // -X (into the wall). North-facing → wall is South, plane
+            // at z = wz + 1 - pad, front normal -Z. Etc.
+            float x0 = wx, x1 = wx + 1f;
+            float y0 = wy, y1 = wy + 1f;
+            float z0 = wz, z1 = wz + 1f;
+
+            switch (f)
+            {
+                case BlockFacing.North: // climber faces North (-Z); ladder on +Z wall, plane at high Z.
+                    z0 = z1 = wz + 1f - pad;
+                    // Front face (visible from inside the cell, normal -Z)
+                    EmitCrossQuad(
+                        wx + 1f, y0, z0, 0f, 0f,
+                        wx,      y0, z0, 1f, 0f,
+                        wx,      y1, z0, 1f, 1f,
+                        wx + 1f, y1, z0, 0f, 1f,
+                        0f, 0f, -1f, layer, lightPacked);
+                    // Back face (visible through the wall, normal +Z)
+                    EmitCrossQuad(
+                        wx,      y0, z0, 0f, 0f,
+                        wx + 1f, y0, z0, 1f, 0f,
+                        wx + 1f, y1, z0, 1f, 1f,
+                        wx,      y1, z0, 0f, 1f,
+                        0f, 0f, +1f, layer, lightPacked);
+                    break;
+                case BlockFacing.South: // climber faces South (+Z); ladder on -Z wall, plane at low Z.
+                    z0 = z1 = wz + pad;
+                    EmitCrossQuad(
+                        wx,      y0, z0, 0f, 0f,
+                        wx + 1f, y0, z0, 1f, 0f,
+                        wx + 1f, y1, z0, 1f, 1f,
+                        wx,      y1, z0, 0f, 1f,
+                        0f, 0f, +1f, layer, lightPacked);
+                    EmitCrossQuad(
+                        wx + 1f, y0, z0, 0f, 0f,
+                        wx,      y0, z0, 1f, 0f,
+                        wx,      y1, z0, 1f, 1f,
+                        wx + 1f, y1, z0, 0f, 1f,
+                        0f, 0f, -1f, layer, lightPacked);
+                    break;
+                case BlockFacing.East: // climber faces East (+X); ladder on -X wall, plane at low X.
+                    x0 = x1 = wx + pad;
+                    EmitCrossQuad(
+                        x0, y0, wz + 1f, 0f, 0f,
+                        x0, y0, wz,      1f, 0f,
+                        x0, y1, wz,      1f, 1f,
+                        x0, y1, wz + 1f, 0f, 1f,
+                        +1f, 0f, 0f, layer, lightPacked);
+                    EmitCrossQuad(
+                        x0, y0, wz,      0f, 0f,
+                        x0, y0, wz + 1f, 1f, 0f,
+                        x0, y1, wz + 1f, 1f, 1f,
+                        x0, y1, wz,      0f, 1f,
+                        -1f, 0f, 0f, layer, lightPacked);
+                    break;
+                default: // West — climber faces West (-X); ladder on +X wall, plane at high X.
+                    x0 = x1 = wx + 1f - pad;
+                    EmitCrossQuad(
+                        x0, y0, wz,      0f, 0f,
+                        x0, y0, wz + 1f, 1f, 0f,
+                        x0, y1, wz + 1f, 1f, 1f,
+                        x0, y1, wz,      0f, 1f,
+                        -1f, 0f, 0f, layer, lightPacked);
+                    EmitCrossQuad(
+                        x0, y0, wz + 1f, 0f, 0f,
+                        x0, y0, wz,      1f, 0f,
+                        x0, y1, wz,      1f, 1f,
+                        x0, y1, wz + 1f, 0f, 1f,
+                        +1f, 0f, 0f, layer, lightPacked);
+                    break;
+            }
+        }
+
         private void EmitDoorSlab(float wx, float wy, float wz, BlockType type, byte meta, int layer, int lightPacked)
         {
             const float thick = 3f / 16f;

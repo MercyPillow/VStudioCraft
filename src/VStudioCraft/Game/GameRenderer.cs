@@ -4338,6 +4338,23 @@ void main()
                     // through; nothing else in this dispatch
                     // consumes the SignItem RMB so it's a no-op.
                 }
+                // Tier 8 #46 — Ladder placement. Side-face only, the
+                // hit cell must be solid (the wall the ladder hangs
+                // from). Routed here ahead of the standard cube
+                // place path so we get the facing-meta poke that
+                // EmitLadder needs to orient the rung quad correctly.
+                if (held == BlockType.Ladder)
+                {
+                    if (TryPlaceLadder(hit))
+                    {
+                        if (GameMode == GameMode.Survival)
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                        SfxBank.PlayPlace(BlockType.Ladder);
+                        return true;
+                    }
+                    // Invalid placement (top/bottom face hit, target
+                    // occupied, or unsupported wall) — fall through.
+                }
             }
 
             // Tier 4 #14 — Held-tool overrides come BEFORE the
@@ -5280,6 +5297,59 @@ void main()
             // successful place. Alpha-faithful: the editor only ever
             // opens at placement; once committed, the sign is sealed.
             BeginSignEdit(px, py, pz);
+            return true;
+        }
+
+        // Tier 8 #46 — Place a ladder on the side face of a solid
+        // block. Top / bottom faces reject (Alpha 1.1.2 ladders are
+        // wall-mount only). Facing meta low-2-bits records the wall
+        // the ladder is attached to, expressed as the BlockFacing
+        // enum (0=North, 1=East, 2=South, 3=West) — the SAME
+        // convention every other facing-aware block uses, so the
+        // mesher's EmitLadder branch shares the same decoder.
+        //
+        // The "facing" recorded is the direction the climber faces
+        // when on the ladder (i.e., the direction the ladder's
+        // visible face points away from the wall): if the player
+        // RMBs the south wall of a stone column, the ladder is
+        // mounted on the south wall and the climber faces south,
+        // so meta = South.
+        private bool TryPlaceLadder(Raycast.Hit hit)
+        {
+            if (_world == null) return false;
+            if (hit.Ny != 0) return false;                  // top / bottom face rejected
+            if (hit.Nx == 0 && hit.Nz == 0) return false;   // sanity — no face normal
+
+            int px = hit.X + hit.Nx;
+            int py = hit.Y + hit.Ny;
+            int pz = hit.Z + hit.Nz;
+
+            var existing = _world.GetBlock(px, py, pz);
+            if (existing != BlockType.Air
+                && existing != BlockType.Water && existing != BlockType.FlowingWater
+                && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
+
+            // Wall must be solid (the ladder needs something to hang from).
+            if (!BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))) return false;
+
+            BlockFacing facing;
+            if (hit.Nx == 1)       facing = BlockFacing.East;
+            else if (hit.Nx == -1) facing = BlockFacing.West;
+            else if (hit.Nz == 1)  facing = BlockFacing.South;
+            else                   facing = BlockFacing.North;
+
+            if (!_world.SetBlock(px, py, pz, BlockType.Ladder)) return false;
+
+            int cx = px >> 4, cz = pz >> 4;
+            var chunk = _world.GetChunk(cx, cz);
+            if (chunk != null)
+            {
+                int lx = px - (cx << 4);
+                int lz = pz - (cz << 4);
+                byte meta = (byte)((byte)facing & 0x03);
+                chunk.SetMeta(lx, py, lz, meta);
+                _world.RecordMetaChange(px, py, pz);
+            }
             return true;
         }
 
