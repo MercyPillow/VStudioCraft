@@ -349,6 +349,50 @@ namespace VStudioCraft.Game
                 int mobSeed = hash ^ unchecked((int)0xFEED5);
                 output.Add(new ZombiePigman(pos, mobSeed));
             }
+
+            // Tier 8 #51 V7 — Ghast spawn pass. Sparse (1-in-3000 per
+            // column on average — a 5×5 ring of 5760 columns rolls
+            // about 0..3 ghasts) and only in genuinely open hover
+            // space: we require a 4-block-tall column of Air at the
+            // candidate altitude so the ghast's 4×4 body actually
+            // fits without clipping the netherrack ceiling. Hover
+            // altitude band is mid-cavern (NetherrackTop+12 ..
+            // CeilingBaseY-8) so the ghast reads as floating in the
+            // open between floor and ceiling.
+            for (int lx = 0; lx < Chunk.SizeX; lx++)
+            for (int lz = 0; lz < Chunk.SizeZ; lz++)
+            {
+                int hash = (int)((uint)seed * 0x6F4A8C9Du
+                    + (uint)(c.ChunkX * 0x9E37B931)
+                    + (uint)(c.ChunkZ * 0xC7E589FB)
+                    + (uint)(lx * 0x5BD1E995)
+                    + (uint)(lz * 0xC6A4A793));
+                if ((uint)hash % 3000u != 0) continue;
+
+                // Pick a hover altitude inside the open cavern band.
+                int bandLo = NetherTerrainGenerator.NetherrackTop + 12;
+                int bandHi = NetherTerrainGenerator.CeilingBaseY - 8;
+                if (bandHi <= bandLo) continue;
+                int hoverY = bandLo + (int)((uint)(hash >> 8) % (uint)(bandHi - bandLo));
+
+                // Verify a 4-block tall air pocket — ghast hitbox is
+                // 4 tall, centred on the body's Position.Y, but the
+                // body extends Height upward so we need clearance
+                // for [hoverY .. hoverY+3] inclusive.
+                bool clear = true;
+                for (int dy = 0; dy <= 3 && clear; dy++)
+                {
+                    var cellT = (BlockType)c.RawBlocks[Chunk.Index(lx, hoverY + dy, lz)];
+                    if (cellT != BlockType.Air) clear = false;
+                }
+                if (!clear) continue;
+
+                int wx = c.ChunkX * Chunk.SizeX + lx;
+                int wz = c.ChunkZ * Chunk.SizeZ + lz;
+                var pos = new OpenTK.Vector3(wx + 0.5f, hoverY, wz + 0.5f);
+                int mobSeed = hash ^ unchecked((int)0xC4A57);
+                output.Add(new Ghast(pos, mobSeed));
+            }
         }
 
         // Tier 8 #51 V4 — Lazy nether-chunk generation for chunks

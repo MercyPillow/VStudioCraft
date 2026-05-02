@@ -211,6 +211,185 @@ namespace VStudioCraft.Game
         }
     }
 
+    // Tier 8 #51 V7 — Ghast: large flying Nether mob that hovers above
+    // the netherrack mass and lobs slow fireballs at the player. Most
+    // mechanically novel mob in the codebase so far:
+    //
+    //   * Flying — no gravity, hovers and drifts horizontally. The base
+    //     HostileMob.Update assumes a grounded chase loop; we override
+    //     Update entirely and skip IntegrateMotion's gravity-bound path.
+    //   * Huge hitbox — 4×4×4 blocks (HalfWidth=2, Height=4). Body
+    //     model in the renderer matches; visual silhouette is a soft
+    //     white blob with dangling tentacles. Big target compensates
+    //     for the long detect range — an alert player can shoot one
+    //     down with arrows before it gets a fireball off.
+    //   * Squishy — only 10 HP. Two well-aimed bow shots or three
+    //     close-range melee swings put one down. Canonical Alpha.
+    //   * Fires a FireballProjectile every FireCooldownSeconds when
+    //     LOS to the player is clear. The fireball travels in a
+    //     straight line at 10 m/s and explodes (radius 2) on contact —
+    //     handled by the renderer's _fireballs tick.
+    //   * Mob spawn: 1-in-3000 per nether-surface column, only above
+    //     y > NetherrackTop+8 in open space. The renderer lifts the
+    //     spawn altitude to a hover band (NetherrackTop+12..CeilingBaseY-8)
+    //     when the chunk is generated.
+    //
+    // The chase / attack hooks of the base class are unused because
+    // we don't melee — we just call into the renderer's IFireballSink
+    // when the cooldown ticks down with a player in range and LOS
+    // clear. Drops 0..2 Gunpowder on death (canonical Alpha).
+    internal sealed class Ghast : HostileMob
+    {
+        public const float HitboxHalfWidth = 2.0f;
+        public const float HitboxHeight    = 4.0f;
+        public const float DriftSpeed      = 0.6f;   // m/s lazy lateral drift
+        public const float BobAmplitude    = 0.4f;   // m vertical bob from sin wave
+        public const float BobPeriodSec    = 4.0f;
+        public const float FireCooldownSeconds = 3.0f;
+        public const float FireDetectRange     = 36f; // matches nether visibility band
+        public const float FireDetectRangeSq   = FireDetectRange * FireDetectRange;
+
+        // Cooldown timer between fireballs. Counts down each tick;
+        // refilled to FireCooldownSeconds when the ghast actually
+        // fires (in-range + LOS clear).
+        public float FireCooldown;
+
+        // Bob phase + drift heading. Drift heading shifts by a small
+        // random offset every WanderInterval so the ghast doesn't
+        // glide forever in one direction.
+        private float _bobPhase;
+        private float _driftYaw;
+        private float _hoverY; // anchor altitude — we bob around this
+
+        public Ghast(Vector3 spawnPos, int seed) : base(spawnPos, seed)
+        {
+            HalfWidth = HitboxHalfWidth;
+            Height    = HitboxHeight;
+            FireCooldown = (float)(_rng.NextDouble() * FireCooldownSeconds);
+            _bobPhase    = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            _driftYaw    = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            _hoverY      = spawnPos.Y;
+        }
+
+        public override int   MaxHealth             => 10;
+        public override float WalkSpeed             => 0f;     // unused — flight overrides
+        public override float DetectRange           => FireDetectRange;
+        public override float AttackRange           => 0f;     // ranged-only — no melee
+        public override int   AttackDamage          => 0;
+        public override float AttackCooldownSeconds => 0f;
+
+        public override void Update(float dt, World world, Vector3 playerPos, IPlayerDamageSink damageSink)
+        {
+            if (IsDead) return;
+            if (HurtTimer > 0f) { HurtTimer -= dt; if (HurtTimer < 0f) HurtTimer = 0f; }
+            if (FireCooldown > 0f) FireCooldown -= dt;
+
+            // Lateral drift — lazy random wander. Re-roll heading
+            // every WanderInterval seconds so the ghast doesn't
+            // glide off into the void.
+            _wanderTimer -= dt;
+            if (_wanderTimer <= 0f)
+            {
+                _wanderTimer = WanderInterval;
+                _driftYaw   += ((float)_rng.NextDouble() - 0.5f) * 1.5f;
+            }
+
+            // Aim drift toward the player on XZ when in detect range
+            // (gentle, not chase) so the ghast keeps slowly closing
+            // in. Otherwise drift along _driftYaw.
+            float dx = playerPos.X - Position.X;
+            float dz = playerPos.Z - Position.Z;
+            float horizDistSq = dx * dx + dz * dz;
+            float yawTarget;
+            if (horizDistSq <= FireDetectRangeSq * 4f)
+            {
+                yawTarget = (float)Math.Atan2(dx, dz);
+                Yaw = yawTarget; // face player for visual feedback
+            }
+            else
+            {
+                yawTarget = _driftYaw;
+            }
+
+            // Drift slowly along yawTarget on XZ. No gravity — we
+            // handle vertical via a sine bob around _hoverY rather
+            // than letting Velocity.Y accumulate.
+            Velocity.X = (float)Math.Sin(yawTarget) * DriftSpeed;
+            Velocity.Z = (float)Math.Cos(yawTarget) * DriftSpeed;
+
+            // Vertical bob — sin wave around the hover anchor. We
+            // override Velocity.Y each tick so the ghast neither
+            // falls (no gravity) nor accumulates drift.
+            _bobPhase += dt * (float)(Math.PI * 2.0 / BobPeriodSec);
+            if (_bobPhase > (float)(Math.PI * 2.0)) _bobPhase -= (float)(Math.PI * 2.0);
+            float targetY = _hoverY + (float)Math.Sin(_bobPhase) * BobAmplitude;
+            Velocity.Y = (targetY - Position.Y) / Math.Max(dt, 1e-3f);
+
+            // Integrate XZ + Y motion through the standard collider so
+            // the ghast still respects walls (a ghast pinned against
+            // a netherrack ceiling shouldn't tunnel through). We do
+            // NOT call gravity — Velocity.Y is driven by the bob.
+            IntegrateMotion(dt, world);
+
+            // Re-anchor _hoverY if a wall pushed us off track. Without
+            // this a ghast that bumps a ceiling would oscillate around
+            // the wrong anchor forever; clamping back to the actual
+            // current Y on collision means the next bob cycle reads
+            // from the post-collision altitude.
+            if (Math.Abs(Position.Y - targetY) > BobAmplitude * 1.5f)
+            {
+                _hoverY = Position.Y;
+            }
+        }
+
+        // Returns true if the ghast wants to fire on this tick. The
+        // renderer checks this each frame; if true, it spawns a
+        // FireballProjectile at the ghast's body, aimed at the
+        // player, and resets FireCooldown via NotifyFired().
+        // The renderer is responsible for the LOS raycast + the
+        // actual fireball construction since FireballProjectile
+        // lives renderer-side (in _fireballs).
+        public bool WantsToFire(Vector3 playerPos)
+        {
+            if (IsDead) return false;
+            if (FireCooldown > 0f) return false;
+            float dx = playerPos.X - Position.X;
+            float dy = playerPos.Y - Position.Y;
+            float dz = playerPos.Z - Position.Z;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            return distSq <= FireDetectRangeSq;
+        }
+
+        public void NotifyFired()
+        {
+            FireCooldown = FireCooldownSeconds;
+        }
+
+        public override void SpawnDeathDrops(IDropSink drops)
+        {
+            // 0..2 gunpowder — canonical Alpha drop. Ghast Tear (the
+            // brewing ingredient drop in modern Minecraft) is out of
+            // scope for Alpha 1.1.2_01 — there's no brewing system
+            // for it to fuel, and the item itself didn't exist until
+            // Beta 1.9. Gunpowder routes through the existing item
+            // path so the player can craft TNT from a ghast farm.
+            int count = _rng.Next(0, 3);
+            for (int i = 0; i < count; i++)
+            {
+                float angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
+                float speed = 1.5f + (float)_rng.NextDouble() * 1.0f;
+                var vel = new Vector3(
+                    (float)Math.Cos(angle) * speed,
+                    3.0f + (float)_rng.NextDouble() * 1.5f,
+                    (float)Math.Sin(angle) * speed);
+                drops.SpawnDrop(
+                    Position + new Vector3(0, Height * 0.5f, 0),
+                    BlockType.Gunpowder, 1,
+                    vel);
+            }
+        }
+    }
+
     // Skeleton — same humanoid shape as Zombie but with the bow-drop
     // niche. Slightly faster (1.1 m/s) but lower HP (20 → matches
     // Zombie in Alpha; skeletons share the zombie HP pool). Attacks

@@ -939,6 +939,12 @@ namespace VStudioCraft.UI
                             // physics. Same gating as TickArrows (frozen
                             // under pause / inventory).
                             _renderer.TickThrown(dt);
+                            // Tier 8 #51 V7 — Ghast firing decision +
+                            // in-flight fireball physics. Same pause
+                            // gating; a paused world doesn't have
+                            // ghasts shooting in the background.
+                            _renderer.TickGhastFiring(dt);
+                            _renderer.TickFireballs(dt);
                             // Tier 4 #23 — Fishing bobber timers (catch +
                             // auto-despawn). No physics — same gating as
                             // TickArrows so a paused world doesn't have

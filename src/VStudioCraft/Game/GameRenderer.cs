@@ -516,6 +516,15 @@ void main()
         private readonly System.Collections.Generic.List<ThrownProjectile> _thrown
             = new System.Collections.Generic.List<ThrownProjectile>();
 
+        // Tier 8 #51 V7 — Ghast fireballs in flight. Same renderer-
+        // owned-list pattern as _arrows / _thrown; TickFireballs advances
+        // physics + collision + impact-explode, RenderFireballs paints
+        // each as an orange glowing cube. Not persisted — SetWorld
+        // clears them so a save/load round-trip doesn't reanimate
+        // mid-flight ghast attacks.
+        private readonly System.Collections.Generic.List<FireballProjectile> _fireballs
+            = new System.Collections.Generic.List<FireballProjectile>();
+
         // Tier 4 #23 — Cast fishing-rod bobbers. Same renderer-owned-
         // list pattern as _arrows / _thrown; TickBobbers advances the
         // catch timer + auto-despawn timer, RenderBobbers paints each
@@ -1665,6 +1674,7 @@ void main()
             // bookkeeping if we were hosting).
             _arrows.Clear();
             _thrown.Clear();
+            _fireballs.Clear();
             _bobbers.Clear();
             _replicatedArrowsById.Clear();
             _replicatedThrownById.Clear();
@@ -3810,6 +3820,8 @@ void main()
             _arrows.Clear();
             // Tier 4 #20 — same reasoning for thrown snowballs/eggs.
             _thrown.Clear();
+            // Tier 8 #51 V7 — same reasoning for ghast fireballs.
+            _fireballs.Clear();
             // Tier 4 #23 — same reasoning for cast bobbers. Player's
             // ActiveBobber back-reference also has to clear so the
             // next world load doesn't think a stale bobber is in
@@ -7424,6 +7436,197 @@ void main()
             }
         }
 
+        // Tier 8 #51 V7 — Per-frame ghast / blaze fireball tick.
+        //   * Ghasts fire one fireball every FireCooldownSeconds when
+        //     LOS is clear; the call site below in TickGhastsAndFireballs
+        //     spawns them.
+        //   * Each fireball travels in a straight line (no gravity),
+        //     swept against blocks + mob AABBs + the player AABB.
+        //   * On any hit the fireball detonates via the shared Explode
+        //     helper (radius 2). No item drop — fireballs vaporise.
+        //   * Lifetime cap (MaxLifetime) + below-world sentinel keep
+        //     a fireball that misses everything from streaming forever.
+        public void TickFireballs(float dt)
+        {
+            if (_world == null || Player == null) return;
+            if (_fireballs.Count == 0) return;
+
+            for (int i = _fireballs.Count - 1; i >= 0; i--)
+            {
+                var p = _fireballs[i];
+
+                p.TimeAliveSeconds += dt;
+                if (p.TimeAliveSeconds > FireballProjectile.MaxLifetime)
+                {
+                    _fireballs.RemoveAt(i);
+                    continue;
+                }
+
+                // Range gate — checks distance from origin BEFORE the
+                // step. Same shape as TickThrown / TickArrows.
+                var fromOrigin = p.Position - p.Origin;
+                if (fromOrigin.LengthSquared > FireballProjectile.MaxRange * FireballProjectile.MaxRange)
+                {
+                    _fireballs.RemoveAt(i);
+                    continue;
+                }
+
+                if (p.Position.Y < -16f)
+                {
+                    _fireballs.RemoveAt(i);
+                    continue;
+                }
+
+                // No gravity — fireball travels in a straight line.
+                Vector3 step = p.Velocity * dt;
+                float stepLen = step.Length;
+                if (stepLen <= 1e-6f) continue;
+                Vector3 stepDir = step / stepLen;
+
+                // Player-AABB pass — fireball that hits the player
+                // detonates on the player's body. We test the player
+                // because the explosion's damage falloff would only
+                // catch the player's torso at the radius edge; a
+                // direct-body hit should detonate AT the player so
+                // the falloff lands on them at point-blank.
+                bool hitPlayer = false;
+                {
+                    var pmin = new Vector3(
+                        Player.Position.X - Player.HalfWidth,
+                        Player.Position.Y,
+                        Player.Position.Z - Player.HalfWidth);
+                    var pmax = new Vector3(
+                        Player.Position.X + Player.HalfWidth,
+                        Player.Position.Y + Player.Height,
+                        Player.Position.Z + Player.HalfWidth);
+                    if (RayAabbIntersect(p.Position, stepDir, pmin, pmax, stepLen, out _))
+                        hitPlayer = true;
+                }
+
+                // Mob-AABB pass — closest mob hit along the step (so
+                // a fireball doesn't pass through a pigman to hit
+                // terrain past it). Skip the firing ghast itself —
+                // we don't want a ghast to instantly suicide on the
+                // muzzle. The "self" filter is approximate (any ghast
+                // within HitRadius of the muzzle is considered the
+                // shooter); good enough at expected ghast densities.
+                float bestMobT = float.MaxValue;
+                HostileMob hitHostile = null;
+                var hostiles = _world.Hostiles;
+                for (int h = 0; h < hostiles.Count; h++)
+                {
+                    var mob = hostiles[h];
+                    if (mob.IsDead) continue;
+                    // Ignore hits on the firing ghast — any ghast
+                    // very close to the spawn origin is treated as
+                    // the shooter.
+                    if (mob is Ghast)
+                    {
+                        var d = mob.Position - p.Origin;
+                        if (d.LengthSquared < 9f) continue;
+                    }
+                    mob.GetAabb(out var min, out var max);
+                    if (RayAabbIntersect(p.Position, stepDir, min, max, stepLen, out float t))
+                    {
+                        if (t < bestMobT)
+                        {
+                            bestMobT = t;
+                            hitHostile = mob;
+                        }
+                    }
+                }
+
+                bool blockHit = Raycast.Cast(_world, p.Position, stepDir, stepLen, out var rh);
+                float blockT = blockHit ? DistanceToHit(p.Position, stepDir, rh) : float.MaxValue;
+
+                // Resolve nearest event — player AABB collapses to
+                // step-length 0 hit (we tested it as an AABB but the
+                // tEnter inside RayAabbIntersect is what determines
+                // ordering; we approximate by treating a player hit
+                // as immediate if no closer block/mob hit fires).
+                if (hitPlayer && stepLen < bestMobT && stepLen < blockT)
+                {
+                    Explode(p.Position, FireballProjectile.ExplosionRadius);
+                    _fireballs.RemoveAt(i);
+                    continue;
+                }
+                if (bestMobT <= blockT && hitHostile != null)
+                {
+                    var hitPos = p.Position + stepDir * bestMobT;
+                    Explode(hitPos, FireballProjectile.ExplosionRadius);
+                    _fireballs.RemoveAt(i);
+                    continue;
+                }
+                if (blockHit)
+                {
+                    var hitPos = p.Position + stepDir * blockT;
+                    Explode(hitPos, FireballProjectile.ExplosionRadius);
+                    _fireballs.RemoveAt(i);
+                    continue;
+                }
+
+                // Free flight.
+                p.Position += step;
+            }
+        }
+
+        // Tier 8 #51 V7 — Ghast firing pass. Walks the world's hostile
+        // list, identifies Ghasts whose cooldown expired AND have LOS
+        // to the player, and spawns a FireballProjectile from each.
+        // Called from the host's render-tick alongside TickFireballs
+        // so a paused world doesn't have ghasts silently shooting in
+        // the background.
+        public void TickGhastFiring(float dt)
+        {
+            if (_world == null || Player == null) return;
+            var hostiles = _world.Hostiles;
+            if (hostiles == null || hostiles.Count == 0) return;
+
+            // Player eye-position used as the fireball target. Aiming
+            // at the eye rather than the foot makes a long-range shot
+            // feel like it actually came from the ghast looking at
+            // the player.
+            Vector3 playerEye = Player.Position + new Vector3(0f, Player.Height * 0.85f, 0f);
+
+            for (int i = 0; i < hostiles.Count; i++)
+            {
+                if (!(hostiles[i] is Ghast g)) continue;
+                if (g.IsDead) continue;
+                if (!g.WantsToFire(playerEye)) continue;
+
+                // Ghast body centre (Position is the AABB foot for
+                // entities; we want the visible body's middle so the
+                // fireball doesn't appear to spawn from the ghast's
+                // feet).
+                Vector3 muzzle = g.Position + new Vector3(0f, g.Height * 0.5f, 0f);
+                Vector3 toPlayer = playerEye - muzzle;
+                float dist = toPlayer.Length;
+                if (dist < 1e-3f) continue;
+                Vector3 aimDir = toPlayer / dist;
+
+                // LOS — voxel raycast from muzzle to player. If any
+                // solid block is between, the ghast can see the
+                // player but can't shoot through it. The raycast
+                // returns a Hit at the first solid voxel; we accept
+                // LOS only if the hit (if any) lies past the player.
+                bool blockHit = Raycast.Cast(_world, muzzle, aimDir, dist + 1f, out var rh);
+                if (blockHit)
+                {
+                    float hitDist = DistanceToHit(muzzle, aimDir, rh);
+                    if (hitDist < dist - 0.5f) continue; // wall in the way
+                }
+
+                _fireballs.Add(new FireballProjectile
+                {
+                    Position = muzzle + aimDir * (g.HalfWidth + 0.5f),
+                    Velocity = aimDir * FireballProjectile.MuzzleSpeed,
+                    Origin   = muzzle,
+                    TimeAliveSeconds = 0f,
+                });
+                g.NotifyFired();
+            }
+        }
+
         // Tier 4 #23 — Per-frame bobber tick. The bobber itself has
         // no physics — it sits at the cast position — so the tick is
         // just two timers:
@@ -10132,6 +10335,9 @@ void main()
             // entities. Reuses the flat-colour overlay shader; per-
             // projectile tint set inside the helper.
             RenderThrown(width, height);
+            // Tier 8 #51 V7 — In-flight ghast fireballs. Same entity-
+            // layer slot as thrown projectiles; orange glowing cube.
+            RenderFireballs(width, height);
             // Tier 4 #23 — Cast fishing-rod bobbers. Same entity-layer
             // slot as arrows / thrown projectiles so depth occludes
             // consistently against mobs / drops. A bobber is a small
@@ -11085,6 +11291,35 @@ void main()
             }
         }
 
+        // Tier 8 #51 V7 — Render every in-flight ghast fireball as
+        // an orange glowing cube. Mirrors RenderThrown's loop shape;
+        // the visible body is bigger (RenderHalfSize=0.40 vs the
+        // 0.08 thrown projectile) so the fireball reads from a
+        // distance. No depth-test changes — the fireball respects
+        // terrain occlusion the way every other projectile does.
+        private void RenderFireballs(int width, int height)
+        {
+            if (_fireballs.Count == 0) return;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+            _overlayShader.SetVector3("uColor", FireballProjectile.BodyColor);
+
+            var vp = _frameVp;
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var sizeScale   = Matrix4.CreateScale(FireballProjectile.RenderHalfSize * 2f);
+
+            for (int i = 0; i < _fireballs.Count; i++)
+            {
+                var p = _fireballs[i];
+                var trans = Matrix4.CreateTranslation(p.Position);
+                var model = localCentre * sizeScale * trans;
+                var mvp = model * vp;
+                _overlayShader.SetMatrix4("uMVP", mvp);
+                _breakCubeMesh.Draw();
+            }
+        }
+
         // Tier 4 #23 — Render every cast fishing bobber as a small
         // white cuboid in the world. Mirrors RenderArrows / RenderThrown
         // — same flat-colour overlay shader, same _breakCubeMesh
@@ -11998,6 +12233,20 @@ void main()
                     color = Vector3.Lerp(color, hurtRed, hurt);
                     DrawCreeper(rigToWorld, vp, color);
                 }
+                else if (mob is Ghast)
+                {
+                    // Tier 8 #51 V7 — Ghast body. Soft white blob
+                    // (single big cuboid sized to the 4×4×4 hitbox)
+                    // with a row of dangling tentacle cuboids on the
+                    // underside. The visual reads as a floating
+                    // jellyfish silhouette at expected viewing
+                    // distances. Eye dots get added on the front so
+                    // the player can read its facing.
+                    var ghastWhite = Vector3.Lerp(new Vector3(0.92f, 0.92f, 0.95f), hurtRed, hurt);
+                    var ghastShade = Vector3.Lerp(new Vector3(0.78f, 0.78f, 0.82f), hurtRed, hurt);
+                    var ghastEyes  = new Vector3(0.10f, 0.05f, 0.05f);
+                    DrawGhast(rigToWorld, vp, ghastWhite, ghastShade, ghastEyes, mob);
+                }
                 else if (mob is Slime slime)
                 {
                     // Tier 4 #18 — Slime body. Single translucent green
@@ -12050,6 +12299,68 @@ void main()
             var eyeSize = new Vector3(eyeS, eyeS, eyeS);
             DrawPigCuboid(new Vector3(+eyeSpacing, eyeY, +eyeForward), eyeSize, rigToWorld, vp, eyes);
             DrawPigCuboid(new Vector3(-eyeSpacing, eyeY, +eyeForward), eyeSize, rigToWorld, vp, eyes);
+        }
+
+        // Tier 8 #51 V7 — Ghast body. Big main cube (~3.6 m on a
+        // side, slightly smaller than the 4×4×4 hitbox so it doesn't
+        // visibly overflow the AABB) with 9 short tentacle cuboids
+        // hanging off the underside. Two eye dots on the front face.
+        // Hurt flash is the standard hurtRed lerp shared with all
+        // hostile mobs. The mob argument is the Ghast itself but we
+        // accept HostileMob to keep the dispatch loop's type plumbing
+        // simple — only HalfWidth/Height are read.
+        private void DrawGhast(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 body, Vector3 shade, Vector3 eyes, HostileMob mob)
+        {
+            float w = mob.HalfWidth * 2f;
+            float h = mob.Height;
+
+            // Main body — a slightly-undersized cube anchored at the
+            // hitbox centre. Position.Y is the AABB foot, so the body
+            // centre sits at h/2 above it.
+            float bodyW = w * 0.85f;
+            float bodyH = h * 0.55f;
+            var bodySize = new Vector3(bodyW, bodyH, bodyW);
+            DrawPigCuboid(new Vector3(0f, h * 0.65f, 0f), bodySize, rigToWorld, vp, body);
+
+            // Tentacles — 3×3 grid of short rectangular cuboids on the
+            // underside. The grid is offset inside the body's footprint
+            // so the tentacles read as hanging from the body, not
+            // sticking out past it. Length varies a little so the
+            // silhouette doesn't read as a perfect grid.
+            float tentW   = w * 0.10f;
+            float tentLen = h * 0.30f;
+            float tentY   = h * 0.65f - bodyH * 0.5f - tentLen * 0.5f;
+            float spacing = bodyW * 0.30f;
+            for (int gx = -1; gx <= 1; gx++)
+            for (int gz = -1; gz <= 1; gz++)
+            {
+                // Vary length per cell — outer tentacles slightly
+                // shorter than the inner ones, so the silhouette
+                // tapers like a jellyfish bell.
+                float len = (gx == 0 && gz == 0) ? tentLen * 1.2f
+                           : (gx * gz != 0)       ? tentLen * 0.85f
+                           :                        tentLen;
+                var tSize = new Vector3(tentW, len, tentW);
+                DrawPigCuboid(
+                    new Vector3(gx * spacing, tentY - (len - tentLen) * 0.5f, gz * spacing),
+                    tSize, rigToWorld, vp, shade);
+            }
+
+            // Eyes — two small dark cubes on the body's front face.
+            // The +Z direction in body-local space is the facing
+            // direction (Yaw rotation is applied via rigToWorld).
+            float eyeS = w * 0.06f;
+            float eyeY = h * 0.78f;
+            float eyeSpacing = bodyW * 0.18f;
+            float eyeForward = bodyW * 0.5f + 0.005f;
+            var eyeSize = new Vector3(eyeS, eyeS, eyeS);
+            DrawPigCuboid(new Vector3(+eyeSpacing, eyeY, +eyeForward), eyeSize, rigToWorld, vp, eyes);
+            DrawPigCuboid(new Vector3(-eyeSpacing, eyeY, +eyeForward), eyeSize, rigToWorld, vp, eyes);
+
+            // Mouth — small dark slot below the eyes for visual focus.
+            var mouthSize = new Vector3(w * 0.20f, h * 0.04f, eyeS);
+            DrawPigCuboid(new Vector3(0f, eyeY - h * 0.10f, +eyeForward), mouthSize, rigToWorld, vp, eyes);
         }
 
         // Humanoid (Zombie / Skeleton): head + torso + 2 arms + 2 legs
