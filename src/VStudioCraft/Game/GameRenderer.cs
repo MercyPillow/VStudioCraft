@@ -3092,6 +3092,19 @@ void main()
             int workerCount = Math.Max(1, Math.Min(3, Environment.ProcessorCount - 2));
             _jobs = new ChunkJobSystem(_world, workerCount);
 
+            // Reset the streaming-trigger gate so the FIRST frame
+            // after a swap always runs GenerateNearMissing in the
+            // new dimension. Without this, an overworld → nether
+            // swap that lands the player at the same chunk-coord
+            // they left from (the overworld portal at chunk (0,0)
+            // and the nether starter portal also at (0,0) is the
+            // common case) would never fire the missing-chunk
+            // walker, leaving everything past the pre-built 5×5
+            // ring as void until the player crosses to a different
+            // chunk-coord.
+            _lastStreamCx = int.MinValue;
+            _lastStreamCz = int.MinValue;
+
             // Restore or spawn the player in the new dimension.
             // Velocity is zeroed in every branch so the player
             // doesn't carry overworld momentum into the nether

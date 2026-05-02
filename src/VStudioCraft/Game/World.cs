@@ -320,12 +320,28 @@ namespace VStudioCraft.Game
         // pre-generated edge so the Nether feels continuous instead
         // of dropping to void. Skips dungeons + spawning the same way
         // GenerateNether does.
+        //
+        // Adds the new chunk to the dirty set AND marks the four
+        // horizontal neighbours dirty too, so the inter-chunk seam
+        // light + face-culling propagation runs. Without these the
+        // chunk would generate correctly but render as a black void
+        // (no mesh built) and the existing neighbour chunk would
+        // keep its previously-emitted "facing the void" boundary
+        // faces.
         public Chunk GenerateNetherChunk(int chunkX, int chunkZ)
         {
             var c = new Chunk(chunkX, chunkZ);
             NetherTerrainGenerator.Generate(c, Seed);
             LightCalculator.RecomputeChunk(c);
             _chunks[(chunkX, chunkZ)] = c;
+            _dirty.Add((chunkX, chunkZ));
+            // Re-mesh the 4 horizontal neighbours so their boundary
+            // faces re-cull against the freshly-installed chunk's
+            // contents.
+            if (_chunks.ContainsKey((chunkX - 1, chunkZ))) _dirty.Add((chunkX - 1, chunkZ));
+            if (_chunks.ContainsKey((chunkX + 1, chunkZ))) _dirty.Add((chunkX + 1, chunkZ));
+            if (_chunks.ContainsKey((chunkX, chunkZ - 1))) _dirty.Add((chunkX, chunkZ - 1));
+            if (_chunks.ContainsKey((chunkX, chunkZ + 1))) _dirty.Add((chunkX, chunkZ + 1));
             return c;
         }
 
