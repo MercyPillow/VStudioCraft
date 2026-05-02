@@ -2754,16 +2754,19 @@ namespace VStudioCraft.Game
                     ? BlockTextures.TileChestFront
                     : BlockTextures.TileChestSide;
             }
-            // Tier 8 #51 — Jack-o-lantern. Top = pumpkin stem,
-            // bottom = pumpkin side (invisible against ground in
-            // most placements; reuses the side tile to skip a
-            // third atlas slot — same shortcut Pumpkin already
-            // uses). The four lateral faces show TilePumpkinSide
-            // EXCEPT on the face that matches `facing`, which
-            // shows the lit carved-face tile.
+            // Tier 8 #51 — Jack-o-lantern matches pumpkin on every
+            // face EXCEPT the front-facing lateral side, which
+            // shows the carved + lit face. Top = pumpkin top,
+            // bottom = pumpkin side (same shortcut Pumpkin uses
+            // for its bottom — the underside of a placed pumpkin /
+            // jack-o-lantern is rarely visible and reusing the side
+            // tile saves an atlas slot). 3 of the 4 lateral faces
+            // show TilePumpkinSide; the face matching `facing` shows
+            // TileJackOLanternFront.
             if (t == BlockType.JackOLantern)
             {
-                if (axis == 1) return BlockTextures.TilePumpkinTop;
+                if (axis == 1 && dir > 0) return BlockTextures.TilePumpkinTop;
+                if (axis == 1)            return BlockTextures.TilePumpkinSide;
                 return IsFacingFront(axis, dir, facing)
                     ? BlockTextures.TileJackOLanternFront
                     : BlockTextures.TilePumpkinSide;

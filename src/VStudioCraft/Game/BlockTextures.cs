@@ -974,7 +974,9 @@ namespace VStudioCraft.Game
                 // Tier 8 #51 — Glowstone block tile from terrain.png.
                 || layer == TileGlowstone
                 // Tier 8 #49 V1 — Dispenser front from terrain.png.
-                || layer == TileDispenserFront;
+                || layer == TileDispenserFront
+                // Tier 6 #32 — MobSpawner cage from terrain.png at (4, 7).
+                || layer == TileMobSpawner;
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3688,14 +3690,17 @@ namespace VStudioCraft.Game
             // Alpha 1.1.2_01 layout puts the jukebox side at (10, 4)
             // (vertical-plank panel) and the top at (11, 4) (planks with
             // a centred disc-slot circle). Verified visually against the
-            // embedded alpha_terrain.png. Bottom is reused from planks
-            // via a multi-face routing in Block.GetTileIndex (the
-            // dedicated layer here just stays procedural / sentinel and
-            // is never sampled). Disc icons would live in alpha_tools.png
-            // at unverified coords — sentinel, stays procedural.
+            // embedded alpha_terrain.png. Per user direction: side AND
+            // bottom both reuse the NoteBlock tile at (10, 4) — the
+            // jukebox is a planked cube with a disc slot on the top
+            // and otherwise reads identical to the note block on
+            // every other face. Top has its own dedicated tile at
+            // (11, 4) showing the disc-slot indent. Disc icons live
+            // in alpha_tools.png at unverified coords — sentinel,
+            // stays procedural.
             /* TileJukeboxTop        */ (11, 4),
             /* TileJukeboxSide       */ (10, 4),
-            /* TileJukeboxBottom     */ (-1, -1),
+            /* TileJukeboxBottom     */ (10, 4),
             /* TileDisc13            */ (0, 15),
             /* TileDiscCat           */ (1, 15),
             // Tier 4 #19 — Armor inventory icons in alpha_tools.png.
@@ -3726,11 +3731,12 @@ namespace VStudioCraft.Game
             /* TileGoldChestplate      */ (4, 1),
             /* TileGoldLeggings        */ (4, 2),
             /* TileGoldBoots           */ (4, 3),
-            // Tier 6 #32 — MobSpawner cage. Procedural-only; sentinel
-            // (-1,-1) keeps the alpha-textures slicer skipping it
-            // and the GenerateProceduralSpawner overlay paints the
-            // dark cage in both atlas modes.
-            /* TileMobSpawner          */ (-1, -1),
+            // Tier 6 #32 — MobSpawner cage. Per user direction the
+            // canonical Alpha tile lives at (4, 7) on terrain.png —
+            // sliced from there in the alpha-textures atlas, with
+            // GenerateMobSpawner kept as the procedural fallback for
+            // the no-PNG atlas path.
+            /* TileMobSpawner          */ (4, 7),
             // Tier 6 #34 — Fire sprite. Procedural-only; the sentinel
             // keeps it out of the alpha-textures slicer.
             /* TileFire                */ (-1, -1),
@@ -3750,8 +3756,8 @@ namespace VStudioCraft.Game
             /* TileSnowyGrassSide      */ (4, 4),
             // Tier 6 #37 — Pumpkin re-added. Canonical Alpha
             // terrain.png coords from the Halloween Update tile pack.
-            /* TilePumpkinTop          */ (6, 6),
-            /* TilePumpkinSide         */ (6, 7),
+            /* TilePumpkinTop          */ (15, 2),
+            /* TilePumpkinSide         */ (14, 2),
             // Tier 8 #47 — Sapling. Canonical Alpha terrain.png
             // (15, 0) — the lone sapling tile in Alpha 1.1.2_01
             // (Birch / Spruce / Jungle saplings are Beta-era).
@@ -3794,18 +3800,21 @@ namespace VStudioCraft.Game
             // Tier 8 #46 — Ladder block tile from terrain.png at
             // canonical Alpha (3, 5).
             /* TileLadder              */ (3, 5),
-            // Tier 8 #51 — Jack-o-lantern carved+lit face from
-            // terrain.png at canonical Alpha (8, 7).
-            /* TileJackOLanternFront   */ (8, 7),
+            // Tier 8 #51 — Jack-o-lantern carved+lit face. Per user
+            // direction: this build's terrain.png places the face
+            // at (15, 3) rather than canonical (8, 7).
+            /* TileJackOLanternFront   */ (15, 3),
             // Tier 8 #51 — Glowstone block from terrain.png at
             // canonical Alpha (9, 6).
-            /* TileGlowstone           */ (9, 6),
+            /* TileGlowstone           */ (6, 6),
             // Tier 8 #51 — Glowstone Dust item icon. Procedural-only
             // (no PNG-source slicer wired in either atlas path).
             /* TileGlowstoneDust       */ (-1, -1),
-            // Tier 8 #49 V1 — Dispenser front from terrain.png at
-            // canonical Alpha (14, 2).
-            /* TileDispenserFront      */ (14, 2),
+            // Tier 8 #49 V1 — Dispenser front. Per user direction
+            // this build's terrain.png places the dispenser muzzle
+            // at (14, 3) (the canonical (14, 2) slot is now used for
+            // pumpkin side art in this asset).
+            /* TileDispenserFront      */ (14, 3),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3927,6 +3936,18 @@ namespace VStudioCraft.Game
             // farming items stay procedural — we haven't verified the
             // alpha_tools.png coords for them yet).
             GenerateProceduralCaneLayers(layerPixels);
+
+            // Tier 4 #25 — Jukebox + disc pack procedural fallback.
+            // MUST run BEFORE UploadCaneBlockLayersFromTerrain below so
+            // the terrain.png slice (the canonical Alpha jukebox top
+            // and side tiles) overlays the procedural fallback rather
+            // than being overwritten by it. Discs stay procedural —
+            // their AlphaTileCoords are sentinels so the slicer skips
+            // them. Original order had this call AFTER the slicer,
+            // which silently kept the procedural jukebox in the
+            // alpha-textures atlas (the user-visible bug).
+            GenerateProceduralJukeboxLayers(layerPixels);
+
             UploadCaneBlockLayersFromTerrain(bgra, srcW, srcH, layerPixels);
 
             // Tier 4 #16 — Door tiles. Procedural fallback paints all
@@ -3988,12 +4009,13 @@ namespace VStudioCraft.Game
             // same sentinel-coord story as the fishing-rod pack.
             GenerateProceduralPaintingLayers(layerPixels);
 
-            // Tier 4 #25 — Jukebox + disc pack. Jukebox face tiles get
-            // overlaid from terrain.png by UploadCaneBlockLayersFromTerrain
-            // above (the slicer's range now includes them via the
-            // verified (10,4) / (11,4) coords); music disc icons stay
-            // procedural until the alpha_tools.png coords are verified.
-            GenerateProceduralJukeboxLayers(layerPixels);
+            // (The Tier 4 #25 jukebox procedural fallback used to live
+            // here, but it was running AFTER UploadCaneBlockLayersFromTerrain
+            // and silently overwriting the terrain.png slice with the
+            // procedural art. It now runs BEFORE the slicer up where
+            // GenerateProceduralCaneLayers does — same shape every
+            // other tail-block pack uses, so the terrain.png coord
+            // wins.)
 
             // Tier 4 #19 — Armor inventory icons. 20 procedural sprites
             // painted as a fallback; the alpha_tools.png slice below
@@ -4089,6 +4111,8 @@ namespace VStudioCraft.Game
                 TileGlowstone,
                 // Tier 8 #49 V1 — Dispenser front.
                 TileDispenserFront,
+                // Tier 6 #32 — MobSpawner cage from terrain.png.
+                TileMobSpawner,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
