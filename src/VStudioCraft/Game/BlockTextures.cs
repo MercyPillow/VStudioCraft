@@ -280,7 +280,10 @@ namespace VStudioCraft.Game
         // Tier 8 #51 — Soul Sand block tile.
         public const int FirstTailSoulSandLayer   = FirstTailNetherrackLayer + TailNetherrackLayerCount; // 179
         public const int TailSoulSandLayerCount   = 1;
-        public const int LayerCount = FirstTailSoulSandLayer + TailSoulSandLayerCount;                  // 180
+        // Tier 8 #51 V1 — Nether Portal swirl tile.
+        public const int FirstTailPortalLayer     = FirstTailSoulSandLayer + TailSoulSandLayerCount;    // 180
+        public const int TailPortalLayerCount     = 1;
+        public const int LayerCount = FirstTailPortalLayer + TailPortalLayerCount;                      // 181
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -517,6 +520,12 @@ namespace VStudioCraft.Game
         // with darker face-shaped pits. Procedural fallback paints
         // a brown sand variant with three darker mottled circles.
         public const int TileSoulSand            = 179;
+        // Tier 8 #51 V1 — Nether Portal swirl. Animated in canon
+        // Alpha (8 frames cycled at the column to give the moving-
+        // particles look); V1 ships a single static frame at
+        // canonical Alpha terrain.png (0, 14). Procedural fallback
+        // paints a purple/indigo gradient with scattered bright pips.
+        public const int TileNetherPortal        = 180;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -844,6 +853,9 @@ namespace VStudioCraft.Game
             // Tier 8 #51 — Soul Sand (procedural fallback).
             UploadLayer(layerPixels, TileSoulSand, GenerateSoulSand);
 
+            // Tier 8 #51 V1 — Nether Portal swirl (procedural).
+            UploadLayer(layerPixels, TileNetherPortal, GenerateNetherPortal);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -1002,7 +1014,9 @@ namespace VStudioCraft.Game
                 // Tier 8 #51 — Netherrack block tile from terrain.png.
                 || layer == TileNetherrack
                 // Tier 8 #51 — Soul Sand block tile from terrain.png.
-                || layer == TileSoulSand;
+                || layer == TileSoulSand
+                // Tier 8 #51 V1 — Nether Portal swirl from terrain.png.
+                || layer == TileNetherPortal;
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3848,6 +3862,12 @@ namespace VStudioCraft.Game
             // Tier 8 #51 — Soul Sand from terrain.png at canonical
             // Alpha (8, 6).
             /* TileSoulSand            */ (8, 6),
+            // Tier 8 #51 V1 — Nether Portal swirl from terrain.png at
+            // canonical Alpha (0, 14). Static frame only — animation
+            // is V2 polish (would need a per-frame atlas-array swap
+            // similar to the Tier 10 animated water/lava optional
+            // feature).
+            /* TileNetherPortal        */ (0, 14),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4128,6 +4148,10 @@ namespace VStudioCraft.Game
             // from terrain.png (8, 6) by the biome loop below.
             UploadLayer(layerPixels, TileSoulSand, GenerateSoulSand);
 
+            // Tier 8 #51 V1 — Nether Portal swirl. Procedural
+            // fallback; overlaid from terrain.png (0, 14).
+            UploadLayer(layerPixels, TileNetherPortal, GenerateNetherPortal);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4158,6 +4182,8 @@ namespace VStudioCraft.Game
                 TileNetherrack,
                 // Tier 8 #51 — Soul Sand block tile.
                 TileSoulSand,
+                // Tier 8 #51 V1 — Nether Portal swirl.
+                TileNetherPortal,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
@@ -7057,6 +7083,50 @@ namespace VStudioCraft.Game
             int[] hy = { 1, 2,  7,  9, 12, 0, 14, 13, 9, 8 };
             for (int i = 0; i < hx.Length; i++)
                 SetPixel(pixels, hx[i], hy[i], hi.r, hi.g, hi.b);
+        }
+
+        // Tier 8 #51 V1 — Nether Portal swirl tile. Static frame
+        // (animation is V2). Vertical purple/indigo gradient with
+        // scattered bright pips suggesting moving particles. The
+        // alpha-textures atlas overlays from terrain.png (0, 14)
+        // on top.
+        private static void GenerateNetherPortal(byte[] pixels)
+        {
+            (byte r, byte g, byte b) deep   = ( 35,   8,  60);
+            (byte r, byte g, byte b) mid    = ( 75,  20, 130);
+            (byte r, byte g, byte b) hi     = (165,  85, 220);
+            (byte r, byte g, byte b) flare  = (220, 150, 255);
+
+            // Vertical gradient from deep at top → mid at middle →
+            // hi at bottom with a soft sine modulation per row so
+            // the texture reads as flowing.
+            for (int y = 0; y < TileSize; y++)
+            {
+                float ty = y / (float)(TileSize - 1);
+                float wave = (float)System.Math.Sin(ty * System.Math.PI * 2.0) * 0.15f;
+                float t = ty + wave;
+                if (t < 0f) t = 0f; else if (t > 1f) t = 1f;
+                byte r = (byte)(deep.r + (hi.r - deep.r) * t);
+                byte g = (byte)(deep.g + (hi.g - deep.g) * t);
+                byte b = (byte)(deep.b + (hi.b - deep.b) * t);
+                for (int x = 0; x < TileSize; x++)
+                    SetPixel(pixels, x, y, r, g, b);
+            }
+
+            // Horizontal mid-band overlay so columns aren't all
+            // identical — gives the swirl some lateral structure.
+            for (int x = 0; x < TileSize; x += 3)
+            for (int y = 0; y < TileSize; y++)
+            {
+                if (((x ^ y) & 1) == 0) SetPixel(pixels, x, y, mid.r, mid.g, mid.b);
+            }
+
+            // Bright flare pips scattered diagonally — read as
+            // glowing particles inside the swirl.
+            int[] fx = { 2, 6, 10, 14, 4, 12, 8, 1, 13, 7 };
+            int[] fy = { 1, 4,  3,  7, 9, 11, 14, 13, 14, 8 };
+            for (int i = 0; i < fx.Length; i++)
+                SetPixel(pixels, fx[i], fy[i], flare.r, flare.g, flare.b);
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

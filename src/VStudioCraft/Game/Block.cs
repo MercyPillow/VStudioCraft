@@ -713,6 +713,25 @@ namespace VStudioCraft.Game
         // creative-catalog-only on the obtain side, mirroring
         // glowstone + netherrack.
         SoulSand           = 173, // Alpha 88
+
+        // Tier 8 #51 V1 — Nether Portal block. Animated purple swirl
+        // inside a lit 4×5 obsidian frame. V1 ships the BLOCK + the
+        // frame-detection-on-flint-and-steel ignition mechanic + the
+        // visual; teleportation to a parallel nether dimension is V2
+        // (the dimension itself doesn't exist yet — separate chunk
+        // store + generation pass).
+        //
+        // Block flags: non-cube (the portal is an axis-aligned plane,
+        // 1×2 cells per portal cell), non-solid (player walks through
+        // it — touching is what triggers teleport in V2), light-
+        // transparent (light passes through — matches Alpha; the swirl
+        // glows but doesn't block sky / block light propagation),
+        // alpha-blended (the swirl has translucent regions).
+        //
+        // Per-cell metadata low-2-bits stores axis (0=Z-axis frame,
+        // 1=X-axis frame) so the mesher orients the swirl plane with
+        // the long side of the frame.
+        NetherPortal       = 174, // Alpha 90
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -1179,6 +1198,11 @@ namespace VStudioCraft.Game
                 // physics, not by the cell being solid. The ladder
                 // cell still raycast-targets so LMB breaks it.
                 case BlockType.Ladder:
+                // Tier 8 #51 V1 — Nether Portal is walk-through.
+                // Touching the cell will trigger a dimension swap in
+                // V2; for V1 the player simply passes through it
+                // (visual decoration only).
+                case BlockType.NetherPortal:
                 // Tier 6 #34 — Fire is non-solid; the player walks
                 // straight through it (taking damage via the
                 // per-tick fluid-contact check pattern rather than
@@ -1754,6 +1778,10 @@ namespace VStudioCraft.Game
                 // Tier 8 #51 — Soul Sand is a 14/16-tall sub-cube;
                 // mesher routes through EmitModels with EmitSubCubeBox.
                 case BlockType.SoulSand:
+                // Tier 8 #51 V1 — Nether Portal renders as a single
+                // axis-aligned plane (the swirl); mesher routes
+                // through EmitModels with EmitNetherPortal.
+                case BlockType.NetherPortal:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1884,6 +1912,10 @@ namespace VStudioCraft.Game
                 // dynamic as snow / slabs — so soul sand is
                 // non-opaque to keep that face emitted.
                 case BlockType.SoulSand:
+                // Tier 8 #51 V1 — Nether Portal is a thin plane
+                // (most of the cell is air), so adjacent obsidian
+                // faces must still emit around the swirl.
+                case BlockType.NetherPortal:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -2073,6 +2105,12 @@ namespace VStudioCraft.Game
                 // own cell light samples to 0 — the block would
                 // render dark even in daylight.
                 case BlockType.SoulSand:
+                // Tier 8 #51 V1 — Nether Portal: thin plane in an
+                // otherwise-air cell, so light flows through (matches
+                // canonical Alpha — sky light still reaches the floor
+                // of a horizontal portal). The swirl is a self-lit
+                // visual, not an actual light emitter.
+                case BlockType.NetherPortal:
                     return true;
                 default:
                     return false;
@@ -2232,6 +2270,12 @@ namespace VStudioCraft.Game
                 // as regular sand). Bare-hand or shovel both work.
                 case BlockType.SoulSand:
                     return 0.5f;
+                // Tier 8 #51 V1 — Nether Portal is unbreakable in
+                // canonical Alpha (you destroy the obsidian frame to
+                // collapse the portal — the portal block itself
+                // can't be mined). Hardness -1 = unbreakable.
+                case BlockType.NetherPortal:
+                    return -1f;
                 // Tier 6 #37 — Snow block. Quick to break (Alpha
                 // hardness 0.2 — single shovel swing). No tool gate;
                 // hand also works.
@@ -2543,6 +2587,10 @@ namespace VStudioCraft.Game
                 // faces.
                 case BlockType.SoulSand:
                     return BlockTextures.TileSoulSand;
+                // Tier 8 #51 V1 — Nether Portal swirl. Single tile;
+                // canonical Alpha terrain.png slot at (0, 14).
+                case BlockType.NetherPortal:
+                    return BlockTextures.TileNetherPortal;
                 // Tier 8 #51 — Glowstone Dust item icon. Procedural;
                 // a small pile of bright yellow grain, similar in
                 // shape to bone meal but in glowstone-yellow tones.

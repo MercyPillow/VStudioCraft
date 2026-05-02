@@ -505,8 +505,7 @@ multiple subsystems at once.
 ### Tier 8 — Late-Alpha systems
 
 51. **Halloween Update block set** — Alpha 1.1.0 (Oct 30, 2010), in scope for our 1.1.2_01 target. Pumpkin already shipped (Tier 6 polish). Remaining:
-    - **Nether portal** — 4×5 obsidian frame ignited by Flint+Steel; teleports the player to a parallel Nether dimension. Largest item on this list — likely splits into its own swim-lane.
-    - **Slimes** — small/medium/large mob variants spawning in slime chunks. Drops Slimeball (already in code as an item).
+    - **Nether portal teleportation + dimension** (V2) — V1 ships the block + 4×5 obsidian frame ignition + animated purple swirl texture; what remains is the nether dimension itself (separate chunk store, generation pass, dimension swap on portal-touch). Slated as its own swim-lane.
 
 ### Tier 9 — Infrastructure + completion
 

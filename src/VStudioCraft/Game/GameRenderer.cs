@@ -4744,6 +4744,24 @@ void main()
                         SfxBank.PlayClick();
                         return true;
                     }
+                    // Tier 8 #51 V1 — Nether Portal ignition. RMB
+                    // Flint+Steel against an obsidian face that's
+                    // part of a valid 4×5 frame fills the 2×3 air
+                    // interior with NetherPortal blocks. Tested on
+                    // the AIR cell adjacent to the clicked face,
+                    // not the obsidian itself, so the player aims
+                    // INTO the frame interior the same way they'd
+                    // aim into a fire spot.
+                    int portalAx = hit.X + hit.Nx;
+                    int portalAy = hit.Y + hit.Ny;
+                    int portalAz = hit.Z + hit.Nz;
+                    if (TryIgniteNetherPortal(portalAx, portalAy, portalAz))
+                    {
+                        if (GameMode == GameMode.Survival)
+                            DamageHeldTool(1);
+                        SfxBank.PlayClick();
+                        return true;
+                    }
                     // Tier 8 #51 — Flint+Steel on a placed Pumpkin
                     // converts it to a JackOLantern (Halloween Update
                     // canonical recipe). Facing meta is set from the
@@ -5525,6 +5543,118 @@ void main()
                 byte meta = (byte)((byte)facing & 0x03);
                 chunk.SetMeta(lx, py, lz, meta);
                 _world.RecordMetaChange(px, py, pz);
+            }
+            return true;
+        }
+
+        // Tier 8 #51 V1 — Nether Portal frame ignition. The clicked
+        // air cell must sit inside a 4-wide × 5-tall obsidian frame
+        // (interior 2×3 air). Frame can be oriented along the X- or
+        // Z-axis (the "wide" dimension of the frame). On success the
+        // 6 interior cells are filled with NetherPortal blocks with
+        // their meta low-bit set to 1 for X-axis frames, 0 for
+        // Z-axis frames — the mesher samples that bit to orient
+        // the swirl plane correctly.
+        //
+        // Algorithm: try every plausible frame position where the
+        // clicked cell could be ANY of the 6 interior cells. For
+        // each candidate (axis × horizontal-offset × vertical-offset)
+        // verify (a) the 2×3 interior is all air, (b) the surrounding
+        // 14 frame cells (12 sides + 2 corners on each end... actually
+        // 14 total: 5 left + 5 right + 2 top + 2 bottom = 14) are all
+        // obsidian. The corner blocks ARE required in V1 — Alpha's
+        // "corner-optional" rule was added in Beta 1.1 and we're
+        // shipping the stricter pre-Beta variant.
+        private bool TryIgniteNetherPortal(int wx, int wy, int wz)
+        {
+            if (_world == null) return false;
+            var hitT = _world.GetBlock(wx, wy, wz);
+            if (hitT != BlockType.Air
+                && hitT != BlockType.Water && hitT != BlockType.FlowingWater) return false;
+
+            // Try X-axis frames first (frame's wide side runs east-
+            // west), then Z-axis. xAxis=true means the 2 interior
+            // columns vary along X with constant Z; xAxis=false
+            // means they vary along Z with constant X.
+            for (int axisIdx = 0; axisIdx < 2; axisIdx++)
+            {
+                bool xAxis = axisIdx == 0;
+                for (int hOff = 0; hOff < 2; hOff++)
+                for (int vOff = 0; vOff < 3; vOff++)
+                {
+                    // (x0, y0, z0) = lower-left interior corner candidate.
+                    int x0 = wx, y0 = wy - vOff, z0 = wz;
+                    if (xAxis) x0 -= hOff; else z0 -= hOff;
+                    if (TryFillPortalIfFrameValid(x0, y0, z0, xAxis))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        // Returns true + fills the interior with NetherPortal blocks
+        // when the 4×5 frame around (x0, y0, z0) (lower-left interior)
+        // is a valid obsidian rectangle. Caller has already verified
+        // the click cell is air-equivalent.
+        private bool TryFillPortalIfFrameValid(int x0, int y0, int z0, bool xAxis)
+        {
+            // Interior cells: 2 wide (along axis) × 3 tall.
+            // For xAxis=true: interior at (x0..x0+1, y0..y0+2, z0).
+            // For xAxis=false: interior at (x0, y0..y0+2, z0..z0+1).
+            for (int dh = 0; dh < 2; dh++)
+            for (int dv = 0; dv < 3; dv++)
+            {
+                int ix = xAxis ? x0 + dh : x0;
+                int iy = y0 + dv;
+                int iz = xAxis ? z0 : z0 + dh;
+                var t = _world.GetBlock(ix, iy, iz);
+                if (t != BlockType.Air
+                    && t != BlockType.Water && t != BlockType.FlowingWater) return false;
+            }
+
+            // Frame cells around the interior — check each is obsidian.
+            // Bottom row (y0-1) and top row (y0+3) span the 2 interior
+            // columns plus the 2 corners on each end (4 cells per row).
+            // Side columns (axis-1 and axis+2) span 5 cells each
+            // (y0-1..y0+3) — that includes the corners we just checked,
+            // so we exclude the corner Y rows from the side scan to
+            // avoid checking them twice.
+            for (int dh = -1; dh < 3; dh++)
+            {
+                int fx = xAxis ? x0 + dh : x0;
+                int fz = xAxis ? z0 : z0 + dh;
+                if (_world.GetBlock(fx, y0 - 1, fz) != BlockType.Obsidian) return false;
+                if (_world.GetBlock(fx, y0 + 3, fz) != BlockType.Obsidian) return false;
+            }
+            for (int dv = 0; dv < 3; dv++)
+            {
+                int leftX  = xAxis ? x0 - 1 : x0;
+                int leftZ  = xAxis ? z0     : z0 - 1;
+                int rightX = xAxis ? x0 + 2 : x0;
+                int rightZ = xAxis ? z0     : z0 + 2;
+                if (_world.GetBlock(leftX,  y0 + dv, leftZ)  != BlockType.Obsidian) return false;
+                if (_world.GetBlock(rightX, y0 + dv, rightZ) != BlockType.Obsidian) return false;
+            }
+
+            // All checks passed — fill the interior with NetherPortal
+            // and stamp the axis bit. Meta low-bit: 1=X-axis, 0=Z-axis.
+            byte meta = (byte)(xAxis ? 0x01 : 0x00);
+            for (int dh = 0; dh < 2; dh++)
+            for (int dv = 0; dv < 3; dv++)
+            {
+                int ix = xAxis ? x0 + dh : x0;
+                int iy = y0 + dv;
+                int iz = xAxis ? z0 : z0 + dh;
+                _world.SetBlock(ix, iy, iz, BlockType.NetherPortal);
+                int cx = ix >> 4, cz = iz >> 4;
+                var ch = _world.GetChunk(cx, cz);
+                if (ch != null)
+                {
+                    int lx = ix - (cx << 4);
+                    int lz = iz - (cz << 4);
+                    ch.SetMeta(lx, iy, lz, meta);
+                    _world.RecordMetaChange(ix, iy, iz);
+                }
             }
             return true;
         }

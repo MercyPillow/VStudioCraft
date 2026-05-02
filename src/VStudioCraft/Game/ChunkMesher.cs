@@ -498,6 +498,20 @@ namespace VStudioCraft.Game
                         x + baseX + 1f, y + 14f / 16f, z + baseZ + 1f,
                         layer, lightPacked);
                 }
+                else if (t == BlockType.NetherPortal)
+                {
+                    // Tier 8 #51 V1 — Nether Portal swirl. A single
+                    // axis-aligned plane through the cell centre,
+                    // double-sided so the player sees the swirl from
+                    // either side of the frame. Meta low-bit picks
+                    // the axis (0=Z-axis frame → plane at X-centre,
+                    // 1=X-axis frame → plane at Z-centre).
+                    byte portalMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
+                    bool xAxisFrame = (portalMeta & 0x01) != 0;
+                    EmitNetherPortal(
+                        x + baseX, y, z + baseZ,
+                        xAxisFrame, layer, lightPacked);
+                }
                 else if (BlockData.IsStair(t))
                 {
                     // Tier 8 #45 V2 — Stair L-shape. Lower step is
@@ -814,6 +828,62 @@ namespace VStudioCraft.Game
                         x0, y1, wz + 1f, 0f, 1f,
                         +1f, 0f, 0f, layer, lightPacked);
                     break;
+            }
+        }
+
+        // Tier 8 #51 V1 — Nether Portal swirl. A double-sided plane
+        // through the cell centre, oriented along the long axis of
+        // the obsidian frame the portal lives inside. xAxisFrame
+        // means the frame's wide side runs east-west (X-axis), so
+        // the swirl plane sits at z=cell-centre with its large
+        // dimension along X. Otherwise the frame is north-south
+        // (Z-axis) and the plane sits at x=cell-centre.
+        //
+        // Two opposing quads (one each direction) so back-face
+        // culling shows the swirl from both sides of the frame.
+        private void EmitNetherPortal(float wx, float wy, float wz,
+            bool xAxisFrame, int layer, int lightPacked)
+        {
+            float y0 = wy + 0f;
+            float y1 = wy + 1f;
+
+            if (xAxisFrame)
+            {
+                // Plane at z = cell centre, spans full X + Y.
+                float zc = wz + 0.5f;
+                // -Z facing (visible from -Z side).
+                EmitCrossQuad(
+                    wx + 0f, y0, zc, 0f, 0f,
+                    wx + 1f, y0, zc, 1f, 0f,
+                    wx + 1f, y1, zc, 1f, 1f,
+                    wx + 0f, y1, zc, 0f, 1f,
+                    0f, 0f, -1f, layer, lightPacked);
+                // +Z facing.
+                EmitCrossQuad(
+                    wx + 1f, y0, zc, 0f, 0f,
+                    wx + 0f, y0, zc, 1f, 0f,
+                    wx + 0f, y1, zc, 1f, 1f,
+                    wx + 1f, y1, zc, 0f, 1f,
+                    0f, 0f, +1f, layer, lightPacked);
+            }
+            else
+            {
+                // Plane at x = cell centre, spans full Z + Y.
+                float xc = wx + 0.5f;
+                // -X facing.
+                EmitCrossQuad(
+                    xc, y0, wz + 1f, 0f, 0f,
+                    xc, y0, wz + 0f, 1f, 0f,
+                    xc, y1, wz + 0f, 1f, 1f,
+                    xc, y1, wz + 1f, 0f, 1f,
+                    -1f, 0f, 0f, layer, lightPacked);
+                // +X facing.
+                EmitCrossQuad(
+                    xc, y0, wz + 0f, 0f, 0f,
+                    xc, y0, wz + 1f, 1f, 0f,
+                    xc, y1, wz + 1f, 1f, 1f,
+                    xc, y1, wz + 0f, 0f, 1f,
+                    +1f, 0f, 0f, layer, lightPacked);
             }
         }
 
