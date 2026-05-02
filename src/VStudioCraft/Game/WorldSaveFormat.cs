@@ -107,7 +107,7 @@ namespace VStudioCraft.Game
         //       it lives in the chunk's metadata byte alongside the
         //       block id, so it persists through the existing v2+
         //       chunk-byte block.
-        private const byte CurrentVersion = 16;
+        private const byte CurrentVersion = 17;
 
         // Phase 8 — one entry per known player in the v13 multiplayer
         // player table. Captured at save time from `ServerHub` (or the
@@ -155,7 +155,24 @@ namespace VStudioCraft.Game
             => Save(path, header, world, null, null);
 
         public static void Save(string path, Header header, World world, IList<PersistedPlayer> players)
-            => Save(path, header, world, players, null);
+            => Save(path, header, world, players, null, default);
+
+        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld)
+            => Save(path, header, world, players, netherWorld, default);
+
+        // Tier 8 #51 V6 — Per-dimension player state. Round-trips the
+        // overworld AND nether positions + camera angles so a save-
+        // and-quit in either dimension reloads at the exact last-
+        // known coords. Default-zeroed members mean "no record" —
+        // the loader skips restoring whichever slot is unset.
+        public struct DimensionState
+        {
+            public Vector3 OverworldPos;
+            public float OverworldYaw, OverworldPitch;
+            public Vector3 NetherPos;
+            public float NetherYaw, NetherPitch;
+            public Dimension CurrentDimension;
+        }
 
         // Tier 8 #51 V5 — Save with an optional Nether world. The
         // overworld is always the primary file content (header + chunk
@@ -164,7 +181,14 @@ namespace VStudioCraft.Game
         // section. Pass null to skip Nether persistence — the player
         // never visited the Nether OR the host wants ephemeral Nether
         // (debug / test fixtures).
-        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld)
+        //
+        // V6 — additional v17 trailing block carrying per-dimension
+        // player state (both positions + camera + currentDim) so the
+        // player reloads in whichever dimension they saved in, at
+        // their exact coords. Pre-v17 saves load with the existing
+        // header.CameraPos as the overworld position and an empty
+        // nether-position slot.
+        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld, DimensionState dimState)
         {
             var tmp = path + ".tmp";
             using (var fs = File.Create(tmp))
@@ -484,6 +508,31 @@ namespace VStudioCraft.Game
                             WriteStack(w, kv.Value.Slots[i]);
                     }
                 }
+
+                // v17: Tier 8 #51 V6 — Per-dimension player state.
+                // Trailing block past v16 nether section. Layout:
+                //   3 floats overworld pos
+                //   1 float  overworld yaw
+                //   1 float  overworld pitch
+                //   3 floats nether pos
+                //   1 float  nether yaw
+                //   1 float  nether pitch
+                //   1 byte   currentDimension (0=Overworld, 1=Nether)
+                // Pre-v17 readers stop after the v16 nether section
+                // and restore overworld pos from header.CameraPos
+                // with an empty nether-position slot, falling back
+                // to the existing first-time-entry flow.
+                w.Write(dimState.OverworldPos.X);
+                w.Write(dimState.OverworldPos.Y);
+                w.Write(dimState.OverworldPos.Z);
+                w.Write(dimState.OverworldYaw);
+                w.Write(dimState.OverworldPitch);
+                w.Write(dimState.NetherPos.X);
+                w.Write(dimState.NetherPos.Y);
+                w.Write(dimState.NetherPos.Z);
+                w.Write(dimState.NetherYaw);
+                w.Write(dimState.NetherPitch);
+                w.Write((byte)dimState.CurrentDimension);
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
@@ -632,8 +681,8 @@ namespace VStudioCraft.Game
         // already does for missing files / version mismatches.
         public static (Header header, World world, Dictionary<string, PersistedPlayer> players) LoadWithPlayers(string path)
         {
-            var (h, w, p, _) = LoadWithPlayersAndNether(path);
-            return (h, w, p);
+            var r = LoadWithPlayersAndNether(path);
+            return (r.header, r.world, r.players);
         }
 
         // Tier 8 #51 V5 — Extended load that ALSO returns the Nether
@@ -642,7 +691,13 @@ namespace VStudioCraft.Game
         // both return null for the nether tuple slot — caller is
         // expected to lazy-create on demand the same way it always
         // has.
-        public static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld) LoadWithPlayersAndNether(string path)
+        //
+        // V6 — Also returns the per-dimension player state from the
+        // v17 trailing block. Pre-v17 saves return a default (zeroed)
+        // DimensionState so the renderer falls back to header.CameraPos
+        // for the overworld slot and starts the nether at the
+        // first-time-entry path.
+        public static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState) LoadWithPlayersAndNether(string path)
         {
             try
             {
@@ -689,7 +744,7 @@ namespace VStudioCraft.Game
             }
         }
 
-        private static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld) LoadWithPlayersInner(string path)
+        private static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState) LoadWithPlayersInner(string path)
         {
             using (var fs = File.OpenRead(path))
             using (var gz = new GZipStream(fs, CompressionMode.Decompress))
@@ -1146,7 +1201,26 @@ namespace VStudioCraft.Game
                     }
                 }
 
-                return (header, world, players, netherWorld);
+                // v17: Tier 8 #51 V6 — Per-dimension player state.
+                // Pre-v17 saves return a default DimensionState; the
+                // renderer falls back to header.CameraPos for the
+                // overworld slot.
+                DimensionState dimState = default;
+                if (version >= 17)
+                {
+                    dimState.OverworldPos   = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                    dimState.OverworldYaw   = r.ReadSingle();
+                    dimState.OverworldPitch = r.ReadSingle();
+                    dimState.NetherPos      = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                    dimState.NetherYaw      = r.ReadSingle();
+                    dimState.NetherPitch    = r.ReadSingle();
+                    byte dim = r.ReadByte();
+                    dimState.CurrentDimension = dim == (byte)Dimension.Nether
+                        ? Dimension.Nether
+                        : Dimension.Overworld;
+                }
+
+                return (header, world, players, netherWorld, dimState);
             }
         }
 

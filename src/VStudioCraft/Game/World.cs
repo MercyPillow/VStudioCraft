@@ -295,6 +295,7 @@ namespace VStudioCraft.Game
             int side = InitialRadiusChunks * 2 + 1;
             int total = side * side;
             var chunks = new Chunk[total];
+            var pigmanBuckets = new List<HostileMob>[total];
 
             System.Threading.Tasks.Parallel.For(0, total, i =>
             {
@@ -303,15 +304,51 @@ namespace VStudioCraft.Game
                 var c = new Chunk(dx, dz);
                 NetherTerrainGenerator.Generate(c, seed);
                 LightCalculator.RecomputeChunk(c);
+                var bucket = new List<HostileMob>();
+                ComputeNetherSpawnsForChunk(c, seed, bucket);
                 chunks[i] = c;
+                pigmanBuckets[i] = bucket;
             });
 
             for (int i = 0; i < total; i++)
             {
                 var c = chunks[i];
                 w._chunks[(c.ChunkX, c.ChunkZ)] = c;
+                if (pigmanBuckets[i].Count > 0) w._hostiles.AddRange(pigmanBuckets[i]);
             }
             return w;
+        }
+
+        // Tier 8 #51 V6 — Per-chunk Nether-mob spawn computation.
+        // Walks each (lx, lz) column at the netherrack surface, rolls
+        // 1-in-150 for a Zombie Pigman spawn (sparse — a 5×5 ring
+        // averages 4-8 spawned pigmen). The hashed RNG keys on
+        // (seed, chunkX, chunkZ, lx, lz) so the same chunk regenerates
+        // the same set of pigmen each time the player visits it.
+        public static void ComputeNetherSpawnsForChunk(Chunk c, int seed, List<HostileMob> output)
+        {
+            for (int lx = 0; lx < Chunk.SizeX; lx++)
+            for (int lz = 0; lz < Chunk.SizeZ; lz++)
+            {
+                int hash = (int)((uint)seed * 0xA76C8B5Du
+                    + (uint)(c.ChunkX * 0x4E1F32D7)
+                    + (uint)(c.ChunkZ * 0x9F4D8B11)
+                    + (uint)(lx * 0x3C5A7C97)
+                    + (uint)(lz * 0xB492C9D3));
+                if ((uint)hash % 150u != 0) continue;
+
+                int yTop = NetherTerrainGenerator.NetherrackTop;
+                var surface = (BlockType)c.RawBlocks[Chunk.Index(lx, yTop, lz)];
+                if (surface != BlockType.Netherrack && surface != BlockType.SoulSand) continue;
+                var aboveT = (BlockType)c.RawBlocks[Chunk.Index(lx, yTop + 1, lz)];
+                if (aboveT != BlockType.Air) continue;
+
+                int wx = c.ChunkX * Chunk.SizeX + lx;
+                int wz = c.ChunkZ * Chunk.SizeZ + lz;
+                var pos = new OpenTK.Vector3(wx + 0.5f, yTop + 1, wz + 0.5f);
+                int mobSeed = hash ^ unchecked((int)0xFEED5);
+                output.Add(new ZombiePigman(pos, mobSeed));
+            }
         }
 
         // Tier 8 #51 V4 — Lazy nether-chunk generation for chunks
@@ -335,6 +372,13 @@ namespace VStudioCraft.Game
             LightCalculator.RecomputeChunk(c);
             _chunks[(chunkX, chunkZ)] = c;
             _dirty.Add((chunkX, chunkZ));
+            // Tier 8 #51 V6 — Spawn Zombie Pigmen for the lazy-streamed
+            // chunk too, otherwise pigmen only existed in the initial
+            // 5×5 ring around the player's nether spawn and the rest
+            // of the dimension was lifeless as the player walked out.
+            var bucket = new List<HostileMob>();
+            ComputeNetherSpawnsForChunk(c, Seed, bucket);
+            if (bucket.Count > 0) _hostiles.AddRange(bucket);
             // Re-mesh the 4 horizontal neighbours so their boundary
             // faces re-cull against the freshly-installed chunk's
             // contents.

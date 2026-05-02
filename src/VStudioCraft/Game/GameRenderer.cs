@@ -2876,26 +2876,30 @@ void main()
             // stashed for the next OpenToLan call to install on the
             // hub; if the user just stays in SP, the table is harmless
             // (just sits unused).
-            var (header, world, players, netherWorld) = WorldSaveFormat.LoadWithPlayersAndNether(path);
-            _pendingPersistedPlayers = players;
+            var loadResult = WorldSaveFormat.LoadWithPlayersAndNether(path);
+            var header = loadResult.header;
+            var world = loadResult.world;
+            _pendingPersistedPlayers = loadResult.players;
             SetWorld(world);
             // Tier 8 #51 V5 — Reinstate the persisted Nether (if any).
-            // Load always lands the player in the OVERWORLD (saved as
-            // primary content) so the Nether goes into _dormantWorld
-            // — the next portal teleport finds it there ready-built
-            // rather than triggering a fresh GenerateNether.
-            // Per-dimension player position slots are zeroed so
-            // SwapDimension's first-time-entry branch fires the
-            // "place at starter portal" code if there's no Nether
-            // saved, or the player's last Nether position if there
-            // is one — but V5 doesn't yet round-trip the per-dim
-            // position itself, so a player who saved-and-quit while
-            // in the Nether reloads in the overworld and re-enters
-            // the Nether via portal as if it were a fresh visit
-            // (just with the persisted terrain instead of regen).
-            _dormantWorld = netherWorld;
-            _overworldPlayerPos = Vector3.Zero;
-            _netherPlayerPos = Vector3.Zero;
+            // Load installs the overworld as `_world` first; the
+            // Nether goes into `_dormantWorld` so the next portal
+            // teleport finds it there ready-built. V6 (below) then
+            // optionally swaps the active dimension if the v17
+            // dimState says the player was in the Nether at save
+            // time.
+            _dormantWorld = loadResult.netherWorld;
+            // Tier 8 #51 V6 — Per-dimension player state. Restore
+            // both saved-on-swap position slots; if the v17 dimState
+            // also says the player was in the NETHER, swap to it
+            // so the post-load camera lands at their nether coords.
+            var ds = loadResult.dimState;
+            _overworldPlayerPos = ds.OverworldPos;
+            _overworldYaw       = ds.OverworldYaw;
+            _overworldPitch     = ds.OverworldPitch;
+            _netherPlayerPos    = ds.NetherPos;
+            _netherYaw          = ds.NetherYaw;
+            _netherPitch        = ds.NetherPitch;
             // header.CameraPos is now the saved player feet position (format v2).
             Player.Position = header.CameraPos;
             Player.Velocity = Vector3.Zero;
@@ -2935,6 +2939,19 @@ void main()
             Camera.Pitch = header.CameraPitch;
             Camera.ClampPitch();
             SyncCameraToPlayer();
+
+            // Tier 8 #51 V6 — If the v17 dimState says the player
+            // was in the NETHER at save time, swap to it now that
+            // the dormant nether World is in place. SwapDimension
+            // restores Player.Position from _netherPlayerPos and
+            // applies the camera yaw/pitch from the per-dim slots
+            // we just loaded above. Pre-v17 saves leave
+            // CurrentDimension at Overworld (default zero) and skip
+            // the swap entirely.
+            if (ds.CurrentDimension == Dimension.Nether && _dormantWorld != null)
+            {
+                SwapDimension(Dimension.Nether);
+            }
         }
 
         // Tier 9 #53 V1 — Autosave HUD notice. Set by the host
@@ -3290,18 +3307,42 @@ void main()
             var players = _serverHub?.SnapshotPlayers();
             // Tier 8 #51 V5 — Pass the Nether World (if any) so the
             // v16 trailing block round-trips netherrack + glowstone +
-            // tile-entity content across save/load. The Nether is
-            // either the active _world (if the player is currently in
-            // it — but we already saved the dormant overworld as the
-            // PRIMARY content above) or the dormant world (if the
-            // player is in the overworld but visited the Nether at
-            // least once this session). Hand off whichever instance
-            // has Dimension == Nether; null skips the v16 block.
+            // tile-entity content across save/load.
             World netherWorld =
                   _world.Dimension == Dimension.Nether                                  ? _world
                 : (_dormantWorld != null && _dormantWorld.Dimension == Dimension.Nether) ? _dormantWorld
                 : null;
-            WorldSaveFormat.Save(path, header, saveWorld, players, netherWorld);
+
+            // Tier 8 #51 V6 — Per-dimension player state. Capture
+            // BOTH dimensions' last-known coords + camera so a
+            // reload places the player exactly where they left
+            // (whichever dimension they were in). Live position
+            // overrides the saved-on-swap slot for the active
+            // dimension so a Save & Quit picks up the very latest
+            // coords, not the moment-of-portal-entry stale ones.
+            var dimState = new WorldSaveFormat.DimensionState
+            {
+                OverworldPos   = _overworldPlayerPos,
+                OverworldYaw   = _overworldYaw,
+                OverworldPitch = _overworldPitch,
+                NetherPos      = _netherPlayerPos,
+                NetherYaw      = _netherYaw,
+                NetherPitch    = _netherPitch,
+                CurrentDimension = _world.Dimension,
+            };
+            if (_world.Dimension == Dimension.Overworld)
+            {
+                dimState.OverworldPos   = Player.Position;
+                dimState.OverworldYaw   = Camera.Yaw;
+                dimState.OverworldPitch = Camera.Pitch;
+            }
+            else
+            {
+                dimState.NetherPos   = Player.Position;
+                dimState.NetherYaw   = Camera.Yaw;
+                dimState.NetherPitch = Camera.Pitch;
+            }
+            WorldSaveFormat.Save(path, header, saveWorld, players, netherWorld, dimState);
         }
 
         public void UpdatePlayer(float dt, Vector3 wishHorizVel, bool wantJump)
@@ -11912,6 +11953,17 @@ void main()
                     var skin   = Vector3.Lerp(new Vector3(0.30f, 0.55f, 0.32f), hurtRed, hurt);
                     var shirt  = Vector3.Lerp(new Vector3(0.20f, 0.35f, 0.50f), hurtRed, hurt);
                     var pants  = Vector3.Lerp(new Vector3(0.18f, 0.20f, 0.32f), hurtRed, hurt);
+                    DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
+                }
+                else if (mob is ZombiePigman)
+                {
+                    // Tier 8 #51 V6 — Pink-flesh skin (canonical
+                    // pigman colour); zombie-green tattered tunic
+                    // tints darker than zombie. Same DrawHumanoid
+                    // path so the body shape stays a humanoid.
+                    var skin   = Vector3.Lerp(new Vector3(0.85f, 0.55f, 0.55f), hurtRed, hurt);
+                    var shirt  = Vector3.Lerp(new Vector3(0.40f, 0.50f, 0.30f), hurtRed, hurt);
+                    var pants  = Vector3.Lerp(new Vector3(0.40f, 0.30f, 0.22f), hurtRed, hurt);
                     DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
                 }
                 else if (mob is Skeleton)

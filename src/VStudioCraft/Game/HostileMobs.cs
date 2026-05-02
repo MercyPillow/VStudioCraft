@@ -80,6 +80,137 @@ namespace VStudioCraft.Game
         }
     }
 
+    // Tier 8 #51 V6 — Zombie Pigman. Humanoid Nether-native mob,
+    // canonical Alpha 1.2.0 Halloween Update creature. Neutral aggro:
+    // wanders idly until the player attacks one, at which point the
+    // hit pigman + every other pigman within ~16 cells flips to
+    // hostile and chases for 30 seconds. After the timer expires, or
+    // if the player flees out of detect range, the mob reverts to
+    // neutral wandering.
+    //
+    // V6 ships the entity class + neutral/hostile state machine + drops;
+    // the "alert nearby pigmen on hit" pack-aggro is V7 polish (each
+    // one tracks its own AggroTimer independently for now). Renders
+    // as a humanoid via the existing DrawHumanoid path with a pink-
+    // green skin tone (zombie body + pig face).
+    internal sealed class ZombiePigman : HostileMob
+    {
+        public const float HitboxHalfWidth = 0.3f;
+        public const float HitboxHeight    = 1.8f;
+        // Seconds the mob stays hostile after being hit. Canonical
+        // Alpha is ~30 s; matches "the player can outrun a single
+        // pigman" feel when there's no nearby pack.
+        public const float AggroDurationSeconds = 30.0f;
+
+        public ZombiePigman(Vector3 spawnPos, int seed) : base(spawnPos, seed)
+        {
+            HalfWidth = HitboxHalfWidth;
+            Height    = HitboxHeight;
+        }
+
+        public override int   MaxHealth             => 20;
+        public override float WalkSpeed             => 1.0f;
+        public override float DetectRange           => 16f;
+        public override float AttackRange           => 1.4f;
+        public override int   AttackDamage          => 5;   // canonical: gold-sword damage
+        public override float AttackCooldownSeconds => 1.0f;
+
+        // Aggro state. AggroTimer counts DOWN from AggroDurationSeconds
+        // when set; while > 0, the base HostileMob.Update treats the
+        // player as in-range and chases. When the timer expires, we
+        // revert to wander mode by overriding Update.
+        public float AggroTimer;
+        public bool IsAggro => AggroTimer > 0f;
+
+        public override void Update(float dt, World world, Vector3 playerPos, IPlayerDamageSink damageSink)
+        {
+            if (IsDead) return;
+            if (AggroTimer > 0f)
+            {
+                AggroTimer -= dt;
+                if (AggroTimer < 0f) AggroTimer = 0f;
+                // Hostile branch — same chase loop the base class
+                // runs.
+                base.Update(dt, world, playerPos, damageSink);
+                return;
+            }
+
+            // Neutral wander. Skips the base class's chase / attack
+            // logic by directly running the wander branch shape (same
+            // as Pig.Update). Updates physics with gravity + AABB
+            // integration.
+            if (HurtTimer > 0f)      { HurtTimer      -= dt; if (HurtTimer      < 0f) HurtTimer      = 0f; }
+            if (AttackCooldown > 0f) { AttackCooldown -= dt; if (AttackCooldown < 0f) AttackCooldown = 0f; }
+
+            _wanderTimer -= dt;
+            if (_wanderTimer <= 0f)
+            {
+                _wanderTimer = WanderInterval;
+                _walking = _rng.NextDouble() < 0.6;
+                if (_walking) Yaw = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            }
+            if (_walking)
+            {
+                Velocity.X = (float)Math.Sin(Yaw) * WalkSpeed;
+                Velocity.Z = (float)Math.Cos(Yaw) * WalkSpeed;
+            }
+            else
+            {
+                Velocity.X = 0f;
+                Velocity.Z = 0f;
+            }
+
+            Velocity.Y -= Gravity * dt;
+            if (Velocity.Y < -MaxFallSpeed) Velocity.Y = -MaxFallSpeed;
+            IntegrateMotion(dt, world);
+        }
+
+        // Override TakeDamage to flip aggro on hit. Player swings a
+        // sword at a pigman → it goes hostile for AggroDurationSeconds.
+        // Subsequent hits during that window REFRESH the timer to
+        // full duration so a player who keeps attacking can't
+        // wait out the chase by stalling.
+        public new void TakeDamage(int amount)
+        {
+            base.TakeDamage(amount);
+            AggroTimer = AggroDurationSeconds;
+        }
+
+        public override void SpawnDeathDrops(IDropSink drops)
+        {
+            // 0..2 cooked porkchop drops — pigmen are pork-themed and
+            // we don't have rotten flesh in this build, so cooked
+            // pork is the closest canonical Alpha drop. Gold ingot
+            // drop (canonical 1-in-4 in Alpha) routes through the
+            // existing GoldIngot item id.
+            int pork = _rng.Next(0, 3);
+            for (int i = 0; i < pork; i++)
+            {
+                drops.SpawnDrop(
+                    Position + new Vector3(0, 0.5f, 0),
+                    BlockType.CookedPorkchop, 1,
+                    RandomScatterVelocity());
+            }
+            if (_rng.Next(4) == 0)
+            {
+                drops.SpawnDrop(
+                    Position + new Vector3(0, 0.5f, 0),
+                    BlockType.GoldIngot, 1,
+                    RandomScatterVelocity());
+            }
+        }
+
+        private Vector3 RandomScatterVelocity()
+        {
+            float angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            float speed = 1.5f + (float)_rng.NextDouble() * 1.0f;
+            return new Vector3(
+                (float)Math.Cos(angle) * speed,
+                3.0f + (float)_rng.NextDouble() * 1.5f,
+                (float)Math.Sin(angle) * speed);
+        }
+    }
+
     // Skeleton — same humanoid shape as Zombie but with the bow-drop
     // niche. Slightly faster (1.1 m/s) but lower HP (20 → matches
     // Zombie in Alpha; skeletons share the zombie HP pool). Attacks
