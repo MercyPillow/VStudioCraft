@@ -119,6 +119,12 @@ namespace VStudioCraft.UI
         {
             InitializeComponent();
 
+            // Tier 9 #53 V2 — Load saved key bindings before the
+            // first input dispatch can fire. No-op on a fresh
+            // install (defaults apply); idempotent across multiple
+            // host constructions in a session.
+            VStudioCraft.Game.KeyBindings.LoadFromDisk();
+
             // Eagerly decode the embedded Alpha terrain.png on the WPF
             // UI thread (this constructor) so its byte buffer is cached
             // before any render-thread atlas rebuild touches it. WPF
@@ -470,6 +476,12 @@ namespace VStudioCraft.UI
 
             _gl?.Dispose();
             _gl = null;
+
+            // Tier 9 #53 V2 — Persist key bindings on shutdown so a
+            // crash mid-session still saves the most recent edits.
+            // Best-effort: KeyBindings.SaveToDisk swallows IO errors
+            // internally, never throws.
+            VStudioCraft.Game.KeyBindings.SaveToDisk();
         }
 
         private void GlOnLoad(object sender, EventArgs e)
@@ -1078,10 +1090,14 @@ namespace VStudioCraft.UI
             var rightH = new Vector3((float)Math.Cos(yaw), 0f,  (float)Math.Sin(yaw));
 
             var wish = Vector3.Zero;
-            if (_input.IsDown(Keys.W)) wish += fwdH;
-            if (_input.IsDown(Keys.S)) wish -= fwdH;
-            if (_input.IsDown(Keys.D)) wish += rightH;
-            if (_input.IsDown(Keys.A)) wish -= rightH;
+            // Tier 9 #53 V2 — Movement keys read through the
+            // configurable KeyBindings table instead of hardcoded
+            // Keys.W/A/S/D so the player's options-menu bindings
+            // apply at every poll.
+            if (_input.IsDown(KeyBindings.MoveForward))  wish += fwdH;
+            if (_input.IsDown(KeyBindings.MoveBackward)) wish -= fwdH;
+            if (_input.IsDown(KeyBindings.MoveRight))    wish += rightH;
+            if (_input.IsDown(KeyBindings.MoveLeft))     wish -= rightH;
             if (wish.LengthSquared > 0f) wish = Vector3.Normalize(wish);
 
             // Tier 5 #27 — Sneak (Shift) and sprint (Ctrl). Sneak wins
@@ -1089,13 +1105,13 @@ namespace VStudioCraft.UI
             // (a stuck Ctrl key shouldn't launch you off a cliff). The
             // sneaking flag is also pushed into Player so its Update
             // can run the AABB edge-stop probe before MoveAxis.
-            bool sneaking = _input.IsDown(Keys.ShiftKey);
+            bool sneaking = _input.IsDown(KeyBindings.Sneak);
             bool sprinting = !sneaking && _input.IsDown(Keys.ControlKey);
             float speed = sneaking ? Player.SneakSpeed
                         : sprinting ? Player.SprintSpeed
                         : Player.WalkSpeed;
             _renderer.Player.IsSneaking = sneaking;
-            bool wantJump = _input.IsDown(Keys.Space);
+            bool wantJump = _input.IsDown(KeyBindings.Jump);
 
             _renderer.UpdatePlayer(dt, wish * speed, wantJump);
 
@@ -1291,6 +1307,31 @@ namespace VStudioCraft.UI
                 return;
             }
 
+            // Tier 9 #53 V2 — Configurable bindings dispatched ahead
+            // of the hardcoded switch. Drop / inventory route through
+            // the runtime KeyBindings table; rebinding via the
+            // Controls screen flips behaviour the next frame without
+            // any reload. The Controls screen itself swallows
+            // keypresses while in capture mode (see HandleRebindCapture)
+            // so a player binding "Inventory = E" doesn't immediately
+            // re-open the panel.
+            if (e.KeyCode == KeyBindings.DropItem)
+            {
+                if (_renderer != null && !_renderer.IsPaused)
+                {
+                    bool shiftHeld = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
+                    if (shiftHeld) _input.DropStackPressed = true;
+                    else           _input.DropOnePressed = true;
+                    e.SuppressKeyPress = true;
+                }
+                return;
+            }
+            if (e.KeyCode == KeyBindings.Inventory)
+            {
+                ToggleInventory();
+                e.SuppressKeyPress = true;
+                return;
+            }
             switch (e.KeyCode)
             {
                 // Number keys just flip the render-thread-visible hotbar
@@ -1340,42 +1381,11 @@ namespace VStudioCraft.UI
                         e.SuppressKeyPress = true;
                     }
                     break;
-                case Keys.Q:
-                    // Q drops one item; Shift+Q drops the whole stack.
-                    // Two contexts:
-                    //   • Inventory closed: source is the selected hotbar
-                    //     slot.
-                    //   • Inventory open: source is the cursor stack if
-                    //     non-empty, otherwise the slot under the mouse
-                    //     pointer (or the hovered hotbar slot in creative).
-                    //
-                    // The render thread drains the one-shot in RenderLoop;
-                    // it picks the right source based on IsInventoryOpen.
-                    // The pause menu still gates Q out (player is in a
-                    // modal that owns the keyboard).
-                    if (_renderer != null && !_renderer.IsPaused)
-                    {
-                        bool shiftHeld = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
-                        if (shiftHeld) _input.DropStackPressed = true;
-                        else           _input.DropOnePressed = true;
-                        e.SuppressKeyPress = true;
-                    }
-                    break;
-                case Keys.E:
-                    // Open / close inventory. Esc also closes it (handled
-                    // below) so the player has the same dismiss key as
-                    // every other modal.
-                    //
-                    // SuppressKeyPress (not just Handled) is REQUIRED here:
-                    // KeyDown flips IsInventoryOpen to true, but WinForms
-                    // still fires a KeyPress for the same physical 'e'
-                    // unless we suppress it explicitly. Without this, the
-                    // creative-mode search bar would receive an 'e' the
-                    // moment the panel opens — pre-typing the very key
-                    // that opened it.
-                    ToggleInventory();
-                    e.SuppressKeyPress = true;
-                    break;
+                // (Tier 9 #53 V2 — Drop and Inventory are now handled
+                // by the configurable-binding dispatch ABOVE this
+                // switch, so a rebound key fires the right action
+                // and the original Q/E are inert if rebound away.
+                // Comments preserved here for archaeology.)
                 case Keys.Escape:
                     // Modal precedence: inventory > options > pause. Esc
                     // pops the topmost modal so the player isn't trapped
