@@ -584,6 +584,24 @@ namespace VStudioCraft.Game
         // Texture: reuses TilePlanks for every face of every box —
         // canonical Alpha shipped fences with the planks tile too.
         Fence              = 161, // Alpha 85
+
+        // Tier 8 #51 — Halloween Update: Jack-o-lantern. Lit pumpkin
+        // variant created by right-clicking a placed Pumpkin block
+        // with Flint and Steel held. Emits light=15 (same as the
+        // brightest sources in Alpha — torch is 14, this is a hair
+        // brighter so a Halloween-themed cave reads visibly different
+        // from a torch-lit one). Per-cell metadata low-2-bits stores
+        // a BlockFacing for which side the carved face points (the
+        // side the player was on when they ignited the pumpkin) —
+        // the mesher's GetTileIndexForOriented samples
+        // TileJackOLanternFront on that face and TilePumpkinSide
+        // on the other three sides + bottom, mirroring the
+        // furnace's front/side dispatch.
+        //
+        // Drops as a JackOLantern block (not a Pumpkin) when broken,
+        // so the lit state survives mining-and-replacing — no need
+        // to re-flint after every move.
+        JackOLantern       = 162, // Alpha 91
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -1850,6 +1868,12 @@ namespace VStudioCraft.Game
                 // visual cue.
                 case BlockType.RedstoneTorchOn:
                     return 7;
+                // Tier 8 #51 — Jack-o-lantern emits 15 (one above
+                // the canonical torch level — Alpha 1.1.2's brightest
+                // block-light source). A row of jack-o-lanterns reads
+                // as a clearly Halloween-decorated path.
+                case BlockType.JackOLantern:
+                    return 15;
                 default:
                     return 0;
             }
@@ -2209,6 +2233,19 @@ namespace VStudioCraft.Game
                     // canonical orange-ridge tile.
                     if (faceKind == 0) return BlockTextures.TilePumpkinTop;
                     return BlockTextures.TilePumpkinSide;
+                // Tier 8 #51 — Un-oriented Jack-o-lantern lookup.
+                // Used by inventory icons / drop sprites where the
+                // facing isn't meaningful: top = stem, all four
+                // sides + bottom default to the carved face so the
+                // dropped/held form looks distinctive (the player
+                // shouldn't be unable to tell jack-o-lantern apart
+                // from a regular pumpkin in their inventory). The
+                // mesher uses GetTileIndexForOriented instead so
+                // the in-world block correctly shows three plain
+                // sides + one carved face.
+                case BlockType.JackOLantern:
+                    if (faceKind == 0) return BlockTextures.TilePumpkinTop;
+                    return BlockTextures.TileJackOLanternFront;
                 case BlockType.Torch:
                 case BlockType.TorchEast:
                 case BlockType.TorchWest:
@@ -2466,6 +2503,20 @@ namespace VStudioCraft.Game
                 return IsFacingFront(axis, dir, facing)
                     ? BlockTextures.TileChestFront
                     : BlockTextures.TileChestSide;
+            }
+            // Tier 8 #51 — Jack-o-lantern. Top = pumpkin stem,
+            // bottom = pumpkin side (invisible against ground in
+            // most placements; reuses the side tile to skip a
+            // third atlas slot — same shortcut Pumpkin already
+            // uses). The four lateral faces show TilePumpkinSide
+            // EXCEPT on the face that matches `facing`, which
+            // shows the lit carved-face tile.
+            if (t == BlockType.JackOLantern)
+            {
+                if (axis == 1) return BlockTextures.TilePumpkinTop;
+                return IsFacingFront(axis, dir, facing)
+                    ? BlockTextures.TileJackOLanternFront
+                    : BlockTextures.TilePumpkinSide;
             }
             return GetTileIndex(t, ChunkMesherFaceKind(axis, dir));
         }

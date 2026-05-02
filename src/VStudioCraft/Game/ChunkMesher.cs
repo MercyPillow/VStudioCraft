@@ -2034,6 +2034,16 @@ namespace VStudioCraft.Game
                             if (ce != null) facing = ce.Facing;
                             layer = BlockData.GetTileIndexForOriented((BlockType)a, axis, dir, facing);
                         }
+                        else if (a == (byte)BlockType.JackOLantern)
+                        {
+                            // Tier 8 #51 — Jack-o-lantern facing is
+                            // stored in the chunk's per-cell metadata
+                            // low-2-bits (simpler than a tile entity —
+                            // same convention as signs / ladders).
+                            byte jolMeta = chunk.RawMeta[Chunk.Index(cx, cy, cz)];
+                            BlockFacing facing = (BlockFacing)(jolMeta & 0x03);
+                            layer = BlockData.GetTileIndexForOriented((BlockType)a, axis, dir, facing);
+                        }
                         else
                         {
                             layer = BlockData.GetTileIndex((BlockType)a, faceKind);

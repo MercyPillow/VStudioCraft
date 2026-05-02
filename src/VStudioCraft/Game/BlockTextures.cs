@@ -264,7 +264,11 @@ namespace VStudioCraft.Game
         // same H-silhouette in plank colours.
         public const int FirstTailLadderLayer     = FirstTailBoneLayer + TailBoneLayerCount;            // 173
         public const int TailLadderLayerCount     = 1;
-        public const int LayerCount = FirstTailLadderLayer + TailLadderLayerCount;                      // 174
+        // Tier 8 #51 — Jack-o-lantern lit front face. Sliced from
+        // terrain.png at canonical Alpha (8, 7).
+        public const int FirstTailJackLayer       = FirstTailLadderLayer + TailLadderLayerCount;        // 174
+        public const int TailJackLayerCount       = 1;
+        public const int LayerCount = FirstTailJackLayer + TailJackLayerCount;                          // 175
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -472,6 +476,12 @@ namespace VStudioCraft.Game
         // rails so the wall behind the ladder shows through. Procedural
         // fallback paints the same H-shape silhouette in plank colours.
         public const int TileLadder              = 173;
+        // Tier 8 #51 — Jack-o-lantern lit front face. Sliced from
+        // terrain.png at canonical Alpha (8, 7) — pumpkin orange
+        // background with carved triangular eyes + a toothy mouth
+        // glowing yellow. Procedural fallback paints the same
+        // silhouette over the pumpkin-side palette.
+        public const int TileJackOLanternFront   = 174;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -783,6 +793,9 @@ namespace VStudioCraft.Game
             // Tier 8 #46 — Ladder block tile (procedural fallback).
             UploadLayer(layerPixels, TileLadder, GenerateLadder);
 
+            // Tier 8 #51 — Jack-o-lantern lit face (procedural).
+            UploadLayer(layerPixels, TileJackOLanternFront, GenerateJackOLanternFront);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -929,7 +942,9 @@ namespace VStudioCraft.Game
                 || layer == TileRedstoneTorchOff
                 || layer == TileRedstoneWire
                 // Tier 8 #46 — Ladder block tile from terrain.png.
-                || layer == TileLadder;
+                || layer == TileLadder
+                // Tier 8 #51 — Jack-o-lantern lit face from terrain.png.
+                || layer == TileJackOLanternFront;
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3749,6 +3764,9 @@ namespace VStudioCraft.Game
             // Tier 8 #46 — Ladder block tile from terrain.png at
             // canonical Alpha (3, 5).
             /* TileLadder              */ (3, 5),
+            // Tier 8 #51 — Jack-o-lantern carved+lit face from
+            // terrain.png at canonical Alpha (8, 7).
+            /* TileJackOLanternFront   */ (8, 7),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -3994,6 +4012,10 @@ namespace VStudioCraft.Game
             // overlaid from terrain.png (3, 5) by the biome loop below.
             UploadLayer(layerPixels, TileLadder, GenerateLadder);
 
+            // Tier 8 #51 — Jack-o-lantern lit face. Procedural fallback;
+            // overlaid from terrain.png (8, 7) by the biome loop below.
+            UploadLayer(layerPixels, TileJackOLanternFront, GenerateJackOLanternFront);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4012,6 +4034,8 @@ namespace VStudioCraft.Game
                 TileRedstoneWire,
                 // Tier 8 #46 — Ladder block tile.
                 TileLadder,
+                // Tier 8 #51 — Jack-o-lantern lit face.
+                TileJackOLanternFront,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
@@ -6642,6 +6666,66 @@ namespace VStudioCraft.Game
                 SetPixel(pixels, 3,  ry, hi.r, hi.g, hi.b);
                 SetPixel(pixels, 12, ry, lo.r, lo.g, lo.b);
             }
+        }
+
+        // Tier 8 #51 — Jack-o-lantern lit front face. Pumpkin-orange
+        // background with the canonical 2-pixel ridge pattern (matches
+        // GeneratePumpkinSide so the carved face blends seamlessly into
+        // the un-carved sides), then triangular eyes + a toothy mouth
+        // burnt out and lit with a warm yellow glow. Procedural — the
+        // alpha-textures atlas overlays from terrain.png (8, 7) on top.
+        private static void GenerateJackOLanternFront(byte[] pixels)
+        {
+            (byte r, byte g, byte b) bodyDark   = (185, 100, 25);
+            (byte r, byte g, byte b) bodyMid    = (220, 130, 40);
+            (byte r, byte g, byte b) bodyHi     = (245, 165, 60);
+            (byte r, byte g, byte b) glow       = (255, 220, 70);
+            (byte r, byte g, byte b) glowDim    = (200, 130, 30);
+
+            // Pumpkin ridges — 4 vertical stripes (cols 1, 5, 9, 13)
+            // running darker-brighter-dark for a 3D ridged look.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, bodyMid.r, bodyMid.g, bodyMid.b);
+            int[] ridgeBrightCols = { 2, 6, 10, 14 };
+            foreach (int rc in ridgeBrightCols)
+            for (int y = 0; y < TileSize; y++)
+                SetPixel(pixels, rc, y, bodyHi.r, bodyHi.g, bodyHi.b);
+            int[] ridgeDarkCols = { 0, 4, 8, 12 };
+            foreach (int rc in ridgeDarkCols)
+            for (int y = 0; y < TileSize; y++)
+                SetPixel(pixels, rc, y, bodyDark.r, bodyDark.g, bodyDark.b);
+
+            // Two triangular eyes at rows 4..6 — left eye spans cols
+            // 3..5 (top of triangle at row 4 col 4, base at row 6
+            // cols 3-5), mirror image on the right at cols 10..12.
+            void DrawEye(int eyeCx)
+            {
+                SetPixel(pixels, eyeCx,     4, glow.r, glow.g, glow.b);
+                SetPixel(pixels, eyeCx - 1, 5, glow.r, glow.g, glow.b);
+                SetPixel(pixels, eyeCx,     5, glow.r, glow.g, glow.b);
+                SetPixel(pixels, eyeCx + 1, 5, glow.r, glow.g, glow.b);
+                SetPixel(pixels, eyeCx - 1, 6, glowDim.r, glowDim.g, glowDim.b);
+                SetPixel(pixels, eyeCx + 1, 6, glowDim.r, glowDim.g, glowDim.b);
+            }
+            DrawEye(4);
+            DrawEye(11);
+
+            // Toothy grin spanning cols 3..12, rows 9..11. Two-row
+            // mouth with alternating "teeth" cells punched darker so
+            // the smile reads jagged.
+            for (int x = 3; x <= 12; x++)
+            {
+                SetPixel(pixels, x,  9, glow.r, glow.g, glow.b);
+                SetPixel(pixels, x, 10, glow.r, glow.g, glow.b);
+            }
+            // Punch out two teeth at cols 6 + 9 (mid-mouth).
+            SetPixel(pixels, 6,  10, bodyDark.r, bodyDark.g, bodyDark.b);
+            SetPixel(pixels, 9,  10, bodyDark.r, bodyDark.g, bodyDark.b);
+            // Round corners of mouth — tone down the outermost cells
+            // in the upper row so the grin tapers at each end.
+            SetPixel(pixels, 3,  9, glowDim.r, glowDim.g, glowDim.b);
+            SetPixel(pixels, 12, 9, glowDim.r, glowDim.g, glowDim.b);
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

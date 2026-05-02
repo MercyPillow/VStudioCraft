@@ -4683,6 +4683,44 @@ void main()
                         SfxBank.PlayClick();
                         return true;
                     }
+                    // Tier 8 #51 — Flint+Steel on a placed Pumpkin
+                    // converts it to a JackOLantern (Halloween Update
+                    // canonical recipe). Facing meta is set from the
+                    // player's current view direction so the carved
+                    // face points TOWARD the player who lit it —
+                    // FacingTowardPlayer returns the cardinal opposite
+                    // of the player's forward, which is exactly what
+                    // we want for "the face shows toward me." The
+                    // furnace front-face dispatch uses the same
+                    // semantics.
+                    if (hitT0 == BlockType.Pumpkin)
+                    {
+                        if (_world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.JackOLantern))
+                        {
+                            int pcx = hit.X >> 4, pcz = hit.Z >> 4;
+                            var pch = _world.GetChunk(pcx, pcz);
+                            if (pch != null)
+                            {
+                                int plx = hit.X - (pcx << 4);
+                                int plz = hit.Z - (pcz << 4);
+                                BlockFacing pfacing = FacingTowardPlayer(Camera.Forward);
+                                byte pmeta = (byte)((byte)pfacing & 0x03);
+                                pch.SetMeta(plx, hit.Y, plz, pmeta);
+                                _world.RecordMetaChange(hit.X, hit.Y, hit.Z);
+                            }
+                            // Decrement the flint+steel's durability
+                            // (creative skips — tools don't degrade
+                            // there). DamageHeldTool already gates on
+                            // IsTool / IsEmpty so calling without a
+                            // gamemode check would be safe too, but
+                            // the explicit branch matches the rest of
+                            // the file.
+                            if (GameMode == GameMode.Survival)
+                                DamageHeldTool(1);
+                            SfxBank.PlayClick();
+                            return true;
+                        }
+                    }
 
                     // Tier 6 #34 — Light fire on the targeted face.
                     // Place a Fire block at the cell adjacent to the

@@ -507,7 +507,6 @@ multiple subsystems at once.
 45. **Slabs + stairs** — Stairs are Alpha 1.0.5_01 canonical; slabs are Beta 1.3 but the user has explicitly opted to keep them in scope (sub-block geometry is general infrastructure that pairs naturally with stairs). Sub-block metadata byte + non-cube collision shape.
 49. **Dispenser** — Alpha 1.0.16. 9-slot tile entity facing outward; redstone signal pops one item from a random slot. Reuses chest's tile-entity infrastructure plus furnace-style facing metadata.
 51. **Halloween Update block set** — Alpha 1.1.0 (Oct 30, 2010), in scope for our 1.1.2_01 target. Pumpkin already shipped (Tier 6 polish). Remaining:
-    - **Jack-o-lantern** — lit variant of Pumpkin, placed via Flint+Steel right-click on a regular Pumpkin. Emits light.
     - **Netherrack** — soft red rock; lava can spread through it.
     - **Soul Sand** — slows player movement, reduces fall damage.
     - **Glowstone** — emits light=15, breaks into Glowstone Dust.
