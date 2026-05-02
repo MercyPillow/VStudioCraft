@@ -1665,6 +1665,14 @@ namespace VStudioCraft.Game
             switch (t)
             {
                 case BlockType.Cactus:
+                // Tier 8 #51 — Soul Sand is IsCubeShape=false because
+                // its in-world collision is 14/16 tall (the player
+                // visually sinks into it). The HOTBAR / INVENTORY
+                // ICON, however, should still read as a normal cube
+                // — a 3D iso brown block — so the player can tell
+                // it apart from the flat sand item form. Same opt-in
+                // shape as Cactus.
+                case BlockType.SoulSand:
                     return true;
                 default:
                     return false;
