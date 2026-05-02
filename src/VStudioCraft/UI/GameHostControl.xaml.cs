@@ -762,6 +762,21 @@ namespace VStudioCraft.UI
                         _input.InventoryClickShift = false;
                     }
 
+                    // Tier 8 #49 V2 — Same drain pattern for the
+                    // dispenser screen. Mirrors the chest path so
+                    // every modal-routing surface stays consistent.
+                    if (_renderer.IsDispenserOpen && _input.InventoryClickButton != 0)
+                    {
+                        _renderer.HandleDispenserClick(
+                            _input.InventoryClickButton,
+                            _input.InventoryClickX,
+                            _input.InventoryClickY,
+                            pw, ph,
+                            _input.InventoryClickShift);
+                        _input.InventoryClickButton = 0;
+                        _input.InventoryClickShift = false;
+                    }
+
                     // Drain RMB drag-deposit queue — the host paints one
                     // slot per MouseMove crossing, and we apply them all
                     // here in arrival order. The renderer's HandleDrag-
@@ -1298,6 +1313,7 @@ namespace VStudioCraft.UI
                     if (_renderer != null && _renderer.IsCraftingOpen) CloseCrafting();
                     else if (_renderer != null && _renderer.IsFurnaceOpen) CloseFurnace();
                     else if (_renderer != null && _renderer.IsChestOpen) CloseChest();
+                    else if (_renderer != null && _renderer.IsDispenserOpen) CloseDispenser();
                     else if (_renderer != null && _renderer.IsInventoryOpen) ToggleInventory();
                     else if (_renderer != null && _renderer.IsOptionsOpen)
                     {
@@ -1430,6 +1446,11 @@ namespace VStudioCraft.UI
                 CloseChest();
                 return;
             }
+            if (_renderer.IsDispenserOpen)
+            {
+                CloseDispenser();
+                return;
+            }
             _renderer.IsInventoryOpen = true;
             _input.ResetInventorySearch();
             ReleaseMouseLook();
@@ -1472,6 +1493,19 @@ namespace VStudioCraft.UI
         {
             if (_renderer == null) return;
             _renderer.CloseChest();
+            _rmbDragActive = false;
+            _rmbDragPainted.Clear();
+            CaptureMouseLook();
+        }
+
+        // Tier 8 #49 V2 — Close the dispenser screen. Same lifecycle
+        // as the chest close path; renderer flushes cursor back into
+        // the player inventory, host clears RMB drag state and
+        // re-captures mouse-look.
+        private void CloseDispenser()
+        {
+            if (_renderer == null) return;
+            _renderer.CloseDispenser();
             _rmbDragActive = false;
             _rmbDragPainted.Clear();
             CaptureMouseLook();

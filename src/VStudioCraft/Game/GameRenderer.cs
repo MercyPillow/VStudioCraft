@@ -706,6 +706,17 @@ void main()
         }
         private (int x, int y, int z) _chestPos;
 
+        // Tier 8 #49 V2 — Same open/close pattern for the dispenser.
+        // RMB-opening a Dispenser sets _isDispenserOpen + _dispenserPos
+        // and routes input through HandleDispenserClick / RenderDispenser.
+        private volatile bool _isDispenserOpen;
+        public bool IsDispenserOpen
+        {
+            get => _isDispenserOpen;
+            set => _isDispenserOpen = value;
+        }
+        private (int x, int y, int z) _dispenserPos;
+
         // Tier 4 #25 — Music disc audio buffers. Null-by-default in V1
         // because real disc audio is asset-deferred — Alpha 1.1.2_01
         // shipped two short OGG tracks ("13" and "cat"); we don't
@@ -760,7 +771,7 @@ void main()
         // Sign editor halts the world for the same reason the inventory
         // does — typing a sign mid-mine shouldn't drop a torch on the
         // player's head when ENTER finishes the message.
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None || _isLoadingWorld || _isEditingSign;
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDispenserOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None || _isLoadingWorld || _isEditingSign;
 
         // Tier 6 — Loading-screen state. Set when a world transition
         // begins (StartNewWorld / LoadFromFile / ConnectToServer);
@@ -3752,6 +3763,18 @@ void main()
                     _isChestOpen = false;
                 }
             }
+            else if (t == BlockType.Dispenser)
+            {
+                // Tier 8 #49 V2 — Creative-break parallel to the chest
+                // path: discard the entity (creative drops nothing) and
+                // close the dispenser UI if it was bound to this cell.
+                _world.RemoveDispenserEntity(hit.X, hit.Y, hit.Z);
+                if (_isDispenserOpen
+                    && _dispenserPos.x == hit.X && _dispenserPos.y == hit.Y && _dispenserPos.z == hit.Z)
+                {
+                    _isDispenserOpen = false;
+                }
+            }
             else if (t == BlockType.Jukebox)
             {
                 // Tier 4 #25 — Jukebox creative-break. Discard the entity
@@ -3949,10 +3972,14 @@ void main()
                     // Tier 8 #49 V1 — Dispenser break in survival:
                     // pop the entity so any items in its 9 slots
                     // spill as drops alongside the dispenser block
-                    // itself. No UI to close (V2 ships the inventory
-                    // panel; for now the dispenser only sees inputs
-                    // from creative item-spawn or future hopper).
+                    // itself. V2 — also close the inventory panel
+                    // if it was bound to this cell.
                     spilledDispenser = _world.RemoveDispenserEntity(bx, by, bz);
+                    if (_isDispenserOpen
+                        && _dispenserPos.x == bx && _dispenserPos.y == by && _dispenserPos.z == bz)
+                    {
+                        _isDispenserOpen = false;
+                    }
                 }
                 else if (brokenType == BlockType.Jukebox)
                 {
@@ -4921,6 +4948,19 @@ void main()
                     _chestPos = (hit.X, hit.Y, hit.Z);
                     _world.GetOrCreateChestEntity(hit.X, hit.Y, hit.Z);
                     _isChestOpen = true;
+                    return true;
+                case BlockType.Dispenser:
+                    // Tier 8 #49 V2 — Dispenser screen binds to the
+                    // cell's DispenserTileEntity (smaller cousin of
+                    // chest — 9 slots in a 3×3 grid). Get-or-create
+                    // so a freshly placed dispenser gets an empty
+                    // entity on first open; placement already runs
+                    // GetOrCreateDispenserEntity to stamp facing, but
+                    // legacy worlds with a manually-spawned dispenser
+                    // (no entity yet) need this too.
+                    _dispenserPos = (hit.X, hit.Y, hit.Z);
+                    _world.GetOrCreateDispenserEntity(hit.X, hit.Y, hit.Z);
+                    _isDispenserOpen = true;
                     return true;
                 case BlockType.Jukebox:
                 {
@@ -8717,6 +8757,117 @@ void main()
             return moved;
         }
 
+        // Tier 8 #49 V2 — Dispenser click dispatch. Mirrors
+        // HandleChestClick exactly except the slot ranges + entity
+        // type. Multiplayer routing is intentionally skipped for V1
+        // network parity (the dispenser inventory hasn't been wired
+        // into the WindowClick / SendInventoryClick protocol yet —
+        // single-player works end-to-end; LAN coop with dispensers
+        // shows a local-only inventory until the protocol catches
+        // up, which is consistent with how every multiplayer feature
+        // grew incrementally during the Phase 6 series).
+        public void HandleDispenserClick(int button, int mx, int my, int screenW, int screenH, bool shift)
+        {
+            if (Input == null) return;
+            if (_world == null) return;
+            var inv = Input.Inventory;
+
+            int slot = DispenserScreen.HitTest(screenW, screenH, mx, my);
+            var de = _world.TryGetDispenserEntity(_dispenserPos.x, _dispenserPos.y, _dispenserPos.z);
+            if (de == null) return;
+            if (slot < 0)
+            {
+                if (!inv.Cursor.IsEmpty) TossCursorStack();
+                return;
+            }
+
+            int dispIdx = DispenserScreen.DispenserIndexFor(slot);
+            if (dispIdx >= 0)
+            {
+                if (shift)
+                {
+                    de.Slots[dispIdx] = inv.TryAdd(de.Slots[dispIdx]);
+                }
+                else if (button == 2) HandleRightClickSlotRef(ref de.Slots[dispIdx], inv);
+                else                  HandleLeftClickSlotRef(ref de.Slots[dispIdx], inv);
+                return;
+            }
+
+            int invIdx = DispenserScreen.InventoryIndexFor(slot);
+            if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
+            if (shift)
+            {
+                ref var src = ref inv.Slots[invIdx];
+                if (!src.IsEmpty)
+                {
+                    bool moved = TryShiftIntoDispenser(ref src, de);
+                    if (!moved) inv.HandleShiftClickSlot(invIdx);
+                }
+            }
+            else if (button == 2)
+            {
+                inv.HandleRightClickSlot(invIdx);
+            }
+            else
+            {
+                inv.HandleLeftClickSlot(invIdx);
+            }
+        }
+
+        // Same two-pass shift-click heuristic as TryShiftIntoChest:
+        // top up matching partials first, then drop into the first
+        // empty slot.
+        private static bool TryShiftIntoDispenser(ref ItemStack src, DispenserTileEntity de)
+        {
+            if (src.IsEmpty) return false;
+            bool moved = false;
+            for (int i = 0; i < de.Slots.Length; i++)
+            {
+                if (src.IsEmpty) break;
+                if (de.Slots[i].IsEmpty || !de.Slots[i].SameKindAs(src)) continue;
+                int room = de.Slots[i].MaxStackSize - de.Slots[i].Count;
+                if (room <= 0) continue;
+                int take = System.Math.Min(room, src.Count);
+                de.Slots[i].Count += take;
+                src.Count -= take;
+                moved = true;
+                if (src.Count == 0) src = ItemStack.Empty;
+            }
+            if (!src.IsEmpty)
+            {
+                for (int i = 0; i < de.Slots.Length; i++)
+                {
+                    if (!de.Slots[i].IsEmpty) continue;
+                    de.Slots[i] = src;
+                    src = ItemStack.Empty;
+                    moved = true;
+                    break;
+                }
+            }
+            return moved;
+        }
+
+        // Tier 8 #49 V2 — Close the dispenser screen. Same cursor
+        // hygiene as CloseChest: slot contents stay on the entity,
+        // only the cursor needs to be drained back into the player
+        // inventory or tossed if the inventory's full.
+        public void CloseDispenser()
+        {
+            if (Input == null)
+            {
+                _isDispenserOpen = false;
+                return;
+            }
+            var inv = Input.Inventory;
+            if (!inv.Cursor.IsEmpty)
+            {
+                var leftover = inv.TryAdd(inv.Cursor);
+                inv.Cursor = ItemStack.Empty;
+                if (!leftover.IsEmpty) ThrowStack(leftover);
+            }
+            _isDispenserOpen = false;
+        }
+
         // Close the chest screen. Slot contents stay on the entity
         // (Alpha behaviour — a chest's a chest); only the cursor
         // needs handling so the held stack doesn't strand on the next
@@ -9460,6 +9611,7 @@ void main()
             else if (_isCraftingOpen) RenderCrafting(width, height);
             else if (_isFurnaceOpen) RenderFurnace(width, height);
             else if (_isChestOpen) RenderChest(width, height);
+            else if (_isDispenserOpen) RenderDispenser(width, height);
             else if (_isPaused)
             {
                 // Options is layered on top of the pause menu — draw the
@@ -14261,6 +14413,169 @@ void main()
                     DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
                 }
                 int cursorFrame = ChestScreen.SlotPx(width, height);
+                int cursorFrameX = cx - cursorFrame / 2;
+                int cursorFrameY = cy - cursorFrame / 2;
+                if (inv.Cursor.Count > 1)
+                {
+                    DrawStackCount(inv.Cursor.Count, cursorFrameX, cursorFrameY,
+                        cursorFrame, cursorFrame, ortho);
+                }
+                DrawDurabilityBar(inv.Cursor, cursorFrameX, cursorFrameY,
+                    cursorFrame, cursorFrame, width, height, ortho);
+            }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Tier 8 #49 V2 — Dispenser inventory panel. Same shape as
+        // RenderChest: dim background → panel chrome → title → slot
+        // wells → icons → stack counts → durability bars → cursor
+        // stack on top. The only differences are the smaller (9-slot)
+        // grid in DispenserScreen and the entity reference is
+        // _world.TryGetDispenserEntity instead of the chest variant.
+        // Code duplication is intentional — keeping the two render
+        // paths separate makes the chest UI immune to dispenser-side
+        // changes and vice versa.
+        private void RenderDispenser(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            DrawSolidQuad(0, 0, width, height,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+
+            DispenserScreen.GetPanelRect(width, height,
+                out int panelX, out int panelY, out int panelW, out int panelH);
+            DrawSolidQuad(panelX, panelY, panelW, panelH,
+                new Vector3(0.16f, 0.16f, 0.18f), 0.95f, ortho);
+            var border = new Vector3(0.78f, 0.82f, 0.88f);
+            int pb = DispenserScreen.SlotBorderPx(width, height);
+            DrawSolidQuad(panelX, panelY, panelW, pb, border, 1f, ortho);
+            DrawSolidQuad(panelX, panelY + panelH - pb, panelW, pb, border, 1f, ortho);
+            DrawSolidQuad(panelX, panelY, pb, panelH, border, 1f, ortho);
+            DrawSolidQuad(panelX + panelW - pb, panelY, pb, panelH, border, 1f, ortho);
+
+            DrawString(DispenserScreen.Title, DispenserScreen.TitleScale(width, height),
+                width / 2, DispenserScreen.TitleY(width, height),
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
+            var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
+            for (int i = 0; i < DispenserScreen.TotalSlots; i++)
+            {
+                DispenserScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh);
+                DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
+            }
+
+            DispenserTileEntity de = _world?.TryGetDispenserEntity(_dispenserPos.x, _dispenserPos.y, _dispenserPos.z);
+            var inv = Input?.Inventory;
+            int iconPad = (DispenserScreen.SlotPx(width, height) - DispenserScreen.IconPx(width, height)) / 2;
+
+            // Icons in dispenser + inventory.
+            if (de != null)
+            {
+                for (int i = 0; i < DispenserScreen.DispenserSlotCount; i++)
+                {
+                    var stack = de.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    DispenserScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+            }
+            if (inv != null)
+            {
+                for (int i = DispenserScreen.InvMainStart; i < DispenserScreen.TotalSlots; i++)
+                {
+                    int invIdx = DispenserScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty) continue;
+                    DispenserScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
+                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
+                }
+                GL.Disable(EnableCap.CullFace);
+            }
+
+            // Stack counts.
+            if (de != null)
+            {
+                for (int i = 0; i < DispenserScreen.DispenserSlotCount; i++)
+                {
+                    var stack = de.Slots[i];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    DispenserScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+            }
+            if (inv != null)
+            {
+                for (int i = DispenserScreen.InvMainStart; i < DispenserScreen.TotalSlots; i++)
+                {
+                    int invIdx = DispenserScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty || stack.Count <= 1) continue;
+                    DispenserScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
+                }
+            }
+
+            // Durability bars.
+            if (de != null)
+            {
+                for (int i = 0; i < DispenserScreen.DispenserSlotCount; i++)
+                {
+                    var stack = de.Slots[i];
+                    if (stack.IsEmpty) continue;
+                    DispenserScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
+            }
+            if (inv != null)
+            {
+                for (int i = DispenserScreen.InvMainStart; i < DispenserScreen.TotalSlots; i++)
+                {
+                    int invIdx = DispenserScreen.InventoryIndexFor(i);
+                    if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
+                    var stack = inv.Slots[invIdx];
+                    if (stack.IsEmpty) continue;
+                    DispenserScreen.GetSlotRect(i, width, height,
+                        out int sx, out int sy, out int sw, out int sh);
+                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
+                }
+            }
+
+            // Cursor stack (follows mouse, drawn last).
+            if (inv != null && !inv.Cursor.IsEmpty && Input != null)
+            {
+                int cx = Input.MenuMouseX;
+                int cy = Input.MenuMouseY;
+                int iconSize = DispenserScreen.IconPx(width, height);
+                int ix = cx - iconSize / 2;
+                int iy = cy - iconSize / 2;
+                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
+                {
+                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                    GL.Disable(EnableCap.CullFace);
+                }
+                else
+                {
+                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                }
+                int cursorFrame = DispenserScreen.SlotPx(width, height);
                 int cursorFrameX = cx - cursorFrame / 2;
                 int cursorFrameY = cy - cursorFrame / 2;
                 if (inv.Cursor.Count > 1)

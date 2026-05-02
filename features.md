@@ -504,7 +504,6 @@ multiple subsystems at once.
 	
 ### Tier 8 — Late-Alpha systems
 
-49. **Dispenser inventory UI** (V2 polish — V1 shipped). Block + facing + texture + redstone-driven ejection + crafting recipe + drop-on-break with inventory spill + v15 save/load all landed in V1; what's missing is the 3×3 inventory panel so the player can manually load items rather than only via creative spawning + future hopper-equivalent tiers. UI follows the chest-panel pattern with smaller dimensions.
 51. **Halloween Update block set** — Alpha 1.1.0 (Oct 30, 2010), in scope for our 1.1.2_01 target. Pumpkin already shipped (Tier 6 polish). Remaining:
     - **Netherrack** — soft red rock;
     - **Soul Sand** — slows player movement, reduces fall damage.
