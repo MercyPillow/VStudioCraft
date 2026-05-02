@@ -557,6 +557,95 @@ namespace VStudioCraft.Net
         };
     }
 
+    // 0x47 — Tier 8 #44 V3 — client→server "I just finished editing
+    // the sign at (X,Y,Z) and these are my four lines of text." The
+    // server validates that there's actually a SignTileEntity at the
+    // coord (rejects writes to non-sign cells from a hostile or
+    // glitched client), copies the strings in, and broadcasts a
+    // SignText (0x61) to every client tracking the chunk so the
+    // typing appears on every viewer's copy of the world.
+    //
+    // No client-side prediction: the local renderer stamps the text
+    // into its own SignTileEntity at commit time so the player sees
+    // their typing immediately, but on multiplayer the SERVER's
+    // SignText echo is what every other client (and the originating
+    // client's authoritative state, after a round trip) sees. If
+    // the server rejects the edit (corrupt coord, race with a
+    // breaker, etc.) the originator's display stays out of sync for
+    // one chunk-reload-cycle — acceptable for the cooperative-LAN
+    // design point.
+    internal struct PlayerEditSignPacket
+    {
+        public int X, Y, Z;
+        public string Line0, Line1, Line2, Line3;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(X);
+            w.WriteInt(Y);
+            w.WriteInt(Z);
+            w.WriteString(Line0 ?? string.Empty);
+            w.WriteString(Line1 ?? string.Empty);
+            w.WriteString(Line2 ?? string.Empty);
+            w.WriteString(Line3 ?? string.Empty);
+        }
+
+        public static PlayerEditSignPacket Read(PacketReader r) => new PlayerEditSignPacket
+        {
+            X = r.ReadInt(),
+            Y = r.ReadInt(),
+            Z = r.ReadInt(),
+            Line0 = r.ReadString(),
+            Line1 = r.ReadString(),
+            Line2 = r.ReadString(),
+            Line3 = r.ReadString(),
+        };
+    }
+
+    // 0x61 — Tier 8 #44 V3 — server→client sign-text broadcast.
+    // Same payload shape as PlayerEditSign minus the implied "this
+    // came from me" semantics (a SignText sent from server to client
+    // is authoritative; the receiving client overwrites its local
+    // SignTileEntity.Lines with the four strings here).
+    //
+    // Sent in two scenarios:
+    //   1. After a successful PlayerEditSign — every client tracking
+    //      the chunk gets the new text, including the originator
+    //      (so the local-prediction stamp gets a server-confirmed
+    //      version on top, which converges if both agree and
+    //      corrects mismatches if the server rejected fields).
+    //   2. During ChunkLoad — for every sign already in the chunk
+    //      being shipped, the server emits one SignText so the
+    //      late-joining client sees existing writing as soon as the
+    //      sign block renders.
+    internal struct SignTextPacket
+    {
+        public int X, Y, Z;
+        public string Line0, Line1, Line2, Line3;
+
+        public void Write(PacketWriter w)
+        {
+            w.WriteInt(X);
+            w.WriteInt(Y);
+            w.WriteInt(Z);
+            w.WriteString(Line0 ?? string.Empty);
+            w.WriteString(Line1 ?? string.Empty);
+            w.WriteString(Line2 ?? string.Empty);
+            w.WriteString(Line3 ?? string.Empty);
+        }
+
+        public static SignTextPacket Read(PacketReader r) => new SignTextPacket
+        {
+            X = r.ReadInt(),
+            Y = r.ReadInt(),
+            Z = r.ReadInt(),
+            Line0 = r.ReadString(),
+            Line1 = r.ReadString(),
+            Line2 = r.ReadString(),
+            Line3 = r.ReadString(),
+        };
+    }
+
     // 0x52 — server→client "I'm opening window <id> of kind <kind>
     // for you, the cell at (x,y,z) is its backing tile entity, and
     // it has <slotCount> slots". Slot population follows in a

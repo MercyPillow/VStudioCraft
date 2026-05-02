@@ -2203,6 +2203,10 @@ void main()
                     ApplyBlockChange(pkt.BlockChange);
                     break;
 
+                case VStudioCraft.Net.PacketIds.SignText:
+                    ApplySignText(pkt.SignText);
+                    break;
+
                 case VStudioCraft.Net.PacketIds.EntitySpawn:
                 {
                     var s = pkt.EntitySpawn;
@@ -2588,6 +2592,28 @@ void main()
         // accumulate this in its own _pendingBlockChanges list (the
         // server is the only authority that broadcasts; the client
         // would just leak memory if it kept appending).
+        // Tier 8 #44 V3 — install / overwrite the SignTileEntity at
+        // the broadcast coord with the four lines from the server. No
+        // chunk remesh needed: the sign-text 3D pass reads
+        // World.SignEntities fresh each frame, so the new lines pop
+        // up next render without any mesh rebuild.
+        //
+        // Allocates the entity if it doesn't exist yet (e.g. a
+        // chunk-load broadcast for a sign that's outside the local
+        // player's currently-tracked entities, or a server-authored
+        // sign that hasn't been touched yet on this client). The
+        // server is the source of truth — this is a hard overwrite,
+        // not a merge.
+        private void ApplySignText(VStudioCraft.Net.SignTextPacket pkt)
+        {
+            if (_world == null) return;
+            var se = _world.GetOrCreateSignEntity(pkt.X, pkt.Y, pkt.Z);
+            se.Lines[0] = pkt.Line0 ?? string.Empty;
+            se.Lines[1] = pkt.Line1 ?? string.Empty;
+            se.Lines[2] = pkt.Line2 ?? string.Empty;
+            se.Lines[3] = pkt.Line3 ?? string.Empty;
+        }
+
         private void ApplyBlockChange(VStudioCraft.Net.BlockChangePacket pkt)
         {
             if (_world == null) return;
@@ -5246,6 +5272,15 @@ void main()
             if (!_isEditingSign) return;
             if (_world != null && Input != null)
             {
+                // Stamp the typed lines into the local SignTileEntity
+                // immediately so the player sees their writing the
+                // moment the editor closes. In net-driven mode the
+                // server's SignText echo will overwrite this in a
+                // few frames; if it agrees the overwrite is a no-op,
+                // and if the server rejects (corrupt coord, etc.)
+                // the local copy reverts on the next chunk reload.
+                // Same "best-effort local prediction, server is
+                // authoritative" pattern dig and place use.
                 var se = _world.GetOrCreateSignEntity(
                     _editingSignPos.x, _editingSignPos.y, _editingSignPos.z);
                 for (int i = 0; i < se.Lines.Length && i < Input.SignEditorLines.Length; i++)
@@ -5256,8 +5291,37 @@ void main()
                 // (RenderSignTexts) reads entity.Lines fresh each
                 // frame, so the freshly-committed text picks up on
                 // the very next render without rebuilding the chunk
-                // mesh. If a future refactor bakes the text into the
-                // chunk mesh, this is where the dirty kick belongs.
+                // mesh.
+
+                // Tier 8 #44 V3 — Ship the edit upstream so other
+                // clients see the writing. Two paths:
+                //
+                //   1. Connected as a friend (`_netClient != null`):
+                //      send PlayerEditSign; server validates and
+                //      broadcasts SignText to every viewer (including
+                //      us — the local entity stamp above is just an
+                //      eager prediction).
+                //
+                //   2. Open-to-LAN host (`_serverHub != null`): the
+                //      host has no `_netClient`; the SP simulation
+                //      writes directly to the local World. Tell the
+                //      embedded hub to fan the edit out to every
+                //      connected friend so they see the writing too.
+                //
+                // Pure single-player (no `_netClient`, no `_serverHub`)
+                // saves the local entity and we're done.
+                if (_netClient != null)
+                {
+                    _netClient.SendEditSign(
+                        _editingSignPos.x, _editingSignPos.y, _editingSignPos.z,
+                        se.Lines[0], se.Lines[1], se.Lines[2], se.Lines[3]);
+                }
+                else if (_serverHub != null)
+                {
+                    _serverHub.NotifyHostSignEdit(
+                        _editingSignPos.x, _editingSignPos.y, _editingSignPos.z,
+                        se.Lines[0], se.Lines[1], se.Lines[2], se.Lines[3]);
+                }
             }
             _isEditingSign = false;
             if (Input != null)
@@ -9670,13 +9734,25 @@ void main()
             GL.BufferData(BufferTarget.ElementArrayBuffer, ibBytes, _signTextIdx, BufferUsageHint.DynamicDraw);
 
             // Single draw of all glyphs in the world. Depth test
-            // stays on; alpha discard handled in fragment.
+            // stays on; alpha discard handled in fragment. Cull face
+            // disabled for this pass — the world-space cross product
+            // for the glyph quads flips sign depending on which
+            // facing direction the right-axis points along, so a
+            // single index order can't satisfy the FrontFace=CCW
+            // gate for all four facings simultaneously. Disabling
+            // cull for the pass renders both sides; the back of a
+            // sign is just plank texture in the chunk mesh anyway,
+            // so showing the typed glyphs on the back face is a mild
+            // visual concession (vs no text visible at all because
+            // every facing's front winding ended up backward).
             _signTextShader.Use();
             _signTextShader.SetInt("uFont", 0);
             _signTextShader.SetMatrix4("uMVP", _frameVp);
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2D, _fontTexture);
+            GL.Disable(EnableCap.CullFace);
             GL.DrawElements(PrimitiveType.Triangles, _signTextIndexCount, DrawElementsType.UnsignedInt, 0);
+            GL.Enable(EnableCap.CullFace);
             GL.BindTexture(TextureTarget.Texture2D, 0);
             GL.BindVertexArray(0);
         }
@@ -11345,25 +11421,49 @@ void main()
             // anchor straight forward into the scene, with the chop
             // pulling the hand down + back at the swing's peak.
             float pointForward = (float)Math.PI / 2f;
-            float chopAngle    = -swingPhase * 0.55f; // ~32° down-chop at peak
-            float armPitch     = pointForward + chopAngle;
+            // Rest-tilt: pitch the arm 20° UP from straight forward.
+            // Adding +δ to the +π/2 base sends the hand at mesh-local
+            // (0, -0.75, 0) to (0, 0.75·sin δ, -0.75·cos δ) — y' rises
+            // and the forward reach shortens. At 20° the hand sits
+            // ≈ 0.26 m above the shoulder line (before the shoulder
+            // anchor translation) and the forward reach is 0.94·0.75
+            // ≈ 0.70 m, reading as "holding the arm forward and
+            // angled noticeably up toward the look direction."
+            float restTiltUp   = MathHelper.DegreesToRadians(40f);
+            float chopAngle    = -swingPhase * 0.35f; // ~32° down-chop at peak
+            float armPitch     = pointForward + restTiltUp + chopAngle;
+            // Uniform 80% scale on the whole arm cuboid — shrinks the
+            // visible forearm by 20% in every dimension so it doesn't
+            // dominate the centre of the screen at this anchor depth.
+            // Applied AFTER the shoulder→origin translation and BEFORE
+            // the rotation/placement, so the scale is around the
+            // shoulder pivot (Y=0 in pre-pitch space). The shoulder
+            // itself stays put at the anchor; the hand pulls 20%
+            // closer along the rotated axis.
+            const float ArmScale = 0.4f;
             // Anchor: lower-right of the viewport, just in front of
             // the near plane. View-space is right-handed (+X right,
-            // +Y up, -Z forward). With Camera.Fov = 70° vertical, the
-            // visible vertical half-extent at depth z is tan(35°)·|z|
-            // ≈ 0.7·|z|. At z=-0.45 that's 0.315, so a shoulder.y of
-            // -0.30 sits just above the bottom of the screen, with
-            // the arm cuboid (±0.125 m around the rotated axis)
-            // entirely inside the frustum. shoulder.x of 0.20 keeps
-            // the arm towards the right side without falling off the
-            // edge on a 4:3 viewport. The hand then extends ~0.75 m
-            // forward to around z ≈ -1.20.
-            var shoulder = new Vector3(0.20f, -0.30f, -0.45f);
+            // +Y up, -Z forward).
+            //   shoulder.x = 0.30: pushes the arm right by ~0.10 m
+            //     compared to the previous 0.20 anchor — about 10% of
+            //     the screen width at this depth on a 16:9 viewport.
+            //   shoulder.y = -0.30: just above the bottom of the screen
+            //     (visible vertical half-extent at z=-0.35 is ≈ 0.245).
+            //   shoulder.z = +0.05: pulled 0.4 m closer to the camera
+            //     than the previous -0.35 anchor. The shoulder itself
+            //     now sits just behind the near plane (z=-0.1), so its
+            //     end of the cuboid is clipped — visually you see the
+            //     forearm/hand jutting in from off-screen rather than
+            //     a full shoulder-to-hand cuboid. The hand end (after
+            //     the +π/2 + 10° rotation chain) lands at z ≈ -0.68,
+            //     well inside the visible frustum.
+            var shoulder = new Vector3(0.25f, -0.35f, -0.15f);
 
             var moveShoulderToOrigin = Matrix4.CreateTranslation(0f, -0.75f, 0f);
+            var scale                = Matrix4.CreateScale(ArmScale);
             var pitch                = Matrix4.CreateRotationX(armPitch);
             var place                = Matrix4.CreateTranslation(shoulder);
-            var armToView            = moveShoulderToOrigin * pitch * place;
+            var armToView            = moveShoulderToOrigin * scale * pitch * place;
             var mvp                  = armToView * _frameProj;
 
             // Hurt flash: same red lerp as the third-person rig. The

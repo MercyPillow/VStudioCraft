@@ -83,6 +83,16 @@ namespace VStudioCraft.Net
         // PlayerUseItem (which acts on the held item) because this
         // intent identifies the world cell the player wants to open.
         public const byte PlayerInteractBlock = 0x46; // C->S
+        // Tier 8 #44 V3 — Sign edit commit. Sent by the client when
+        // the local player closes the sign editor (Enter on the last
+        // line or Escape). Carries (x, y, z, line0..line3); the
+        // server is authoritative on persisted text — it copies the
+        // 4 strings into the SignTileEntity and broadcasts the new
+        // text to every client tracking the chunk via SignText
+        // (0x61). Server-side validation is intentionally lax (any
+        // string up to a defensive cap) — Alpha-faithful design
+        // point is cooperative LAN play, no anti-grief on text.
+        public const byte PlayerEditSign      = 0x47; // C->S
 
         // 0x5_ — window / inventory (Phase 6) ------------------------------
         public const byte InventoryClick      = 0x50; // C->S  — Phase 6b
@@ -102,6 +112,15 @@ namespace VStudioCraft.Net
 
         // 0x6_ — tile entity blobs (Phase 6) -------------------------------
         public const byte TileEntityData      = 0x60; // S->C
+        // Tier 8 #44 V3 — Sign text broadcast. Carries (x, y, z,
+        // line0..line3). Server emits this to every client tracking
+        // the chunk: (a) once per sign in the chunk on ChunkLoad, so
+        // late-joiners see existing writing; (b) once per sign on
+        // PlayerEditSign accept, so live edits propagate to all
+        // viewers. Distinct from TileEntityData (chest/furnace) so
+        // the wire shape stays minimal — sign payload is just 4
+        // strings plus the world coord.
+        public const byte SignText            = 0x61; // S->C
 
         // Protocol version. Bumped when packet shapes change so a mismatched
         // client gets a clean Disconnect at login rather than misinterpreting
@@ -114,6 +133,14 @@ namespace VStudioCraft.Net
         //     so a v2 server replying to a v1 client would mis-frame
         //     the next packet — bumping the version cuts that off
         //     with a clean Disconnect at login.
-        public const int ProtocolVersion = 2;
+        // v3: Tier 8 #44 V3 — adds PlayerEditSign (0x47) and SignText
+        //     (0x61). New packets only; existing packet shapes
+        //     unchanged. We bump anyway because a v2 server would
+        //     not know how to decode an inbound 0x47 from a v3
+        //     client, and a v2 client wouldn't recognise 0x61 from
+        //     a v3 server — both would throw at the dispatcher and
+        //     drop the connection mid-session, which is worse than
+        //     a clean Disconnect at login.
+        public const int ProtocolVersion = 3;
     }
 }

@@ -504,7 +504,6 @@ multiple subsystems at once.
 	
 ### Tier 8 — Late-Alpha systems
 
-44. **Signs (post + wall) with writable text + Sign item (323)** — Alpha 1.0.16. Tile entity with a 4-line string + in-place text editor.
 45. **Slabs + stairs** — Stairs are Alpha 1.0.5_01 canonical; slabs are Beta 1.3 but the user has explicitly opted to keep them in scope (sub-block geometry is general infrastructure that pairs naturally with stairs). Sub-block metadata byte + non-cube collision shape.
 46. **Fences / ladders** — Alpha 1.0.14 / 1.0.17.
 49. **Dispenser** — Alpha 1.0.16. 9-slot tile entity facing outward; redstone signal pops one item from a random slot. Reuses chest's tile-entity infrastructure plus furnace-style facing metadata.

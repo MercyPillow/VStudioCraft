@@ -336,6 +336,19 @@ namespace VStudioCraft.Net
             _hostClient.LastReportedPitch = pitch;
         }
 
+        // Tier 8 #44 V3 — host-side hook so the open-to-LAN host's
+        // local sign-edit commits propagate to friends. The host
+        // doesn't go through HandleEditSign (no socket round-trip
+        // for loopback), so GameRenderer.CommitSignEdit calls this
+        // directly when IsHostingLan to fan the edit out to every
+        // connected friend. The host's local SignTileEntity is
+        // already updated by the renderer before this fires; this
+        // method's job is just the BroadcastSignText.
+        public void NotifyHostSignEdit(int wx, int wy, int wz, string l0, string l1, string l2, string l3)
+        {
+            BroadcastSignText(wx, wy, wz, l0, l1, l2, l3);
+        }
+
         // Phase 8 — return one PersistedPlayer per non-loopback,
         // logged-in client, for inclusion in the v13 player table on
         // save. The loopback host is skipped because the host's pose
@@ -775,6 +788,10 @@ namespace VStudioCraft.Net
 
                     case PacketIds.PlayerInteractBlock:
                         HandleInteractBlock(client, pkt.PlayerInteractBlock);
+                        break;
+
+                    case PacketIds.PlayerEditSign:
+                        HandleEditSign(client, pkt.PlayerEditSign);
                         break;
 
                     case PacketIds.WindowClick:
@@ -1309,6 +1326,80 @@ namespace VStudioCraft.Net
                 target.Slots[i] = from;
                 from = ItemStack.Empty;
                 return;
+            }
+        }
+
+        // Tier 8 #44 V3 — handle a client's sign-edit commit. Validates
+        // the target cell holds a sign block, copies the four lines
+        // into the SignTileEntity (server is authoritative), and
+        // broadcasts a SignText to every viewer tracking the chunk so
+        // every client's world has the same writing.
+        //
+        // Lax validation per the cooperative-LAN design point:
+        //  - Reach gate (no editing across the map)
+        //  - Block-id gate (rejects writes to non-sign cells)
+        //  - Defensive per-line cap of 64 chars (well above the
+        //    Alpha 1.0.16 15-char limit; gives us headroom if a
+        //    future client raises its line cap, while still
+        //    rejecting a megabyte string from a hostile client).
+        private const int MaxSignLineWireLen = 64;
+
+        private void HandleEditSign(ServerClient client, PlayerEditSignPacket pkt)
+        {
+            if (client.Phase == ClientPhase.AwaitingLogin) return;
+            if (!IsWithinReach(client, pkt.X, pkt.Y, pkt.Z)) return;
+            var cell = _world.GetBlock(pkt.X, pkt.Y, pkt.Z);
+            if (cell != BlockType.SignPost && cell != BlockType.WallSign) return;
+
+            string l0 = ClampSignLine(pkt.Line0);
+            string l1 = ClampSignLine(pkt.Line1);
+            string l2 = ClampSignLine(pkt.Line2);
+            string l3 = ClampSignLine(pkt.Line3);
+
+            var se = _world.GetOrCreateSignEntity(pkt.X, pkt.Y, pkt.Z);
+            se.Lines[0] = l0;
+            se.Lines[1] = l1;
+            se.Lines[2] = l2;
+            se.Lines[3] = l3;
+
+            BroadcastSignText(pkt.X, pkt.Y, pkt.Z, l0, l1, l2, l3);
+        }
+
+        private static string ClampSignLine(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            if (s.Length > MaxSignLineWireLen) return s.Substring(0, MaxSignLineWireLen);
+            return s;
+        }
+
+        // Send a SignText packet to every client tracking the chunk
+        // that contains (wx, wz). Mirrors the BlockChange broadcast
+        // pattern: AwaitingLogin clients are skipped (they don't have
+        // chunks yet); LoggingIn clients with the chunk already
+        // shipped are included so the editor's commit shows up on
+        // their screen even if the rest of the spawn-window burst is
+        // still draining. Loopback (Open-to-LAN host) is skipped —
+        // the host's local SignTileEntity is already authoritative.
+        private void BroadcastSignText(int wx, int wy, int wz, string l0, string l1, string l2, string l3)
+        {
+            int rcx = wx >> 4;
+            int rcz = wz >> 4;
+            for (int c = 0; c < _clients.Count; c++)
+            {
+                var cl = _clients[c];
+                if (cl.Phase == ClientPhase.AwaitingLogin) continue;
+                if (cl.Session.IsLoopback) continue;
+                if (!cl.TrackedChunks.Contains((rcx, rcz))) continue;
+                cl.Session.Send(PacketIds.SignText, w => new SignTextPacket
+                {
+                    X = wx,
+                    Y = wy,
+                    Z = wz,
+                    Line0 = l0 ?? string.Empty,
+                    Line1 = l1 ?? string.Empty,
+                    Line2 = l2 ?? string.Empty,
+                    Line3 = l3 ?? string.Empty,
+                }.Write(w));
             }
         }
 
@@ -2922,6 +3013,46 @@ namespace VStudioCraft.Net
             // BlockChange records inside it actually ship and so
             // SlideChunkWindow knows to ChunkUnload it on scroll-off.
             client.TrackedChunks.Add((cx, cz));
+
+            // Tier 8 #44 V3 — Ship the sign text for every sign that
+            // lives in this chunk. The chunk byte stream above only
+            // carries block ids + meta (the facing); the typed text
+            // is in SignTileEntities at world scope. Without this
+            // pass, late-joining clients would see blank planks for
+            // every existing sign until someone re-edited it.
+            //
+            // Only loopback skip (the host's own World already has
+            // the entries — no point round-tripping through the
+            // socket); every real client receives one SignText per
+            // sign in the chunk regardless of whether the entity is
+            // empty (an empty-but-allocated sign means the placer
+            // pressed Escape on a freshly-placed sign without
+            // typing; rendering it as blank planks is correct).
+            if (!client.Session.IsLoopback)
+            {
+                int chunkOriginX = cx << 4;
+                int chunkOriginZ = cz << 4;
+                foreach (var kv in _world.SignEntities)
+                {
+                    var pos = kv.Key;
+                    if ((pos.x >> 4) != cx || (pos.z >> 4) != cz) continue;
+                    var lines = kv.Value?.Lines;
+                    string l0 = (lines != null && lines.Length > 0 ? lines[0] : null) ?? string.Empty;
+                    string l1 = (lines != null && lines.Length > 1 ? lines[1] : null) ?? string.Empty;
+                    string l2 = (lines != null && lines.Length > 2 ? lines[2] : null) ?? string.Empty;
+                    string l3 = (lines != null && lines.Length > 3 ? lines[3] : null) ?? string.Empty;
+                    int wx = pos.x, wy = pos.y, wz = pos.z;
+                    client.Session.Send(PacketIds.SignText, w => new SignTextPacket
+                    {
+                        X = wx, Y = wy, Z = wz,
+                        Line0 = l0, Line1 = l1, Line2 = l2, Line3 = l3,
+                    }.Write(w));
+                    // chunkOriginX/Z aren't used in the loop body but
+                    // make the "this chunk only" filter above readable
+                    // at first glance; keep them for the comment intent.
+                    _ = chunkOriginX; _ = chunkOriginZ;
+                }
+            }
         }
 
         // Accept loop runs on its own thread. AcceptTcpClient blocks

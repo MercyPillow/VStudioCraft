@@ -275,6 +275,12 @@ namespace VStudioCraft.Net
                 case PacketIds.PlayerInteractBlock:
                     return new InboundPacket { Id = id, PlayerInteractBlock = PlayerInteractBlockPacket.Read(_reader) };
 
+                case PacketIds.PlayerEditSign:
+                    return new InboundPacket { Id = id, PlayerEditSign = PlayerEditSignPacket.Read(_reader) };
+
+                case PacketIds.SignText:
+                    return new InboundPacket { Id = id, SignText = SignTextPacket.Read(_reader) };
+
                 case PacketIds.OpenWindow:
                     return new InboundPacket { Id = id, OpenWindow = OpenWindowPacket.Read(_reader) };
 
@@ -349,6 +355,8 @@ namespace VStudioCraft.Net
         public CloseWindowPacket     CloseWindow;
         public WindowClickPacket     WindowClick;
         public TileEntityDataPacket  TileEntityData;
+        public PlayerEditSignPacket  PlayerEditSign;
+        public SignTextPacket        SignText;
         public EntitySpawnPacket     EntitySpawn;
         public EntityRelMovePacket   EntityRelMove;
         public EntityLookPacket      EntityLook;

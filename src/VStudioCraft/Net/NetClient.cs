@@ -276,6 +276,23 @@ namespace VStudioCraft.Net
             }.Write(w));
         }
 
+        // Tier 8 #44 V3 — Send the sign-edit commit. Called by
+        // GameRenderer.CommitSignEdit when the local player closes
+        // the editor in net-driven mode. Server validates the cell
+        // holds a sign block and rebroadcasts to every viewer.
+        public void SendEditSign(int x, int y, int z, string l0, string l1, string l2, string l3)
+        {
+            if (!_loggedIn) return;
+            _session.Send(PacketIds.PlayerEditSign, w => new PlayerEditSignPacket
+            {
+                X = x, Y = y, Z = z,
+                Line0 = l0 ?? string.Empty,
+                Line1 = l1 ?? string.Empty,
+                Line2 = l2 ?? string.Empty,
+                Line3 = l3 ?? string.Empty,
+            }.Write(w));
+        }
+
         // Phase 6c — friend clicked a slot inside an open window
         // (chest / furnace / crafting). Distinct from
         // SendInventoryClick which targets the player's own inventory.
