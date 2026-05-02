@@ -643,6 +643,26 @@ namespace VStudioCraft.Game
         // mesher / collision branches needed.
         Glowstone          = 167, // Alpha 89
         GlowstoneDust      = 168, // Alpha 348
+
+        // Tier 8 #45 V2 — Wooden + Cobblestone stairs. Canonical
+        // Alpha 1.0.5_01 staircase blocks. Per-cell metadata
+        // low-2-bits stores the facing direction (the side the
+        // upper half-step sits on — i.e., the direction the player
+        // ascends UP when climbing). 0=North, 1=East, 2=South,
+        // 3=West using the standard BlockFacing enum.
+        //
+        // Geometry is an L-shape from the side: a 1×0.5×1 lower
+        // step (full cell footprint, half height) PLUS a
+        // 0.5×0.5×1 (or 1×0.5×0.5) upper step on the back half.
+        // Collision uses two AABBs per cell — see
+        // BlockData.TryGetExtraCollisionAabb.
+        //
+        // Player auto-step (MaxAutoStepHeight = 0.55) covers both
+        // the lower step (0.5 tall) and the lower → upper jump
+        // within the same cell, so a continuous staircase climbs
+        // smoothly without the player having to jump on each step.
+        WoodStairs         = 169, // Alpha 53
+        CobblestoneStairs  = 170, // Alpha 67
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -1500,9 +1520,49 @@ namespace VStudioCraft.Game
                 case BlockType.BrickSlab:
                 case BlockType.WoodSlab:
                     return (0f, 0f, 0f, 1f, 0.5f, 1f);
+                // Tier 8 #45 V2 — Stairs: lower step is the same
+                // 1×0.5×1 lower-half slab regardless of facing.
+                // The upper step is a separate AABB returned by
+                // TryGetExtraCollisionAabb (keyed on per-cell meta
+                // facing). Entity.Collides + Raycast both check
+                // the extra box so collision + clicks land on
+                // the full L-shape.
+                case BlockType.WoodStairs:
+                case BlockType.CobblestoneStairs:
+                    return (0f, 0f, 0f, 1f, 0.5f, 1f);
                 default:
                     return (0f, 0f, 0f, 1f, 1f, 1f);
             }
+        }
+
+        // Tier 8 #45 V2 — Secondary collision AABB. Currently only
+        // stairs return a second box; future multi-AABB blocks
+        // (slab + slab merging, fence with cap, etc.) extend here.
+        // Returns true + fills `box` with the upper-half step's
+        // extents based on the meta byte's facing. The box is in
+        // the same fractional [0..1] cell-space as the primary AABB.
+        public static bool TryGetExtraCollisionAabb(
+            BlockType t, byte meta,
+            out (float minX, float minY, float minZ, float maxX, float maxY, float maxZ) box)
+        {
+            if (IsStair(t))
+            {
+                BlockFacing f = (BlockFacing)(meta & 0x03);
+                // The upper step sits on the BACK half of the cell —
+                // i.e., the side OPPOSITE to where the player stands
+                // when facing the stair. For Stair facing East
+                // (player ascends toward +X, lower step is on -X
+                // side / west, upper step is on +X side / east).
+                switch (f)
+                {
+                    case BlockFacing.East:  box = (0.5f, 0.5f, 0f,   1f,  1f, 1f); return true;
+                    case BlockFacing.West:  box = (0f,   0.5f, 0f,   0.5f, 1f, 1f); return true;
+                    case BlockFacing.South: box = (0f,   0.5f, 0.5f, 1f,  1f, 1f); return true;
+                    default: /*North*/      box = (0f,   0.5f, 0f,   1f,  1f, 0.5f); return true;
+                }
+            }
+            box = default;
+            return false;
         }
 
         // Tier 6 #37 — Inventory / hotbar / held-view icon dispatch.
@@ -1629,6 +1689,11 @@ namespace VStudioCraft.Game
                 case BlockType.CobblestoneSlab:
                 case BlockType.BrickSlab:
                 case BlockType.WoodSlab:
+                // Tier 8 #45 V2 — Stairs are an L-shape made from
+                // two sub-cube boxes; mesher routes through
+                // EmitStair in the EmitModels pass.
+                case BlockType.WoodStairs:
+                case BlockType.CobblestoneStairs:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1746,6 +1811,13 @@ namespace VStudioCraft.Game
                 case BlockType.CobblestoneSlab:
                 case BlockType.BrickSlab:
                 case BlockType.WoodSlab:
+                // Tier 8 #45 V2 — Stairs leave one of the four
+                // 0.5×0.5×1 quadrants of their upper half as air,
+                // plus part of the lower-front half above the
+                // step. Adjacent cube faces must still emit so
+                // those air-exposed corners aren't culled away.
+                case BlockType.WoodStairs:
+                case BlockType.CobblestoneStairs:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -1908,6 +1980,27 @@ namespace VStudioCraft.Game
                 // ITSELF the light source. Light has to pass through
                 // the cell so the emission propagates to neighbours.
                 case BlockType.Fire:
+                // Tier 8 #46 part 2 — Fence: 4×16×4 post + thin arms,
+                // most of the cell volume is air. Without this, a
+                // fence in daylight would render its mesh dark
+                // because the cell's own light value (mesher samples
+                // there) would be 0 from the BFS treating the cell
+                // as opaque.
+                case BlockType.Fence:
+                // Tier 8 #45 V1 — Slabs fill the bottom half only;
+                // the top half is air through which light flows.
+                // Same dark-mesh symptom as fence without this.
+                case BlockType.StoneSlab:
+                case BlockType.CobblestoneSlab:
+                case BlockType.BrickSlab:
+                case BlockType.WoodSlab:
+                // Tier 8 #45 V2 — Stairs leave one of the four
+                // 0.5×0.5×1 quadrants of their upper half as air
+                // plus part of the lower-front above the step;
+                // light flows through those open volumes the same
+                // way it does for slabs.
+                case BlockType.WoodStairs:
+                case BlockType.CobblestoneStairs:
                     return true;
                 default:
                     return false;
@@ -2338,6 +2431,14 @@ namespace VStudioCraft.Game
                 // face; canonical Alpha terrain.png slot at (9, 6).
                 case BlockType.Glowstone:
                     return BlockTextures.TileGlowstone;
+                // Tier 8 #45 V2 — Stairs reuse the source material's
+                // tile on every face. WoodStairs → TilePlanks (the
+                // Alpha "wooden stair" was plank-coloured, not log-
+                // coloured), CobblestoneStairs → TileCobblestone.
+                case BlockType.WoodStairs:
+                    return BlockTextures.TilePlanks;
+                case BlockType.CobblestoneStairs:
+                    return BlockTextures.TileCobblestone;
                 // Tier 8 #51 — Glowstone Dust item icon. Procedural;
                 // a small pile of bright yellow grain, similar in
                 // shape to bone meal but in glowstone-yellow tones.
@@ -2688,6 +2789,13 @@ namespace VStudioCraft.Game
             || t == BlockType.CobblestoneSlab
             || t == BlockType.BrickSlab
             || t == BlockType.WoodSlab;
+
+        // Tier 8 #45 V2 — True for any stair variant. Used by mesher /
+        // placement / collision dispatch to take the L-shape branch
+        // without listing both ids at every site.
+        public static bool IsStair(BlockType t)
+            => t == BlockType.WoodStairs
+            || t == BlockType.CobblestoneStairs;
 
         public static bool IsDoorBottom(BlockType t)
             => t == BlockType.WoodDoorBlockBottom

@@ -171,6 +171,23 @@ namespace VStudioCraft.Game
             _pendingBlockChanges.Add(new BlockChangeRecord(wx, wy, wz, t, meta));
         }
 
+        // Tier 8 #45 V2 — Top-level meta read used by Entity.Collides
+        // (stair L-shape collision needs the facing byte) and by
+        // Raycast (so click-against-stair lands on the upper step).
+        // Out-of-range / unloaded chunks return 0; callers that care
+        // about the distinction can compare against GetBlock first.
+        public byte GetMeta(int wx, int wy, int wz)
+        {
+            if (wy < 0 || wy >= Chunk.SizeY) return 0;
+            int cx = (int)Math.Floor(wx / (float)Chunk.SizeX);
+            int cz = (int)Math.Floor(wz / (float)Chunk.SizeZ);
+            var c = GetChunk(cx, cz);
+            if (c == null) return 0;
+            int lx = wx - cx * Chunk.SizeX;
+            int lz = wz - cz * Chunk.SizeZ;
+            return c.GetMeta(lx, wy, lz);
+        }
+
         private World(int seed)
         {
             Seed = seed;

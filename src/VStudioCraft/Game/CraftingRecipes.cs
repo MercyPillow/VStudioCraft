@@ -283,6 +283,29 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.WoodSlab, 6)));
 
+            // Tier 8 #45 V2 — Stair recipes. 6 of the source material
+            // arranged in a 3-step staircase (canonical Alpha 1.0.5_01
+            // pattern: "S.. / SS. / SSS") → 4 stairs. Output of 4
+            // means a single stair costs 1.5 source blocks — slightly
+            // material-efficient compared to slabs (1 cube per 2
+            // slabs), reflecting the more complex L-shape geometry.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Air,    BlockType.Air },
+                    { BlockType.Planks, BlockType.Planks, BlockType.Air },
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                },
+                new ItemStack(BlockType.WoodStairs, 4)));
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Cobblestone, BlockType.Air,         BlockType.Air },
+                    { BlockType.Cobblestone, BlockType.Cobblestone, BlockType.Air },
+                    { BlockType.Cobblestone, BlockType.Cobblestone, BlockType.Cobblestone },
+                },
+                new ItemStack(BlockType.CobblestoneStairs, 4)));
+
             // Tier 8 #51 — Glowstone block from 4 dust in a 2×2.
             // Canonical Alpha 1.1.2_01 recipe; not actually craftable
             // in vanilla Alpha (glowstone dust drops were nether-only

@@ -276,6 +276,28 @@ namespace VStudioCraft.Game
                 {
                     return true;
                 }
+                // Tier 8 #45 V2 — Secondary AABB check. Currently
+                // only stairs have a second box (the upper-half
+                // step on one side of the cell, picked by facing
+                // meta). Cheap path: gated on TryGetExtraCollisionAabb
+                // returning true, so default cubes / slabs / etc.
+                // skip the extra meta lookup entirely.
+                if (BlockData.IsStair(t))
+                {
+                    byte meta = world.GetMeta(x, y, z);
+                    if (BlockData.TryGetExtraCollisionAabb(t, meta, out var ex))
+                    {
+                        float ex0X = x + ex.minX, ex1X = x + ex.maxX;
+                        float ex0Y = y + ex.minY, ex1Y = y + ex.maxY;
+                        float ex0Z = z + ex.minZ, ex1Z = z + ex.maxZ;
+                        if (maxX > ex0X && minX < ex1X
+                            && maxY > ex0Y && minY < ex1Y
+                            && maxZ > ex0Z && minZ < ex1Z)
+                        {
+                            return true;
+                        }
+                    }
+                }
             }
             return false;
         }

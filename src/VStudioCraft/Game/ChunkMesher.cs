@@ -486,6 +486,35 @@ namespace VStudioCraft.Game
                         x + baseX + 1f, y + 0.5f, z + baseZ + 1f,
                         layer, lightPacked);
                 }
+                else if (BlockData.IsStair(t))
+                {
+                    // Tier 8 #45 V2 — Stair L-shape. Lower step is
+                    // the cell-wide half-cube (same as a slab); the
+                    // upper step is a 0.5×0.5×1 (or 1×0.5×0.5)
+                    // half-cube on the back side, picked by the
+                    // facing meta. The two boxes meet exactly at the
+                    // y=0.5 plane and at the cell midline along the
+                    // facing axis, so the L-shape reads cleanly
+                    // without z-fighting between the boxes.
+                    byte stairMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
+                    BlockFacing sf = (BlockFacing)(stairMeta & 0x03);
+                    // Lower step — same for all facings.
+                    EmitSubCubeBox(
+                        x + baseX + 0f, y + 0f, z + baseZ + 0f,
+                        x + baseX + 1f, y + 0.5f, z + baseZ + 1f,
+                        layer, lightPacked);
+                    // Upper step — TryGetExtraCollisionAabb already
+                    // encodes the per-facing extents we want, so
+                    // we delegate to it for symmetry.
+                    if (BlockData.TryGetExtraCollisionAabb(t, stairMeta, out var ex))
+                    {
+                        EmitSubCubeBox(
+                            x + baseX + ex.minX, y + ex.minY, z + baseZ + ex.minZ,
+                            x + baseX + ex.maxX, y + ex.maxY, z + baseZ + ex.maxZ,
+                            layer, lightPacked);
+                    }
+                    _ = sf; // facing already consumed via TryGetExtra
+                }
                 else if (t == BlockType.Fence)
                 {
                     // Tier 8 #46 part 2 — Wooden fence. Sample the

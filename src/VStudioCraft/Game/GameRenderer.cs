@@ -4355,6 +4355,22 @@ void main()
                     // Invalid placement (top/bottom face hit, target
                     // occupied, or unsupported wall) — fall through.
                 }
+                // Tier 8 #45 V2 — Stair placement. Standard cube
+                // placement path doesn't set facing meta, so route
+                // through a dedicated helper that picks the facing
+                // from the player's view direction (the stair's
+                // upper step ends up on the side AWAY from the
+                // player so they can walk UP the steps).
+                if (BlockData.IsStair(held))
+                {
+                    if (TryPlaceStair(hit, held))
+                    {
+                        if (GameMode == GameMode.Survival)
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                        SfxBank.PlayPlace(held);
+                        return true;
+                    }
+                }
             }
 
             // Tier 4 #14 — Held-tool overrides come BEFORE the
@@ -5384,6 +5400,59 @@ void main()
             {
                 int lx = px - (cx << 4);
                 int lz = pz - (cz << 4);
+                byte meta = (byte)((byte)facing & 0x03);
+                chunk.SetMeta(lx, py, lz, meta);
+                _world.RecordMetaChange(px, py, pz);
+            }
+            return true;
+        }
+
+        // Tier 8 #45 V2 — Place a stair block, computing facing
+        // from the player's current view so the upper step ends up
+        // on the side AWAY from where the player is standing — the
+        // canonical Minecraft convention. With facing = the
+        // direction the player is looking, the upper step sits on
+        // the player-facing side of the cell, so they walk UP the
+        // staircase by approaching the lower side.
+        private bool TryPlaceStair(Raycast.Hit hit, BlockType stairType)
+        {
+            if (_world == null) return false;
+            if (hit.Nx == 0 && hit.Ny == 0 && hit.Nz == 0) return false;
+
+            int px = hit.X + hit.Nx;
+            int py = hit.Y + hit.Ny;
+            int pz = hit.Z + hit.Nz;
+
+            var existing = _world.GetBlock(px, py, pz);
+            if (existing != BlockType.Air
+                && existing != BlockType.Water && existing != BlockType.FlowingWater
+                && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
+
+            if (!_world.SetBlock(px, py, pz, stairType)) return false;
+
+            int cx = px >> 4, cz = pz >> 4;
+            var chunk = _world.GetChunk(cx, cz);
+            if (chunk != null)
+            {
+                int lx = px - (cx << 4);
+                int lz = pz - (cz << 4);
+                // Facing = direction the player is looking on the
+                // horizontal plane. We pick the dominant horizontal
+                // axis of the camera's forward vector — that's the
+                // direction the upper step will face. The opposite
+                // (player-back) side is the lower step they walk
+                // onto first. FacingTowardPlayer returns the cardinal
+                // direction TOWARD the player; we flip it to get
+                // "the direction the player is looking."
+                BlockFacing toward = FacingTowardPlayer(Camera.Forward);
+                BlockFacing facing;
+                switch (toward)
+                {
+                    case BlockFacing.North: facing = BlockFacing.South; break;
+                    case BlockFacing.South: facing = BlockFacing.North; break;
+                    case BlockFacing.East:  facing = BlockFacing.West;  break;
+                    default:                facing = BlockFacing.East;  break;
+                }
                 byte meta = (byte)((byte)facing & 0x03);
                 chunk.SetMeta(lx, py, lz, meta);
                 _world.RecordMetaChange(px, py, pz);

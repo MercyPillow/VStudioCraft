@@ -504,7 +504,6 @@ multiple subsystems at once.
 	
 ### Tier 8 — Late-Alpha systems
 
-45. **Stairs** — Alpha 1.0.5_01 wooden + cobblestone stairs. Needs a multi-AABB collision system to render their L-shape correctly (the lower half is a full-cell-wide step, the upper half is a half-cell-wide step on one side). Slabs already shipped — Tier 8 #45 V1: StoneSlab/CobblestoneSlab/BrickSlab/WoodSlab BlockTypes + half-cube collision + EmitSubCubeBox mesh + 3-block-row crafting recipes. Stairs are V2 of this swim-lane.
 49. **Dispenser** — Alpha 1.0.16. 9-slot tile entity facing outward; redstone signal pops one item from a random slot. Reuses chest's tile-entity infrastructure plus furnace-style facing metadata.
 51. **Halloween Update block set** — Alpha 1.1.0 (Oct 30, 2010), in scope for our 1.1.2_01 target. Pumpkin already shipped (Tier 6 polish). Remaining:
     - **Netherrack** — soft red rock; lava can spread through it.

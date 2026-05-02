@@ -56,13 +56,45 @@ namespace VStudioCraft.Game
                 var block = world.GetBlock(ix, iy, iz);
                 if (BlockData.IsRaycastTarget(block))
                 {
+                    // Tier 8 #45 V2 — Stairs have a primary AABB
+                    // (lower step) plus a secondary AABB (upper step
+                    // on one side). Test the closer one first; both
+                    // are valid hit candidates. We pick whichever
+                    // yields a smaller tEnter since the ray hits
+                    // that geometry first.
                     var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(block);
                     float minX = ix + b0x, maxX = ix + b1x;
                     float minY = iy + b0y, maxY = iy + b1y;
                     float minZ = iz + b0z, maxZ = iz + b1z;
-                    if (RayAabb(origin, dir, minX, minY, minZ, maxX, maxY, maxZ,
-                        out _, out int hitAxis, out int hitNegSign))
+                    bool hit1 = RayAabb(origin, dir, minX, minY, minZ, maxX, maxY, maxZ,
+                        out float t1, out int axis1, out int neg1);
+
+                    bool hit2 = false;
+                    float t2 = float.PositiveInfinity;
+                    int axis2 = 0, neg2 = 0;
+                    if (BlockData.IsStair(block))
                     {
+                        byte sMeta = world.GetMeta(ix, iy, iz);
+                        if (BlockData.TryGetExtraCollisionAabb(block, sMeta, out var ex))
+                        {
+                            float exMinX = ix + ex.minX, exMaxX = ix + ex.maxX;
+                            float exMinY = iy + ex.minY, exMaxY = iy + ex.maxY;
+                            float exMinZ = iz + ex.minZ, exMaxZ = iz + ex.maxZ;
+                            hit2 = RayAabb(origin, dir,
+                                exMinX, exMinY, exMinZ, exMaxX, exMaxY, exMaxZ,
+                                out t2, out axis2, out neg2);
+                        }
+                    }
+
+                    bool anyHit = hit1 || hit2;
+                    if (anyHit)
+                    {
+                        // Pick the closer hit (smaller t) — that's the
+                        // face the ray actually strikes first.
+                        bool useFirst = hit1 && (!hit2 || t1 <= t2);
+                        int hitAxis    = useFirst ? axis1 : axis2;
+                        int hitNegSign = useFirst ? neg1  : neg2;
+
                         hit.X = ix; hit.Y = iy; hit.Z = iz;
                         // Face normal — points OUT of the AABB on the
                         // entry face. hitAxis is the axis whose slab
