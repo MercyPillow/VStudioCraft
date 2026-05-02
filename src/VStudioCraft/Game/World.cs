@@ -267,6 +267,68 @@ namespace VStudioCraft.Game
         // ApplyChunkLoad starts installing replicated chunks.
         public static World CreateEmpty(int seed) => new World(seed);
 
+        // Tier 8 #51 V4 — Which dimension this World instance hosts.
+        // Defaults to Overworld; SwapDimension on GameRenderer drives
+        // dimension swaps by reassigning which World the renderer
+        // points at, not by mutating this field. The flag exists so
+        // the few systems that DO need dimension awareness (e.g.
+        // mob-spawn rule overrides, fog-tint pickup, save format
+        // dispatch) can read it directly off the World.
+        public Dimension Dimension = Dimension.Overworld;
+
+        // Tier 8 #51 V4 — Nether-dimension factory. Generates an
+        // initial 5×5 chunk ring of Nether terrain (netherrack mass
+        // + lava lakes + glowstone scatter + soul-sand patches +
+        // bedrock floor / cap) using the per-chunk seeded RNG so the
+        // same world-seed always produces the same Nether layout.
+        // Skips the dungeon + passive-spawn passes that the overworld
+        // generator runs — Nether mobs (ghasts, blazes) are out of
+        // scope for V4, and overworld-style passive mobs would feel
+        // wrong in a netherrack pocket.
+        //
+        // Same parallel-Generate shape as the overworld factory so
+        // the initial-ring build cost is spread across cores.
+        public static World GenerateNether(int seed)
+        {
+            var w = new World(seed) { Dimension = Dimension.Nether };
+
+            int side = InitialRadiusChunks * 2 + 1;
+            int total = side * side;
+            var chunks = new Chunk[total];
+
+            System.Threading.Tasks.Parallel.For(0, total, i =>
+            {
+                int dz = (i / side) - InitialRadiusChunks;
+                int dx = (i % side) - InitialRadiusChunks;
+                var c = new Chunk(dx, dz);
+                NetherTerrainGenerator.Generate(c, seed);
+                LightCalculator.RecomputeChunk(c);
+                chunks[i] = c;
+            });
+
+            for (int i = 0; i < total; i++)
+            {
+                var c = chunks[i];
+                w._chunks[(c.ChunkX, c.ChunkZ)] = c;
+            }
+            return w;
+        }
+
+        // Tier 8 #51 V4 — Lazy nether-chunk generation for chunks
+        // outside the initial 5×5 ring. The renderer's chunk-streaming
+        // path can call this when the player wanders past the
+        // pre-generated edge so the Nether feels continuous instead
+        // of dropping to void. Skips dungeons + spawning the same way
+        // GenerateNether does.
+        public Chunk GenerateNetherChunk(int chunkX, int chunkZ)
+        {
+            var c = new Chunk(chunkX, chunkZ);
+            NetherTerrainGenerator.Generate(c, Seed);
+            LightCalculator.RecomputeChunk(c);
+            _chunks[(chunkX, chunkZ)] = c;
+            return c;
+        }
+
         public static World Generate(int seed)
         {
             var w = new World(seed);

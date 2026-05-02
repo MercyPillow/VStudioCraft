@@ -923,6 +923,29 @@ void main()
         private World _world;
         private ChunkJobSystem _jobs;
 
+        // Tier 8 #51 V4 — Dimension state. The renderer holds the
+        // currently-active world in `_world`; the inactive dimension
+        // hangs around in `_dormantWorld` until the player teleports
+        // back. Both fields point to real World instances; SwapDimension
+        // just swaps which one is hot. We remember the player's position
+        // in each dimension separately so a round trip lands them
+        // exactly where they left.
+        //
+        // The Nether is lazy-created on the first portal teleport
+        // (the overworld might never see one). Both dimensions persist
+        // for the session; V4 part 2 wires save/load so they survive
+        // game restarts. Until then a reload regenerates the Nether
+        // fresh, which is OK because the overworld portal frame
+        // remembers nothing about the nether and the player can
+        // simply re-light it.
+        private World _dormantWorld;
+        private OpenTK.Vector3 _overworldPlayerPos;
+        private OpenTK.Vector3 _netherPlayerPos;
+        private float _overworldYaw, _overworldPitch;
+        private float _netherYaw, _netherPitch;
+        public Dimension CurrentDimension =>
+            _world != null ? _world.Dimension : Dimension.Overworld;
+
         // Multiplayer client handle. Non-null when this renderer is driving
         // a connection to a dedicated server (Phase 2c+); null when the
         // renderer owns its own World via StartNewWorld / LoadFromFile.
@@ -2965,14 +2988,21 @@ void main()
                 // from ever reaching the teleport threshold.
                 if (_inPortalSeconds >= PortalTeleportSeconds)
                 {
-                    // Trigger fires — flash, reset, cool down.
-                    // V4 will plug the dimension-swap in here; for
-                    // now the only effect is the brief white flash
-                    // so the player has clear feedback that the
-                    // teleport threshold was reached.
+                    // Trigger fires — flash, reset, cool down,
+                    // SWAP DIMENSIONS. The flash plays during the
+                    // swap so the visual transition obscures any
+                    // brief mesh-rebuild hitch.
                     _portalTeleportFlash = PortalTeleportFlashSeconds;
                     _portalTeleportCooldown = PortalTeleportCooldownSeconds;
                     _inPortalSeconds = 0f;
+
+                    // Tier 8 #51 V4 — Pick the target dimension as
+                    // the OPPOSITE of the current one. Round-trip
+                    // works automatically from either side.
+                    var target = _world.Dimension == Dimension.Overworld
+                        ? Dimension.Nether
+                        : Dimension.Overworld;
+                    SwapDimension(target);
                 }
             }
             else
@@ -2982,6 +3012,156 @@ void main()
             }
         }
         public bool IsPortalTeleportFlashActive => _portalTeleportFlash > 0f;
+
+        // Tier 8 #51 V4 — Swap the active dimension. Saves the
+        // player's position + camera yaw/pitch into the appropriate
+        // per-dimension slot, swaps which World the renderer points
+        // at (lazy-creating the Nether on first call), clears the
+        // chunk-mesh cache so the new dimension's meshes get rebuilt
+        // from scratch, restores the player to the saved position
+        // in the target dimension (or to a freshly-built spawn portal
+        // if this is the first time entering it).
+        //
+        // Single-player only for now — multiplayer dimension sync
+        // would need a wire-protocol extension (LAN clients can play
+        // alongside a host who is in the nether, but they'd see the
+        // host's overworld until they teleport themselves; that's
+        // V5 polish).
+        public void SwapDimension(Dimension target)
+        {
+            if (_world == null || Player == null) return;
+            if (_world.Dimension == target) return;
+
+            // Save current dimension state.
+            if (_world.Dimension == Dimension.Overworld)
+            {
+                _overworldPlayerPos = Player.Position;
+                _overworldYaw = Camera.Yaw;
+                _overworldPitch = Camera.Pitch;
+            }
+            else
+            {
+                _netherPlayerPos = Player.Position;
+                _netherYaw = Camera.Yaw;
+                _netherPitch = Camera.Pitch;
+            }
+
+            // Swap which World is hot. Lazy-create the target if
+            // we haven't visited it yet.
+            World next;
+            if (_dormantWorld != null && _dormantWorld.Dimension == target)
+            {
+                next = _dormantWorld;
+            }
+            else
+            {
+                next = target == Dimension.Nether
+                    ? World.GenerateNether(_world.Seed)
+                    : World.Generate(_world.Seed);
+            }
+            _dormantWorld = _world;
+            _world = next;
+
+            // Drop the chunk-mesh cache so the renderer rebuilds
+            // meshes for the new dimension. The old meshes still
+            // belong to the dormant World's chunks; when we swap
+            // back, ProcessDirtyChunks will rebuild them on demand.
+            foreach (var m in _chunkMeshes.Values) m.Dispose();
+            _chunkMeshes.Clear();
+            _world.MarkAllDirty();
+
+            // Restore or spawn the player in the new dimension.
+            // Velocity is zeroed in every branch so the player
+            // doesn't carry overworld momentum into the nether
+            // (or vice versa) — the swap is an instant re-spawn,
+            // not a continuous transit.
+            Player.Velocity = OpenTK.Vector3.Zero;
+            if (target == Dimension.Overworld)
+            {
+                if (_overworldPlayerPos != OpenTK.Vector3.Zero)
+                {
+                    Player.Position = _overworldPlayerPos;
+                    Camera.Yaw = _overworldYaw;
+                    Camera.Pitch = _overworldPitch;
+                }
+                // else: leave player at spawn — first-time-ever
+                // case shouldn't fire because we always start in
+                // the overworld, but the no-op branch is harmless.
+            }
+            else
+            {
+                if (_netherPlayerPos != OpenTK.Vector3.Zero)
+                {
+                    Player.Position = _netherPlayerPos;
+                    Camera.Yaw = _netherYaw;
+                    Camera.Pitch = _netherPitch;
+                }
+                else
+                {
+                    // First-time entry: build a starter portal +
+                    // landing platform at (0, NetherrackTop+1, 0)
+                    // and drop the player onto it. Subsequent
+                    // teleports return to wherever the player left.
+                    BuildNetherStarterPortal();
+                    Player.Position = new OpenTK.Vector3(
+                        1.5f, NetherTerrainGenerator.NetherrackTop + 1, 1.5f);
+                    Player.Velocity = OpenTK.Vector3.Zero;
+                    _netherPlayerPos = Player.Position;
+                    _netherYaw = Camera.Yaw;
+                    _netherPitch = Camera.Pitch;
+                }
+            }
+
+            SyncCameraToPlayer();
+        }
+
+        // Tier 8 #51 V4 — Build a starter portal in the freshly-
+        // generated Nether so a first-time visitor lands next to a
+        // working return portal. Frame is at (0, NetherrackTop+1..+5,
+        // 0..-1) — small 4×5 obsidian rectangle on the X-axis with
+        // its lit interior already filled in. Walking into it
+        // round-trips back to the overworld.
+        private void BuildNetherStarterPortal()
+        {
+            int baseY = NetherTerrainGenerator.NetherrackTop + 1;
+            // Frame on the X-axis (interior 2 wide along X, plane at
+            // z=0). Lower-left interior corner = (0, baseY, 0).
+            int x0 = 0, y0 = baseY, z0 = 0;
+
+            // Side columns x=-1 and x=2, full 5 tall.
+            for (int dy = -1; dy <= 3; dy++)
+            {
+                _world.SetBlock(-1,    y0 + dy, z0, BlockType.Obsidian);
+                _world.SetBlock( 2,    y0 + dy, z0, BlockType.Obsidian);
+            }
+            // Top + bottom rows along x=0..1.
+            for (int dx = 0; dx < 2; dx++)
+            {
+                _world.SetBlock(x0 + dx, y0 - 1, z0, BlockType.Obsidian);
+                _world.SetBlock(x0 + dx, y0 + 3, z0, BlockType.Obsidian);
+            }
+            // Interior 2×3 fill with NetherPortal blocks (X-axis
+            // frame → meta low-bit = 1).
+            for (int dx = 0; dx < 2; dx++)
+            for (int dy = 0; dy < 3; dy++)
+            {
+                int wx = x0 + dx, wy = y0 + dy, wz = z0;
+                _world.SetBlock(wx, wy, wz, BlockType.NetherPortal);
+                int cx = wx >> 4, cz = wz >> 4;
+                var ch = _world.GetChunk(cx, cz);
+                if (ch != null)
+                {
+                    int lx = wx - (cx << 4);
+                    int lz = wz - (cz << 4);
+                    ch.SetMeta(lx, wy, lz, 0x01);
+                }
+            }
+            // Put a netherrack landing pad on the +Z side so the
+            // player materialises on solid ground rather than
+            // potentially clipping into a soul-sand patch.
+            for (int dx = -1; dx <= 2; dx++)
+                _world.SetBlock(dx, y0 - 1, 1, BlockType.Netherrack);
+        }
 
         public void SaveToFile(string path)
         {
@@ -3705,6 +3885,33 @@ void main()
         {
             int r = ViewDistanceChunks;
             _scratchChunks.Clear();
+            // Tier 8 #51 V4 — Nether-dimension chunk streaming. The
+            // overworld path enqueues missing chunks onto the
+            // ChunkJobSystem worker pool, which calls TerrainGenerator
+            // with overworld noise. The Nether needs its own gen
+            // pass; for V4 part 1 we just synchronously fill missing
+            // Nether chunks on the render thread with NetherTerrainGenerator
+            // so wandering past the initial 5×5 ring still works.
+            // Cost is comparable to the overworld worker (each chunk
+            // gen is fast — no dungeons, no spawn pass), and the
+            // few-frame hitch on first walk into a fresh chunk is
+            // hidden by the brief portal-flash that brought the
+            // player here.
+            if (_world.Dimension == Dimension.Nether)
+            {
+                for (int dz = -r; dz <= r; dz++)
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    int ds = dx * dx + dz * dz;
+                    if (ds > r * r) continue;
+                    int cx = pcx + dx, cz = pcz + dz;
+                    if (!_world.HasChunk(cx, cz))
+                    {
+                        _world.GenerateNetherChunk(cx, cz);
+                    }
+                }
+                return;
+            }
             for (int dz = -r; dz <= r; dz++)
             for (int dx = -r; dx <= r; dx++)
             {
@@ -9539,6 +9746,21 @@ void main()
             float skyLightLevel = 0.18f + 0.82f * Math.Max(0f, (sun.Y + 0.1f) / 1.1f);
             if (skyLightLevel > 1f) skyLightLevel = 1f;
 
+            // Tier 8 #51 V4 — Nether dimension overrides sky + sky-
+            // light + ambient. Sky becomes a flat dim red-orange
+            // (no horizon gradient — the netherrack ceiling caps the
+            // top, not the open sky); sky-light drops to 0 (only
+            // block light from glowstone / lava illuminates the
+            // pocket); ambient term gets a small red-tint floor so
+            // the unlit corners aren't pitch black.
+            if (_world != null && _world.Dimension == Dimension.Nether)
+            {
+                sky    = new Vector3(0.20f, 0.05f, 0.03f);
+                zenith = new Vector3(0.10f, 0.02f, 0.01f);
+                skyLightLevel = 0f;
+                ambient = 0.18f;
+            }
+
             GL.ClearColor(sky.X, sky.Y, sky.Z, 1.0f);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
@@ -9605,6 +9827,20 @@ void main()
             // Default cap = 1.0: surface fog reaches full opacity at
             // fogEnd so the chunk-streaming boundary is fully hidden.
             float fogMaxAlpha = 1.0f;
+
+            // Tier 8 #51 V4 — Nether fog override. Tighter range
+            // (visibility ~2 chunks) + dim red-orange tint match
+            // the canonical Alpha Nether atmosphere. Sits ahead of
+            // the underwater override so a Nether-water cell still
+            // gets the underwater fog (impossible currently — water
+            // doesn't generate in the nether — but defensive).
+            if (_world != null && _world.Dimension == Dimension.Nether)
+            {
+                fogColor = new Vector3(0.30f, 0.06f, 0.02f);
+                fogStart = 6f;
+                fogEnd   = 36f;
+                fogMaxAlpha = 0.95f;
+            }
 
             // Submerged overrides — colour matches the canonical
             // overlay tint; range is dramatically shorter because
