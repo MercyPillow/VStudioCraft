@@ -509,7 +509,7 @@ multiple subsystems at once.
 
 ### Tier 9 — Infrastructure + completion
 
-53. **Configurable key bindings + autosave + backup-on-load-failure**.
+53. **Configurable key bindings** (V2 — V1 shipped autosave + backup-on-load-failure). V1 ships: 5-minute interval autosave with HUD "WORLD SAVED" notice (fades 0.5 s at the tail), reset on every world transition; corrupt saves are quarantined to `<path>.corrupt-<timestamp>.bak` before the load exception bubbles up, so the original file isn't silently overwritten by a partial save. What remains: a key-rebinding UI in the options menu so the player can change WASD / inventory / pause keys, plus persistence of the chosen bindings to a config file.
 54. **Minecart (328) + Boat (333) + rail blocks** — Alpha 1.0.13 / 1.0.16 vehicles. Minecart on rails, boat on water; each is a ridable entity. Storage Minecart (Beta 1.5) and Powered Minecart (Beta 1.5) explicitly DROPPED — out of scope for Alpha 1.1.2_01.
 	
 ### Tier 10 — Optional Features

@@ -524,7 +524,66 @@ namespace VStudioCraft.Game
             return (h, w);
         }
 
+        // Tier 9 #53 V1 — Backup-on-load-failure. When a parse
+        // exception escapes LoadWithPlayersInner the catch block here
+        // copies the corrupt save aside (renaming to
+        // `<path>.corrupt-<timestamp>.bak` so the user can recover or
+        // hand-inspect later) and re-throws. This way a save with one
+        // bad chunk byte doesn't get silently overwritten by a
+        // subsequent partial save — the original file is preserved
+        // verbatim under a new name.
+        //
+        // The host's load path catches the rethrown exception and
+        // surfaces it via the title-screen error line, same as it
+        // already does for missing files / version mismatches.
         public static (Header header, World world, Dictionary<string, PersistedPlayer> players) LoadWithPlayers(string path)
+        {
+            try
+            {
+                return LoadWithPlayersInner(path);
+            }
+            catch (System.Exception ex) when (!(ex is FileNotFoundException))
+            {
+                TryQuarantineCorruptSave(path, ex);
+                throw;
+            }
+        }
+
+        // Best-effort copy of the corrupt save to a sibling .bak
+        // file. Failure is silent — if the file lock or disk-full
+        // condition stops us, the original Load exception is still
+        // bubbled up unchanged. The timestamp suffix handles the
+        // case of REPEATED corrupt loads on the same path so each
+        // attempt produces its own quarantined snapshot.
+        private static void TryQuarantineCorruptSave(string path, System.Exception originalException)
+        {
+            try
+            {
+                if (!File.Exists(path)) return;
+                string stamp = System.DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+                string bak = path + ".corrupt-" + stamp + ".bak";
+                // Avoid overwriting an existing backup with the same
+                // second-resolution stamp (rare but possible — same
+                // file double-loaded in <1 s after a transient
+                // failure).
+                int dedupe = 0;
+                while (File.Exists(bak))
+                {
+                    bak = path + ".corrupt-" + stamp + "-" + (++dedupe) + ".bak";
+                    if (dedupe > 100) return; // give up — don't loop forever
+                }
+                File.Copy(path, bak);
+            }
+            catch
+            {
+                // Swallow — original Load exception will surface to
+                // the caller anyway. We don't want a backup-failure
+                // to mask the real load error.
+                _ = originalException;
+            }
+        }
+
+        private static (Header header, World world, Dictionary<string, PersistedPlayer> players) LoadWithPlayersInner(string path)
         {
             using (var fs = File.OpenRead(path))
             using (var gz = new GZipStream(fs, CompressionMode.Decompress))

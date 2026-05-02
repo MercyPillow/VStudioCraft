@@ -72,6 +72,23 @@ namespace VStudioCraft.UI
         private string _worldPath;
         private bool _disposed;
 
+        // Tier 9 #53 V1 — Autosave. The render loop counts down this
+        // timer; on expiry we call _renderer.SaveToFile(_worldPath)
+        // and reset to AutosaveIntervalSeconds. Skips when the world
+        // isn't ready, the path is empty (CLI --connect or untitled
+        // session), or the world is halted (death screen / loading
+        // screen / paused / etc.) — autosaving a frozen world is a
+        // waste, and saving WHILE the player has a tile-entity panel
+        // open could race the slot mutations.
+        private const float AutosaveIntervalSeconds = 5f * 60f; // 5 minutes
+        private float _autosaveTimer = AutosaveIntervalSeconds;
+        // HUD notice timing lives on the renderer (the host just
+        // hands it the duration on each successful autosave); see
+        // GameRenderer.SetAutosaveNoticeTimer / TickAutosaveNotice /
+        // IsAutosaveNoticeActive. Duration constant is kept here
+        // since the host is what triggers each notice.
+        private const float AutosaveNoticeSeconds = 2.5f;
+
         public event Action Modified;
 
         // Raised when the player clicks "Save" in the pause menu. Hosts (the
@@ -145,6 +162,12 @@ namespace VStudioCraft.UI
         {
             _worldPath = path;
             WorldPathChanged?.Invoke(path);
+            // Tier 9 #53 V1 — Reset autosave countdown on every
+            // world transition so a freshly-loaded world doesn't
+            // fire an autosave 30 s in (just because the host's
+            // timer happened to be near zero from the previous
+            // world's tail).
+            _autosaveTimer = AutosaveIntervalSeconds;
             if (!_glReady)
             {
                 _pendingIsLoad = true;
@@ -172,6 +195,12 @@ namespace VStudioCraft.UI
 
         public void StartNewWorld(int seed)
         {
+            // Tier 9 #53 V1 — Same autosave reset as LoadFromFile.
+            // A "Create New World" flow shouldn't autosave during
+            // the loading screen; reset to a full interval so the
+            // first autosave lands well after the player has had
+            // time to settle in.
+            _autosaveTimer = AutosaveIntervalSeconds;
             if (!_glReady)
             {
                 _pendingIsLoad = false;
@@ -917,6 +946,41 @@ namespace VStudioCraft.UI
                         if (!netDriven) _renderer.TickDrops(dt);
                         _renderer.TickFurnacesIfDue(dt);
                     }
+
+                    // Tier 9 #53 V1 — Autosave tick. Skipped while
+                    // unpaused-and-untitled OR while net-driven (the
+                    // remote server owns persistence in MP). Decrements
+                    // the timer every frame regardless of pause state
+                    // so a player who pauses for >5 minutes triggers
+                    // an autosave the moment they resume.
+                    if (!netDriven && !string.IsNullOrEmpty(_worldPath))
+                    {
+                        _autosaveTimer -= dt;
+                        if (_autosaveTimer <= 0f)
+                        {
+                            // Reset BEFORE saving so a save exception
+                            // doesn't lock the timer at 0 and spam
+                            // retries.
+                            _autosaveTimer = AutosaveIntervalSeconds;
+                            try
+                            {
+                                _renderer.SaveToFile(_worldPath);
+                                _renderer.SetAutosaveNoticeTimer(AutosaveNoticeSeconds);
+                            }
+                            catch
+                            {
+                                // Best-effort: a transient save failure
+                                // (disk full, permission, etc.) shouldn't
+                                // crash the game. The next interval will
+                                // try again. The user can also
+                                // pause→Save manually for an immediate
+                                // attempt with the existing error path.
+                            }
+                        }
+                    }
+                    // Drive the renderer-side notice countdown so the
+                    // "Saved" HUD hint fades on its own.
+                    _renderer.TickAutosaveNotice(dt);
 
                     long t1 = Stopwatch.GetTimestamp();
 

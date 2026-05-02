@@ -2894,6 +2894,24 @@ void main()
             SyncCameraToPlayer();
         }
 
+        // Tier 9 #53 V1 — Autosave HUD notice. Set by the host
+        // immediately after a successful autosave; the renderer
+        // decrements every frame in UpdatePlayer and the HUD reads
+        // IsAutosaveNoticeActive to draw a brief "Saved" notice in
+        // the top-left. Public setter so the host owns the autosave
+        // timing; the renderer just owns the on-screen rendering.
+        private float _autosaveNoticeTimer;
+        public void SetAutosaveNoticeTimer(float seconds) { _autosaveNoticeTimer = seconds; }
+        public bool IsAutosaveNoticeActive => _autosaveNoticeTimer > 0f;
+        public void TickAutosaveNotice(float dt)
+        {
+            if (_autosaveNoticeTimer > 0f)
+            {
+                _autosaveNoticeTimer -= dt;
+                if (_autosaveNoticeTimer < 0f) _autosaveNoticeTimer = 0f;
+            }
+        }
+
         public void SaveToFile(string path)
         {
             if (_world == null) return;
@@ -9731,6 +9749,14 @@ void main()
             // hosting — most frames pay one bool check.
             if (IsHostingLan) RenderLanHostChip(width, height);
 
+            // Tier 9 #53 V1 — Autosave HUD notice. Briefly drawn
+            // top-centre after every successful autosave so the
+            // player isn't surprised by the brief frame hitch and
+            // knows their progress is committed. Fades in on the
+            // first frame and out on the last; mid-life is full
+            // opacity. Cheap branch when no notice is active.
+            if (_autosaveNoticeTimer > 0f) RenderAutosaveNotice(width, height);
+
             // Modal overlays. Only one is shown at a time — the host
             // never opens the inventory over an active pause menu, but
             // we still gate on _isInventoryOpen first so a stuck flag
@@ -13560,6 +13586,55 @@ void main()
                 centerX: boxX + boxW / 2,
                 topY: boxY + padY,
                 tint: new Vector4(1f, 1f, 1f, 1f),
+                ortho: ortho);
+        }
+
+        // Tier 9 #53 V1 — Briefly-visible top-centre notice after a
+        // successful autosave. Same chip-style chrome as the
+        // RenderLanHostChip block but in slate grey so it reads as
+        // an info notification rather than a status indicator. Alpha
+        // tracks the timer so the chip eases out at the tail of its
+        // window — the last 0.5 s fades to 0 over the linear range,
+        // matching the canonical "appear / hold / fade" pattern.
+        private void RenderAutosaveNotice(int width, int height)
+        {
+            const string text = "WORLD SAVED";
+            // Compute fade alpha. Last 0.5 s fades linearly from 1 →
+            // 0; everything before that is full opacity.
+            const float FadeWindow = 0.5f;
+            float a = _autosaveNoticeTimer >= FadeWindow
+                ? 1f
+                : System.Math.Max(0f, _autosaveNoticeTimer / FadeWindow);
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            int scale = System.Math.Max(1, UiScale.S(2, width, height));
+            int glyphW = HotbarTextures.GlyphCellW * scale;
+            int glyphH = HotbarTextures.GlyphCellH * scale;
+            int textW = text.Length * glyphW;
+            int padX = scale * 3, padY = scale * 2;
+            int boxW = textW + padX * 2;
+            int boxH = glyphH + padY * 2;
+            // Top-centre with a few-pixel margin from the top edge.
+            int boxX = (width - boxW) / 2;
+            int boxY = scale * 4;
+
+            DrawSolidQuad(boxX, boxY, boxW, boxH, new Vector3(0.18f, 0.22f, 0.28f), 0.85f * a, ortho);
+            int border = System.Math.Max(1, scale / 2);
+            var frame = new Vector3(0.65f, 0.72f, 0.82f);
+            DrawSolidQuad(boxX, boxY, boxW, border, frame, a, ortho);
+            DrawSolidQuad(boxX, boxY + boxH - border, boxW, border, frame, a, ortho);
+            DrawSolidQuad(boxX, boxY, border, boxH, frame, a, ortho);
+            DrawSolidQuad(boxX + boxW - border, boxY, border, boxH, frame, a, ortho);
+            DrawString(text, scale,
+                centerX: boxX + boxW / 2,
+                topY: boxY + padY,
+                tint: new Vector4(1f, 1f, 1f, a),
                 ortho: ortho);
         }
 
