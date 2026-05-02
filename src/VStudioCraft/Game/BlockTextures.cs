@@ -3867,7 +3867,7 @@ namespace VStudioCraft.Game
             // is V2 polish (would need a per-frame atlas-array swap
             // similar to the Tier 10 animated water/lava optional
             // feature).
-            /* TileNetherPortal        */ (0, 14),
+            /* TileNetherPortal        */ (9, 6),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
