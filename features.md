@@ -505,7 +505,7 @@ multiple subsystems at once.
 ### Tier 8 — Late-Alpha systems
 
 51. **Halloween Update block set** — Alpha 1.1.0 (Oct 30, 2010), in scope for our 1.1.2_01 target. Pumpkin already shipped (Tier 6 polish). Remaining:
-    - **Nether portal teleportation + dimension** (V2) — V1 ships the block + 4×5 obsidian frame ignition + animated purple swirl texture; what remains is the nether dimension itself (separate chunk store, generation pass, dimension swap on portal-touch). Slated as its own swim-lane.
+    - **Nether portal teleportation + dimension** (V4 — V1 + V2 + V3 part 1 shipped). V1: block + 4×5 obsidian frame ignition + purple swirl texture. V2: frame-collapse on obsidian break (flood-fill from `World.SetBlock` dissolves the connected portal component when an adjacent obsidian is removed). V3 part 1: player-touch detection (`Player.IsInNetherPortal` AABB-cell scan) + per-frame `_inPortalSeconds` accumulator + a full-screen indigo `RenderPortalTint` that ramps via a quadratic curve to ~0.55 alpha at PortalTintMaxSeconds (3 s) — the visual "pulling" feedback the eventual teleport will piggyback on. What remains: the nether dimension itself (separate chunk store, generation pass, dimension swap when the portal-tint timer crosses the teleport threshold). Slated as its own swim-lane.
 
 ### Tier 9 — Infrastructure + completion
 

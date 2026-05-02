@@ -982,6 +982,13 @@ namespace VStudioCraft.UI
                     // "Saved" HUD hint fades on its own.
                     _renderer.TickAutosaveNotice(dt);
 
+                    // Tier 8 #51 V3 part 1 — Portal-pulling timer.
+                    // Driven every frame (incl. paused/modal) so the
+                    // tint fade is independent of world simulation
+                    // pause state. Cheap when not in portal (≤ 8 cell
+                    // reads + a comparison).
+                    _renderer.TickPortalContact(dt);
+
                     long t1 = Stopwatch.GetTimestamp();
 
                     _renderer.Render(pw, ph);

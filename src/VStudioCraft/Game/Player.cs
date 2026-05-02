@@ -433,6 +433,32 @@ namespace VStudioCraft.Game
             return false;
         }
 
+        // Tier 8 #51 V3 — True when any cell within the player's
+        // AABB is a NetherPortal block. Same scan shape as
+        // IsOnLadder; sampled per-frame by the GameRenderer to
+        // accumulate the portal-pulling timer (see RenderPortalTint /
+        // _inPortalSeconds). Cheap (≤ ~8 cell reads on a standing
+        // player); the eventual dimension-swap hook in V3 part 2
+        // will key off the same predicate.
+        public bool IsInNetherPortal(World world)
+        {
+            float minX = Position.X - HalfWidth, maxX = Position.X + HalfWidth;
+            float minZ = Position.Z - HalfWidth, maxZ = Position.Z + HalfWidth;
+            int bx0 = (int)Math.Floor(minX);
+            int bx1 = (int)Math.Floor(maxX - 1e-5f);
+            int by0 = (int)Math.Floor(Position.Y);
+            int by1 = (int)Math.Floor(Position.Y + Height - 1e-5f);
+            int bz0 = (int)Math.Floor(minZ);
+            int bz1 = (int)Math.Floor(maxZ - 1e-5f);
+            for (int y = by0; y <= by1; y++)
+            for (int x = bx0; x <= bx1; x++)
+            for (int z = bz0; z <= bz1; z++)
+            {
+                if (world.GetBlock(x, y, z) == BlockType.NetherPortal) return true;
+            }
+            return false;
+        }
+
         // Tier 8 #51 — True when the cell directly under the player's
         // foot AABB is Soul Sand. Sampled per-tick from Update so
         // the horizontal-velocity scale follows the player around;

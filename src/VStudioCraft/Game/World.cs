@@ -177,6 +177,64 @@ namespace VStudioCraft.Game
             _pendingBlockChanges.Add(new BlockChangeRecord(wx, wy, wz, t, meta));
         }
 
+        // Tier 8 #51 V2 — When an obsidian frame block is removed,
+        // any NetherPortal block adjacent to that obsidian is now
+        // un-framed; the entire connected component of portal blocks
+        // it sat in dissolves back to air. Walk the 6 face-neighbours
+        // and flood-fill from each NetherPortal we find, setting
+        // every portal cell in that component to Air.
+        //
+        // Bounded: a single portal's interior is at most 6 cells, so
+        // each flood-fill terminates fast. The set deduplicates so
+        // multiple obsidian-adjacent portal cells in the same frame
+        // resolve to a single dissolve pass.
+        private void CollapsePortalsAdjacentTo(int wx, int wy, int wz)
+        {
+            // Quick scan — most obsidian removals have NO adjacent
+            // portal so the cheap path is just 6 GetBlock reads.
+            int[] dx = {  1, -1,  0,  0,  0,  0 };
+            int[] dy = {  0,  0,  1, -1,  0,  0 };
+            int[] dz = {  0,  0,  0,  0,  1, -1 };
+            HashSet<(int, int, int)> visited = null;
+            Queue<(int, int, int)> queue = null;
+            for (int d = 0; d < 6; d++)
+            {
+                int nx = wx + dx[d];
+                int ny = wy + dy[d];
+                int nz = wz + dz[d];
+                if (GetBlock(nx, ny, nz) != BlockType.NetherPortal) continue;
+                if (visited == null)
+                {
+                    visited = new HashSet<(int, int, int)>();
+                    queue   = new Queue<(int, int, int)>();
+                }
+                if (visited.Add((nx, ny, nz))) queue.Enqueue((nx, ny, nz));
+            }
+            if (queue == null) return;
+            // Flood-fill across portal blocks. Each portal block is
+            // adjacent to up to 4 other portal blocks (the 2×3 rect)
+            // so the component closes quickly.
+            while (queue.Count > 0)
+            {
+                var (cx, cy, cz) = queue.Dequeue();
+                for (int d = 0; d < 6; d++)
+                {
+                    int ax = cx + dx[d];
+                    int ay = cy + dy[d];
+                    int az = cz + dz[d];
+                    if (GetBlock(ax, ay, az) != BlockType.NetherPortal) continue;
+                    if (visited.Add((ax, ay, az))) queue.Enqueue((ax, ay, az));
+                }
+            }
+            // Dissolve. SetBlock recurses but our guard above only
+            // fires when oldT == Obsidian, so converting NetherPortal
+            // → Air doesn't re-enter this function.
+            foreach (var (px, py, pz) in visited)
+            {
+                SetBlock(px, py, pz, BlockType.Air);
+            }
+        }
+
         // Tier 8 #45 V2 — Top-level meta read used by Entity.Collides
         // (stair L-shape collision needs the facing byte) and by
         // Raycast (so click-against-stair lands on the upper step).
@@ -1666,6 +1724,23 @@ namespace VStudioCraft.Game
             // walk, which crashed the game tick to ~4 fps for users
             // with no redstone placed at all.
             RedstonePowerSystem.OnBlockChanged(wx, wy, wz, oldT, t);
+
+            // Tier 8 #51 V2 — Nether Portal frame collapse. When an
+            // obsidian block (or any cell that was holding a portal
+            // up) is broken, scan the 6 neighbours for NetherPortal
+            // blocks and dissolve the entire connected component
+            // back to air. Canonical Alpha behaviour: a portal
+            // depends on its frame; remove a corner / side / floor
+            // / ceiling block of obsidian and the swirl evaporates.
+            //
+            // We trigger only on obsidian → not-obsidian transitions
+            // (cheap branch on most edits — only obsidian removals
+            // walk neighbours). The component flood-fill itself is
+            // tightly bounded — a single portal is at most 6 cells.
+            if (oldT == BlockType.Obsidian && t != BlockType.Obsidian)
+            {
+                CollapsePortalsAdjacentTo(wx, wy, wz);
+            }
 
             // Tier 6 #35 — Falling-physics enqueue. Two cases trigger
             // a fall check: (a) the new block IS sand/gravel and might

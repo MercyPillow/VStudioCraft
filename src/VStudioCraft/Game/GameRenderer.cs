@@ -2912,6 +2912,34 @@ void main()
             }
         }
 
+        // Tier 8 #51 V3 part 1 — Portal-pulling timer. Every frame
+        // the player AABB overlaps a NetherPortal block, this
+        // accumulates dt; otherwise it decays toward 0 at 2× speed
+        // so stepping out of the portal clears the visual quickly
+        // (you don't want a lingering purple tint after the player
+        // walks away). RenderPortalTint maps the value to a screen
+        // overlay's intensity. The eventual V3 part 2 dimension
+        // swap will trigger when _inPortalSeconds crosses a
+        // threshold (canonical Alpha is ~4 s of continuous portal
+        // contact before the teleport fires).
+        private float _inPortalSeconds;
+        public const float PortalTintMaxSeconds = 3.0f;
+        public void TickPortalContact(float dt)
+        {
+            if (_world == null || Player == null) return;
+            bool inPortal = Player.IsInNetherPortal(_world);
+            if (inPortal)
+            {
+                _inPortalSeconds += dt;
+                if (_inPortalSeconds > PortalTintMaxSeconds) _inPortalSeconds = PortalTintMaxSeconds;
+            }
+            else
+            {
+                _inPortalSeconds -= dt * 2f;
+                if (_inPortalSeconds < 0f) _inPortalSeconds = 0f;
+            }
+        }
+
         public void SaveToFile(string path)
         {
             if (_world == null) return;
@@ -9715,6 +9743,12 @@ void main()
             // stays readable through the flash. Auto-fades via Player's
             // HurtTimer (set by TakeDamage, decremented in Update).
             RenderHurtOverlay(width, height);
+            // Tier 8 #51 V3 part 1 — Portal-pulling tint. Layered
+            // BEFORE selection outline / crosshair so the HUD chrome
+            // stays legible through the wash. Auto-fades via
+            // _inPortalSeconds (incremented while in portal,
+            // 2× decay otherwise — see TickPortalContact).
+            RenderPortalTint(width, height);
             RenderSelectionOutline(width, height);
             RenderCrosshair(width, height);
 
@@ -9946,6 +9980,49 @@ void main()
             // toward orange so it doesn't read as "danger HUD" against
             // the blue sky.
             _overlayShader.SetVector3("uColor", new Vector3(0.85f, 0.10f, 0.10f));
+            _overlayShader.SetFloat("uAlpha", alpha);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+            _unitQuadMesh.Draw();
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        // Tier 8 #51 V3 part 1 — Full-screen purple wash whose
+        // intensity scales with how long the player has been
+        // standing in a NetherPortal. Peak alpha is reached at
+        // PortalTintMaxSeconds (3 s); at 0 s no draw call fires.
+        // Pairs with the swirl-block visual to communicate "the
+        // portal is pulling you in" before the V3 part 2 dimension
+        // teleport actually fires. Mirrors RenderHurtOverlay's
+        // overlay-shader path — same fullscreen quad, just a
+        // purple colour and a different timer source.
+        private void RenderPortalTint(int width, int height)
+        {
+            if (_inPortalSeconds <= 0f) return;
+
+            float frac = _inPortalSeconds / PortalTintMaxSeconds;
+            if (frac > 1f) frac = 1f;
+            // Eased curve — quadratic ramp so the early seconds are
+            // subtle and the tail of the timer (close to teleport)
+            // is visibly opaque. Peak at ~0.55 alpha so the world
+            // stays readable through the wash.
+            float alpha = frac * frac * 0.55f;
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+            var scale = Matrix4.CreateScale(width, height, 1f);
+            var mvp = scale * ortho;
+
+            _overlayShader.Use();
+            _overlayShader.SetMatrix4("uMVP", mvp);
+            // Indigo-purple matching the portal swirl palette so the
+            // tint reads as "from the portal" rather than as a
+            // separate damage / vignette indicator.
+            _overlayShader.SetVector3("uColor", new Vector3(0.40f, 0.10f, 0.65f));
             _overlayShader.SetFloat("uAlpha", alpha);
 
             GL.Enable(EnableCap.Blend);
