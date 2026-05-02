@@ -9691,11 +9691,27 @@ void main()
                         float brX = originX + xR * rightX;
                         float brZ = originZ + xR * rightZ;
 
+                        // U coords swapped vs the naive "BL gets u0,
+                        // BR gets u1" — the world-space `right` axis
+                        // used to lay the quad out doesn't match the
+                        // player's screen-space right when they view
+                        // the front face. For facing=North (text
+                        // faces -Z), the player views from -Z looking
+                        // +Z; their right is -X, so the world-low-X
+                        // corner of the quad (my BL) is on their
+                        // RIGHT and should carry the glyph's right
+                        // edge (high U). The same coincidence holds
+                        // for the other three facings — across all
+                        // four, the BL/BR labels in world coords are
+                        // the player's right/left in screen coords,
+                        // so a single U-swap is the universal fix.
+                        // Without it glyphs render mirrored (flipped
+                        // left-right).
                         EmitSignGlyphQuad(
-                            blX, yB, blZ,  u0, v1,   // bottom-left
-                            brX, yB, brZ,  u1, v1,   // bottom-right
-                            brX, yT, brZ,  u1, v0,   // top-right
-                            blX, yT, blZ,  u0, v0);  // top-left
+                            blX, yB, blZ,  u1, v1,   // bottom-left  (player's right-bottom)
+                            brX, yB, brZ,  u0, v1,   // bottom-right (player's left-bottom)
+                            brX, yT, brZ,  u0, v0,   // top-right    (player's left-top)
+                            blX, yT, blZ,  u1, v0);  // top-left     (player's right-top)
                     }
                 }
             }
@@ -11138,19 +11154,19 @@ void main()
             var stack = Input.Inventory.GetHotbar(Input.HotbarIndex);
 
             // Scale the gizmo with the viewport but cap so it doesn't
-            // dominate small windows. UiScale.S returns the base pixel
-            // size scaled up for high-DPI / large viewports; the cap
-            // (height/4) keeps the gizmo from eating the entire bottom
-            // of a small window.
-            int iconPx = UiScale.S(96, width, height);
-            int cap = height / 4;
+            // dominate small windows. Base size 313 = previous 125 ×
+            // 2.5 (per-feature "2.5× larger" request). UiScale.S
+            // returns the base pixel size scaled up for high-DPI /
+            // large viewports; the cap loosens to height/3 to let
+            // the new size actually come through on 1080p (height/4
+            // would have clamped 313 → 270 and you'd see ~2.16× the
+            // original 96, not the 2.5× the request asks for). The
+            // cap still kicks in on small windows (≈ 600 px tall and
+            // below) so the gizmo never eats more than a third of
+            // the vertical viewport.
+            int iconPx = UiScale.S(413, width, height);
+            int cap = height / 2;
             if (iconPx > cap) iconPx = cap;
-
-            int marginRight  = UiScale.S(20, width, height);
-            // Lift above the hotbar so the gizmo doesn't overlap it. The
-            // hotbar sits ~bottom of the viewport with its own margin;
-            // 72 px (scaled) clears it on every reasonable window size.
-            int marginBottom = UiScale.S(72, width, height);
 
             // Swing pose. swingProgress runs 0 → 1 across the swing's
             // lifetime (0 = just triggered, 1 = back to rest). A sin(πt)
@@ -11164,15 +11180,55 @@ void main()
             }
             float swingPhase = (float)System.Math.Sin(swingProgress * System.Math.PI);
 
-            // Y dip — the gizmo dives down + slightly out toward the
-            // bottom-right corner during the swing's mid-frame, then
-            // pulls back. Pixel-level so the motion is visible at any
-            // viewport size.
-            int yDip = (int)(swingPhase * iconPx * 0.40f);
-            int xDip = (int)(swingPhase * iconPx * 0.10f);
+            // Anchor the icon at the projected screen-space hand
+            // position (rather than the previous bottom-right
+            // corner). The hand is the tip of the first-person arm
+            // mesh; we mirror the arm's transform chain in
+            // RenderFirstPersonArm to compute where mesh-local
+            // (0, 0, 0) lands in view space, then project via
+            // _frameProj into clip space and map to viewport
+            // pixels. This way the held block sits ON the hand as
+            // the player would expect, and the position stays correct
+            // across FOV changes / viewport aspects without
+            // hand-tuned per-resolution constants.
+            //
+            // If _frameProj hasn't been populated yet (very first
+            // frame before the world pass runs), fall back to the
+            // legacy bottom-right anchor so we never render the icon
+            // at (0, 0) due to a NaN division.
+            float handCenterX, handCenterY;
+            if (TryProjectHandToScreen(width, height, swingPhase, out float hx, out float hy))
+            {
+                handCenterX = hx;
+                handCenterY = hy;
+            }
+            else
+            {
+                int marginRight  = UiScale.S(20, width, height);
+                int marginBottom = UiScale.S(72, width, height);
+                handCenterX = width  - marginRight  - iconPx * 0.5f;
+                handCenterY = height - marginBottom - iconPx * 0.5f;
+            }
 
-            int x0 = width  - iconPx - marginRight  + xDip;
-            int y0 = height - iconPx - marginBottom + yDip;
+            // Swing dip — the icon dives slightly down + out during
+            // the swing's mid-frame, then pulls back. Layered on top
+            // of the projected hand position so the icon and arm
+            // peak together. Magnitudes scaled to iconPx so the dip
+            // reads consistently at any resolution.
+            float yDip = swingPhase * iconPx * 0.40f;
+            float xDip = swingPhase * iconPx * 0.10f;
+
+            // Per-feature offset — push the icon down 50 logical
+            // pixels (UiScale-aware so it tracks viewport DPI like
+            // every other HUD constant). Applied on top of the
+            // projected hand position so the icon now sits below
+            // where the hand projects to, reading as the held block
+            // resting in front of the lower torso rather than at
+            // eye / hand level.
+            int yOffset = UiScale.S(50, width, height);
+
+            int x0 = (int)(handCenterX - iconPx * 0.5f + xDip);
+            int y0 = (int)(handCenterY - iconPx * 0.5f + yDip) + yOffset;
 
             var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
 
@@ -11187,28 +11243,30 @@ void main()
             GL.Enable(EnableCap.Blend);
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
-            // Arm first — sits behind the held item so a held block
-            // overlaps the wrist naturally, just like Alpha. Also covers
-            // the empty-hand case where the held-item branch is a no-op.
+            // Arm draws ONLY when the hotbar slot is empty. Per-feature
+            // request: when the player is holding something, suppress
+            // the arm and let the held-item gizmo stand on its own.
+            // The arm still appears for an empty hand so the player
+            // never sees a totally blank lower-right corner.
             //
-            // Two paths: when the canonical Steve skin loaded successfully
-            // we draw a real 3D textured arm cuboid in view-space (mirrors
-            // Alpha's "arm extending into the scene from the bottom-right"
-            // behaviour). If the skin failed to decode, fall back to the
-            // 2D-quad placeholder that pre-dated the skin work.
-            // Both helpers leave CullFace disabled on exit so the rest of
-            // the HUD pass can rely on the same baseline state.
-            if (_steveSkinTexture != 0 && _steveArmRMesh != null)
-            {
-                RenderFirstPersonArm(swingPhase);
-            }
-            else
-            {
-                RenderPlayerArm(width, height, swingPhase, ortho);
-            }
-
+            // Two paths for the arm: when the canonical Steve skin
+            // loaded successfully we draw a real 3D textured arm
+            // cuboid in view-space (mirrors Alpha's "arm extending
+            // into the scene from the bottom-right" behaviour). If
+            // the skin failed to decode, fall back to the 2D-quad
+            // placeholder. Both helpers leave CullFace disabled on
+            // exit so the rest of the HUD pass can rely on the same
+            // baseline state.
             if (stack.IsEmpty)
             {
+                if (_steveSkinTexture != 0 && _steveArmRMesh != null)
+                {
+                    RenderFirstPersonArm(swingPhase);
+                }
+                else
+                {
+                    RenderPlayerArm(width, height, swingPhase, ortho);
+                }
                 // Empty hand — only the arm renders. The arm helper
                 // already restored its own GL state, so nothing else to
                 // do here.
@@ -11375,6 +11433,84 @@ void main()
         // faces shade as a 3D solid. We clear the depth buffer before
         // drawing, then leave depth test on for the cube. The HUD pass
         // that follows turns depth test back off as part of its setup.
+        // Compute where the first-person arm's hand tip lands on
+        // screen, in viewport pixels (top-left origin to match the
+        // 2D HUD coord system used by DrawSpriteQuadFor). Mirrors
+        // the transform chain inside RenderFirstPersonArm exactly —
+        // any tweak to the arm pose (anchor, scale, rest-tilt, chop
+        // amount) needs to flow into both. Returns false if the
+        // projection isn't available yet (first frame before the
+        // world pass populates _frameProj) or if the projected point
+        // sits behind the camera (clip-space w ≤ 0).
+        private bool TryProjectHandToScreen(int width, int height, float swingPhase, out float screenX, out float screenY)
+        {
+            screenX = 0f; screenY = 0f;
+            // _frameProj is populated by the world pass each frame; if
+            // we somehow get here before that ran (e.g. a frame where
+            // the world is paused mid-load), bail.
+            if (_frameProj.M44 == 0f && _frameProj.M11 == 0f) return false;
+
+            // Mirror RenderFirstPersonArm's transform chain. The hand
+            // is at mesh-local (0, 0, 0) (mesh shoulder is at Y=+0.75).
+            // Chain (row-vector OpenTK):
+            //   1. moveShoulderToOrigin = T(0, -0.75, 0)
+            //   2. scale = S(0.4)
+            //   3. pitch = R_x(π/2 + 40° + chopAngle)
+            //   4. place = T(0.25, -0.35, -0.15)
+            // For the hand specifically, after step 1 the point is
+            // (0, -0.75, 0); after step 2 it's (0, -0.3, 0); after
+            // step 3 the rotation maps (0, -0.3, 0) → (0, -0.3·cosθ,
+            // -0.3·sinθ); step 4 translates by the shoulder anchor.
+            float pointForward = (float)Math.PI / 2f;
+            float restTiltUp   = MathHelper.DegreesToRadians(40f);
+            float chopAngle    = -swingPhase * 0.35f;
+            float armPitch     = pointForward + restTiltUp + chopAngle;
+            const float ArmScale = 0.4f;
+
+            // Mesh-local hand → after moveShoulderToOrigin + scale.
+            float hx = 0f;
+            float hy = -0.75f * ArmScale;
+            float hz = 0f;
+
+            // Apply R_x(armPitch). y' = y·cosθ − z·sinθ, z' = y·sinθ + z·cosθ.
+            float cosT = (float)Math.Cos(armPitch);
+            float sinT = (float)Math.Sin(armPitch);
+            float ry = hy * cosT - hz * sinT;
+            float rz = hy * sinT + hz * cosT;
+            float rx = hx;
+
+            // Translate to shoulder anchor.
+            float vx = rx + 0.25f;
+            float vy = ry + -0.35f;
+            float vz = rz + -0.15f;
+
+            // Project: clip = view * proj. The arm draws with mvp =
+            // armToView * _frameProj (no view matrix), because it's
+            // already authored in view space. Same here.
+            //
+            // OpenTK row-vector: clip = (vx, vy, vz, 1) * _frameProj.
+            // We compute the four clip components by hand to keep
+            // this allocation-free.
+            var p = _frameProj;
+            float cx = vx * p.M11 + vy * p.M21 + vz * p.M31 + p.M41;
+            float cy = vx * p.M12 + vy * p.M22 + vz * p.M32 + p.M42;
+            float cz = vx * p.M13 + vy * p.M23 + vz * p.M33 + p.M43;
+            float cw = vx * p.M14 + vy * p.M24 + vz * p.M34 + p.M44;
+            _ = cz;
+            if (cw <= 0.0001f) return false;
+
+            // NDC. -1..+1 in X (left→right) and Y (bottom→top).
+            float ndcX = cx / cw;
+            float ndcY = cy / cw;
+
+            // Map to viewport pixels. The HUD draws with an ortho
+            // whose origin is the top-left of the viewport (Y grows
+            // downward), so flip the Y axis when mapping NDC → pixel.
+            screenX = (ndcX * 0.5f + 0.5f) * width;
+            screenY = (1f - (ndcY * 0.5f + 0.5f)) * height;
+            return true;
+        }
+
         private void RenderFirstPersonArm(float swingPhase)
         {
             // Re-enable the world-pass GL state baseline (the caller
