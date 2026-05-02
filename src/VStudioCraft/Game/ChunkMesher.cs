@@ -486,6 +486,18 @@ namespace VStudioCraft.Game
                         x + baseX + 1f, y + 0.5f, z + baseZ + 1f,
                         layer, lightPacked);
                 }
+                else if (t == BlockType.SoulSand)
+                {
+                    // Tier 8 #51 — Soul Sand. 1×0.875×1 box pinned to
+                    // the cell bottom — the missing top 2/16 is what
+                    // makes the player visually sink into the surface
+                    // when standing on it. Tile chosen by GetTileIndex
+                    // above (TileSoulSand on every face).
+                    EmitSubCubeBox(
+                        x + baseX + 0f, y + 0f, z + baseZ + 0f,
+                        x + baseX + 1f, y + 14f / 16f, z + baseZ + 1f,
+                        layer, lightPacked);
+                }
                 else if (BlockData.IsStair(t))
                 {
                     // Tier 8 #45 V2 — Stair L-shape. Lower step is

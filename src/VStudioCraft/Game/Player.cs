@@ -42,6 +42,13 @@ namespace VStudioCraft.Game
         public const float SwimUpAccel = 22f;       // m/s² applied while Space held
         public const float WaterMoveScale = 0.5f;   // horizontal velocity multiplier
 
+        // Tier 8 #51 — Soul Sand horizontal slowdown. While the
+        // player is standing ON a Soul Sand cell, their horizontal
+        // velocity is scaled by this factor — canonical Alpha drops
+        // movement to ~40% on soul sand, the signature gameplay
+        // beat that pairs with the visual sub-cube subsidence.
+        public const float SoulSandMoveScale = 0.4f;
+
         // Tier 8 #46 — Ladder climb. Gravity is suppressed while the
         // player is on a ladder; vertical motion comes straight from
         // jump (up) / sneak (down) input at a constant climb speed.
@@ -244,6 +251,15 @@ namespace VStudioCraft.Game
             // Minecraft-like). In water we scale it down so swimming reads
             // sluggish vs. walking on land.
             float horizScale = inWater ? WaterMoveScale : 1f;
+            // Tier 8 #51 — Soul Sand slowdown. Stacks multiplicatively
+            // with WaterMoveScale (a soul-sand block submerged in
+            // water scales by 0.5 × 0.4 = 0.2 — slower than either
+            // alone, matching canonical Alpha). Probed only when the
+            // player is on the ground; mid-air is unaffected so a
+            // jumping player escapes the slowdown briefly, which is
+            // the canonical "hop to outpace soul sand" trick.
+            if (OnGround && IsStandingOnSoulSand(world))
+                horizScale *= SoulSandMoveScale;
             Velocity.X = wishHorizVel.X * horizScale;
             Velocity.Z = wishHorizVel.Z * horizScale;
 
@@ -395,6 +411,32 @@ namespace VStudioCraft.Game
             for (int z = bz0; z <= bz1; z++)
             {
                 if (world.GetBlock(x, y, z) == BlockType.Ladder) return true;
+            }
+            return false;
+        }
+
+        // Tier 8 #51 — True when the cell directly under the player's
+        // foot AABB is Soul Sand. Sampled per-tick from Update so
+        // the horizontal-velocity scale follows the player around;
+        // cheap (≤ 4 cell reads on a wide-stance player). The probe
+        // looks 1e-3 below the foot Y to land on the supporting cell
+        // rather than the player's own cell.
+        public bool IsStandingOnSoulSand(World world)
+        {
+            float minX = Position.X - HalfWidth, maxX = Position.X + HalfWidth;
+            float minZ = Position.Z - HalfWidth, maxZ = Position.Z + HalfWidth;
+            int bx0 = (int)Math.Floor(minX);
+            int bx1 = (int)Math.Floor(maxX - 1e-5f);
+            int bz0 = (int)Math.Floor(minZ);
+            int bz1 = (int)Math.Floor(maxZ - 1e-5f);
+            // Foot Y is where the player's collision AABB bottom sits.
+            // The supporting cell is the one whose top face is at
+            // Position.Y, i.e. the cell at floor(Position.Y - epsilon).
+            int by = (int)Math.Floor(Position.Y - 1e-3f);
+            for (int x = bx0; x <= bx1; x++)
+            for (int z = bz0; z <= bz1; z++)
+            {
+                if (world.GetBlock(x, by, z) == BlockType.SoulSand) return true;
             }
             return false;
         }

@@ -274,7 +274,13 @@ namespace VStudioCraft.Game
         // Tier 8 #49 V1 — Dispenser front face.
         public const int FirstTailDispenserLayer  = FirstTailGlowstoneLayer + TailGlowstoneLayerCount;  // 177
         public const int TailDispenserLayerCount  = 1;
-        public const int LayerCount = FirstTailDispenserLayer + TailDispenserLayerCount;                // 178
+        // Tier 8 #51 — Netherrack block tile.
+        public const int FirstTailNetherrackLayer = FirstTailDispenserLayer + TailDispenserLayerCount;  // 178
+        public const int TailNetherrackLayerCount = 1;
+        // Tier 8 #51 — Soul Sand block tile.
+        public const int FirstTailSoulSandLayer   = FirstTailNetherrackLayer + TailNetherrackLayerCount; // 179
+        public const int TailSoulSandLayerCount   = 1;
+        public const int LayerCount = FirstTailSoulSandLayer + TailSoulSandLayerCount;                  // 180
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -501,6 +507,16 @@ namespace VStudioCraft.Game
         // the centre. Procedural fallback paints the same shape
         // over the furnace-side palette.
         public const int TileDispenserFront      = 177;
+        // Tier 8 #51 — Netherrack block. Single tile on every face;
+        // canonical Alpha terrain.png slot at (7, 6) — a mottled
+        // red-rock pattern. Procedural fallback paints a similar
+        // red speckled stone for the no-PNG atlas path.
+        public const int TileNetherrack          = 178;
+        // Tier 8 #51 — Soul Sand block. Single tile on every face;
+        // canonical Alpha terrain.png slot at (8, 6) — brown sand
+        // with darker face-shaped pits. Procedural fallback paints
+        // a brown sand variant with three darker mottled circles.
+        public const int TileSoulSand            = 179;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -822,6 +838,12 @@ namespace VStudioCraft.Game
             // Tier 8 #49 V1 — Dispenser front (procedural).
             UploadLayer(layerPixels, TileDispenserFront, GenerateDispenserFront);
 
+            // Tier 8 #51 — Netherrack (procedural fallback).
+            UploadLayer(layerPixels, TileNetherrack, GenerateNetherrack);
+
+            // Tier 8 #51 — Soul Sand (procedural fallback).
+            UploadLayer(layerPixels, TileSoulSand, GenerateSoulSand);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -976,7 +998,11 @@ namespace VStudioCraft.Game
                 // Tier 8 #49 V1 — Dispenser front from terrain.png.
                 || layer == TileDispenserFront
                 // Tier 6 #32 — MobSpawner cage from terrain.png at (4, 7).
-                || layer == TileMobSpawner;
+                || layer == TileMobSpawner
+                // Tier 8 #51 — Netherrack block tile from terrain.png.
+                || layer == TileNetherrack
+                // Tier 8 #51 — Soul Sand block tile from terrain.png.
+                || layer == TileSoulSand;
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3815,6 +3841,13 @@ namespace VStudioCraft.Game
             // at (14, 3) (the canonical (14, 2) slot is now used for
             // pumpkin side art in this asset).
             /* TileDispenserFront      */ (14, 3),
+            // Tier 8 #51 — Netherrack from terrain.png at canonical
+            // Alpha (7, 6). The user's custom terrain.png may have
+            // moved this elsewhere — adjust the coord here if so.
+            /* TileNetherrack          */ (7, 6),
+            // Tier 8 #51 — Soul Sand from terrain.png at canonical
+            // Alpha (8, 6).
+            /* TileSoulSand            */ (8, 6),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4087,6 +4120,14 @@ namespace VStudioCraft.Game
             // overlaid from terrain.png (14, 2) by the biome loop below.
             UploadLayer(layerPixels, TileDispenserFront, GenerateDispenserFront);
 
+            // Tier 8 #51 — Netherrack. Procedural fallback; overlaid
+            // from terrain.png (7, 6) by the biome loop below.
+            UploadLayer(layerPixels, TileNetherrack, GenerateNetherrack);
+
+            // Tier 8 #51 — Soul Sand. Procedural fallback; overlaid
+            // from terrain.png (8, 6) by the biome loop below.
+            UploadLayer(layerPixels, TileSoulSand, GenerateSoulSand);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4113,6 +4154,10 @@ namespace VStudioCraft.Game
                 TileDispenserFront,
                 // Tier 6 #32 — MobSpawner cage from terrain.png.
                 TileMobSpawner,
+                // Tier 8 #51 — Netherrack block tile.
+                TileNetherrack,
+                // Tier 8 #51 — Soul Sand block tile.
+                TileSoulSand,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
@@ -6929,6 +6974,89 @@ namespace VStudioCraft.Game
             // Interior highlight (upper-left of port).
             SetPixel(pixels, 6, 7, portHi.r, portHi.g, portHi.b);
             SetPixel(pixels, 7, 7, portHi.r, portHi.g, portHi.b);
+        }
+
+        // Tier 8 #51 — Netherrack tile. Mottled red rock — a deep
+        // brick-red base with darker scab cells and a few brighter
+        // highlights so the texture reads as eroded volcanic stone
+        // rather than flat colour. Procedural fallback; the alpha-
+        // textures atlas overlays from terrain.png (7, 6) on top.
+        private static void GenerateNetherrack(byte[] pixels)
+        {
+            (byte r, byte g, byte b) baseC = (135,  35,  35);   // deep brick red
+            (byte r, byte g, byte b) dark  = ( 90,  20,  20);   // recessed scab
+            (byte r, byte g, byte b) hi    = (180,  60,  55);   // erosion highlight
+            (byte r, byte g, byte b) lo    = ( 65,  15,  15);   // shadow speckle
+
+            // Solid base fill.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+
+            // Scab clusters — irregular dark patches scattered so the
+            // tile looks pitted rather than uniform.
+            int[] sx = { 1, 2, 3, 7, 8, 9, 12, 13, 5, 6, 11, 4, 10 };
+            int[] sy = { 2, 3, 2, 5, 6, 5,  3,  4, 11, 12, 12, 9, 10 };
+            for (int i = 0; i < sx.Length; i++)
+                SetPixel(pixels, sx[i], sy[i], dark.r, dark.g, dark.b);
+
+            // Highlight pips — bright red flecks suggesting erosion or
+            // exposed lighter mineral, scattered diagonally so the
+            // pattern doesn't grid up.
+            int[] hx = { 5, 13, 2, 9, 14, 1, 6, 11 };
+            int[] hy = { 1,  4, 7, 8,  9, 11, 14, 13 };
+            for (int i = 0; i < hx.Length; i++)
+                SetPixel(pixels, hx[i], hy[i], hi.r, hi.g, hi.b);
+
+            // Lo-speckle background — softens the gridded scab pattern.
+            int[] lx = { 0, 4, 8, 14, 7, 0, 15, 3, 12 };
+            int[] ly = { 5, 0, 14,  2, 14, 11, 8, 13, 7 };
+            for (int i = 0; i < lx.Length; i++)
+                SetPixel(pixels, lx[i], ly[i], lo.r, lo.g, lo.b);
+        }
+
+        // Tier 8 #51 — Soul Sand tile. Brown sand with three darker
+        // mottled circles suggesting the spectral "faces" carved into
+        // the surface in canonical Alpha. Procedural fallback; the
+        // alpha-textures atlas overlays from terrain.png (8, 6) on
+        // top.
+        private static void GenerateSoulSand(byte[] pixels)
+        {
+            (byte r, byte g, byte b) baseC = (110,  85,  60);   // dusty brown
+            (byte r, byte g, byte b) hi    = (140, 110,  80);   // sand highlight
+            (byte r, byte g, byte b) pit   = ( 65,  50,  35);   // dark recessed face
+            (byte r, byte g, byte b) pitHi = ( 85,  65,  45);   // pit interior tone
+
+            // Solid base fill.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+
+            // Three pit clusters — each a dark roughly-circular blob
+            // a few pixels across, resembling the canonical Alpha
+            // soul-sand "faces". Positioned to read at hotbar size.
+            void DrawPit(int cx, int cy)
+            {
+                // 4-cell cross + 2 corner pixels gives a softer
+                // round shape than a strict 2×2 square.
+                SetPixel(pixels, cx,     cy,     pit.r, pit.g, pit.b);
+                SetPixel(pixels, cx + 1, cy,     pit.r, pit.g, pit.b);
+                SetPixel(pixels, cx,     cy + 1, pit.r, pit.g, pit.b);
+                SetPixel(pixels, cx + 1, cy + 1, pit.r, pit.g, pit.b);
+                SetPixel(pixels, cx - 1, cy,     pitHi.r, pitHi.g, pitHi.b);
+                SetPixel(pixels, cx + 2, cy + 1, pitHi.r, pitHi.g, pitHi.b);
+            }
+            DrawPit(3, 4);
+            DrawPit(10, 5);
+            DrawPit(6, 11);
+
+            // Sand-grain highlight pips — bright flecks scattered
+            // through the base so the texture doesn't read as flat
+            // brown.
+            int[] hx = { 1, 14, 7, 13, 0, 8, 4, 12, 2, 5 };
+            int[] hy = { 1, 2,  7,  9, 12, 0, 14, 13, 9, 8 };
+            for (int i = 0; i < hx.Length; i++)
+                SetPixel(pixels, hx[i], hy[i], hi.r, hi.g, hi.b);
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

@@ -683,6 +683,36 @@ namespace VStudioCraft.Game
         // load items rather than relying on creative + future
         // hopper-equivalent tiers.
         Dispenser          = 171, // Alpha 23
+
+        // Tier 8 #51 — Halloween Update: Netherrack. Soft red rock
+        // that generates the bulk of the Nether dimension's terrain.
+        // V1 ships the block — proper texture, low hardness (axe-
+        // bypassable like stone), drops itself on break, full cube
+        // shape. The Alpha-canonical "lava and fire never burn out
+        // when adjacent to netherrack" behaviour is V2 polish: it
+        // requires the fluid sim to special-case the block (currently
+        // lava spreads identically through all flowable cells), and
+        // the fire system to skip the burn-out timer when the
+        // supporting block is netherrack.
+        //
+        // No natural source until the nether dimension lands; V1 is
+        // creative-catalog-only on the obtain side, mirroring how
+        // glowstone shipped without a vanilla spawn route.
+        Netherrack         = 172, // Alpha 87
+
+        // Tier 8 #51 — Halloween Update: Soul Sand. Brown haunted-
+        // looking sand variant native to the Nether. 14/16 tall (the
+        // top 2/16 is air — the player visually sinks into it) with
+        // a horizontal-velocity slowdown that drops the player's
+        // speed to ~40% while standing on it. The slowdown is the
+        // signature gameplay feature; the slight subsidence is
+        // visual polish that pairs with it.
+        //
+        // Drops itself on break. Hardness 0.5 (soft like sand).
+        // No natural source until the nether dimension lands;
+        // creative-catalog-only on the obtain side, mirroring
+        // glowstone + netherrack.
+        SoulSand           = 173, // Alpha 88
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -1550,6 +1580,13 @@ namespace VStudioCraft.Game
                 case BlockType.WoodStairs:
                 case BlockType.CobblestoneStairs:
                     return (0f, 0f, 0f, 1f, 0.5f, 1f);
+                // Tier 8 #51 — Soul Sand: 1×0.875×1 footprint pinned
+                // to the cell bottom. The 2/16 missing slice at the
+                // top makes the player visually "sink" and is the
+                // visual cue that pairs with the horizontal
+                // velocity slowdown applied in Player.Update.
+                case BlockType.SoulSand:
+                    return (0f, 0f, 0f, 1f, 14f / 16f, 1f);
                 default:
                     return (0f, 0f, 0f, 1f, 1f, 1f);
             }
@@ -1714,6 +1751,9 @@ namespace VStudioCraft.Game
                 // EmitStair in the EmitModels pass.
                 case BlockType.WoodStairs:
                 case BlockType.CobblestoneStairs:
+                // Tier 8 #51 — Soul Sand is a 14/16-tall sub-cube;
+                // mesher routes through EmitModels with EmitSubCubeBox.
+                case BlockType.SoulSand:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1838,6 +1878,12 @@ namespace VStudioCraft.Game
                 // those air-exposed corners aren't culled away.
                 case BlockType.WoodStairs:
                 case BlockType.CobblestoneStairs:
+                // Tier 8 #51 — Soul Sand: top 2/16 of the cell is
+                // air (the player visually sinks). The cube above
+                // would otherwise lose its bottom face — same
+                // dynamic as snow / slabs — so soul sand is
+                // non-opaque to keep that face emitted.
+                case BlockType.SoulSand:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -2021,6 +2067,12 @@ namespace VStudioCraft.Game
                 // way it does for slabs.
                 case BlockType.WoodStairs:
                 case BlockType.CobblestoneStairs:
+                // Tier 8 #51 — Soul Sand: top 2/16 of the cell is
+                // air, so light can flow through. Without this, the
+                // BFS would treat soul sand as opaque and the mesh's
+                // own cell light samples to 0 — the block would
+                // render dark even in daylight.
+                case BlockType.SoulSand:
                     return true;
                 default:
                     return false;
@@ -2170,6 +2222,16 @@ namespace VStudioCraft.Game
                     return 0.6f;
                 case BlockType.Wool:
                     return 0.8f;
+                // Tier 8 #51 — Netherrack: Alpha hardness 0.4. Soft
+                // red rock; faster to mine than stone (1.5) but
+                // slower than dirt (0.5). Bare-hand mining works;
+                // a wooden pickaxe is fastest.
+                case BlockType.Netherrack:
+                    return 0.4f;
+                // Tier 8 #51 — Soul Sand: Alpha hardness 0.5 (same
+                // as regular sand). Bare-hand or shovel both work.
+                case BlockType.SoulSand:
+                    return 0.5f;
                 // Tier 6 #37 — Snow block. Quick to break (Alpha
                 // hardness 0.2 — single shovel swing). No tool gate;
                 // hand also works.
@@ -2470,6 +2532,17 @@ namespace VStudioCraft.Game
                 case BlockType.Dispenser:
                     if (faceKind == 0 || faceKind == 1) return BlockTextures.TileFurnaceTop;
                     return BlockTextures.TileDispenserFront;
+                // Tier 8 #51 — Netherrack. Single tile on every face
+                // — canonical Alpha terrain.png slot at (7, 6) — a
+                // mottled red-rock pattern.
+                case BlockType.Netherrack:
+                    return BlockTextures.TileNetherrack;
+                // Tier 8 #51 — Soul Sand. Single tile on every face;
+                // canonical Alpha terrain.png slot at (8, 6) — a
+                // brown sand with darker pits resembling spectral
+                // faces.
+                case BlockType.SoulSand:
+                    return BlockTextures.TileSoulSand;
                 // Tier 8 #51 — Glowstone Dust item icon. Procedural;
                 // a small pile of bright yellow grain, similar in
                 // shape to bone meal but in glowstone-yellow tones.

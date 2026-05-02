@@ -505,8 +505,8 @@ multiple subsystems at once.
 ### Tier 8 — Late-Alpha systems
 
 51. **Halloween Update block set** — Alpha 1.1.0 (Oct 30, 2010), in scope for our 1.1.2_01 target. Pumpkin already shipped (Tier 6 polish). Remaining:
-    - **Netherrack** — soft red rock;
-    - **Soul Sand** — slows player movement, reduces fall damage.
+    - **Netherrack lava-conductive behaviour** (V2) — V1 shipped the block (BlockType.Netherrack, hardness 0.4, `(7, 6)` texture, drops itself, creative-only obtain). What remains: lava that reaches a netherrack-supported cell shouldn't burn out, and fire on a netherrack-adjacent block needs to skip the burn-out timer. Both require fluid/fire sim hooks that don't exist yet.
+    - **Soul Sand fall-damage reduction** (V2) — V1 shipped the block (BlockType.SoulSand, hardness 0.5, 1×0.875×1 sub-cube collision, `(8, 6)` texture, drops itself, creative-only obtain) AND the horizontal-velocity slowdown (40% scale via SoulSandMoveScale, gated on `IsStandingOnSoulSand` + OnGround so a hop escapes it). What remains: fall-damage reduction when landing ON soul sand. Needs a hook in `Player.UpdateFallTracking` that reads the supporting cell's BlockType and softens `LastFallDistance` when it's Soul Sand.
     - **Nether portal** — 4×5 obsidian frame ignited by Flint+Steel; teleports the player to a parallel Nether dimension. Largest item on this list — likely splits into its own swim-lane.
     - **Slimes** — small/medium/large mob variants spawning in slime chunks. Drops Slimeball (already in code as an item).
 
