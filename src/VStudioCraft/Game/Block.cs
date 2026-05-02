@@ -1834,6 +1834,12 @@ namespace VStudioCraft.Game
                 case BlockType.FlowingLava:
                 case BlockType.Leaves:
                 case BlockType.Glass:
+                // Tier 6 #32 — MobSpawner cage has alpha-cut gaps
+                // between the iron bars; treating it as opaque
+                // would cull adjacent block faces and the player
+                // wouldn't see the room (or eventually the
+                // spinning mob model) behind / inside the cage.
+                case BlockType.MobSpawner:
                 // Cross-sprite blocks don't fill the cell. If they were marked
                 // opaque the cube sweep would cull the faces of the block
                 // beneath them (so the grass under a torch loses its top face)
@@ -1967,6 +1973,13 @@ namespace VStudioCraft.Game
             {
                 case BlockType.Leaves:
                 case BlockType.Glass:
+                // Tier 6 #32 — MobSpawner cage: terrain.png at (4, 7)
+                // has alpha=0 cells between the iron bars so the
+                // player can see the spinning mob model inside. Same
+                // alpha-test treatment as glass / leaves — opaque
+                // stream + fragment-shader discard, no order-
+                // dependence.
+                case BlockType.MobSpawner:
                     return true;
                 default:
                     return false;
@@ -2011,6 +2024,14 @@ namespace VStudioCraft.Game
                 case BlockType.FlowingLava:
                 case BlockType.Glass:
                 case BlockType.Leaves:
+                // Tier 6 #32 — MobSpawner cage: alpha gaps between
+                // the bars let light through, same shape as glass /
+                // leaves. Without this the BFS would treat the cage
+                // as opaque, the cell's own light would clamp to 0,
+                // and the alpha-tested mesh would render dark even
+                // in daylight (parallel to the slab/fence/stair
+                // lighting bug we already fixed).
+                case BlockType.MobSpawner:
                 case BlockType.Dandelion:
                 case BlockType.Rose:
                 case BlockType.BrownMushroom:

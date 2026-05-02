@@ -2924,14 +2924,56 @@ void main()
         // contact before the teleport fires).
         private float _inPortalSeconds;
         public const float PortalTintMaxSeconds = 3.0f;
+        // Tier 8 #51 V3 part 2 — Once continuous portal contact
+        // crosses PortalTeleportSeconds (4 s, canonical Alpha) the
+        // teleport trigger fires: a brief white-flash overlay
+        // plays and the timer is reset, with the actual dimension
+        // swap a V4 follow-up (the destination world doesn't exist
+        // yet). The post-teleport cooldown prevents the trigger
+        // from re-firing every frame while the player is still in
+        // the portal — _inPortalSeconds doesn't begin re-accumulating
+        // until the player has stepped out and the cooldown has
+        // expired (matches the Alpha "you've just teleported, brief
+        // grace period before the return trip" feel).
+        public const float PortalTeleportSeconds = 4.0f;
+        public const float PortalTeleportFlashSeconds = 0.45f;
+        public const float PortalTeleportCooldownSeconds = 1.0f;
+        private float _portalTeleportFlash;     // counts DOWN over the flash visible window
+        private float _portalTeleportCooldown;  // counts down — accumulator stays at 0 while > 0
         public void TickPortalContact(float dt)
         {
             if (_world == null || Player == null) return;
+            if (_portalTeleportCooldown > 0f)
+            {
+                _portalTeleportCooldown -= dt;
+                if (_portalTeleportCooldown < 0f) _portalTeleportCooldown = 0f;
+            }
+            if (_portalTeleportFlash > 0f)
+            {
+                _portalTeleportFlash -= dt;
+                if (_portalTeleportFlash < 0f) _portalTeleportFlash = 0f;
+            }
             bool inPortal = Player.IsInNetherPortal(_world);
-            if (inPortal)
+            if (inPortal && _portalTeleportCooldown <= 0f)
             {
                 _inPortalSeconds += dt;
-                if (_inPortalSeconds > PortalTintMaxSeconds) _inPortalSeconds = PortalTintMaxSeconds;
+                // No cap on the accumulator — the visual ramp clamps
+                // its own fraction to 1 at PortalTintMaxSeconds (so
+                // the wash hits peak alpha at 3 s and stays there
+                // until the teleport fires at 4 s). Capping the
+                // accumulator at the visual max would prevent it
+                // from ever reaching the teleport threshold.
+                if (_inPortalSeconds >= PortalTeleportSeconds)
+                {
+                    // Trigger fires — flash, reset, cool down.
+                    // V4 will plug the dimension-swap in here; for
+                    // now the only effect is the brief white flash
+                    // so the player has clear feedback that the
+                    // teleport threshold was reached.
+                    _portalTeleportFlash = PortalTeleportFlashSeconds;
+                    _portalTeleportCooldown = PortalTeleportCooldownSeconds;
+                    _inPortalSeconds = 0f;
+                }
             }
             else
             {
@@ -2939,6 +2981,7 @@ void main()
                 if (_inPortalSeconds < 0f) _inPortalSeconds = 0f;
             }
         }
+        public bool IsPortalTeleportFlashActive => _portalTeleportFlash > 0f;
 
         public void SaveToFile(string path)
         {
@@ -9749,6 +9792,12 @@ void main()
             // _inPortalSeconds (incremented while in portal,
             // 2× decay otherwise — see TickPortalContact).
             RenderPortalTint(width, height);
+            // Tier 8 #51 V3 part 2 — White flash punctuating the
+            // teleport trigger. Drawn after the slow tint so the
+            // build-up resolves visibly as the player crosses the
+            // 4 s threshold. V4 will use the same trigger to fire
+            // the dimension swap.
+            RenderPortalTeleportFlash(width, height);
             RenderSelectionOutline(width, height);
             RenderCrosshair(width, height);
 
@@ -9980,6 +10029,39 @@ void main()
             // toward orange so it doesn't read as "danger HUD" against
             // the blue sky.
             _overlayShader.SetVector3("uColor", new Vector3(0.85f, 0.10f, 0.10f));
+            _overlayShader.SetFloat("uAlpha", alpha);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+            _unitQuadMesh.Draw();
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        // Tier 8 #51 V3 part 2 — Brief white flash overlay played
+        // when the portal teleport TRIGGER fires (the player held
+        // continuous portal contact for PortalTeleportSeconds = 4 s).
+        // Linear fade-out over PortalTeleportFlashSeconds = 0.45 s
+        // so the visible "transition" reads like a one-frame burst
+        // followed by a quick wash-out. Drawn after the slow
+        // purple tint so the flash visibly punctuates the build-up.
+        private void RenderPortalTeleportFlash(int width, int height)
+        {
+            if (_portalTeleportFlash <= 0f) return;
+
+            float alpha = _portalTeleportFlash / PortalTeleportFlashSeconds;
+            if (alpha > 1f) alpha = 1f;
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+            var scale = Matrix4.CreateScale(width, height, 1f);
+            var mvp = scale * ortho;
+
+            _overlayShader.Use();
+            _overlayShader.SetMatrix4("uMVP", mvp);
+            _overlayShader.SetVector3("uColor", new Vector3(1f, 1f, 1f));
             _overlayShader.SetFloat("uAlpha", alpha);
 
             GL.Enable(EnableCap.Blend);

@@ -3813,7 +3813,7 @@ namespace VStudioCraft.Game
             // sheet) — sentinel here so the terrain slicer skips it.
             // The actual icon will fall back to the procedural
             // generator until a tools-sheet slicer wires it in.
-            /* TileRedstoneDust        */ (-1, -1),
+            /* TileRedstoneDust        */ (8, 3),
             // Redstone Wire (in-world block) — canonical Alpha
             // terrain.png unpowered cross variant at (4, 5). The
             // powered variant lives at (4, 6); not currently sliced
@@ -3835,8 +3835,8 @@ namespace VStudioCraft.Game
             // Tier 8 #50 — Bone + Bone Meal item icons.
             // Procedural-only; sentinel coords skip both the
             // terrain.png and alpha_tools.png slicer paths.
-            /* TileBone                */ (-1, -1),
-            /* TileBoneMeal            */ (-1, -1),
+            /* TileBone                */ (5, 5),
+            /* TileBoneMeal            */ (6, 5),
             // Tier 8 #46 — Ladder block tile from terrain.png at
             // canonical Alpha (3, 5).
             /* TileLadder              */ (3, 5),
@@ -3849,7 +3849,7 @@ namespace VStudioCraft.Game
             /* TileGlowstone           */ (6, 6),
             // Tier 8 #51 — Glowstone Dust item icon. Procedural-only
             // (no PNG-source slicer wired in either atlas path).
-            /* TileGlowstoneDust       */ (-1, -1),
+            /* TileGlowstoneDust       */ (9, 4),
             // Tier 8 #49 V1 — Dispenser front. Per user direction
             // this build's terrain.png places the dispenser muzzle
             // at (14, 3) (the canonical (14, 2) slot is now used for
