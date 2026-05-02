@@ -250,6 +250,54 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Fence, 2)));
 
+            // Tier 8 #45 V1 — Slab recipes. Three of the source
+            // material in a horizontal row → 6 slabs. Canonical
+            // Alpha 1.0.5_01 recipe applied to each material; the
+            // 6-slab output makes a 3-stone craft economically
+            // identical to splitting the source into two cubes
+            // worth of slabs (3 stone → 6 half-blocks = 3 cubes
+            // worth of material — slabs cost the same as their
+            // source).
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Stone, BlockType.Stone, BlockType.Stone },
+                },
+                new ItemStack(BlockType.StoneSlab, 6)));
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Cobblestone, BlockType.Cobblestone, BlockType.Cobblestone },
+                },
+                new ItemStack(BlockType.CobblestoneSlab, 6)));
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Bricks, BlockType.Bricks, BlockType.Bricks },
+                },
+                new ItemStack(BlockType.BrickSlab, 6)));
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                },
+                new ItemStack(BlockType.WoodSlab, 6)));
+
+            // Tier 8 #51 — Glowstone block from 4 dust in a 2×2.
+            // Canonical Alpha 1.1.2_01 recipe; not actually craftable
+            // in vanilla Alpha (glowstone dust drops were nether-only
+            // and the recipe is a Beta-era addition), but pairing it
+            // with the dust drop gives the player a cycle (place +
+            // mine creative-spawned glowstone → 2..4 dust → re-craft
+            // a block) without needing the nether to ship first.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.GlowstoneDust, BlockType.GlowstoneDust },
+                    { BlockType.GlowstoneDust, BlockType.GlowstoneDust },
+                },
+                new ItemStack(BlockType.Glowstone, 1)));
+
             // Crafting Table: 2×2 planks → 1 crafting table.
             list.Add(new ShapedRecipe(
                 new BlockType[,]

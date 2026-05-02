@@ -6031,6 +6031,15 @@ void main()
                 dropType = BlockType.ClayBall;
                 dropCount = 4;
             }
+            // Tier 8 #51 — Glowstone drops 2..4 dust per block,
+            // randomised per break. Canonical Alpha 1.1.2_01 quantity;
+            // matches clay's "block consumed into multiple ingredient
+            // items" pattern.
+            else if (type == BlockType.Glowstone)
+            {
+                dropType = BlockType.GlowstoneDust;
+                dropCount = 2 + _dropRng.Next(3); // 2..4 inclusive
+            }
             else
             {
                 dropType = ToolData.DropFor(type);

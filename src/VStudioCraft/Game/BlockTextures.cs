@@ -268,7 +268,10 @@ namespace VStudioCraft.Game
         // terrain.png at canonical Alpha (8, 7).
         public const int FirstTailJackLayer       = FirstTailLadderLayer + TailLadderLayerCount;        // 174
         public const int TailJackLayerCount       = 1;
-        public const int LayerCount = FirstTailJackLayer + TailJackLayerCount;                          // 175
+        // Tier 8 #51 — Glowstone block tile + dust item icon.
+        public const int FirstTailGlowstoneLayer  = FirstTailJackLayer + TailJackLayerCount;            // 175
+        public const int TailGlowstoneLayerCount  = 2;
+        public const int LayerCount = FirstTailGlowstoneLayer + TailGlowstoneLayerCount;                // 177
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -482,6 +485,13 @@ namespace VStudioCraft.Game
         // glowing yellow. Procedural fallback paints the same
         // silhouette over the pumpkin-side palette.
         public const int TileJackOLanternFront   = 174;
+        // Tier 8 #51 — Glowstone block (canonical Alpha terrain.png
+        // (9, 6)) — speckled bright-yellow / cream tile with darker
+        // crystalline cluster cells. Used on every face.
+        public const int TileGlowstone           = 175;
+        // Tier 8 #51 — Glowstone Dust item icon. Procedural; small
+        // pile of bright yellow grain similar in shape to bone meal.
+        public const int TileGlowstoneDust       = 176;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -796,6 +806,10 @@ namespace VStudioCraft.Game
             // Tier 8 #51 — Jack-o-lantern lit face (procedural).
             UploadLayer(layerPixels, TileJackOLanternFront, GenerateJackOLanternFront);
 
+            // Tier 8 #51 — Glowstone block + dust (procedural).
+            UploadLayer(layerPixels, TileGlowstone,     GenerateGlowstone);
+            UploadLayer(layerPixels, TileGlowstoneDust, GenerateGlowstoneDust);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -944,7 +958,9 @@ namespace VStudioCraft.Game
                 // Tier 8 #46 — Ladder block tile from terrain.png.
                 || layer == TileLadder
                 // Tier 8 #51 — Jack-o-lantern lit face from terrain.png.
-                || layer == TileJackOLanternFront;
+                || layer == TileJackOLanternFront
+                // Tier 8 #51 — Glowstone block tile from terrain.png.
+                || layer == TileGlowstone;
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3767,6 +3783,12 @@ namespace VStudioCraft.Game
             // Tier 8 #51 — Jack-o-lantern carved+lit face from
             // terrain.png at canonical Alpha (8, 7).
             /* TileJackOLanternFront   */ (8, 7),
+            // Tier 8 #51 — Glowstone block from terrain.png at
+            // canonical Alpha (9, 6).
+            /* TileGlowstone           */ (9, 6),
+            // Tier 8 #51 — Glowstone Dust item icon. Procedural-only
+            // (no PNG-source slicer wired in either atlas path).
+            /* TileGlowstoneDust       */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4016,6 +4038,12 @@ namespace VStudioCraft.Game
             // overlaid from terrain.png (8, 7) by the biome loop below.
             UploadLayer(layerPixels, TileJackOLanternFront, GenerateJackOLanternFront);
 
+            // Tier 8 #51 — Glowstone block + dust. Block tile is
+            // overlaid from terrain.png (9, 6) by the biome loop below;
+            // dust stays procedural (sentinel coords skip the slicer).
+            UploadLayer(layerPixels, TileGlowstone,     GenerateGlowstone);
+            UploadLayer(layerPixels, TileGlowstoneDust, GenerateGlowstoneDust);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4036,6 +4064,8 @@ namespace VStudioCraft.Game
                 TileLadder,
                 // Tier 8 #51 — Jack-o-lantern lit face.
                 TileJackOLanternFront,
+                // Tier 8 #51 — Glowstone block tile.
+                TileGlowstone,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
@@ -6726,6 +6756,87 @@ namespace VStudioCraft.Game
             // in the upper row so the grin tapers at each end.
             SetPixel(pixels, 3,  9, glowDim.r, glowDim.g, glowDim.b);
             SetPixel(pixels, 12, 9, glowDim.r, glowDim.g, glowDim.b);
+        }
+
+        // Tier 8 #51 — Glowstone block tile. Speckled bright-yellow /
+        // cream tile evoking the canonical Alpha "crystalline cluster"
+        // look. Three colour bands (deep amber base, mid yellow body,
+        // bright cream highlight) painted in stippled clusters so the
+        // tile reads as a glowing crystal aggregate even without the
+        // emissive light contribution. Procedural fallback; the alpha-
+        // textures atlas overlays from terrain.png (9, 6) on top.
+        private static void GenerateGlowstone(byte[] pixels)
+        {
+            (byte r, byte g, byte b) baseC = (155, 110,  35);
+            (byte r, byte g, byte b) body  = (220, 175,  60);
+            (byte r, byte g, byte b) hi    = (255, 230, 130);
+
+            // Solid base fill — deep amber so the gaps between
+            // crystal clusters read as recessed rather than alpha.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, baseC.r, baseC.g, baseC.b);
+
+            // Mid-yellow crystal clusters — three irregular blobs
+            // arranged so the tile tiles seamlessly when stacked.
+            int[] cx = { 3, 4, 4, 5, 9, 10, 10, 11, 12, 6, 7, 8, 7 };
+            int[] cy = { 3, 2, 4, 3, 4, 3,  5,  4,  3, 9, 10, 9, 11 };
+            for (int i = 0; i < cx.Length; i++)
+                SetPixel(pixels, cx[i], cy[i], body.r, body.g, body.b);
+
+            // Bright highlight pips at the centre of each cluster so
+            // the tile reads as glowing inside even when not
+            // physically emitting light.
+            int[] hx = { 4, 10, 7 };
+            int[] hy = { 3, 4,  10 };
+            for (int i = 0; i < hx.Length; i++)
+                SetPixel(pixels, hx[i], hy[i], hi.r, hi.g, hi.b);
+
+            // Body-colour scatter dots filling out the rest of the
+            // tile so the texture doesn't look sparse against the
+            // amber base.
+            int[] sx = { 1, 2, 13, 14, 0, 15, 8, 0, 6, 13, 1, 14 };
+            int[] sy = { 7, 12, 8, 11, 14, 2, 6, 5, 14, 13, 1, 0 };
+            for (int i = 0; i < sx.Length; i++)
+                SetPixel(pixels, sx[i], sy[i], body.r, body.g, body.b);
+        }
+
+        // Tier 8 #51 — Glowstone Dust item icon. Bright-yellow grain
+        // pile with a stippled highlight pattern; same overall
+        // silhouette as the bone-meal pile but in glowstone-yellow
+        // tones so the player can tell them apart in inventory.
+        private static void GenerateGlowstoneDust(byte[] pixels)
+        {
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 0] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+                pixels[i + 3] = 0;
+            }
+            (byte r, byte g, byte b) body = (235, 195,  70);
+            (byte r, byte g, byte b) hi   = (255, 240, 145);
+            (byte r, byte g, byte b) lo   = (155, 115,  30);
+
+            // Tapered pile, base 11 wide, top 3 wide, centred at x=8.
+            int[] rowHalfWidths = { 1, 2, 3, 4, 5, 5 };
+            int yTop = 6;
+            for (int yi = 0; yi < rowHalfWidths.Length; yi++)
+            {
+                int y  = yTop + yi;
+                int hw = rowHalfWidths[yi];
+                for (int dx = -hw; dx <= hw; dx++)
+                    SetPixel(pixels, 8 + dx, y, body.r, body.g, body.b);
+                SetPixel(pixels, 8 - 1, y, hi.r, hi.g, hi.b);
+                SetPixel(pixels, 8 + hw, y, lo.r, lo.g, lo.b);
+            }
+            // Bright stippled grains — denser than bone meal because
+            // glowstone dust is glittering crystal rather than flat
+            // powder.
+            int[] gx = { 5, 9, 6, 11, 7, 5, 12, 8, 10 };
+            int[] gy = { 7, 7, 9, 9, 10, 10, 11, 11, 11 };
+            for (int i = 0; i < gx.Length; i++)
+                SetPixel(pixels, gx[i], gy[i], hi.r, hi.g, hi.b);
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

@@ -602,6 +602,47 @@ namespace VStudioCraft.Game
         // so the lit state survives mining-and-replacing — no need
         // to re-flint after every move.
         JackOLantern       = 162, // Alpha 91
+
+        // Tier 8 #45 V1 — Half-block slabs. Four material variants
+        // mirror canonical Alpha 1.0.5_01's slab metadata family
+        // (44:0=Stone, 44:2=Wood, 44:3=Cobblestone, 44:4=Brick) but
+        // we use four distinct BlockTypes rather than a metadata-
+        // discriminated single id because per-cell metadata in this
+        // codebase already encodes facing for several other block
+        // types — keeping slabs in their own id space avoids a
+        // facing-vs-material collision in the meta byte.
+        //
+        // All four variants render as a 1×0.5×1 sub-cube pinned to
+        // the cell bottom (no top-half / upside-down slabs in V1 —
+        // that's a Beta 1.3 mechanic which we'll add when stairs
+        // ship in #45 V2). Collision matches the visual mesh, so
+        // the player auto-steps onto a slab without jumping
+        // (MaxAutoStepHeight = 0.55 covers it).
+        //
+        // Stairs (Alpha 53 + 67) are deferred to #45 V2 — they need
+        // a multi-AABB collision system for their L-shape, which is
+        // a bigger refactor than the slab work itself.
+        StoneSlab          = 163, // Alpha 44:0
+        CobblestoneSlab    = 164, // Alpha 44:3
+        BrickSlab          = 165, // Alpha 44:4
+        WoodSlab           = 166, // Alpha 44:2
+
+        // Tier 8 #51 — Halloween Update: Glowstone block + dust.
+        //
+        // Glowstone is a full opaque cube emitting light=15 (the
+        // brightest fixed source in Alpha; matches Jack-o-lantern).
+        // In canonical Alpha 1.1.2_01 it generated only in the
+        // Nether, which we haven't shipped yet — so for now the
+        // block is creative-catalog only on the inventory side. The
+        // crafting loop still works: place + break a glowstone block
+        // (drops 2..4 dust), then 4 dust → 1 block in a 2×2 craft.
+        //
+        // GlowstoneDust is a pure inventory item — drops from a
+        // broken glowstone block, crafts back into one. Folds into
+        // the existing IsItem range past the slabs with no per-block
+        // mesher / collision branches needed.
+        Glowstone          = 167, // Alpha 89
+        GlowstoneDust      = 168, // Alpha 348
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -749,6 +790,10 @@ namespace VStudioCraft.Game
         // into a tree on the spot.
         public const BlockType Bone                = BlockType.Bone;
         public const BlockType BoneMeal            = BlockType.BoneMeal;
+        // Tier 8 #51 — Glowstone Dust item alias (block form is in
+        // BlockType only — the dust item is what crafts into the
+        // glowing block and drops from breaking one).
+        public const BlockType GlowstoneDust       = BlockType.GlowstoneDust;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -866,6 +911,12 @@ namespace VStudioCraft.Game
                 // gets its own id and we expose 351 here).
                 case BlockType.Bone:                return 352;
                 case BlockType.BoneMeal:            return 351;
+                // Tier 8 #51 — Glowstone Dust at canonical Alpha 348.
+                // The block form (Alpha 89) isn't an item, so AlphaId
+                // returns -1 for it via the default fall-through —
+                // same convention every other placeable-block form
+                // uses (e.g. WoodDoorBlockBottom is non-item).
+                case BlockType.GlowstoneDust:       return 348;
                 default:                       return -1;
             }
         }
@@ -971,6 +1022,14 @@ namespace VStudioCraft.Game
                 // explicitly; Bone reads fine as a single word
                 // and falls through to the ToString default.
                 case BlockType.BoneMeal:            return "Bone Meal";
+                // Tier 8 #51 — Glowstone Dust + Glowstone block both
+                // need their friendly names since the auto-splitter
+                // would render them as "Glowstone Dust" and just
+                // "Glowstone" anyway via ToString — but the explicit
+                // entries keep the inventory tooltip stable if the
+                // enum is ever renamed.
+                case BlockType.GlowstoneDust:       return "Glowstone Dust";
+                case BlockType.Glowstone:           return "Glowstone";
                 default:                       return t.ToString();
             }
         }
@@ -1314,7 +1373,11 @@ namespace VStudioCraft.Game
             // past SignItem; no in-world block form so they fold
             // straight into the IsItem slice.
             || t == BlockType.Bone
-            || t == BlockType.BoneMeal;
+            || t == BlockType.BoneMeal
+            // Tier 8 #51 — Glowstone Dust. Block form (Glowstone)
+            // is a regular cube and falls through to IsCubeShape /
+            // IsSolid / IsOpaque defaults; this is just the item.
+            || t == BlockType.GlowstoneDust;
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -1428,6 +1491,15 @@ namespace VStudioCraft.Game
                 // catching on a 2/16-wide arm sticking out.
                 case BlockType.Fence:
                     return (6f / 16f, 0f, 6f / 16f, 10f / 16f, 1f, 10f / 16f);
+                // Tier 8 #45 V1 — Slabs: full 1×0.5×1 footprint,
+                // pinned to the cell bottom. Auto-step (max 0.55)
+                // covers the half-block lift so the player walks
+                // onto slabs naturally without jumping.
+                case BlockType.StoneSlab:
+                case BlockType.CobblestoneSlab:
+                case BlockType.BrickSlab:
+                case BlockType.WoodSlab:
+                    return (0f, 0f, 0f, 1f, 0.5f, 1f);
                 default:
                     return (0f, 0f, 0f, 1f, 1f, 1f);
             }
@@ -1550,6 +1622,13 @@ namespace VStudioCraft.Game
                 // mesher routes through EmitFence in the EmitModels
                 // pass with neighbour sampling.
                 case BlockType.Fence:
+                // Tier 8 #45 V1 — Slabs are 1×0.5×1 half-cubes pinned
+                // to the cell bottom; mesher routes through
+                // EmitSlab in the EmitModels pass.
+                case BlockType.StoneSlab:
+                case BlockType.CobblestoneSlab:
+                case BlockType.BrickSlab:
+                case BlockType.WoodSlab:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1658,6 +1737,15 @@ namespace VStudioCraft.Game
                 // the post, not have it culled away as if a cube
                 // were there).
                 case BlockType.Fence:
+                // Tier 8 #45 V1 — Slabs fill only the bottom half of
+                // their cell; the top half is air. The cube above
+                // would otherwise lose its bottom face (culled
+                // against what it thinks is a full cube), so slabs
+                // are non-opaque to keep that face emitted.
+                case BlockType.StoneSlab:
+                case BlockType.CobblestoneSlab:
+                case BlockType.BrickSlab:
+                case BlockType.WoodSlab:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -1873,6 +1961,13 @@ namespace VStudioCraft.Game
                 // block-light source). A row of jack-o-lanterns reads
                 // as a clearly Halloween-decorated path.
                 case BlockType.JackOLantern:
+                    return 15;
+                // Tier 8 #51 — Glowstone block emits the same 15 as
+                // the jack-o-lantern. In canonical Alpha 1.1.2_01 the
+                // block was the *primary* nether-roof light source so
+                // it lights through itself like a glowing crystal —
+                // matches the brightest fixed-source convention here.
+                case BlockType.Glowstone:
                     return 15;
                 default:
                     return 0;
@@ -2225,6 +2320,29 @@ namespace VStudioCraft.Game
                 // Alpha shipped fences with the planks tile too.
                 case BlockType.Fence:
                     return BlockTextures.TilePlanks;
+                // Tier 8 #45 V1 — Slabs reuse the source material's
+                // tiles. StoneSlab → TileStone, CobblestoneSlab →
+                // TileCobblestone, BrickSlab → TileBricks, WoodSlab
+                // → TilePlanks (the slab is wood-PLANK-coloured;
+                // canonical Alpha called it "Wooden Slab" but the
+                // texture is the planks tile, not the log tile).
+                case BlockType.StoneSlab:
+                    return BlockTextures.TileStone;
+                case BlockType.CobblestoneSlab:
+                    return BlockTextures.TileCobblestone;
+                case BlockType.BrickSlab:
+                    return BlockTextures.TileBricks;
+                case BlockType.WoodSlab:
+                    return BlockTextures.TilePlanks;
+                // Tier 8 #51 — Glowstone block. Single tile on every
+                // face; canonical Alpha terrain.png slot at (9, 6).
+                case BlockType.Glowstone:
+                    return BlockTextures.TileGlowstone;
+                // Tier 8 #51 — Glowstone Dust item icon. Procedural;
+                // a small pile of bright yellow grain, similar in
+                // shape to bone meal but in glowstone-yellow tones.
+                case BlockType.GlowstoneDust:
+                    return BlockTextures.TileGlowstoneDust;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
                     // Bottom shares the side tile (the bottom of a
@@ -2559,6 +2677,17 @@ namespace VStudioCraft.Game
             || t == BlockType.WoodDoorBlockTop
             || t == BlockType.IronDoorBlockBottom
             || t == BlockType.IronDoorBlockTop;
+
+        // Tier 8 #45 V1 — True for any of the 4 slab variants. Used
+        // by mesher / placement / collision dispatch to take the
+        // half-cube branch without listing all four ids at every
+        // site. Adding a new slab material in the future (sandstone
+        // slab, etc.) only needs an edit here.
+        public static bool IsSlab(BlockType t)
+            => t == BlockType.StoneSlab
+            || t == BlockType.CobblestoneSlab
+            || t == BlockType.BrickSlab
+            || t == BlockType.WoodSlab;
 
         public static bool IsDoorBottom(BlockType t)
             => t == BlockType.WoodDoorBlockBottom
@@ -2933,6 +3062,15 @@ namespace VStudioCraft.Game
                 // landed) consumes the ore block and produces an ingot.
                 case BlockType.CoalOre:    return BlockType.Coal;
                 case BlockType.DiamondOre: return BlockType.Diamond;
+                // Tier 8 #51 — Glowstone block breaks into Glowstone
+                // Dust, NOT a glowstone block back. Same shape as
+                // ore-to-item drops above. Quantity (2..4) is
+                // randomised by the survival drop loop in GameRenderer
+                // — DropFor is single-item, the multi-drop happens at
+                // the call site via the existing GetDropQuantity hook
+                // (see Tier 6 #37 for the same pattern with snow
+                // layers dropping snowballs).
+                case BlockType.Glowstone:  return BlockType.GlowstoneDust;
                 // A broken LitFurnace drops the un-lit Furnace item — the
                 // burning state is part of the tile entity, not the
                 // dropped item. Tile-entity teardown (in GameRenderer)

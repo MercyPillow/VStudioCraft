@@ -476,6 +476,16 @@ namespace VStudioCraft.Game
                     byte ladderMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
                     EmitLadder(x + baseX, y, z + baseZ, ladderMeta, layer, lightPacked);
                 }
+                else if (BlockData.IsSlab(t))
+                {
+                    // Tier 8 #45 V1 — Half-block slab. 1×0.5×1 box
+                    // pinned to the cell bottom; tile chosen by
+                    // GetTileIndex above.
+                    EmitSubCubeBox(
+                        x + baseX + 0f, y + 0f, z + baseZ + 0f,
+                        x + baseX + 1f, y + 0.5f, z + baseZ + 1f,
+                        layer, lightPacked);
+                }
                 else if (t == BlockType.Fence)
                 {
                     // Tier 8 #46 part 2 — Wooden fence. Sample the
