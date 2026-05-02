@@ -107,7 +107,7 @@ namespace VStudioCraft.Game
         //       it lives in the chunk's metadata byte alongside the
         //       block id, so it persists through the existing v2+
         //       chunk-byte block.
-        private const byte CurrentVersion = 15;
+        private const byte CurrentVersion = 16;
 
         // Phase 8 — one entry per known player in the v13 multiplayer
         // player table. Captured at save time from `ServerHub` (or the
@@ -152,9 +152,19 @@ namespace VStudioCraft.Game
         // table. Calls through to the MP-aware overload with a null
         // player list, which writes a 0-count v13 block.
         public static void Save(string path, Header header, World world)
-            => Save(path, header, world, null);
+            => Save(path, header, world, null, null);
 
         public static void Save(string path, Header header, World world, IList<PersistedPlayer> players)
+            => Save(path, header, world, players, null);
+
+        // Tier 8 #51 V5 — Save with an optional Nether world. The
+        // overworld is always the primary file content (header + chunk
+        // section + tile entities); the Nether goes in a v16 trailing
+        // block so pre-v16 readers stop cleanly at the v15 dispenser
+        // section. Pass null to skip Nether persistence — the player
+        // never visited the Nether OR the host wants ephemeral Nether
+        // (debug / test fixtures).
+        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld)
         {
             var tmp = path + ".tmp";
             using (var fs = File.Create(tmp))
@@ -390,6 +400,90 @@ namespace VStudioCraft.Game
                     for (int i = 0; i < DispenserTileEntity.SlotCount; i++)
                         WriteStack(w, kv.Value.Slots[i]);
                 }
+
+                // v16: Tier 8 #51 V5 — Nether dimension persistence.
+                // Trailing block past the v15 dispenser section. A
+                // single byte flag indicates whether the Nether
+                // exists for this world (the player visited it at
+                // least once). When present, we write the same
+                // chunk-byte format the overworld uses + the
+                // overworld tile-entity tail blocks (chest /
+                // furnace / sign / etc.) for the Nether's parallel
+                // dictionaries. Pre-v16 saves stop cleanly at the
+                // v15 dispenser block — they never see this byte.
+                bool hasNether = netherWorld != null && netherWorld.Dimension == Dimension.Nether;
+                w.Write((byte)(hasNether ? 1 : 0));
+                if (hasNether)
+                {
+                    w.Write(netherWorld.PersistentChunkCount);
+                    foreach (var chunk in netherWorld.AllChunksForPersistence())
+                    {
+                        w.Write(chunk.ChunkX);
+                        w.Write(chunk.ChunkZ);
+                        w.Write((byte)(chunk.IsModified ? 1 : 0));
+                        chunk.WriteTo(w);
+                    }
+                    // Nether-side tile entities. Currently any of the
+                    // 5 entity types could exist in the Nether (the
+                    // player can place chests + dispensers etc. on
+                    // their netherrack platform), so we write all
+                    // five dictionaries even if most are empty —
+                    // matches the overworld's exhaustive tail-block
+                    // approach and keeps the load symmetric.
+                    int neFurnaceCount = 0;
+                    foreach (var _ in netherWorld.FurnaceEntities) neFurnaceCount++;
+                    w.Write(neFurnaceCount);
+                    foreach (var kv in netherWorld.FurnaceEntities)
+                    {
+                        w.Write(kv.Key.x);
+                        w.Write(kv.Key.y);
+                        w.Write(kv.Key.z);
+                        WriteStack(w, kv.Value.Input);
+                        WriteStack(w, kv.Value.Fuel);
+                        WriteStack(w, kv.Value.Output);
+                        w.Write(kv.Value.BurnTimeTicks);
+                        w.Write(kv.Value.MaxBurnTimeTicks);
+                        w.Write(kv.Value.CookProgressTicks);
+                    }
+                    int neChestCount = 0;
+                    foreach (var _ in netherWorld.ChestEntities) neChestCount++;
+                    w.Write(neChestCount);
+                    foreach (var kv in netherWorld.ChestEntities)
+                    {
+                        w.Write(kv.Key.x);
+                        w.Write(kv.Key.y);
+                        w.Write(kv.Key.z);
+                        w.Write((byte)kv.Value.Facing);
+                        for (int i = 0; i < ChestTileEntity.SlotCount; i++)
+                            WriteStack(w, kv.Value.Slots[i]);
+                    }
+                    int neSignCount = 0;
+                    foreach (var _ in netherWorld.SignEntities) neSignCount++;
+                    w.Write(neSignCount);
+                    foreach (var kv in netherWorld.SignEntities)
+                    {
+                        w.Write(kv.Key.x);
+                        w.Write(kv.Key.y);
+                        w.Write(kv.Key.z);
+                        var lines = kv.Value.Lines ?? new string[4];
+                        for (int i = 0; i < 4; i++)
+                        {
+                            w.Write(i < lines.Length && lines[i] != null ? lines[i] : string.Empty);
+                        }
+                    }
+                    int neDispenserCount = 0;
+                    foreach (var _ in netherWorld.DispenserEntities) neDispenserCount++;
+                    w.Write(neDispenserCount);
+                    foreach (var kv in netherWorld.DispenserEntities)
+                    {
+                        w.Write(kv.Key.x);
+                        w.Write(kv.Key.y);
+                        w.Write(kv.Key.z);
+                        w.Write((byte)kv.Value.Facing);
+                        for (int i = 0; i < DispenserTileEntity.SlotCount; i++)
+                            WriteStack(w, kv.Value.Slots[i]);
+                    }
+                }
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
@@ -538,6 +632,18 @@ namespace VStudioCraft.Game
         // already does for missing files / version mismatches.
         public static (Header header, World world, Dictionary<string, PersistedPlayer> players) LoadWithPlayers(string path)
         {
+            var (h, w, p, _) = LoadWithPlayersAndNether(path);
+            return (h, w, p);
+        }
+
+        // Tier 8 #51 V5 — Extended load that ALSO returns the Nether
+        // world if one was persisted (v16+ saves only). Pre-v16 saves
+        // and v16 saves where the player never visited the Nether
+        // both return null for the nether tuple slot — caller is
+        // expected to lazy-create on demand the same way it always
+        // has.
+        public static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld) LoadWithPlayersAndNether(string path)
+        {
             try
             {
                 return LoadWithPlayersInner(path);
@@ -583,7 +689,7 @@ namespace VStudioCraft.Game
             }
         }
 
-        private static (Header header, World world, Dictionary<string, PersistedPlayer> players) LoadWithPlayersInner(string path)
+        private static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld) LoadWithPlayersInner(string path)
         {
             using (var fs = File.OpenRead(path))
             using (var gz = new GZipStream(fs, CompressionMode.Decompress))
@@ -951,7 +1057,96 @@ namespace VStudioCraft.Game
                     }
                 }
 
-                return (header, world, players);
+                // v16: Tier 8 #51 V5 — Nether world. Pre-v16 saves
+                // had no Nether block, so a load returns null and
+                // the renderer lazy-creates the Nether on the next
+                // portal entry the same way it did pre-V5. v16+
+                // saves with hasNether=0 (player never visited the
+                // Nether before saving) also return null.
+                World netherWorld = null;
+                if (version >= 16)
+                {
+                    byte hasNether = r.ReadByte();
+                    if (hasNether != 0)
+                    {
+                        netherWorld = World.Empty(header.Seed);
+                        netherWorld.Dimension = Dimension.Nether;
+                        int neChunkCount = r.ReadInt32();
+                        if (neChunkCount < 0 || neChunkCount > 1_000_000)
+                            throw new InvalidDataException($"v16 nether chunkCount {neChunkCount} out of expected range");
+                        for (int i = 0; i < neChunkCount; i++)
+                        {
+                            int cx = r.ReadInt32();
+                            int cz = r.ReadInt32();
+                            bool modified = r.ReadByte() != 0;
+                            var c = new Chunk(cx, cz) { IsModified = modified };
+                            c.ReadFrom(r);
+                            netherWorld.AddChunk(c);
+                        }
+                        // Recompute lighting for every nether chunk so
+                        // the per-cell light values are consistent with
+                        // the loaded block data.
+                        foreach (var c in netherWorld.AllChunksForPersistence())
+                        {
+                            LightCalculator.RecomputeChunk(c);
+                        }
+                        // Nether-side tile entities — same shape as
+                        // the overworld tail blocks above, but writing
+                        // into netherWorld's parallel dictionaries.
+                        int neFurnaceCount = r.ReadInt32();
+                        for (int i = 0; i < neFurnaceCount; i++)
+                        {
+                            int wx = r.ReadInt32();
+                            int wy = r.ReadInt32();
+                            int wz = r.ReadInt32();
+                            var fe = netherWorld.GetOrCreateFurnaceEntity(wx, wy, wz);
+                            fe.Input = ReadStack(r);
+                            fe.Fuel = ReadStack(r);
+                            fe.Output = ReadStack(r);
+                            fe.BurnTimeTicks = r.ReadInt32();
+                            fe.MaxBurnTimeTicks = r.ReadInt32();
+                            fe.CookProgressTicks = r.ReadInt32();
+                        }
+                        int neChestCount = r.ReadInt32();
+                        for (int i = 0; i < neChestCount; i++)
+                        {
+                            int wx = r.ReadInt32();
+                            int wy = r.ReadInt32();
+                            int wz = r.ReadInt32();
+                            byte facing = r.ReadByte();
+                            var ce = netherWorld.GetOrCreateChestEntity(wx, wy, wz);
+                            ce.Facing = (BlockFacing)facing;
+                            for (int s = 0; s < ChestTileEntity.SlotCount; s++)
+                                ce.Slots[s] = ReadStack(r);
+                        }
+                        int neSignCount = r.ReadInt32();
+                        for (int i = 0; i < neSignCount; i++)
+                        {
+                            int wx = r.ReadInt32();
+                            int wy = r.ReadInt32();
+                            int wz = r.ReadInt32();
+                            var se = netherWorld.GetOrCreateSignEntity(wx, wy, wz);
+                            for (int line = 0; line < 4; line++)
+                            {
+                                se.Lines[line] = r.ReadString();
+                            }
+                        }
+                        int neDispenserCount = r.ReadInt32();
+                        for (int i = 0; i < neDispenserCount; i++)
+                        {
+                            int wx = r.ReadInt32();
+                            int wy = r.ReadInt32();
+                            int wz = r.ReadInt32();
+                            byte facing = r.ReadByte();
+                            var de = netherWorld.GetOrCreateDispenserEntity(wx, wy, wz);
+                            de.Facing = (BlockFacing)facing;
+                            for (int s = 0; s < DispenserTileEntity.SlotCount; s++)
+                                de.Slots[s] = ReadStack(r);
+                        }
+                    }
+                }
+
+                return (header, world, players, netherWorld);
             }
         }
 

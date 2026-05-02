@@ -2876,9 +2876,26 @@ void main()
             // stashed for the next OpenToLan call to install on the
             // hub; if the user just stays in SP, the table is harmless
             // (just sits unused).
-            var (header, world, players) = WorldSaveFormat.LoadWithPlayers(path);
+            var (header, world, players, netherWorld) = WorldSaveFormat.LoadWithPlayersAndNether(path);
             _pendingPersistedPlayers = players;
             SetWorld(world);
+            // Tier 8 #51 V5 — Reinstate the persisted Nether (if any).
+            // Load always lands the player in the OVERWORLD (saved as
+            // primary content) so the Nether goes into _dormantWorld
+            // — the next portal teleport finds it there ready-built
+            // rather than triggering a fresh GenerateNether.
+            // Per-dimension player position slots are zeroed so
+            // SwapDimension's first-time-entry branch fires the
+            // "place at starter portal" code if there's no Nether
+            // saved, or the player's last Nether position if there
+            // is one — but V5 doesn't yet round-trip the per-dim
+            // position itself, so a player who saved-and-quit while
+            // in the Nether reloads in the overworld and re-enters
+            // the Nether via portal as if it were a fresh visit
+            // (just with the persisted terrain instead of regen).
+            _dormantWorld = netherWorld;
+            _overworldPlayerPos = Vector3.Zero;
+            _netherPlayerPos = Vector3.Zero;
             // header.CameraPos is now the saved player feet position (format v2).
             Player.Position = header.CameraPos;
             Player.Velocity = Vector3.Zero;
@@ -3271,7 +3288,20 @@ void main()
             // they get their inventory back on rejoin. SP saves get a
             // 0-count v13 block (~4 bytes overhead).
             var players = _serverHub?.SnapshotPlayers();
-            WorldSaveFormat.Save(path, header, saveWorld, players);
+            // Tier 8 #51 V5 — Pass the Nether World (if any) so the
+            // v16 trailing block round-trips netherrack + glowstone +
+            // tile-entity content across save/load. The Nether is
+            // either the active _world (if the player is currently in
+            // it — but we already saved the dormant overworld as the
+            // PRIMARY content above) or the dormant world (if the
+            // player is in the overworld but visited the Nether at
+            // least once this session). Hand off whichever instance
+            // has Dimension == Nether; null skips the v16 block.
+            World netherWorld =
+                  _world.Dimension == Dimension.Nether                                  ? _world
+                : (_dormantWorld != null && _dormantWorld.Dimension == Dimension.Nether) ? _dormantWorld
+                : null;
+            WorldSaveFormat.Save(path, header, saveWorld, players, netherWorld);
         }
 
         public void UpdatePlayer(float dt, Vector3 wishHorizVel, bool wantJump)
