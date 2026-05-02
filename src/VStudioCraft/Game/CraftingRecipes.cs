@@ -237,6 +237,19 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Ladder, 3)));
 
+            // Tier 8 #46 part 2 — Wooden Fence. 6 sticks in two
+            // horizontal rows of 3 → 2 fences. Canonical Alpha 1.0.14
+            // recipe ("SSS / SSS"). Output is 2 — net cost 3 sticks
+            // per fence, so a single 4-plank → 4-stick craft fully
+            // pays for one fence with sticks left over.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Stick, BlockType.Stick, BlockType.Stick },
+                    { BlockType.Stick, BlockType.Stick, BlockType.Stick },
+                },
+                new ItemStack(BlockType.Fence, 2)));
+
             // Crafting Table: 2×2 planks → 1 crafting table.
             list.Add(new ShapedRecipe(
                 new BlockType[,]

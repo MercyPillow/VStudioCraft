@@ -564,6 +564,26 @@ namespace VStudioCraft.Game
         // Ladder block on break and crafts from 7 sticks in an
         // H-shape (rails on cols 0 + 2, rungs on col 1 rows 0-2).
         Ladder             = 160, // Alpha 65
+
+        // Tier 8 #46 part 2 — Wooden Fence. Alpha 85 — placed-block
+        // form is a 4×16×4 wood post pinned at the cell centre with
+        // 2×3×8 connection arms reaching toward each neighbouring
+        // fence / solid full-cube block. The mesher samples the four
+        // horizontal neighbours and emits an arm only on sides that
+        // actually have a connector — the player can walk diagonally
+        // through a row of fences so a single picket doesn't form a
+        // 4-arm cross of geometry that protrudes into empty cells.
+        //
+        // Player-collision uses the same central post as a partial
+        // AABB; jumping a single fence is technically possible with a
+        // running start (the v1 collision is full-cell-height = 16/16
+        // rather than the canonical 24/16 that extends into the cell
+        // above). The 1.5-cell height is a follow-up; v1 ships
+        // 16/16 for simplicity.
+        //
+        // Texture: reuses TilePlanks for every face of every box —
+        // canonical Alpha shipped fences with the planks tile too.
+        Fence              = 161, // Alpha 85
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -1383,6 +1403,13 @@ namespace VStudioCraft.Game
                 // The collision AABB matches the 14×14 column.
                 case BlockType.Cactus:
                     return (1f / 16f, 0f, 1f / 16f, 15f / 16f, 1f, 15f / 16f);
+                // Tier 8 #46 part 2 — Fence: 4×16×4 post pinned at
+                // cell centre. The connection arms are visual-only;
+                // collision gates on the central post so the player
+                // can walk diagonally past a fence-corner without
+                // catching on a 2/16-wide arm sticking out.
+                case BlockType.Fence:
+                    return (6f / 16f, 0f, 6f / 16f, 10f / 16f, 1f, 10f / 16f);
                 default:
                     return (0f, 0f, 0f, 1f, 1f, 1f);
             }
@@ -1501,6 +1528,10 @@ namespace VStudioCraft.Game
                 // Tier 8 #46 — Ladder is a thin wall-hugging quad,
                 // routed through EmitLadder in the EmitModels pass.
                 case BlockType.Ladder:
+                // Tier 8 #46 part 2 — Fence is a 4×16×4 post + arms;
+                // mesher routes through EmitFence in the EmitModels
+                // pass with neighbour sampling.
+                case BlockType.Fence:
                 // Tier 6 #34 — Fire renders as a cross-sprite (two
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
@@ -1602,6 +1633,13 @@ namespace VStudioCraft.Game
                 // it (otherwise the wall would punch a square
                 // shadow through the ladder's open silhouette).
                 case BlockType.Ladder:
+                // Tier 8 #46 part 2 — Fence is a slim post + arms,
+                // most of the cell volume is empty. Adjacent cube
+                // faces must still emit (a stone wall next to a
+                // fence post should still show its full face beside
+                // the post, not have it culled away as if a cube
+                // were there).
+                case BlockType.Fence:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -2158,6 +2196,11 @@ namespace VStudioCraft.Game
                 // BlockTextures.TileLadder.
                 case BlockType.Ladder:
                     return BlockTextures.TileLadder;
+                // Tier 8 #46 part 2 — Fence reuses TilePlanks for
+                // every face of every box (post + arms). Canonical
+                // Alpha shipped fences with the planks tile too.
+                case BlockType.Fence:
+                    return BlockTextures.TilePlanks;
                 case BlockType.Pumpkin:
                     // Top face = stem patch on a brown crown tile.
                     // Bottom shares the side tile (the bottom of a

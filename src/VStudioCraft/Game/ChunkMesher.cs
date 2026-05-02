@@ -476,6 +476,25 @@ namespace VStudioCraft.Game
                     byte ladderMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
                     EmitLadder(x + baseX, y, z + baseZ, ladderMeta, layer, lightPacked);
                 }
+                else if (t == BlockType.Fence)
+                {
+                    // Tier 8 #46 part 2 — Wooden fence. Sample the
+                    // four horizontal neighbours and emit a central
+                    // post + connection arms toward each connecting
+                    // side (other fences + any solid full-cube block
+                    // count as connectors).
+                    byte nNorth = BlockOrNeighbor(chunk, x, y, z - 1, nxNeg, nxPos, nzNeg, nzPos);
+                    byte nSouth = BlockOrNeighbor(chunk, x, y, z + 1, nxNeg, nxPos, nzNeg, nzPos);
+                    byte nEast  = BlockOrNeighbor(chunk, x + 1, y, z, nxNeg, nxPos, nzNeg, nzPos);
+                    byte nWest  = BlockOrNeighbor(chunk, x - 1, y, z, nxNeg, nxPos, nzNeg, nzPos);
+                    EmitFence(
+                        x + baseX, y, z + baseZ,
+                        FenceConnects((BlockType)nNorth),
+                        FenceConnects((BlockType)nSouth),
+                        FenceConnects((BlockType)nEast),
+                        FenceConnects((BlockType)nWest),
+                        layer, lightPacked);
+                }
                 else
                 {
                     EmitCrossSprite(x + baseX, y, z + baseZ, layer, lightPacked);
@@ -744,6 +763,110 @@ namespace VStudioCraft.Game
                         x0, y1, wz + 1f, 0f, 1f,
                         +1f, 0f, 0f, layer, lightPacked);
                     break;
+            }
+        }
+
+        // Tier 8 #46 part 2 — True if the given block, viewed from
+        // an adjacent fence, should produce a connection arm. Other
+        // fences obviously connect; any solid full-cube also counts
+        // (fence-against-stone-wall in canonical Alpha shows the arm
+        // blending into the wall face). Air, fluids, sub-cube blocks,
+        // items, and tools all reject — those are mostly "open" cells
+        // and an arm reaching into one would just stick out into thin
+        // air with no anchor.
+        private static bool FenceConnects(BlockType t)
+        {
+            if (t == BlockType.Fence) return true;
+            if (BlockData.IsSolid(t) && BlockData.IsCubeShape(t)) return true;
+            return false;
+        }
+
+        // Tier 8 #46 part 2 — Wooden fence mesh. A 4×16×4 central
+        // post pinned at the cell centre + up to four 2×3×8
+        // connection arms reaching toward each connecting horizontal
+        // neighbour. Each arm is two stacked rails: a lower rail at
+        // y = 6/16..9/16 and an upper rail at y = 12/16..15/16,
+        // matching the canonical Alpha fence silhouette where the
+        // top rail aligns with the post cap and the lower rail sits
+        // just above the player's knee.
+        //
+        // Reuses EmitSubCubeBox for every sub-volume so all six face
+        // windings + UVs are correct. The arm UVs end up sampling
+        // a stretched portion of the planks tile — acceptable
+        // because the planks tile is symmetric enough that minor
+        // distortion on a 2/16-thick rail isn't visible at gameplay
+        // distance.
+        private void EmitFence(
+            float wx, float wy, float wz,
+            bool connectNorth, bool connectSouth, bool connectEast, bool connectWest,
+            int layer, int lightPacked)
+        {
+            // Central post — 4×16×4 at the cell centre.
+            EmitSubCubeBox(
+                wx +  6f / 16f, wy + 0f,         wz +  6f / 16f,
+                wx + 10f / 16f, wy + 1f,         wz + 10f / 16f,
+                layer, lightPacked);
+
+            // Rail Y bands shared across all four connection
+            // directions. Lower rail spans y=[6/16, 9/16] (3-pixel-
+            // tall rail at knee height); upper rail spans y=[12/16,
+            // 15/16] (3-pixel-tall rail just below the post cap).
+            const float ry0Lower = 6f  / 16f;
+            const float ry1Lower = 9f  / 16f;
+            const float ry0Upper = 12f / 16f;
+            const float ry1Upper = 15f / 16f;
+            // Rail thickness in the horizontal-perpendicular direction
+            // (to the arm's run): 2/16 wide centred on the cell.
+            const float armHalf  = 1f / 16f;
+            const float cellMid  = 0.5f;
+
+            if (connectNorth)
+            {
+                // Arm runs from the post (z=6/16) toward -Z (z=0).
+                EmitSubCubeBox(
+                    wx + cellMid - armHalf, wy + ry0Lower, wz + 0f,
+                    wx + cellMid + armHalf, wy + ry1Lower, wz + 6f / 16f,
+                    layer, lightPacked);
+                EmitSubCubeBox(
+                    wx + cellMid - armHalf, wy + ry0Upper, wz + 0f,
+                    wx + cellMid + armHalf, wy + ry1Upper, wz + 6f / 16f,
+                    layer, lightPacked);
+            }
+            if (connectSouth)
+            {
+                // Arm runs from the post (z=10/16) toward +Z (z=1).
+                EmitSubCubeBox(
+                    wx + cellMid - armHalf, wy + ry0Lower, wz + 10f / 16f,
+                    wx + cellMid + armHalf, wy + ry1Lower, wz + 1f,
+                    layer, lightPacked);
+                EmitSubCubeBox(
+                    wx + cellMid - armHalf, wy + ry0Upper, wz + 10f / 16f,
+                    wx + cellMid + armHalf, wy + ry1Upper, wz + 1f,
+                    layer, lightPacked);
+            }
+            if (connectEast)
+            {
+                // Arm runs from the post (x=10/16) toward +X (x=1).
+                EmitSubCubeBox(
+                    wx + 10f / 16f, wy + ry0Lower, wz + cellMid - armHalf,
+                    wx + 1f,        wy + ry1Lower, wz + cellMid + armHalf,
+                    layer, lightPacked);
+                EmitSubCubeBox(
+                    wx + 10f / 16f, wy + ry0Upper, wz + cellMid - armHalf,
+                    wx + 1f,        wy + ry1Upper, wz + cellMid + armHalf,
+                    layer, lightPacked);
+            }
+            if (connectWest)
+            {
+                // Arm runs from the post (x=6/16) toward -X (x=0).
+                EmitSubCubeBox(
+                    wx + 0f,        wy + ry0Lower, wz + cellMid - armHalf,
+                    wx + 6f / 16f,  wy + ry1Lower, wz + cellMid + armHalf,
+                    layer, lightPacked);
+                EmitSubCubeBox(
+                    wx + 0f,        wy + ry0Upper, wz + cellMid - armHalf,
+                    wx + 6f / 16f,  wy + ry1Upper, wz + cellMid + armHalf,
+                    layer, lightPacked);
             }
         }
 
