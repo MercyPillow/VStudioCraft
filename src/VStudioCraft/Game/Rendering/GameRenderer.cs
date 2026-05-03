@@ -5363,6 +5363,109 @@ void main()
                 }
             }
 
+            // Tier 4 #15 — Bucket interactions need a fluid-aware ray
+            // because Raycast.Cast skips water and lava (they are not
+            // IsRaycastTarget — that gate keeps LMB-break from
+            // targeting fluids). A bucket aimed at a water/lava source
+            // would otherwise see the wall BEHIND the fluid as its
+            // target, not the fluid itself. We do the same step-and-
+            // sample walk pattern the boat-place path uses just above.
+            //
+            //   - Empty bucket + source cell hit  → scoop, swap held
+            //                                       bucket for filled.
+            //   - Filled bucket + replaceable hit → pour, swap held
+            //                                       bucket for empty.
+            //
+            // We stop the walk when we hit a solid block first so a
+            // bucket aimed past a water cell at a wall behind it
+            // isn't intercepted by the fluid behind the wall (the
+            // wall takes priority via the standard raycast below).
+            if (Input != null)
+            {
+                var preStackBucket = Input.Inventory.GetHotbar(Input.HotbarIndex);
+                BlockType preHeldBucket = preStackBucket.IsEmpty ? BlockType.Air : preStackBucket.Type;
+                bool isFilled = preHeldBucket == BlockType.BucketWater
+                             || preHeldBucket == BlockType.BucketLava;
+                if (preHeldBucket == BlockType.BucketEmpty || isFilled)
+                {
+                    const float StepLen = 0.1f;
+                    Vector3 rayDir = Camera.Forward;
+                    for (float t = 0f; t <= ReachDistance; t += StepLen)
+                    {
+                        Vector3 p = Camera.Position + rayDir * t;
+                        int wx = (int)System.Math.Floor(p.X);
+                        int wy = (int)System.Math.Floor(p.Y);
+                        int wz = (int)System.Math.Floor(p.Z);
+                        var bt = _world.GetBlock(wx, wy, wz);
+
+                        // Empty bucket + source cell → scoop. Sources
+                        // only; flowing cells are transient and don't
+                        // qualify in canonical Alpha.
+                        if (preHeldBucket == BlockType.BucketEmpty
+                            && (bt == BlockType.Water || bt == BlockType.Lava))
+                        {
+                            BlockType filled = bt == BlockType.Water
+                                ? BlockType.BucketWater
+                                : BlockType.BucketLava;
+                            if (_world.SetBlock(wx, wy, wz, BlockType.Air))
+                            {
+                                int cx = wx >> 4, cz = wz >> 4;
+                                var chunk = _world.GetChunk(cx, cz);
+                                if (chunk != null) chunk.HasActiveFluid = true;
+                                SwapHeldBucket(filled);
+                                SfxBank.PlayPlace(BlockType.Wool);
+                                return true;
+                            }
+                            break;
+                        }
+
+                        // Filled bucket + replaceable cell → pour. We
+                        // accept Air, any fluid, OR a flowing fluid of
+                        // EITHER family (you can pour water on top of
+                        // flowing lava to make obsidian/cobble in the
+                        // fluid sim, and pour lava onto water to do the
+                        // converse). Source cells of the SAME family
+                        // are also replaceable so a player can "top up"
+                        // an existing source without effect; opposite-
+                        // family sources stay protected (the player
+                        // shouldn't accidentally erase a lava source
+                        // by pointing a water bucket at it).
+                        if (isFilled)
+                        {
+                            BlockType srcType = preHeldBucket == BlockType.BucketWater
+                                ? BlockType.Water
+                                : BlockType.Lava;
+                            int srcGroup = BlockData.FluidGroup(srcType);
+                            int btGroup  = BlockData.FluidGroup(bt);
+                            bool replaceableHere = bt == BlockType.Air
+                                || (btGroup != 0 && btGroup == srcGroup)
+                                || bt == BlockType.FlowingWater
+                                || bt == BlockType.FlowingLava;
+                            if (replaceableHere)
+                            {
+                                if (_world.SetBlock(wx, wy, wz, srcType))
+                                {
+                                    int cx = wx >> 4, cz = wz >> 4;
+                                    var chunk = _world.GetChunk(cx, cz);
+                                    if (chunk != null) chunk.HasActiveFluid = true;
+                                    SwapHeldBucket(BlockType.BucketEmpty);
+                                    SfxBank.PlayPlace(BlockType.Wool);
+                                    return true;
+                                }
+                                break;
+                            }
+                        }
+
+                        // Stop on a solid block — the player is aiming
+                        // past the fluid (if any) at the wall behind.
+                        // The standard raycast below will pick that
+                        // wall up and the existing filled-bucket
+                        // adjacent-cell path handles it.
+                        if (BlockData.IsSolid(bt)) break;
+                    }
+                }
+            }
+
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
                 return false;
             var target = _world.GetBlock(hit.X, hit.Y, hit.Z);
