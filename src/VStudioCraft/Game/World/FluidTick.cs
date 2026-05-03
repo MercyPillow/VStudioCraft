@@ -38,8 +38,14 @@ namespace VStudioCraft.Game
     // What we DO NOT implement yet (logged in features.md):
     //  - Visual height variation for non-falling cells (flowing cells render
     //    as full cubes; the lid pass already handles surface fluid).
-    //  - Water-meets-lava block formation (cobblestone / stone / obsidian).
     //  - Level-based animated textures.
+    //
+    // Water-meets-lava block formation IS implemented — see the
+    // `group == 2 && HasWaterNeighbour(...)` branch in ScanChunk (lava
+    // source → obsidian; flowing lava + water below → stone; flowing
+    // lava + water elsewhere → cobblestone). Earlier revisions of
+    // this file claimed it was deferred; that note went stale once
+    // Tier 6 #36 landed and is corrected here.
     internal static class FluidTick
     {
         // Horizontal reach, applied to both fluids. Encoded into the per-cell
