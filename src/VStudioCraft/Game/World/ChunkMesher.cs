@@ -123,6 +123,29 @@ namespace VStudioCraft.Game
         // face that overlaps the trapezoid the owning chunk drew on its own
         // edge. Visible as a square block of water sticking up out of a
         // shallow flow exactly where chunk seams sit.
+        // True when a fluid surface cell's side-face toward (lx, y, lz)
+        // should emit a trapezoid quad. The neighbour qualifies if it
+        // is NON-OPAQUE (so the face would actually be visible) AND
+        // NOT in the same fluid family as `group` (same-family meets
+        // are internal — no face). This generalises the older
+        // "neighbour == Air" check so the trapezoid also covers a
+        // source water cell pressed against glass, leaves, a flower,
+        // or a shorter cube like soul sand or farmland — without it,
+        // the cube sweep emits a full-height 16-pixel side face that
+        // protrudes 1 pixel above the 15/16 lid surface.
+        private static bool FluidSideExposed(
+            Chunk chunk, int lx, int y, int lz,
+            Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos,
+            int selfGroup)
+        {
+            byte raw = BlockOrNeighbor(chunk, lx, y, lz, nxNeg, nxPos, nzNeg, nzPos);
+            if (raw == (byte)BlockType.Air) return true;
+            var bt = (BlockType)raw;
+            if (BlockData.FluidGroup(bt) == selfGroup) return false; // same-fluid internal
+            if (BlockData.IsOpaque(bt)) return false;                // hidden behind solid
+            return true;
+        }
+
         private static bool IsSurfaceFluidOrNeighbor(
             Chunk chunk, int lx, int y, int lz,
             Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos)
@@ -194,13 +217,24 @@ namespace VStudioCraft.Game
                 float wx = x + baseX, wz = z + baseZ, wy = y;
                 EmitFluidLidQuad(wx, wz, hSW, hNW, hNE, hSE, layer, lightPacked, transparent);
 
-                // Trapezoidal side faces for each air-facing edge. The cube
+                // Trapezoidal side faces for each exposed edge. The cube
                 // sweep's full-height side face was suppressed for these;
                 // we emit one whose top tracks the sloped lid so the
-                // end-cap respects the water level instead of being full-height.
+                // end-cap respects the water level instead of being full-
+                // height. "Exposed" means the neighbour is non-opaque AND
+                // not in the same fluid family — air, glass / leaves, a
+                // shorter cube like soul sand or farmland, a flower /
+                // wheat, a slab, etc. Internal-vs-same-fluid is skipped
+                // because those interior faces should never render
+                // (matches the cube sweep's internal-transparent gate).
+                // Without this generalisation, a source water cell next
+                // to a 15/16-tall block would have the cube sweep render
+                // its side face at full 16-pixel height even though the
+                // visible lid sits at 15/16 — visible as a 1-pixel sliver
+                // of plain-water-side sticking up above the lid.
 
                 // +X east face (top corners SE and NE)
-                if (BlockOrNeighbor(chunk, x + 1, y, z, nxNeg, nxPos, nzNeg, nzPos) == (byte)BlockType.Air)
+                if (FluidSideExposed(chunk, x + 1, y, z, nxNeg, nxPos, nzNeg, nzPos, group))
                 {
                     int lp = LightOrNeighbor(chunk, x + 1, y, z, nxNeg, nxPos, nzNeg, nzPos);
                     EmitFluidSideFace(
@@ -211,7 +245,7 @@ namespace VStudioCraft.Game
                         1f, 0f, 0f, layer, lp, transparent);
                 }
                 // -X west face (top corners SW and NW)
-                if (BlockOrNeighbor(chunk, x - 1, y, z, nxNeg, nxPos, nzNeg, nzPos) == (byte)BlockType.Air)
+                if (FluidSideExposed(chunk, x - 1, y, z, nxNeg, nxPos, nzNeg, nzPos, group))
                 {
                     int lp = LightOrNeighbor(chunk, x - 1, y, z, nxNeg, nxPos, nzNeg, nzPos);
                     EmitFluidSideFace(
@@ -222,7 +256,7 @@ namespace VStudioCraft.Game
                         -1f, 0f, 0f, layer, lp, transparent);
                 }
                 // +Z north face (top corners NW and NE)
-                if (BlockOrNeighbor(chunk, x, y, z + 1, nxNeg, nxPos, nzNeg, nzPos) == (byte)BlockType.Air)
+                if (FluidSideExposed(chunk, x, y, z + 1, nxNeg, nxPos, nzNeg, nzPos, group))
                 {
                     int lp = LightOrNeighbor(chunk, x, y, z + 1, nxNeg, nxPos, nzNeg, nzPos);
                     EmitFluidSideFace(
@@ -233,7 +267,7 @@ namespace VStudioCraft.Game
                         0f, 0f, 1f, layer, lp, transparent);
                 }
                 // -Z south face (top corners SW and SE)
-                if (BlockOrNeighbor(chunk, x, y, z - 1, nxNeg, nxPos, nzNeg, nzPos) == (byte)BlockType.Air)
+                if (FluidSideExposed(chunk, x, y, z - 1, nxNeg, nxPos, nzNeg, nzPos, group))
                 {
                     int lp = LightOrNeighbor(chunk, x, y, z - 1, nxNeg, nxPos, nzNeg, nzPos);
                     EmitFluidSideFace(
@@ -1746,15 +1780,26 @@ namespace VStudioCraft.Game
                 0f, -1f, 0f, topLayer, lYNeg);
         }
 
-        // Tier 6 — Floor torch as a 2×10×2 box standing in the
-        // centre of the cell, replacing the cross-sprite render. UV
-        // sampling uses only the centre 2×10 strip of the canonical
-        // torch tile (U:[7/16..9/16], V:[0..10/16]) so the wood
-        // column shows correctly on the box's narrow side faces;
-        // sampling the full tile would compress all 16 source
-        // columns into the 2-pixel face width and the wood pixels
-        // would alias out. Top + bottom faces sample a small 2×2
-        // wood region.
+        // Tier 6 — Floor torch. Structurally a 2×10×2 column at the
+        // cell centre (matches the AABB returned from
+        // BlockData.GetCollisionBox so picking + selection wireframe
+        // line up with the visible column). The visible mesh extends
+        // 1 pixel past that column on each perpendicular axis so the
+        // SIDE faces are 4 pixels wide and the TOP / BOTTOM faces are
+        // 4×4 — same idea as the cactus 14×16×14 inset, where each
+        // side plane spans more than the orthogonal column it sits on
+        // and the corner viewing angle reads as a # silhouette.
+        // Without this overlap, the torch tile's outer pixels (the
+        // wider parts of the redstone-torch flame head, and the
+        // 1-pixel-wider bits at the top of the regular torch) get
+        // chopped off by the narrow 2-pixel column. The 2×2 footprint
+        // for collision is preserved — only the rendered geometry
+        // sticks out.
+        //
+        // UV samples the 4×N strip of the canonical torch tile
+        // centred on the column (U:[6/16..10/16], V:[0..10/16]) so
+        // each pixel in the texture maps 1:1 onto a pixel of the
+        // visible face. Top + bottom faces sample a 4×2 wood region.
         //
         // Light: torches emit BlockLight=14 in the source cell, but
         // we want the rendered faces to read at full brightness on
@@ -1763,77 +1808,101 @@ namespace VStudioCraft.Game
         // per-face neighbour-sample dance the cube mesher does.
         private void EmitTorchBox(float wx, float wy, float wz, int layer, int lightPacked)
         {
-            const float colHalf = 1f / 16f;          // 2-pixel column → 1px each side of cell centre
-            const float colTop  = 10f / 16f;         // 10 pixels tall
+            // Structural column — collision-matching 2×2 cross-section,
+            // 10 pixels tall, centred on the cell.
+            const float colHalf = 1f / 16f;     // 2-pixel column → 1px each side of cell centre
+            const float colTop  = 10f / 16f;    // 10 pixels tall
+            // Visual overhang — 1 pixel past the column on each
+            // perpendicular axis. Side planes still SIT at the column
+            // boundary along their facing axis; only their orthogonal
+            // extent grows to 4 pixels.
+            const float visHalf = 2f / 16f;     // 4-pixel visible extent → 2px each side of cell centre
             float cx = wx + 0.5f;
             float cz = wz + 0.5f;
-            float x0 = cx - colHalf;
+            float x0 = cx - colHalf;            // ±X face plane positions (column edges)
             float x1 = cx + colHalf;
-            float z0 = cz - colHalf;
+            float z0 = cz - colHalf;            // ±Z face plane positions (column edges)
             float z1 = cz + colHalf;
+            float xv0 = cx - visHalf;           // visible perpendicular extents (1px past column)
+            float xv1 = cx + visHalf;
+            float zv0 = cz - visHalf;
+            float zv1 = cz + visHalf;
             float y0 = wy + 0f;
             float y1 = wy + colTop;
 
             // `layer` is supplied by the caller — TileTorch for normal
             // torches, TileRedstoneTorchOn / Off for redstone variants.
             // The U/V slices below assume the tile follows Alpha's
-            // torch.png layout (centre 2-pixel-wide column for the
-            // wood, top of column for the flame head). Both the
-            // regular and redstone tiles match that layout.
+            // torch.png layout (centre 4-pixel-wide column for the
+            // wood / flame, top of column for the flame head). Both
+            // the regular and redstone tiles match that layout.
 
-            // Side-face UV: U samples the wood column (U=7/16..9/16),
+            // Side-face UV: U samples the 4-pixel-wide centre strip
+            // of the tile (U=6/16..10/16) so the wider parts of the
+            // sprite are no longer chopped off by the narrow column.
             // V samples the wood height (V=0..10/16).
-            const float uColLo = 7f / 16f;
-            const float uColHi = 9f / 16f;
+            const float uColLo = 6f / 16f;
+            const float uColHi = 10f / 16f;
             const float vBase  = 0f;
             const float vTop   = 10f / 16f;
 
-            // -X face (dir<0)
+            // -X face (dir<0): plane at x0, perpendicular extent zv0..zv1
             EmitCrossQuad(
-                x0, y0, z0, uColLo, vBase,
-                x0, y0, z1, uColHi, vBase,
-                x0, y1, z1, uColHi, vTop,
-                x0, y1, z0, uColLo, vTop,
+                x0, y0, zv0, uColLo, vBase,
+                x0, y0, zv1, uColHi, vBase,
+                x0, y1, zv1, uColHi, vTop,
+                x0, y1, zv0, uColLo, vTop,
                 -1f, 0f, 0f, layer, lightPacked);
-            // +X face (dir>0)
+            // +X face (dir>0): plane at x1, perpendicular extent zv0..zv1
             EmitCrossQuad(
-                x1, y0, z0, uColLo, vBase,
-                x1, y1, z0, uColLo, vTop,
-                x1, y1, z1, uColHi, vTop,
-                x1, y0, z1, uColHi, vBase,
+                x1, y0, zv0, uColLo, vBase,
+                x1, y1, zv0, uColLo, vTop,
+                x1, y1, zv1, uColHi, vTop,
+                x1, y0, zv1, uColHi, vBase,
                 +1f, 0f, 0f, layer, lightPacked);
-            // -Z face (dir<0)
+            // -Z face (dir<0): plane at z0, perpendicular extent xv0..xv1
             EmitCrossQuad(
-                x0, y0, z0, uColLo, vBase,
-                x0, y1, z0, uColLo, vTop,
-                x1, y1, z0, uColHi, vTop,
-                x1, y0, z0, uColHi, vBase,
+                xv0, y0, z0, uColLo, vBase,
+                xv0, y1, z0, uColLo, vTop,
+                xv1, y1, z0, uColHi, vTop,
+                xv1, y0, z0, uColHi, vBase,
                 0f, 0f, -1f, layer, lightPacked);
-            // +Z face (dir>0)
+            // +Z face (dir>0): plane at z1, perpendicular extent xv0..xv1
             EmitCrossQuad(
-                x0, y0, z1, uColLo, vBase,
-                x1, y0, z1, uColHi, vBase,
-                x1, y1, z1, uColHi, vTop,
-                x0, y1, z1, uColLo, vTop,
+                xv0, y0, z1, uColLo, vBase,
+                xv1, y0, z1, uColHi, vBase,
+                xv1, y1, z1, uColHi, vTop,
+                xv0, y1, z1, uColLo, vTop,
                 0f, 0f, +1f, layer, lightPacked);
-            // +Y face (top of wood column) — sample 2×2 of wood
-            // just below the wood-flame transition.
+            // +Y face (top of wood column) — kept at the structural
+            // 2×2 column footprint (NOT widened like the side faces)
+            // because the wood post's top is only 2 pixels of solid
+            // texture; widening the geometry to 4×4 would sample the
+            // transparent / unrelated pixels surrounding the post and
+            // produce visible alpha artifacts on the top surface. The
+            // 4-pixel-wide hash silhouette from any side angle is
+            // already established by the four wider side planes; the
+            // top/bottom can stay tight without losing the look. UV
+            // samples 2×2 of wood just below the wood-flame transition.
+            const float uPostLo = 7f / 16f;
+            const float uPostHi = 9f / 16f;
             const float vCapLo = 8f / 16f;
             const float vCapHi = 10f / 16f;
             EmitCrossQuad(
-                x0, y1, z1, uColLo, vCapLo,
-                x1, y1, z1, uColHi, vCapLo,
-                x1, y1, z0, uColHi, vCapHi,
-                x0, y1, z0, uColLo, vCapHi,
+                x0, y1, z1, uPostLo, vCapLo,
+                x1, y1, z1, uPostHi, vCapLo,
+                x1, y1, z0, uPostHi, vCapHi,
+                x0, y1, z0, uPostLo, vCapHi,
                 0f, +1f, 0f, layer, lightPacked);
-            // -Y face (bottom) — sample 2×2 of the wood base.
+            // -Y face (bottom) — 2×2 footprint sampling a 2×2 wood
+            // base region. Same rationale as the top.
             const float vBotLo = 0f;
             const float vBotHi = 2f / 16f;
             EmitCrossQuad(
-                x0, y0, z0, uColLo, vBotLo,
-                x1, y0, z0, uColHi, vBotLo,
-                x1, y0, z1, uColHi, vBotHi,
-                x0, y0, z1, uColLo, vBotHi,
+                x0, y0, z0, uPostLo, vBotLo,
+                x1, y0, z0, uPostHi, vBotLo,
+                x1, y0, z1, uPostHi, vBotHi,
+                x0, y0, z1, uPostLo, vBotHi,
                 0f, -1f, 0f, layer, lightPacked);
         }
 
@@ -2383,8 +2452,28 @@ namespace VStudioCraft.Game
                     {
                         if (axis == 1 && dir > 0)
                             aCube = false;   // top — always replaced
-                        else if ((axis == 0 || axis == 2) && b == (byte)BlockType.Air)
-                            aCube = false;   // air-facing side — replaced by trapezoid
+                        else if (axis == 0 || axis == 2)
+                        {
+                            // Side face is replaced by a trapezoid in
+                            // EmitFluidSurfaceLids whenever the neighbour
+                            // would have shown the full-height face — that
+                            // is, the neighbour is non-opaque and not in the
+                            // same fluid family. (Internal-vs-same-fluid is
+                            // already collapsed by `internalTransparent`
+                            // below, and opaque neighbours occlude the face
+                            // anyway so it doesn't matter who owns it.) The
+                            // older check "b == Air" missed the case where
+                            // the neighbour was a shorter / non-opaque cube
+                            // (soul sand, farmland, glass, leaves, …) — the
+                            // cube sweep then drew a full 16-pixel side face
+                            // that protruded 1 pixel above the source's
+                            // 15/16 lid as a visible sliver.
+                            bool bAir = b == (byte)BlockType.Air;
+                            bool bSameFluid = !bAir && BlockData.FluidGroup((BlockType)b) != 0
+                                              && BlockData.FluidGroup((BlockType)b)
+                                                 == BlockData.FluidGroup((BlockType)a);
+                            if (!bSameFluid && !bOpaque) aCube = false;
+                        }
                     }
                     if (!aAir && aCube && !bOpaque && !internalTransparent)
                     {

@@ -1222,11 +1222,17 @@ namespace VStudioCraft.Game
                 case BlockType.Sapling:
                     return (0.35f, 0f, 0.35f, 0.65f, 0.4f, 0.65f);
                 // Tier 8 #42 — Redstone torch shares the regular-
-                // torch hitbox: small column at cell centre, ~0.6
-                // tall.
+                // torch hitbox: 2×10×2 column at cell centre, same
+                // 7/16..9/16 footprint and 0..10/16 height as
+                // BlockType.Torch above. The visual mesh extends
+                // 1 pixel past this footprint on each perpendicular
+                // axis to create the cactus-style hash silhouette,
+                // but the AABB stays the tight 2×2 so picking +
+                // selection wireframe match the column the player
+                // perceives.
                 case BlockType.RedstoneTorchOn:
                 case BlockType.RedstoneTorchOff:
-                    return (0.4f, 0f, 0.4f, 0.6f, 0.6f, 0.6f);
+                    return (7f / 16f, 0f, 7f / 16f, 9f / 16f, 10f / 16f, 9f / 16f);
                 // Tier 8 #42 — Redstone wire: 1×1/16×1 floor slab so
                 // the click area + selection wireframe match the
                 // visible thin red line on the floor.
