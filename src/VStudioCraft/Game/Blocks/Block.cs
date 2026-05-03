@@ -899,14 +899,13 @@ namespace VStudioCraft.Game
                 // directly so we don't need solid collision here.
                 case BlockType.Rail:
                     return false;
-                // Tier 6 #37 Phase 4 — SnowBlock IS solid; its
-                // collision shape is a 1/8-tall slab pinned to the
-                // cell bottom, returned by GetCollisionAabb. The
-                // entity-collision code consults the AABB instead of
-                // assuming a full cube — falls through the default
-                // `return true` here so the cell is considered
-                // collidable, with the AABB function carving out the
-                // actual extent.
+                // Sub-cell solid blocks (SoulSand, Farmland, Chest,
+                // doors, …) all fall through to the default `return
+                // true` and rely on GetCollisionAabb to carve out
+                // their actual extent. The entity-collision code
+                // consults the AABB instead of assuming a full cube,
+                // so a 15/16-tall block reports collision for the
+                // bottom 15 px and air above it.
                 //
                 // Future blocks (torches, flowers, mushrooms) can
                 // adopt the same approach: return true here, return
@@ -1185,10 +1184,9 @@ namespace VStudioCraft.Game
         // the cell's world position to get the world-space AABB. The
         // default is the full cube — every existing solid block falls
         // through to that, so the change is invisible to the cube
-        // mesh / fluid sim / etc. SnowBlock returns a 1/8-tall slab
-        // pinned to the cell bottom so the player can stand ON the
-        // snow at Y = cellY + 0.125 instead of phasing through to
-        // the grass below.
+        // mesh / fluid sim / etc. Soul sand returns (0,0,0,1,15/16,1)
+        // so the player visually sinks into the sand by 1 px while
+        // standing on it instead of floating at full cube height.
         //
         // The intent is that future sub-cell blocks (slabs / stairs /
         // partial torches / flower hitboxes) fill out additional
@@ -1296,8 +1294,6 @@ namespace VStudioCraft.Game
         {
             switch (t)
             {
-                case BlockType.SnowBlock:
-                    return (0f, 0f, 0f, 1f, 1f / 8f, 1f);
                 // Tier 6 #37 Phase 4 — Cross-sprite flora hitboxes.
                 // Flowers and mushrooms render as crossed quads
                 // through the cell centre but only take up a fraction
@@ -1488,10 +1484,6 @@ namespace VStudioCraft.Game
         // those cases without affecting the chunk mesher's IsCubeShape
         // branch (which gates "does the cube sweep emit faces for
         // this block").
-        //
-        // Snow layer is INTENTIONALLY excluded — its 1/8 height makes
-        // a full-cube icon look wrong, and the flat-sprite icon
-        // (using TileSnow as a square) reads as a snow tile.
         public static bool RendersAsCubeIcon(BlockType t)
         {
             if (IsCubeShape(t)) return true;
@@ -1643,10 +1635,6 @@ namespace VStudioCraft.Game
                 // the cell floor; mesher routes through EmitModels
                 // with EmitRail (same shape as a paper-thin slab).
                 case BlockType.Rail:
-                // Tier 6 #37 Phase 4 — SnowBlock is a 1/8-tall layer,
-                // not a full cube. Routed through the mesher's slab
-                // emitter (EmitSnowLayer).
-                case BlockType.SnowBlock:
                 // Tier 6 #37 — Cactus is an inset 14×16×14 box, not
                 // a full cube. Routed through the mesher's custom
                 // box emitter (EmitCactusBox).
@@ -1809,15 +1797,6 @@ namespace VStudioCraft.Game
                 case BlockType.WoodDoorBlockTop:
                 case BlockType.IronDoorBlockBottom:
                 case BlockType.IronDoorBlockTop:
-                // Tier 6 #37 Phase 4 — Snow layer is a 1/8-tall slab,
-                // it doesn't fill the cell. If it were marked opaque
-                // the cube sweep would cull adjacent block faces
-                // against it (a dirt cube touching a snow layer would
-                // lose its facing side face — the player would see
-                // straight through the dirt). Same reasoning as the
-                // door / cross-sprite entries above. The snow's own
-                // 6-box geometry is emitted by EmitSnowLayer.
-                case BlockType.SnowBlock:
                 // Tier 6 #37 — Cactus is an inset 14×16×14 box; if
                 // marked opaque the cube sweep would cull adjacent
                 // block faces against it (a dirt cube touching a
@@ -1948,15 +1927,12 @@ namespace VStudioCraft.Game
                 case BlockType.Ladder:
                 // Tier 6 #37 — Ice is translucent (matches Alpha — a
                 // pond covered in ice still has the bed visible
-                // through the surface). SnowBlock is a 1/8 slab so
-                // the cell is mostly air — light propagates straight
-                // through. Cactus is a 14×16×14 inset column with
-                // the corner regions of the cell empty — light
-                // through those gaps must reach the sand below, or
-                // a cactus in sunlight would cast a 1m black square
+                // through the surface). Cactus is a 14×16×14 inset
+                // column with the corner regions of the cell empty —
+                // light through those gaps must reach the sand below,
+                // or a cactus in sunlight would cast a 1m black square
                 // shadow on its supporting block.
                 case BlockType.Ice:
-                case BlockType.SnowBlock:
                 case BlockType.Cactus:
                 // Tier 4 #16 — Door halves don't fill the cell; light
                 // must propagate through them (otherwise a closed

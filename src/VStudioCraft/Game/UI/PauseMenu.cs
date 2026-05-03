@@ -16,8 +16,13 @@ namespace VStudioCraft.Game
             None,
             BackToGame,
             Options,
-            Save,
-            Quit,
+            // SaveAndQuit replaces the old separate Save / Quit
+            // buttons — clicking it persists the world to disk and
+            // returns the player to the title screen in one step.
+            // This is the canonical Alpha behaviour ("Save and quit
+            // to title"), and it removes the foot-gun where a player
+            // would Quit without remembering to Save first.
+            SaveAndQuit,
             // Phase 7 — toggles in-process LAN host. Single ActionId
             // (not separate Open/Close) because the two are mutually
             // exclusive — you're either hosting or you aren't, and the
@@ -51,14 +56,17 @@ namespace VStudioCraft.Game
             public string Label;
         }
 
-        // Order shown top-to-bottom in the menu.
+        // Order shown top-to-bottom in the menu. SaveAndQuit sits at
+        // the bottom because it's the only destructive action in the
+        // list (kicks the player back to title) — placing it furthest
+        // from BackToGame keeps a misclick costing only a little
+        // mouse travel.
         private static readonly ActionId[] Order = new[]
         {
             ActionId.BackToGame,
             ActionId.Options,
-            ActionId.Save,
             ActionId.ToggleLan,
-            ActionId.Quit,
+            ActionId.SaveAndQuit,
         };
 
         // Uppercase to match the bitmap-font glyph table — the font has no
@@ -73,9 +81,8 @@ namespace VStudioCraft.Game
         {
             "BACK TO GAME",
             "OPTIONS",
-            "SAVE",
             "OPEN TO LAN",
-            "QUIT",
+            "SAVE & QUIT",
         };
 
         public static int Count => Order.Length;

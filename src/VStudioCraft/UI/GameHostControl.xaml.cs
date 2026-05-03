@@ -1942,9 +1942,6 @@ namespace VStudioCraft.UI
                     // buttons (the buttons become unreachable until BACK).
                     _renderer.IsOptionsOpen = true;
                     break;
-                case PauseMenu.ActionId.Save:
-                    RaiseSaveRequested();
-                    break;
                 case PauseMenu.ActionId.ToggleLan:
                     // Phase 7 — flip the LAN host on/off. OpenToLan
                     // enqueues onto the render thread (same pattern as
@@ -1956,13 +1953,19 @@ namespace VStudioCraft.UI
                     if (IsHostingLan) CloseLan();
                     else OpenToLan();
                     break;
-                case PauseMenu.ActionId.Quit:
-                    // Tier 6 #47 — Pause's Quit returns to the title
-                    // screen in Standalone (RaiseReturnedToTitle hops
-                    // through the renderer-thread event). VSIX hosts
-                    // can ignore the event or hook it differently;
-                    // those still get the existing QuitRequested
-                    // path through the File→Exit / window-close flow.
+                case PauseMenu.ActionId.SaveAndQuit:
+                    // Save the world, then return to the title screen.
+                    // RaiseSaveRequested fires the SaveRequested event
+                    // on the host so Standalone / VSIX can persist via
+                    // their normal save flow (the same one the old
+                    // Save button used). RaiseReturnedToTitle then
+                    // hops through the renderer-thread event that
+                    // tears down the world and shows the title menu;
+                    // VSIX hosts can ignore the event or hook it
+                    // differently. TogglePause clears the pause flag
+                    // so the pause menu doesn't immediately re-render
+                    // over the title.
+                    RaiseSaveRequested();
                     if (_renderer != null) _renderer.RaiseReturnedToTitle();
                     TogglePause();
                     break;

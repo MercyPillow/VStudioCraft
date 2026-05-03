@@ -4127,8 +4127,21 @@ void main()
 
             // Tier 8 #42 perf — Clear the static redstone cell registry
             // so the new world doesn't inherit stale (wx, wy, wz)
-            // entries from the previous session.
+            // entries from the previous session, then re-register the
+            // incoming world's chunks. The ordering matters: the load
+            // path (WorldSaveFormat.Load → World.AddChunk) already
+            // calls RegisterChunk before SetWorld runs; without the
+            // re-register pass, ClearAll above would wipe those fresh
+            // cells alongside the stale ones and leave the registry
+            // empty post-load — RedstonePowerSystem.Tick would then
+            // early-out on `Cells.Count == 0` and every torch / lever /
+            // button / pressure plate / door / note block / dispenser
+            // in the loaded world would be inert. Symptom: doors that
+            // were saved open stay open because DriveDoorSink never
+            // runs; redstone wire / torch state never updates.
             RedstonePowerSystem.ClearAll();
+            foreach (var chunk in world.Chunks)
+                RedstonePowerSystem.RegisterChunk(chunk);
 
             foreach (var m in _chunkMeshes.Values) m.Dispose();
             _chunkMeshes.Clear();

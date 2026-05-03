@@ -309,10 +309,10 @@ namespace VStudioCraft.Game
                 // partial AABB rather than assuming the whole cell
                 // is solid. Default cubes return (0,0,0,1,1,1) so
                 // the test reduces to the original "any overlap" for
-                // them; SnowBlock returns (0,0,0,1,0.125,1) which
-                // means the player can stand on top of the snow
-                // layer at Y = cellY + 0.125 instead of the full
-                // cellY + 1.
+                // them; SoulSand returns (0,0,0,1,15/16,1) so the
+                // player visually sinks 1 px into the sand instead
+                // of standing flush with the cell ceiling, and
+                // Farmland uses the same idiom.
                 //
                 // Door-specific: the meta byte encodes facing + open +
                 // hinge state, and GetCollisionAabb returns a 3/16-thick

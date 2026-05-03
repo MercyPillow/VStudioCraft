@@ -1863,6 +1863,18 @@ namespace VStudioCraft.Game
         public void AddChunk(Chunk chunk)
         {
             _chunks[(chunk.ChunkX, chunk.ChunkZ)] = chunk;
+            // Tier 8 #42 perf — Populate the redstone registry for
+            // any in-cache redstone blocks. Without this, chunks
+            // installed via the save-load path (which calls
+            // AddChunk directly, not SetChunk) leave Cells empty,
+            // and RedstonePowerSystem.Tick early-outs on
+            // `Cells.Count == 0` — every torch / lever / button /
+            // pressure plate / door / note block / dispenser in a
+            // reloaded world stays inert until something causes a
+            // SetBlock fire OnBlockChanged to re-add it. Cheap on
+            // chunks with no redstone (one byte compare per cell,
+            // no allocation).
+            RedstonePowerSystem.RegisterChunk(chunk);
         }
 
         public Chunk GetChunk(int cx, int cz)

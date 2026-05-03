@@ -449,16 +449,6 @@ namespace VStudioCraft.Game
                     byte meta = chunk.RawMeta[Chunk.Index(x, y, z)];
                     EmitDoorSlab(x + baseX, y, z + baseZ, t, meta, layer, lightPacked);
                 }
-                else if (t == BlockType.SnowBlock)
-                {
-                    // Tier 6 #37 Phase 4 — Snow layer. 1/8-tall slab
-                    // pinned to the bottom of the cell, six box faces
-                    // textured with TileSnow on every face. Same
-                    // overall structure as EmitDoorSlab but with a
-                    // fixed full-X/full-Z footprint and a 0.125 Y
-                    // height.
-                    EmitSnowLayer(x + baseX, y, z + baseZ, layer, lightPacked);
-                }
                 else if (t == BlockType.RedstoneWire)
                 {
                     // Tier 8 #42 — Redstone wire reuses the 1/8 slab
