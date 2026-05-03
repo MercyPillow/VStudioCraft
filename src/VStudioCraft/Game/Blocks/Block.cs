@@ -1305,13 +1305,20 @@ namespace VStudioCraft.Game
                 case BlockType.WoodStairs:
                 case BlockType.CobblestoneStairs:
                     return (0f, 0f, 0f, 1f, 0.5f, 1f);
-                // Tier 8 #51 — Soul Sand: 1×0.875×1 footprint pinned
-                // to the cell bottom. The 2/16 missing slice at the
+                // Tier 8 #51 — Soul Sand: 1×(15/16)×1 footprint pinned
+                // to the cell bottom. The 1/16 missing slice at the
                 // top makes the player visually "sink" and is the
                 // visual cue that pairs with the horizontal
                 // velocity slowdown applied in Player.Update.
                 case BlockType.SoulSand:
-                    return (0f, 0f, 0f, 1f, 14f / 16f, 1f);
+                    return (0f, 0f, 0f, 1f, 15f / 16f, 1f);
+                // Farmland — tilled dirt sits 1/16 lower than a full
+                // cube so a planted row reads as a recessed strip and
+                // the player visibly steps down onto it. Same idiom
+                // as soul sand and snow layer: visual height = collision
+                // height; the player AABB sinks to match the mesh top.
+                case BlockType.Farmland:
+                    return (0f, 0f, 0f, 1f, 15f / 16f, 1f);
                 // Tier 9 #54 V2 — Rail. 1×(1/16)×1 footprint pinned to
                 // the cell floor. Used by raycast so LMB targeting
                 // hits only the visible rail layer, not the whole cell.
@@ -1489,9 +1496,14 @@ namespace VStudioCraft.Game
                 // EmitStair in the EmitModels pass.
                 case BlockType.WoodStairs:
                 case BlockType.CobblestoneStairs:
-                // Tier 8 #51 — Soul Sand is a 14/16-tall sub-cube;
+                // Tier 8 #51 — Soul Sand is a 15/16-tall sub-cube;
                 // mesher routes through EmitModels with EmitSubCubeBox.
                 case BlockType.SoulSand:
+                // Farmland is a 15/16-tall sub-cube — same idiom as
+                // soul sand but the top face uses TileFarmlandTop
+                // while the sides + bottom use TileDirt. Mesher
+                // routes through a dedicated EmitFarmlandBox helper.
+                case BlockType.Farmland:
                 // Tier 8 #51 V1 — Nether Portal renders as a single
                 // axis-aligned plane (the swirl); mesher routes
                 // through EmitModels with EmitNetherPortal.
@@ -1630,12 +1642,18 @@ namespace VStudioCraft.Game
                 // those air-exposed corners aren't culled away.
                 case BlockType.WoodStairs:
                 case BlockType.CobblestoneStairs:
-                // Tier 8 #51 — Soul Sand: top 2/16 of the cell is
+                // Tier 8 #51 — Soul Sand: top 1/16 of the cell is
                 // air (the player visually sinks). The cube above
                 // would otherwise lose its bottom face — same
                 // dynamic as snow / slabs — so soul sand is
                 // non-opaque to keep that face emitted.
                 case BlockType.SoulSand:
+                // Farmland: top 1/16 of the cell is air. Adjacent
+                // cube faces (e.g. dirt next to farmland) must still
+                // emit so the 1px sliver of the dirt's side wall is
+                // visible above the farmland surface — same idiom
+                // as soul sand.
+                case BlockType.Farmland:
                 // Tier 8 #51 V1 — Nether Portal is a thin plane
                 // (most of the cell is air), so adjacent obsidian
                 // faces must still emit around the swirl.
@@ -1844,12 +1862,18 @@ namespace VStudioCraft.Game
                 // way it does for slabs.
                 case BlockType.WoodStairs:
                 case BlockType.CobblestoneStairs:
-                // Tier 8 #51 — Soul Sand: top 2/16 of the cell is
+                // Tier 8 #51 — Soul Sand: top 1/16 of the cell is
                 // air, so light can flow through. Without this, the
                 // BFS would treat soul sand as opaque and the mesh's
                 // own cell light samples to 0 — the block would
                 // render dark even in daylight.
                 case BlockType.SoulSand:
+                // Farmland: top 1/16 of the cell is air. Light must
+                // pass through so the farmland surface samples its
+                // own sky/block light correctly — without this the
+                // tilled top face would render dark in daylight,
+                // same gotcha as soul sand.
+                case BlockType.Farmland:
                 // Tier 8 #51 V1 — Nether Portal: thin plane in an
                 // otherwise-air cell, so light flows through (matches
                 // canonical Alpha — sky light still reaches the floor

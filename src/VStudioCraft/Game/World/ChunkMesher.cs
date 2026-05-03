@@ -451,7 +451,19 @@ namespace VStudioCraft.Game
                     // from any angle (the cross-sprite had a
                     // washed-out look at oblique angles where both
                     // crossed quads showed the same flat sprite).
-                    EmitTorchBox(x + baseX, y, z + baseZ, lightPacked);
+                    EmitTorchBox(x + baseX, y, z + baseZ, layer, lightPacked);
+                }
+                else if (t == BlockType.RedstoneTorchOn || t == BlockType.RedstoneTorchOff)
+                {
+                    // Redstone torches share the floor torch's 2×10×2
+                    // wood-column geometry — only the texture differs
+                    // (TileRedstoneTorchOn / Off resolved by GetTileIndex
+                    // into `layer` above). Same 3D-pillar look as the
+                    // regular torch instead of the older cross-sprite.
+                    // Redstone torches don't have wall-mounted variants
+                    // in this build, so the EmitWallTorchBox path
+                    // doesn't need a redstone branch.
+                    EmitTorchBox(x + baseX, y, z + baseZ, layer, lightPacked);
                 }
                 else if (t == BlockType.SignPost)
                 {
@@ -488,15 +500,27 @@ namespace VStudioCraft.Game
                 }
                 else if (t == BlockType.SoulSand)
                 {
-                    // Tier 8 #51 — Soul Sand. 1×0.875×1 box pinned to
-                    // the cell bottom — the missing top 2/16 is what
+                    // Tier 8 #51 — Soul Sand. 1×(15/16)×1 box pinned to
+                    // the cell bottom — the missing top 1/16 is what
                     // makes the player visually sink into the surface
                     // when standing on it. Tile chosen by GetTileIndex
                     // above (TileSoulSand on every face).
                     EmitSubCubeBox(
                         x + baseX + 0f, y + 0f, z + baseZ + 0f,
-                        x + baseX + 1f, y + 14f / 16f, z + baseZ + 1f,
+                        x + baseX + 1f, y + 15f / 16f, z + baseZ + 1f,
                         layer, lightPacked);
+                }
+                else if (t == BlockType.Farmland)
+                {
+                    // Farmland. 1×(15/16)×1 box pinned to the cell bottom —
+                    // tilled soil sits 1/16 lower than a full cube so a
+                    // crop row reads as a slightly recessed strip. Top
+                    // face uses TileFarmlandTop (the cross-hatched dry
+                    // soil); the four sides + bottom use TileDirt — Alpha
+                    // only retextures the top of farmland, the sides
+                    // remain plain dirt so a row of farmland adjacent
+                    // to dirt blends seamlessly along its sides.
+                    EmitFarmlandBox(x + baseX, y, z + baseZ, lightPacked);
                 }
                 else if (t == BlockType.Rail)
                 {
@@ -1353,6 +1377,65 @@ namespace VStudioCraft.Game
                 0f, -1f, 0f, layer, lightPacked);
         }
 
+        // Farmland — same shape as a 15/16-tall sub-cube but the top
+        // face wants a different tile (TileFarmlandTop) than the four
+        // sides + bottom (TileDirt). EmitSubCubeBox is single-layer so
+        // we can't reuse it; this helper inlines the same six-quad
+        // emission with the per-face split.
+        private void EmitFarmlandBox(float wx, float wy, float wz, int lightPacked)
+        {
+            float x0 = wx,        x1 = wx + 1f;
+            float z0 = wz,        z1 = wz + 1f;
+            float y0 = wy;
+            float y1 = wy + 15f / 16f;
+            float vTop = 15f / 16f; // matches the side-face texture height
+            int side = BlockTextures.TileDirt;
+            int top  = BlockTextures.TileFarmlandTop;
+
+            // -X face
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x0, y0, z1, 1f, 0f,
+                x0, y1, z1, 1f, vTop,
+                x0, y1, z0, 0f, vTop,
+                -1f, 0f, 0f, side, lightPacked);
+            // +X face
+            EmitCrossQuad(
+                x1, y0, z0, 1f, 0f,
+                x1, y1, z0, 1f, vTop,
+                x1, y1, z1, 0f, vTop,
+                x1, y0, z1, 0f, 0f,
+                +1f, 0f, 0f, side, lightPacked);
+            // -Z face
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x0, y1, z0, 0f, vTop,
+                x1, y1, z0, 1f, vTop,
+                x1, y0, z0, 1f, 0f,
+                0f, 0f, -1f, side, lightPacked);
+            // +Z face
+            EmitCrossQuad(
+                x0, y0, z1, 0f, 0f,
+                x1, y0, z1, 1f, 0f,
+                x1, y1, z1, 1f, vTop,
+                x0, y1, z1, 0f, vTop,
+                0f, 0f, +1f, side, lightPacked);
+            // +Y face — TileFarmlandTop
+            EmitCrossQuad(
+                x0, y1, z1, 0f, 0f,
+                x1, y1, z1, 1f, 0f,
+                x1, y1, z0, 1f, 1f,
+                x0, y1, z0, 0f, 1f,
+                0f, +1f, 0f, top, lightPacked);
+            // -Y face — TileDirt
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x1, y0, z0, 1f, 0f,
+                x1, y0, z1, 1f, 1f,
+                x0, y0, z1, 0f, 1f,
+                0f, -1f, 0f, side, lightPacked);
+        }
+
         // Tier 9 #54 V5/V6/V7 — Rail top face with meta-aware UV
         // rotation, curve-tile dispatch, and slanted-mesh dispatch
         // for ascending variants.
@@ -1650,7 +1733,7 @@ namespace VStudioCraft.Game
         // their inset surfaces. Sampling at the source cell directly
         // (its own block-light) gives the natural glow without the
         // per-face neighbour-sample dance the cube mesher does.
-        private void EmitTorchBox(float wx, float wy, float wz, int lightPacked)
+        private void EmitTorchBox(float wx, float wy, float wz, int layer, int lightPacked)
         {
             const float colHalf = 1f / 16f;          // 2-pixel column → 1px each side of cell centre
             const float colTop  = 10f / 16f;         // 10 pixels tall
@@ -1663,7 +1746,12 @@ namespace VStudioCraft.Game
             float y0 = wy + 0f;
             float y1 = wy + colTop;
 
-            int layer = BlockTextures.TileTorch;
+            // `layer` is supplied by the caller — TileTorch for normal
+            // torches, TileRedstoneTorchOn / Off for redstone variants.
+            // The U/V slices below assume the tile follows Alpha's
+            // torch.png layout (centre 2-pixel-wide column for the
+            // wood, top of column for the flame head). Both the
+            // regular and redstone tiles match that layout.
 
             // Side-face UV: U samples the wood column (U=7/16..9/16),
             // V samples the wood height (V=0..10/16).
