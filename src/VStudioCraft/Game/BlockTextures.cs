@@ -289,7 +289,16 @@ namespace VStudioCraft.Game
         // Tier 8 #51 V13 — Nether Brick item tile (items.png 12,1).
         public const int FirstTailNetherBrickItemLayer = FirstTailNetherBrickLayer + TailNetherBrickLayerCount; // 182
         public const int TailNetherBrickItemLayerCount = 1;
-        public const int LayerCount = FirstTailNetherBrickItemLayer + TailNetherBrickItemLayerCount;    // 183
+        // Tier 9 #54 V1 — Boat item icon tile (items.png 8,8).
+        public const int FirstTailBoatItemLayer = FirstTailNetherBrickItemLayer + TailNetherBrickItemLayerCount; // 183
+        public const int TailBoatItemLayerCount = 1;
+        // Tier 9 #54 V2 — Rail block tile (terrain.png 0,8).
+        public const int FirstTailRailLayer = FirstTailBoatItemLayer + TailBoatItemLayerCount;          // 184
+        public const int TailRailLayerCount = 1;
+        // Tier 9 #54 V2 — Minecart item icon tile (items.png 7,8).
+        public const int FirstTailMinecartItemLayer = FirstTailRailLayer + TailRailLayerCount;          // 185
+        public const int TailMinecartItemLayerCount = 1;
+        public const int LayerCount = FirstTailMinecartItemLayer + TailMinecartItemLayerCount;          // 186
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -539,6 +548,14 @@ namespace VStudioCraft.Game
         // Tier 8 #51 V13 — Nether Brick item icon. items.png slot
         // (12, 1). Held in inventory; smelted from netherrack.
         public const int TileNetherBrickItem     = 182;
+        // Tier 9 #54 V1 — Boat item icon. items.png slot (8, 8).
+        // Held in inventory; RMB on water spawns a Boat entity.
+        public const int TileBoatItem            = 183;
+        // Tier 9 #54 V2 — Rail block. terrain.png slot (0, 8). Track
+        // segments with transparent gaps between the rails.
+        public const int TileRail                = 184;
+        // Tier 9 #54 V2 — Minecart item icon. items.png slot (7, 8).
+        public const int TileMinecartItem        = 185;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -873,6 +890,13 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileNetherBrick,     GenerateNetherBrick);
             UploadLayer(layerPixels, TileNetherBrickItem, GenerateNetherBrickItem);
 
+            // Tier 9 #54 V1 — Boat item icon (procedural fallback).
+            UploadLayer(layerPixels, TileBoatItem,        GenerateBoatItem);
+
+            // Tier 9 #54 V2 — Rail block + Minecart icon (procedural fallbacks).
+            UploadLayer(layerPixels, TileRail,            GenerateRail);
+            UploadLayer(layerPixels, TileMinecartItem,    GenerateMinecartItem);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -1035,10 +1059,13 @@ namespace VStudioCraft.Game
                 // Tier 8 #51 V1 — Nether Portal swirl from terrain.png.
                 || layer == TileNetherPortal
                 // Tier 8 #51 V13 — Nether Brick block tile from terrain.png.
-                || layer == TileNetherBrick;
-                // Note: TileNetherBrickItem is NOT terrain-sourced — its
-                // (12, 1) coord references items.png, so it routes
-                // through UploadTailItemsFromAlphaTools below.
+                || layer == TileNetherBrick
+                // Tier 9 #54 V2 — Rail block tile from terrain.png (0, 8).
+                || layer == TileRail;
+                // Note: TileNetherBrickItem + TileBoatItem + TileMinecartItem
+                // are NOT terrain-sourced — their coords reference
+                // items.png, so they route through
+                // UploadTailItemsFromAlphaTools below.
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3897,6 +3924,13 @@ namespace VStudioCraft.Game
             // IsTailLayerTerrainSourced) so the item-icon coord is
             // sliced from items.png, not terrain.png.
             /* TileNetherBrickItem     */ (12, 1),
+            // Tier 9 #54 V1 — Boat item icon from items.png at (8, 8).
+            // Same items-atlas routing as NetherBrickItem above.
+            /* TileBoatItem            */ (8, 8),
+            // Tier 9 #54 V2 — Rail block tile from terrain.png at (0, 8).
+            /* TileRail                */ (0, 8),
+            // Tier 9 #54 V2 — Minecart item icon from items.png at (7, 8).
+            /* TileMinecartItem        */ (7, 8),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4187,6 +4221,16 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileNetherBrick,     GenerateNetherBrick);
             UploadLayer(layerPixels, TileNetherBrickItem, GenerateNetherBrickItem);
 
+            // Tier 9 #54 V1 — Boat item icon. Procedural fallback;
+            // overlaid from items.png (8, 8) by the items-atlas slicer.
+            UploadLayer(layerPixels, TileBoatItem,        GenerateBoatItem);
+
+            // Tier 9 #54 V2 — Rail block + Minecart icon. Procedural
+            // fallbacks; overlaid from terrain.png (0, 8) and
+            // items.png (7, 8) respectively.
+            UploadLayer(layerPixels, TileRail,            GenerateRail);
+            UploadLayer(layerPixels, TileMinecartItem,    GenerateMinecartItem);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4221,12 +4265,14 @@ namespace VStudioCraft.Game
                 TileNetherPortal,
                 // Tier 8 #51 V13 — Nether Brick block tile from terrain.png (10, 6).
                 TileNetherBrick,
+                // Tier 9 #54 V2 — Rail block tile from terrain.png (0, 8).
+                TileRail,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
-                // TileNetherBrickItem is also items-atlas-sourced,
-                // not terrain — sliced from items.png (12, 1) by
-                // UploadTailItemsFromAlphaTools.
+                // TileNetherBrickItem + TileBoatItem + TileMinecartItem
+                // are also items-atlas-sourced, sliced from items.png
+                // by UploadTailItemsFromAlphaTools.
             };
             for (int i = 0; i < biomeTailLayers.Length; i++)
             {
@@ -7262,6 +7308,148 @@ namespace VStudioCraft.Game
             SetPixel(pixels, x1 - 2, y0 + 2, brickHi.r, brickHi.g, brickHi.b);
             SetPixel(pixels, x0 + 2, y1 - 1, brickHi.r, brickHi.g, brickHi.b);
             SetPixel(pixels, x1 - 2, y1 - 1, brickHi.r, brickHi.g, brickHi.b);
+        }
+
+        // Tier 9 #54 V1 — Boat item icon. A small wooden hull
+        // silhouette: trapezoidal shape (narrow at the bottom,
+        // wider at the top) suggesting a boat seen from above-side.
+        // Brown plank colour with a darker outline. The alpha-
+        // textures atlas overlays from items.png (8, 8) on top
+        // when the user has the canonical PNG.
+        private static void GenerateBoatItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) plank   = (140,  90,  50);
+            (byte r, byte g, byte b) plankHi = (180, 130,  80);
+            (byte r, byte g, byte b) outline = ( 60,  35,  15);
+
+            // Hull body — trapezoidal, narrower at the keel.
+            // Rows 9..12 of the tile carry progressively narrower bands.
+            for (int y = 8; y <= 12; y++)
+            {
+                int inset = y - 8;       // 0..4
+                int x0 = 2 + inset;
+                int x1 = 13 - inset;
+                if (x0 > x1) continue;
+                for (int x = x0; x <= x1; x++)
+                    SetPixel(pixels, x, y, plank.r, plank.g, plank.b);
+                // Outline pixels at the trapezoid edges.
+                SetPixel(pixels, x0, y, outline.r, outline.g, outline.b);
+                SetPixel(pixels, x1, y, outline.r, outline.g, outline.b);
+            }
+            // Top deck rim — single row at y=7 spanning the widest part.
+            for (int x = 1; x <= 14; x++)
+                SetPixel(pixels, x, 7, plank.r, plank.g, plank.b);
+            for (int x = 0; x <= 15; x++)
+                SetPixel(pixels, x, 6, outline.r, outline.g, outline.b);
+
+            // Bottom keel cap.
+            SetPixel(pixels, 7, 13, outline.r, outline.g, outline.b);
+            SetPixel(pixels, 8, 13, outline.r, outline.g, outline.b);
+
+            // Plank-grain highlights along the upper deck and inside the hull.
+            SetPixel(pixels,  3, 9, plankHi.r, plankHi.g, plankHi.b);
+            SetPixel(pixels, 12, 9, plankHi.r, plankHi.g, plankHi.b);
+            SetPixel(pixels,  5, 7, plankHi.r, plankHi.g, plankHi.b);
+            SetPixel(pixels, 10, 7, plankHi.r, plankHi.g, plankHi.b);
+        }
+
+        // Tier 9 #54 V2 — Rail block tile. Two parallel iron rails
+        // running vertically through the tile (top-down view; the
+        // mesher emits this as the top face of the 1/16-thin rail
+        // box). Wooden cross-ties between the rails. Most of the
+        // tile is transparent so the floor below shows through.
+        // The alpha-textures atlas overlays from terrain.png (0, 8)
+        // on top when the user has the canonical PNG.
+        private static void GenerateRail(byte[] pixels)
+        {
+            (byte r, byte g, byte b) iron  = (180, 180, 190);
+            (byte r, byte g, byte b) ironHi = (215, 215, 225);
+            (byte r, byte g, byte b) wood  = (110,  75,  40);
+            (byte r, byte g, byte b) woodHi = (140,  95,  55);
+
+            // Start fully transparent.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                pixels[(y * TileSize + x) * 4 + 3] = 0;
+
+            // Two iron rails running vertically — at x=4..5 and x=10..11.
+            for (int y = 0; y < TileSize; y++)
+            {
+                SetPixel(pixels,  4, y, iron.r,   iron.g,   iron.b);
+                SetPixel(pixels,  5, y, ironHi.r, ironHi.g, ironHi.b);
+                SetPixel(pixels, 10, y, ironHi.r, ironHi.g, ironHi.b);
+                SetPixel(pixels, 11, y, iron.r,   iron.g,   iron.b);
+            }
+
+            // Wooden cross-ties at y=2, 7, 12 — short horizontal
+            // strips spanning between the two rails. The ties read
+            // as the wood holding the iron in place.
+            int[] tieYs = { 2, 7, 12 };
+            for (int i = 0; i < tieYs.Length; i++)
+            {
+                int ty = tieYs[i];
+                for (int x = 3; x <= 12; x++)
+                    SetPixel(pixels, x, ty, wood.r, wood.g, wood.b);
+                // Highlight strip 1 row above each tie for plank grain.
+                if (ty > 0)
+                {
+                    for (int x = 4; x <= 11; x++)
+                        SetPixel(pixels, x, ty - 1, woodHi.r, woodHi.g, woodHi.b);
+                    // Re-emit the iron rail pixels we just overwrote with
+                    // the highlight strip so they don't end up wood-tinted.
+                    SetPixel(pixels,  4, ty - 1, iron.r,   iron.g,   iron.b);
+                    SetPixel(pixels,  5, ty - 1, ironHi.r, ironHi.g, ironHi.b);
+                    SetPixel(pixels, 10, ty - 1, ironHi.r, ironHi.g, ironHi.b);
+                    SetPixel(pixels, 11, ty - 1, iron.r,   iron.g,   iron.b);
+                }
+            }
+        }
+
+        // Tier 9 #54 V2 — Minecart item icon. A small dark cart
+        // silhouette: rectangular open-top box on a pair of wheels.
+        // The alpha-textures atlas overlays from items.png (7, 8)
+        // on top when the user has the canonical PNG.
+        private static void GenerateMinecartItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) cart    = ( 90,  90, 100);
+            (byte r, byte g, byte b) cartHi  = (135, 135, 150);
+            (byte r, byte g, byte b) wheel   = ( 50,  50,  60);
+            (byte r, byte g, byte b) outline = ( 30,  30,  35);
+
+            // Start fully transparent.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                pixels[(y * TileSize + x) * 4 + 3] = 0;
+
+            // Cart body — open-top rectangle, rows y=4..10, x=2..13.
+            for (int y = 4; y <= 10; y++)
+            for (int x = 2; x <= 13; x++)
+            {
+                bool top = y == 4;
+                bool inside = (y > 5 && y < 10) && (x > 3 && x < 12);
+                if (top || inside) continue; // open top + hollow interior
+                SetPixel(pixels, x, y, cart.r, cart.g, cart.b);
+            }
+            // Outline of the cart's outer wall.
+            for (int x = 2; x <= 13; x++)
+                SetPixel(pixels, x, 10, outline.r, outline.g, outline.b);
+            for (int y = 4; y <= 10; y++)
+            {
+                SetPixel(pixels,  2, y, outline.r, outline.g, outline.b);
+                SetPixel(pixels, 13, y, outline.r, outline.g, outline.b);
+            }
+            // Highlights on the cart's lip — visible top edge of the wall.
+            SetPixel(pixels,  3, 5, cartHi.r, cartHi.g, cartHi.b);
+            SetPixel(pixels, 12, 5, cartHi.r, cartHi.g, cartHi.b);
+
+            // Wheels — two dark dots at y=12 below the cart.
+            for (int dx = 0; dx < 2; dx++)
+            {
+                SetPixel(pixels,  4 + dx, 11, wheel.r, wheel.g, wheel.b);
+                SetPixel(pixels, 10 + dx, 11, wheel.r, wheel.g, wheel.b);
+                SetPixel(pixels,  4 + dx, 12, outline.r, outline.g, outline.b);
+                SetPixel(pixels, 10 + dx, 12, outline.r, outline.g, outline.b);
+            }
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

@@ -945,6 +945,12 @@ namespace VStudioCraft.UI
                             // ghasts shooting in the background.
                             _renderer.TickGhastFiring(dt);
                             _renderer.TickFireballs(dt);
+                            // Tier 9 #54 V1 — Boat physics (buoyancy,
+                            // drag, rider thrust). Same pause gating.
+                            _renderer.TickBoats(dt);
+                            // Tier 9 #54 V2 — Minecart physics (rail-
+                            // axis lock + thrust). Same pause gating.
+                            _renderer.TickMinecarts(dt);
                             // Tier 4 #23 — Fishing bobber timers (catch +
                             // auto-despawn). No physics — same gating as
                             // TickArrows so a paused world doesn't have
@@ -1119,10 +1125,29 @@ namespace VStudioCraft.UI
             _renderer.Player.IsSneaking = sneaking;
             bool wantJump = _input.IsDown(KeyBindings.Jump);
 
+            const float sensitivity = 0.0035f;
+            // Tier 9 #54 V1 — Suppress player physics while mounted in
+            // a boat. The boat's TickBoats pass writes Player.Position
+            // every frame, so feeding the player a wish-velocity from
+            // WASD here would either be overwritten (best case) or
+            // fight the boat's anchor (worst case, jittery seat). The
+            // forward thrust the rider applies happens INSIDE TickBoats
+            // by checking Input.IsDown(MoveForward) directly; no need
+            // to plumb it through here. V2 extends the same gate to
+            // minecarts.
+            if (_renderer.Player.MountedBoat != null
+             || _renderer.Player.MountedMinecart != null)
+            {
+                _input.ConsumeMouseDelta(out float mxBoat, out float myBoat);
+                cam.Yaw   += mxBoat * sensitivity;
+                cam.Pitch -= myBoat * sensitivity;
+                cam.ClampPitch();
+                return;
+            }
+
             _renderer.UpdatePlayer(dt, wish * speed, wantJump);
 
             _input.ConsumeMouseDelta(out float mx, out float my);
-            const float sensitivity = 0.0035f;
             cam.Yaw += mx * sensitivity;
             cam.Pitch -= my * sensitivity;
             cam.ClampPitch();

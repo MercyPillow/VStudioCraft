@@ -103,6 +103,8 @@
     <Compile Include="Game\HostileMobs.cs" />
     <Compile Include="Game\ArrowProjectile.cs" />
     <Compile Include="Game\Bobber.cs" />
+    <Compile Include="Game\Boat.cs" />
+    <Compile Include="Game\Minecart.cs" />
     <Compile Include="Game\JukeboxTileEntity.cs" />
     <Compile Include="Game\SignTileEntity.cs" />
     <Compile Include="Game\Painting.cs" />

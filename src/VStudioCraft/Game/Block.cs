@@ -745,6 +745,29 @@ namespace VStudioCraft.Game
         // Item form of nether brick — held in inventory, smelted
         // from netherrack, and crafted into NetherBrick blocks.
         NetherBrickItem    = 176, // Alpha 405 (modern id, see above)
+
+        // Tier 9 #54 V1 — Boat. Player crafts from 5 planks (U-shape),
+        // RMB on a water cell to spawn a Boat entity at that location.
+        // Item-only id; boats are entities in the world (renderer-
+        // owned per-dim list, like drops/projectiles), not blocks —
+        // so this BlockType only ever appears in inventory / hotbar
+        // and never in the chunk block array.
+        Boat               = 177, // Alpha 333
+
+        // Tier 9 #54 V2 — Rail block. Placed on top of a solid block
+        // via RMB; the per-cell metadata low-2-bits encodes the rail
+        // axis: 0 = N-S (runs along Z), 1 = E-W (runs along X).
+        // V2 ships straight rails only — curves + ascending rails are
+        // V3 polish (require neighbour-aware mesh + slope physics).
+        // Non-cube (1/16 tall on the cell floor), non-solid (player
+        // walks through), light-transparent, alpha-tested texture.
+        Rail               = 178, // Alpha 66
+
+        // Tier 9 #54 V2 — Minecart. Ridable cart that follows rails.
+        // Item-only id (the cart-in-world is a renderer-owned entity,
+        // like Boat); RMB on a rail with this held spawns a Minecart
+        // entity at that cell.
+        Minecart           = 179, // Alpha 328
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -899,6 +922,10 @@ namespace VStudioCraft.Game
         // Tier 8 #51 V13 — Nether Brick item. Smelted from
         // netherrack; 4× crafts a NetherBrick block.
         public const BlockType NetherBrickItem     = BlockType.NetherBrickItem;
+        // Tier 9 #54 V1 — Boat. Item-only (placed as entity).
+        public const BlockType Boat                = BlockType.Boat;
+        // Tier 9 #54 V2 — Minecart. Item-only (placed as entity on rail).
+        public const BlockType Minecart            = BlockType.Minecart;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -1027,6 +1054,10 @@ namespace VStudioCraft.Game
                 // the modern id since it's the canonical anchor and
                 // doesn't collide with any Alpha 1.1.2_01 id).
                 case BlockType.NetherBrickItem:     return 405;
+                // Tier 9 #54 V1 — Boat item. Canonical Alpha id 333.
+                case BlockType.Boat:                return 333;
+                // Tier 9 #54 V2 — Minecart. Canonical Alpha id 328.
+                case BlockType.Minecart:            return 328;
                 default:                       return -1;
             }
         }
@@ -1143,6 +1174,11 @@ namespace VStudioCraft.Game
                 // Tier 8 #51 V13.
                 case BlockType.NetherBrickItem:     return "Nether Brick";
                 case BlockType.NetherBrick:         return "Nether Bricks";
+                // Tier 9 #54 V1.
+                case BlockType.Boat:                return "Boat";
+                // Tier 9 #54 V2.
+                case BlockType.Rail:                return "Rails";
+                case BlockType.Minecart:            return "Minecart";
                 default:                       return t.ToString();
             }
         }
@@ -1232,6 +1268,11 @@ namespace VStudioCraft.Game
                 // per-tick fluid-contact check pattern rather than
                 // collision).
                 case BlockType.Fire:
+                // Tier 9 #54 V2 — Rails are 1/16 tall on the cell
+                // floor; the player walks across without colliding.
+                // The minecart's rail-follow logic samples the cell
+                // directly so we don't need solid collision here.
+                case BlockType.Rail:
                     return false;
                 // Tier 6 #37 Phase 4 — SnowBlock IS solid; its
                 // collision shape is a 1/8-tall slab pinned to the
@@ -1500,7 +1541,13 @@ namespace VStudioCraft.Game
             // block form) is a regular cube and falls through to
             // IsCubeShape / IsSolid / IsOpaque defaults; this slice
             // just registers the held-item form.
-            || t == BlockType.NetherBrickItem;
+            || t == BlockType.NetherBrickItem
+            // Tier 9 #54 V1 — Boat. Item-only (no in-world block form);
+            // RMB on water spawns a Boat entity instead of placing a block.
+            || t == BlockType.Boat
+            // Tier 9 #54 V2 — Minecart. Item-only (cart-in-world is an
+            // entity); RMB on a rail spawns it.
+            || t == BlockType.Minecart;
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -1640,6 +1687,11 @@ namespace VStudioCraft.Game
                 // velocity slowdown applied in Player.Update.
                 case BlockType.SoulSand:
                     return (0f, 0f, 0f, 1f, 14f / 16f, 1f);
+                // Tier 9 #54 V2 — Rail. 1×(1/16)×1 footprint pinned to
+                // the cell floor. Used by raycast so LMB targeting
+                // hits only the visible rail layer, not the whole cell.
+                case BlockType.Rail:
+                    return (0f, 0f, 0f, 1f, 1f / 16f, 1f);
                 default:
                     return (0f, 0f, 0f, 1f, 1f, 1f);
             }
@@ -1823,6 +1875,10 @@ namespace VStudioCraft.Game
                 // crossed quads showing the flame from any angle),
                 // same path as flowers / wheat / sugar cane.
                 case BlockType.Fire:
+                // Tier 9 #54 V2 — Rail is a 1/16-tall flat block on
+                // the cell floor; mesher routes through EmitModels
+                // with EmitRail (same shape as a paper-thin slab).
+                case BlockType.Rail:
                 // Tier 6 #37 Phase 4 — SnowBlock is a 1/8-tall layer,
                 // not a full cube. Routed through the mesher's slab
                 // emitter (EmitSnowLayer).
@@ -1959,6 +2015,12 @@ namespace VStudioCraft.Game
                 // (most of the cell is air), so adjacent obsidian
                 // faces must still emit around the swirl.
                 case BlockType.NetherPortal:
+                // Tier 9 #54 V2 — Rail is paper-thin on the cell floor;
+                // most of the cell is air, so adjacent block faces
+                // must still emit (otherwise a wall behind the rail
+                // would lose its near face when culled against the
+                // rail cell).
+                case BlockType.Rail:
                     return false;
                 // Tier 4 #16 — Doors are thin slabs and don't fill the
                 // cell; the four neighbouring cube faces (and the
@@ -2169,6 +2231,10 @@ namespace VStudioCraft.Game
                 // of a horizontal portal). The swirl is a self-lit
                 // visual, not an actual light emitter.
                 case BlockType.NetherPortal:
+                // Tier 9 #54 V2 — Rail is paper-thin; light flows
+                // through it freely so a torch placed next to a
+                // rail-only path lights cells beyond.
+                case BlockType.Rail:
                     return true;
                 default:
                     return false;
@@ -2334,6 +2400,10 @@ namespace VStudioCraft.Game
                 // can't be mined). Hardness -1 = unbreakable.
                 case BlockType.NetherPortal:
                     return -1f;
+                // Tier 9 #54 V2 — Rail. Alpha hardness 0.7 — quick to
+                // break with a pickaxe; bare-hand also works.
+                case BlockType.Rail:
+                    return 0.7f;
                 // Tier 6 #37 — Snow block. Quick to break (Alpha
                 // hardness 0.2 — single shovel swing). No tool gate;
                 // hand also works.
@@ -2662,6 +2732,21 @@ namespace VStudioCraft.Game
                 // dispatch needed.
                 case BlockType.NetherBrickItem:
                     return BlockTextures.TileNetherBrickItem;
+                // Tier 9 #54 V1 — Boat icon. Items atlas slot for the
+                // hotbar / inventory render. The in-world boat is an
+                // entity (not a block), so this lookup only fires for
+                // held-item / inventory rendering.
+                case BlockType.Boat:
+                    return BlockTextures.TileBoatItem;
+                // Tier 9 #54 V2 — Rail block tile. terrain.png slot
+                // (0, 8) — the canonical Alpha straight-rail tile.
+                // Curve variants live at (0, 7); V2 ships straight
+                // only.
+                case BlockType.Rail:
+                    return BlockTextures.TileRail;
+                // Tier 9 #54 V2 — Minecart icon. items.png slot (7, 8).
+                case BlockType.Minecart:
+                    return BlockTextures.TileMinecartItem;
                 // Tier 8 #51 — Glowstone Dust item icon. Procedural;
                 // a small pile of bright yellow grain, similar in
                 // shape to bone meal but in glowstone-yellow tones.

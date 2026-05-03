@@ -379,6 +379,46 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.NetherBrick, 1)));
 
+            // Tier 9 #54 V1 — Boat: 5 planks in a U shape.
+            // Canonical Alpha 1.1.2_01 pattern is a hollow trough:
+            //     P . P
+            //     P P P
+            // (3-wide × 2-tall, top-middle empty). Yields 1 Boat item.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Air,    BlockType.Planks },
+                    { BlockType.Planks, BlockType.Planks, BlockType.Planks },
+                },
+                new ItemStack(BlockType.Boat, 1)));
+
+            // Tier 9 #54 V2 — Rails: 6 iron ingots + 1 stick in the
+            // canonical Alpha 1.1.2_01 layout:
+            //     I . I
+            //     I S I
+            //     I . I
+            // Yields 16 rails per craft.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.IronIngot, BlockType.Air,   BlockType.IronIngot },
+                    { BlockType.IronIngot, BlockType.Stick, BlockType.IronIngot },
+                    { BlockType.IronIngot, BlockType.Air,   BlockType.IronIngot },
+                },
+                new ItemStack(BlockType.Rail, 16)));
+
+            // Tier 9 #54 V2 — Minecart: 5 iron ingots in a U shape.
+            //     I . I
+            //     I I I
+            // Yields 1 Minecart.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.IronIngot, BlockType.Air,       BlockType.IronIngot },
+                    { BlockType.IronIngot, BlockType.IronIngot, BlockType.IronIngot },
+                },
+                new ItemStack(BlockType.Minecart, 1)));
+
             // Furnace: 8 cobblestone in a U-shape ringing an empty middle
             // cell. Alpha pattern is "CCC / C.C / CCC" — the hollow center
             // is what makes it a smelter rather than just a stone block.

@@ -555,6 +555,27 @@ void main()
         private System.Collections.Generic.List<Bobber> _dormantBobbers
             = new System.Collections.Generic.List<Bobber>();
 
+        // Tier 9 #54 V1 — In-world boats. Same renderer-owned-list
+        // pattern + per-dim swap idiom as _drops / _arrows / _thrown.
+        // Boats are placed by the player (RMB on water with a Boat
+        // item held); a Boat exists until the player breaks it
+        // (LMB) or it lands a hard collision. Not persisted in V1
+        // — boats vanish on save/load (canonical Alpha behaviour
+        // for non-saved entities; persistence is a V3 follow-up).
+        private System.Collections.Generic.List<Boat> _boats
+            = new System.Collections.Generic.List<Boat>();
+        private System.Collections.Generic.List<Boat> _dormantBoats
+            = new System.Collections.Generic.List<Boat>();
+
+        // Tier 9 #54 V2 — In-world minecarts. Same renderer-owned-list
+        // pattern + per-dim swap idiom as _boats. RMB on a Rail block
+        // with a Minecart item spawns one; LMB on a cart drops a
+        // Minecart item back. Not persisted in V2.
+        private System.Collections.Generic.List<Minecart> _minecarts
+            = new System.Collections.Generic.List<Minecart>();
+        private System.Collections.Generic.List<Minecart> _dormantMinecarts
+            = new System.Collections.Generic.List<Minecart>();
+
         // Per-bobber RNG. Same pattern as _dropRng — stable seed so a
         // future deterministic-replay path stays reproducible; the
         // digits don't carry meaning beyond "not shared with any
@@ -1716,6 +1737,8 @@ void main()
             _thrown.Clear();
             _fireballs.Clear();
             _bobbers.Clear();
+            _boats.Clear();
+            _minecarts.Clear();
             _replicatedArrowsById.Clear();
             _replicatedThrownById.Clear();
             _replicatedBobbersById.Clear();
@@ -3187,7 +3210,19 @@ void main()
             var swapThrown    = _thrown;    _thrown    = _dormantThrown;    _dormantThrown    = swapThrown;
             var swapFireballs = _fireballs; _fireballs = _dormantFireballs; _dormantFireballs = swapFireballs;
             var swapBobbers   = _bobbers;   _bobbers   = _dormantBobbers;   _dormantBobbers   = swapBobbers;
-            if (Player != null) Player.ActiveBobber = null;
+            var swapBoats     = _boats;     _boats     = _dormantBoats;     _dormantBoats     = swapBoats;
+            var swapMinecarts = _minecarts; _minecarts = _dormantMinecarts; _dormantMinecarts = swapMinecarts;
+            if (Player != null)
+            {
+                Player.ActiveBobber = null;
+                // Tier 9 #54 V1 — Dismount the boat on dim swap. The
+                // boat the player was riding stays in the original
+                // dimension's _dormantBoats stash, but the player's
+                // back-reference would otherwise be a stale pointer
+                // into a dim they're no longer in.
+                Player.MountedBoat = null;
+                Player.MountedMinecart = null;
+            }
 
             _world = next;
             _world.MarkAllDirty();
@@ -3903,7 +3938,16 @@ void main()
             // there's no window where the back-ref is live but the
             // list is empty.
             _bobbers.Clear();
-            if (Player != null) Player.ActiveBobber = null;
+            // Tier 9 #54 V1 — Boats clear on full world load too.
+            _boats.Clear();
+            // Tier 9 #54 V2 — Minecarts clear on full world load too.
+            _minecarts.Clear();
+            if (Player != null)
+            {
+                Player.ActiveBobber = null;
+                Player.MountedBoat = null;
+                Player.MountedMinecart = null;
+            }
             // Tier 8 #51 V12 — same reasoning for the dormant-dim
             // stashes: a full world load arrives in overworld, so any
             // entities the previous session had stashed in the
@@ -3916,6 +3960,8 @@ void main()
             _dormantThrown.Clear();
             _dormantFireballs.Clear();
             _dormantBobbers.Clear();
+            _dormantBoats.Clear();
+            _dormantMinecarts.Clear();
             _bowDrawSec = 0f;
             _bowWasDrawing = false;
             // Same reasoning for cosmetic particles — a leftover lava
@@ -4214,6 +4260,33 @@ void main()
         public bool TryBreak()
         {
             if (_world == null) return false;
+            // Tier 9 #54 V1 — Boat punch. LMB-aimed at a Boat AABB
+            // breaks the boat and drops a Boat item. Runs ahead of
+            // the block-raycast / net-dig dispatch so a boat in
+            // front of a wall takes priority. Skipped if the boat
+            // is the player's currently-mounted boat — that case
+            // would auto-eject the player on hit, which is annoying
+            // (you can dismount with Sneak instead).
+            if (Player != null && Player.MountedBoat == null)
+            {
+                if (TryBreakBoatAt(Camera.Position, Camera.Forward, ReachDistance))
+                {
+                    Player.TriggerSwing();
+                    SfxBank.PlayPlace(BlockType.Wool);
+                    return true;
+                }
+            }
+            // Tier 9 #54 V2 — Same path for minecart: LMB on a cart
+            // breaks it and drops a Minecart item.
+            if (Player != null && Player.MountedMinecart == null)
+            {
+                if (TryBreakMinecartAt(Camera.Position, Camera.Forward, ReachDistance))
+                {
+                    Player.TriggerSwing();
+                    SfxBank.PlayPlace(BlockType.Stone);
+                    return true;
+                }
+            }
             // Phase 3 — net-driven mode: emit a PlayerDigStart intent.
             // Server validates reach, applies SetBlock, and broadcasts
             // BlockChange back; the local replica updates only when the
@@ -4865,11 +4938,88 @@ void main()
                         ReelFishingBobber();
                     return true;
                 }
+
+                // Tier 9 #54 V1 — Boat mount. RMB along the camera ray
+                // intercepts a Boat AABB and mounts it. Runs ahead of
+                // the block raycast like the cow-milk / pig-mount
+                // paths so a boat in front of a wall takes priority.
+                // Skipped if the player is HOLDING a Boat (the place
+                // path below handles that) so RMB-with-boat-held
+                // never rebounds into a mount on the previous boat.
+                if (preHeld != BlockType.Boat && Player.MountedBoat == null)
+                {
+                    if (TryMountBoatAt(Camera.Position, Camera.Forward, ReachDistance))
+                        return true;
+                }
+                // Tier 9 #54 V2 — Minecart mount. Same shape as boat
+                // mount; runs ahead of the block raycast.
+                if (preHeld != BlockType.Minecart && Player.MountedMinecart == null)
+                {
+                    if (TryMountMinecartAt(Camera.Position, Camera.Forward, ReachDistance))
+                        return true;
+                }
             }
 
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
                 return false;
             var target = _world.GetBlock(hit.X, hit.Y, hit.Z);
+
+            // Tier 9 #54 V1 — Boat placement. RMB with Boat item on a
+            // water cell spawns a Boat entity floating just above the
+            // water surface. Anywhere else (solid block, lava, air
+            // beyond reach) the boat doesn't place — Alpha matches.
+            if (Input != null)
+            {
+                var heldStackBoat = Input.Inventory.GetHotbar(Input.HotbarIndex);
+                BlockType heldBoat = heldStackBoat.IsEmpty ? BlockType.Air : heldStackBoat.Type;
+                if (heldBoat == BlockType.Boat
+                    && (target == BlockType.Water || target == BlockType.FlowingWater))
+                {
+                    var spawnPos = new Vector3(hit.X + 0.5f, hit.Y + 1.0f, hit.Z + 0.5f);
+                    SpawnBoat(spawnPos, Camera.Yaw);
+                    if (GameMode == GameMode.Survival)
+                        Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                    SfxBank.PlayPlace(BlockType.Wool);
+                    return true;
+                }
+
+                // Tier 9 #54 V2 — Rail placement. RMB with Rail item on
+                // top of a solid block places a Rail at the air cell
+                // above. Auto-orient: scan the 4 horizontal neighbours
+                // for existing rails — if any is on the +X/-X side we
+                // pick E-W (meta=1), if on +Z/-Z side we pick N-S
+                // (meta=0). Default fallback: pick the axis closer to
+                // the player's facing yaw so a fresh-track first-rail
+                // reads correctly.
+                if (heldBoat == BlockType.Rail && hit.Ny > 0)
+                {
+                    int rx = hit.X, ry = hit.Y + 1, rz = hit.Z;
+                    if (BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))
+                        && _world.GetBlock(rx, ry, rz) == BlockType.Air)
+                    {
+                        byte axis = ChooseRailAxis(rx, ry, rz, Camera.Yaw);
+                        _world.SetBlockWithMeta(rx, ry, rz, BlockType.Rail, axis);
+                        if (GameMode == GameMode.Survival)
+                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                        SfxBank.PlayPlace(BlockType.Stone);
+                        return true;
+                    }
+                }
+
+                // Tier 9 #54 V2 — Minecart placement. RMB with Minecart
+                // item on a Rail block spawns a Minecart entity at the
+                // rail cell's centre, just above the rail surface.
+                if (heldBoat == BlockType.Minecart && target == BlockType.Rail)
+                {
+                    float spawnY = hit.Y + Minecart.RailRideOffset;
+                    var spawnPos = new Vector3(hit.X + 0.5f, spawnY, hit.Z + 0.5f);
+                    SpawnMinecart(spawnPos, Camera.Yaw);
+                    if (GameMode == GameMode.Survival)
+                        Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                    SfxBank.PlayPlace(BlockType.Stone);
+                    return true;
+                }
+            }
 
             // Tier 4 #24 — Painting placement. RMB on a wall with a
             // Painting held mounts a Painting entity onto the air-side
@@ -7785,6 +7935,282 @@ void main()
         // Same gate-and-call pattern the host uses for TickArrows /
         // TickThrown so all three projectile-like entity systems
         // freeze under pause / inventory together.
+        // Tier 9 #54 V1 — Boat physics tick. Walks every live boat,
+        // picks the rider input (forward thrust + camera yaw if the
+        // player is mounted), and runs Boat.Tick which integrates
+        // buoyancy + drag + steering. The boat the host's player
+        // is currently riding is the only one that takes thrust;
+        // unridden boats just float on whatever water they're in.
+        // Frozen under pause / inventory same as TickArrows etc.
+        // Tier 9 #54 V1 — Edge-trigger for Sneak-to-dismount. Tracks
+        // the previous frame's Sneak state so we only dismount on
+        // a fresh press (not on every frame Sneak is held).
+        private bool _sneakHeldLastFrame;
+
+        public void TickBoats(float dt)
+        {
+            if (_world == null) return;
+
+            // Sneak-to-dismount, edge-triggered. Outside the boat-loop
+            // so a player without any active boat doesn't churn this
+            // check unnecessarily, but we always update the previous-
+            // state flag.
+            bool sneakNow = Input != null && Input.IsDown(KeyBindings.Sneak);
+            if (Player != null && Player.MountedBoat != null
+                && sneakNow && !_sneakHeldLastFrame)
+            {
+                // Dismount: pop the player slightly to the side so the
+                // next physics tick doesn't immediately re-collide with
+                // the boat AABB and fling them.
+                var b = Player.MountedBoat;
+                Player.Position = new Vector3(
+                    b.Position.X + (float)Math.Sin(b.Yaw + Math.PI * 0.5) * (b.HalfWidth + 0.5f),
+                    b.Position.Y + b.Height + 0.05f,
+                    b.Position.Z + (float)Math.Cos(b.Yaw + Math.PI * 0.5) * (b.HalfWidth + 0.5f));
+                Player.Velocity = OpenTK.Vector3.Zero;
+                Player.MountedBoat = null;
+            }
+            _sneakHeldLastFrame = sneakNow;
+
+            if (_boats.Count == 0) return;
+
+            for (int i = 0; i < _boats.Count; i++)
+            {
+                var boat = _boats[i];
+                bool isHostsBoat = Player != null && Player.MountedBoat == boat;
+                Player rider     = isHostsBoat ? Player : null;
+                bool forward     = isHostsBoat && Input != null && Input.IsDown(KeyBindings.MoveForward);
+                float yaw        = isHostsBoat ? Camera.Yaw : boat.Yaw;
+                boat.Tick(dt, _world, rider, forward, yaw);
+
+                // While the host is mounted, the player position
+                // tracks the boat's seat (slightly above the deck).
+                // Player physics is suppressed via the IsMountedBoat
+                // check in Player.Update — see that branch.
+                if (isHostsBoat)
+                {
+                    Player.Position = new Vector3(
+                        boat.Position.X,
+                        boat.Position.Y + boat.Height + 0.10f,
+                        boat.Position.Z);
+                    Player.Velocity = OpenTK.Vector3.Zero;
+                    SyncCameraToPlayer();
+                }
+            }
+        }
+
+        // Spawn a Boat at the given water surface position. Called by
+        // the RMB-on-water item handler. Yaw initialised to the
+        // player's camera yaw so the boat reads as facing the way
+        // the player is looking.
+        public Boat SpawnBoat(Vector3 pos, float yaw)
+        {
+            var b = new Boat(pos, yaw);
+            _boats.Add(b);
+            return b;
+        }
+
+        // Try to mount whichever Boat lies under the player's RMB
+        // raycast within RMB-mount range. Called by TryInteract on
+        // RMB when the player is empty-handed (or holding non-water-
+        // place item) and within ~3 blocks of a boat. Returns true
+        // on a successful mount.
+        public bool TryMountBoatAt(Vector3 origin, Vector3 dir, float maxDist)
+        {
+            if (Player == null) return false;
+            if (Player.MountedBoat != null) return true; // already mounted
+            float bestT = float.MaxValue;
+            Boat best = null;
+            for (int i = 0; i < _boats.Count; i++)
+            {
+                var b = _boats[i];
+                var min = new Vector3(b.Position.X - b.HalfWidth, b.Position.Y, b.Position.Z - b.HalfWidth);
+                var max = new Vector3(b.Position.X + b.HalfWidth, b.Position.Y + b.Height, b.Position.Z + b.HalfWidth);
+                if (RayAabbIntersect(origin, dir, min, max, maxDist, out float t))
+                {
+                    if (t < bestT) { bestT = t; best = b; }
+                }
+            }
+            if (best == null) return false;
+            Player.MountedBoat = best;
+            return true;
+        }
+
+        // Tier 9 #54 V2 — Minecart tick. Same shape as TickBoats:
+        // pick the rider input, anchor the player's position to the
+        // cart's seat while mounted, and apply Sneak-edge dismount.
+        // Sneak edge tracking is shared with the boat's _sneakHeldLastFrame
+        // to keep state simple — Sneak dismounts whichever vehicle
+        // the player is currently in, never both at once.
+        public void TickMinecarts(float dt)
+        {
+            if (_world == null) return;
+
+            // Sneak edge-trigger dismount for minecart. Boat handler
+            // updates _sneakHeldLastFrame; we re-read sneakNow here
+            // for the minecart-specific case. Mutually exclusive
+            // with the boat path because the player can only be
+            // mounted in one vehicle at a time.
+            bool sneakNow = Input != null && Input.IsDown(KeyBindings.Sneak);
+            if (Player != null && Player.MountedMinecart != null
+                && sneakNow && !_sneakHeldLastFrame)
+            {
+                var c = Player.MountedMinecart;
+                Player.Position = new Vector3(
+                    c.Position.X + (float)Math.Sin(c.Yaw + Math.PI * 0.5) * (c.HalfWidth + 0.5f),
+                    c.Position.Y + c.Height + 0.05f,
+                    c.Position.Z + (float)Math.Cos(c.Yaw + Math.PI * 0.5) * (c.HalfWidth + 0.5f));
+                Player.Velocity = OpenTK.Vector3.Zero;
+                Player.MountedMinecart = null;
+            }
+
+            if (_minecarts.Count == 0) return;
+
+            for (int i = 0; i < _minecarts.Count; i++)
+            {
+                var cart = _minecarts[i];
+                bool isHostsCart = Player != null && Player.MountedMinecart == cart;
+                Player rider     = isHostsCart ? Player : null;
+                bool forward     = isHostsCart && Input != null && Input.IsDown(KeyBindings.MoveForward);
+                float yaw        = isHostsCart ? Camera.Yaw : cart.Yaw;
+                cart.Tick(dt, _world, rider, forward, yaw);
+
+                if (isHostsCart)
+                {
+                    Player.Position = new Vector3(
+                        cart.Position.X,
+                        cart.Position.Y + cart.Height + 0.05f,
+                        cart.Position.Z);
+                    Player.Velocity = OpenTK.Vector3.Zero;
+                    SyncCameraToPlayer();
+                }
+            }
+        }
+
+        // Tier 9 #54 V2 — Pick a rail orientation at place time.
+        // Auto-orient: scans the 4 horizontal neighbour cells for an
+        // existing Rail. If a rail sits to the +X or -X side, the new
+        // rail is E-W (meta=1) so the two connect. If a rail sits to
+        // the +Z or -Z side, the new rail is N-S (meta=0). If both
+        // axes have a neighbour rail (T-intersection), prefer the
+        // axis matching the player's facing yaw — gives the player
+        // control over which way the new rail bridges.
+        // Falls through to "pick the axis closest to the player's
+        // current facing yaw" when there are no neighbour rails (a
+        // first-rail-of-a-track situation).
+        private byte ChooseRailAxis(int rx, int ry, int rz, float playerYaw)
+        {
+            bool railEast  = _world.GetBlock(rx + 1, ry, rz) == BlockType.Rail;
+            bool railWest  = _world.GetBlock(rx - 1, ry, rz) == BlockType.Rail;
+            bool railNorth = _world.GetBlock(rx, ry, rz - 1) == BlockType.Rail;
+            bool railSouth = _world.GetBlock(rx, ry, rz + 1) == BlockType.Rail;
+            bool axisXNeigh = railEast || railWest;
+            bool axisZNeigh = railNorth || railSouth;
+
+            // The player's facing yaw points along ±X when sin(yaw) is
+            // dominant, ±Z when cos(yaw) is dominant. We use abs() to
+            // pick the axis only — sign is irrelevant for rail meta.
+            float ax = System.Math.Abs((float)System.Math.Sin(playerYaw));
+            float az = System.Math.Abs((float)System.Math.Cos(playerYaw));
+            bool yawIsX = ax > az;
+
+            if (axisXNeigh && !axisZNeigh) return 1; // E-W
+            if (axisZNeigh && !axisXNeigh) return 0; // N-S
+            if (axisXNeigh && axisZNeigh)  return yawIsX ? (byte)1 : (byte)0;
+            return yawIsX ? (byte)1 : (byte)0;       // no neighbour: pick by player yaw
+        }
+
+        // Spawn a Minecart at the centre of the given rail cell.
+        public Minecart SpawnMinecart(Vector3 pos, float yaw)
+        {
+            var c = new Minecart(pos, yaw);
+            _minecarts.Add(c);
+            return c;
+        }
+
+        public bool TryMountMinecartAt(Vector3 origin, Vector3 dir, float maxDist)
+        {
+            if (Player == null) return false;
+            if (Player.MountedMinecart != null) return true;
+            float bestT = float.MaxValue;
+            Minecart best = null;
+            for (int i = 0; i < _minecarts.Count; i++)
+            {
+                var c = _minecarts[i];
+                var min = new Vector3(c.Position.X - c.HalfWidth, c.Position.Y, c.Position.Z - c.HalfWidth);
+                var max = new Vector3(c.Position.X + c.HalfWidth, c.Position.Y + c.Height, c.Position.Z + c.HalfWidth);
+                if (RayAabbIntersect(origin, dir, min, max, maxDist, out float t))
+                {
+                    if (t < bestT) { bestT = t; best = c; }
+                }
+            }
+            if (best == null) return false;
+            Player.MountedMinecart = best;
+            return true;
+        }
+
+        public bool TryBreakMinecartAt(Vector3 origin, Vector3 dir, float maxDist)
+        {
+            if (_minecarts.Count == 0) return false;
+            float bestT = float.MaxValue;
+            int bestIdx = -1;
+            for (int i = 0; i < _minecarts.Count; i++)
+            {
+                var c = _minecarts[i];
+                var min = new Vector3(c.Position.X - c.HalfWidth, c.Position.Y, c.Position.Z - c.HalfWidth);
+                var max = new Vector3(c.Position.X + c.HalfWidth, c.Position.Y + c.Height, c.Position.Z + c.HalfWidth);
+                if (RayAabbIntersect(origin, dir, min, max, maxDist, out float t))
+                {
+                    if (t < bestT) { bestT = t; bestIdx = i; }
+                }
+            }
+            if (bestIdx < 0) return false;
+            var hit = _minecarts[bestIdx];
+            SpawnBreakDrop(
+                (int)System.Math.Floor(hit.Position.X),
+                (int)System.Math.Floor(hit.Position.Y),
+                (int)System.Math.Floor(hit.Position.Z),
+                BlockType.Minecart, BlockType.Air);
+            if (Player != null && Player.MountedMinecart == hit)
+                Player.MountedMinecart = null;
+            _minecarts.RemoveAt(bestIdx);
+            return true;
+        }
+
+        // Punch a boat (LMB-targeted) — remove from the world and
+        // drop a Boat item at its location. Called by TryBreak when
+        // the LMB raycast hits a boat AABB. Returns true if a boat
+        // was found + broken.
+        public bool TryBreakBoatAt(Vector3 origin, Vector3 dir, float maxDist)
+        {
+            if (_boats.Count == 0) return false;
+            float bestT = float.MaxValue;
+            int bestIdx = -1;
+            for (int i = 0; i < _boats.Count; i++)
+            {
+                var b = _boats[i];
+                var min = new Vector3(b.Position.X - b.HalfWidth, b.Position.Y, b.Position.Z - b.HalfWidth);
+                var max = new Vector3(b.Position.X + b.HalfWidth, b.Position.Y + b.Height, b.Position.Z + b.HalfWidth);
+                if (RayAabbIntersect(origin, dir, min, max, maxDist, out float t))
+                {
+                    if (t < bestT) { bestT = t; bestIdx = i; }
+                }
+            }
+            if (bestIdx < 0) return false;
+            var hit = _boats[bestIdx];
+            // Drop a Boat item where the boat was.
+            SpawnBreakDrop(
+                (int)System.Math.Floor(hit.Position.X),
+                (int)System.Math.Floor(hit.Position.Y),
+                (int)System.Math.Floor(hit.Position.Z),
+                BlockType.Boat, BlockType.Air);
+            // Eject the rider if any.
+            if (Player != null && Player.MountedBoat == hit)
+                Player.MountedBoat = null;
+            _boats.RemoveAt(bestIdx);
+            return true;
+        }
+
         public void TickBobbers(float dt)
         {
             if (_bobbers.Count == 0) return;
@@ -10486,6 +10912,13 @@ void main()
             // white cuboid; the line from the rod tip back to the
             // bobber is a polish TODO (see RenderBobbers).
             RenderBobbers(width, height);
+            // Tier 9 #54 V1 — Boats. Wooden hull + railed sides;
+            // depth-test the same as projectiles/mobs so a boat
+            // floats correctly against terrain occlusion.
+            RenderBoats(width, height);
+            // Tier 9 #54 V2 — Minecarts. Dark-iron open-top box +
+            // wheels, oriented along the rail axis.
+            RenderMinecarts(width, height);
             // Tier 6 #35 — Animated sand/gravel between cells. Each
             // entity renders as a flat-coloured cube via the same
             // overlay-shader path the projectile / bobber renderers
@@ -11461,6 +11894,109 @@ void main()
                 var mvp = model * vp;
                 _overlayShader.SetMatrix4("uMVP", mvp);
                 _breakCubeMesh.Draw();
+            }
+        }
+
+        // Tier 9 #54 V1 — Render every Boat as a small wooden hull
+        // composed of a wide flat deck + 4 short side rails so the
+        // silhouette reads as a boat from any angle. Same overlay
+        // shader as the projectile passes — flat colour, no atlas
+        // sampling, lit by ambient only (matches the simplicity of
+        // pig/cow/sheep render).
+        private void RenderBoats(int width, int height)
+        {
+            if (_boats.Count == 0) return;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            var vp = _frameVp;
+            var deckColor = new Vector3(0.55f, 0.38f, 0.20f);  // wood-plank brown
+            var rimColor  = new Vector3(0.40f, 0.26f, 0.12f);  // darker brown for the side rails
+
+            for (int i = 0; i < _boats.Count; i++)
+            {
+                var b = _boats[i];
+                float w = b.HalfWidth * 2f;
+                float h = b.Height;
+                var rot = Matrix4.CreateRotationY(b.Yaw);
+                var trans = Matrix4.CreateTranslation(b.Position);
+                var rigToWorld = rot * trans;
+
+                // Hull deck — large flat cuboid spanning the full footprint.
+                var deckSize = new Vector3(w, h * 0.55f, w);
+                DrawPigCuboid(new Vector3(0f, h * 0.275f, 0f), deckSize, rigToWorld, vp, deckColor);
+
+                // Side rails — 4 short cuboids hugging the deck edge.
+                float railH = h * 0.45f;
+                float railT = w * 0.10f;       // rail thickness
+                float halfW = w * 0.5f;
+                float railY = h * 0.55f + railH * 0.5f;
+                // Front + back rails
+                DrawPigCuboid(new Vector3(0f, railY, +halfW - railT * 0.5f),
+                    new Vector3(w, railH, railT), rigToWorld, vp, rimColor);
+                DrawPigCuboid(new Vector3(0f, railY, -halfW + railT * 0.5f),
+                    new Vector3(w, railH, railT), rigToWorld, vp, rimColor);
+                // Left + right rails
+                DrawPigCuboid(new Vector3(+halfW - railT * 0.5f, railY, 0f),
+                    new Vector3(railT, railH, w), rigToWorld, vp, rimColor);
+                DrawPigCuboid(new Vector3(-halfW + railT * 0.5f, railY, 0f),
+                    new Vector3(railT, railH, w), rigToWorld, vp, rimColor);
+            }
+        }
+
+        // Tier 9 #54 V2 — Render every Minecart as a small open-top
+        // dark-iron cuboid box on a pair of wheels. Yaw rotates the
+        // body to face along the rail axis. Same overlay shader as
+        // boats / projectiles.
+        private void RenderMinecarts(int width, int height)
+        {
+            if (_minecarts.Count == 0) return;
+
+            _overlayShader.Use();
+            _overlayShader.SetFloat("uAlpha", 1f);
+
+            var vp = _frameVp;
+            var bodyColor  = new Vector3(0.40f, 0.42f, 0.48f); // dark iron
+            var rimColor   = new Vector3(0.22f, 0.22f, 0.26f); // darker rim
+            var wheelColor = new Vector3(0.15f, 0.15f, 0.18f);
+
+            for (int i = 0; i < _minecarts.Count; i++)
+            {
+                var c = _minecarts[i];
+                float w = c.HalfWidth * 2f;
+                float h = c.Height;
+                var rot = Matrix4.CreateRotationY(c.Yaw);
+                var trans = Matrix4.CreateTranslation(c.Position);
+                var rigToWorld = rot * trans;
+
+                // Cart base — flat slab covering the footprint, top at h*0.45.
+                var baseSize = new Vector3(w, h * 0.30f, w);
+                DrawPigCuboid(new Vector3(0f, h * 0.15f, 0f), baseSize, rigToWorld, vp, bodyColor);
+
+                // Side walls — 4 short cuboids forming an open-top box.
+                float wallH = h * 0.55f;
+                float wallT = w * 0.10f;
+                float halfW = w * 0.5f;
+                float wallY = h * 0.30f + wallH * 0.5f;
+                DrawPigCuboid(new Vector3(0f, wallY, +halfW - wallT * 0.5f),
+                    new Vector3(w, wallH, wallT), rigToWorld, vp, rimColor);
+                DrawPigCuboid(new Vector3(0f, wallY, -halfW + wallT * 0.5f),
+                    new Vector3(w, wallH, wallT), rigToWorld, vp, rimColor);
+                DrawPigCuboid(new Vector3(+halfW - wallT * 0.5f, wallY, 0f),
+                    new Vector3(wallT, wallH, w), rigToWorld, vp, rimColor);
+                DrawPigCuboid(new Vector3(-halfW + wallT * 0.5f, wallY, 0f),
+                    new Vector3(wallT, wallH, w), rigToWorld, vp, rimColor);
+
+                // Wheels — 4 small cubes at the cart's underside corners.
+                float wheelS = w * 0.18f;
+                float wheelY = -wheelS * 0.5f + 0.02f;
+                float wheelOff = halfW * 0.65f;
+                var wheelSize = new Vector3(wheelS, wheelS, wheelS);
+                DrawPigCuboid(new Vector3(+wheelOff, wheelY, +wheelOff), wheelSize, rigToWorld, vp, wheelColor);
+                DrawPigCuboid(new Vector3(+wheelOff, wheelY, -wheelOff), wheelSize, rigToWorld, vp, wheelColor);
+                DrawPigCuboid(new Vector3(-wheelOff, wheelY, +wheelOff), wheelSize, rigToWorld, vp, wheelColor);
+                DrawPigCuboid(new Vector3(-wheelOff, wheelY, -wheelOff), wheelSize, rigToWorld, vp, wheelColor);
             }
         }
 

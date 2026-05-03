@@ -252,6 +252,25 @@ namespace VStudioCraft.Game
             return c.GetMeta(lx, wy, lz);
         }
 
+        // Tier 9 #54 V2 — Set both block + meta in one call. Used by
+        // rail placement (axis bit on the meta) and any other block
+        // family that wants to atomically commit a typed block + its
+        // per-cell metadata. Falls through to SetBlock for the type
+        // change (which handles dirty-marking + light recompute) and
+        // then writes the meta on the now-installed cell.
+        public bool SetBlockWithMeta(int wx, int wy, int wz, BlockType t, byte meta, bool record = true)
+        {
+            if (!SetBlock(wx, wy, wz, t, record)) return false;
+            int cx = (int)Math.Floor(wx / (float)Chunk.SizeX);
+            int cz = (int)Math.Floor(wz / (float)Chunk.SizeZ);
+            var c = GetChunk(cx, cz);
+            if (c == null) return false;
+            int lx = wx - cx * Chunk.SizeX;
+            int lz = wz - cz * Chunk.SizeZ;
+            c.SetMeta(lx, wy, lz, meta);
+            return true;
+        }
+
         private World(int seed)
         {
             Seed = seed;

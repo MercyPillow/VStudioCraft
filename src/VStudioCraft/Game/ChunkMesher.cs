@@ -498,6 +498,24 @@ namespace VStudioCraft.Game
                         x + baseX + 1f, y + 14f / 16f, z + baseZ + 1f,
                         layer, lightPacked);
                 }
+                else if (t == BlockType.Rail)
+                {
+                    // Tier 9 #54 V2 — Rail. 1×(1/16)×1 box pinned to
+                    // the cell floor. Texture is alpha-tested (the
+                    // canonical rail tile has transparent gaps between
+                    // the rails) so we route through the same
+                    // EmitSubCubeBox path slabs use; the chunk-mesher
+                    // tile-emit pass handles alpha-test discard for
+                    // tiles flagged in IsAlphaTestedCube — but rails
+                    // are non-cube, so the rail texture's transparent
+                    // pixels stay opaque-stream and rely on the very
+                    // thin Y extent (1/16) to keep them from visibly
+                    // covering anything.
+                    EmitSubCubeBox(
+                        x + baseX + 0f, y + 0f, z + baseZ + 0f,
+                        x + baseX + 1f, y + 1f / 16f, z + baseZ + 1f,
+                        layer, lightPacked);
+                }
                 else if (t == BlockType.NetherPortal)
                 {
                     // Tier 8 #51 V1 — Nether Portal swirl. A single

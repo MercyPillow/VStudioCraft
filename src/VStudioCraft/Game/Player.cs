@@ -137,6 +137,21 @@ namespace VStudioCraft.Game
         // kind.
         public Pig Riding;
 
+        // Tier 9 #54 V1 — Currently-mounted boat, or null. Same
+        // ephemeral-reference contract as `Riding` above: cleared
+        // on world load + on dimension swap (boats don't follow
+        // the player across portals — they belong to the dim they
+        // were placed in). RMB on a boat sets this; Sneak (Shift)
+        // dismounts. While set, the player's WASD movement input
+        // is suppressed and replaced by the boat's thrust path.
+        public Boat MountedBoat;
+
+        // Tier 9 #54 V2 — Currently-mounted minecart, or null. Same
+        // ephemeral-reference contract as Riding / MountedBoat.
+        // While set, the player's WASD is suppressed; W applies
+        // forward thrust along the cart's rail axis via TickMinecarts.
+        public Minecart MountedMinecart;
+
         // Tier 4 #23 — Currently-cast fishing bobber, or null if no
         // line is out. Set by GameRenderer.TryInteract on the cast
         // RMB and cleared when the player reels (or when the bobber
