@@ -404,10 +404,29 @@ namespace VStudioCraft.Game
                     Velocity.Z *= decay;
                 }
 
-                // Integrate motion through standard collider so a cart
-                // that runs into a wall stops cleanly. Shared by both
-                // straight + curve branches.
-                if (world != null) IntegrateMotion(dt, world);
+                // Integrate motion. Straight + curve rails use the
+                // standard AABB collider so a cart that runs into a
+                // wall stops cleanly. ASCENDING rails bypass AABB —
+                // the cart's body Y mid-slope is below cy+1 while its
+                // X-front already extends into the next cell, which
+                // typically holds the SUPPORT BLOCK under the upper
+                // rail. AABB would snag the cart on that support and
+                // freeze it. The slope's rail topology guarantees a
+                // clean path ahead, so direct integration is safe.
+                if (world != null)
+                {
+                    if (isAsc)
+                    {
+                        Position.X += Velocity.X * dt;
+                        Position.Z += Velocity.Z * dt;
+                        // Y stays at the slope's targetY (set above);
+                        // Velocity.Y was zeroed too, so no Y drift.
+                    }
+                    else
+                    {
+                        IntegrateMotion(dt, world);
+                    }
+                }
             }
             else
             {
