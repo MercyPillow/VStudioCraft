@@ -1145,6 +1145,18 @@ namespace VStudioCraft.Game
                         {
                             LightCalculator.RecomputeChunk(c);
                         }
+                        // Tier 8 #51 V14 — Cross-chunk seam fix-up,
+                        // mirroring the overworld load path above. The
+                        // per-chunk RecomputeChunk loop gives each
+                        // chunk correct INTERNAL lighting but leaves
+                        // seams at every chunk boundary — glowstone
+                        // clusters near a chunk seam don't bleed into
+                        // the neighbour, lava lakes' light doesn't
+                        // fan across. Without this BFS pass the player
+                        // sees dark stripes along every chunk seam on
+                        // reload until they place/break a block to
+                        // re-trigger lighting locally.
+                        LightCalculator.PropagateAcrossSeams(netherWorld);
                         // Nether-side tile entities — same shape as
                         // the overworld tail blocks above, but writing
                         // into netherWorld's parallel dictionaries.
