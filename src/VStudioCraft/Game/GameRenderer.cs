@@ -3997,7 +3997,15 @@ void main()
             // Add the swim-bob Y offset to the eye position when submerged.
             // The offset is updated inside Player.Update and eases back to
             // zero on exit, so the camera glides rather than snaps.
-            var eye = Player.Position + new Vector3(0f, Player.EyeHeight + Player.SwimBobOffset, 0f);
+            // Tier 9 #54 V14 — StepLerpY subtracts from eye Y while
+            // the player is still "catching up" visually after an
+            // auto-step (snow / slab / stair). Physics-Y already
+            // teleported up; the camera spends the next few frames
+            // smoothly rising from the old altitude to the new.
+            var eye = Player.Position + new Vector3(
+                0f,
+                Player.EyeHeight + Player.SwimBobOffset - Player.StepLerpY,
+                0f);
             if (!ThirdPersonMode)
             {
                 Camera.Position = eye;

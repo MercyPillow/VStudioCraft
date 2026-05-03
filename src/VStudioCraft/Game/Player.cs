@@ -340,6 +340,19 @@ namespace VStudioCraft.Game
                 if (!HasGroundUnderAabb(world, probeZ)) Velocity.Z = 0f;
             }
 
+            // Tier 9 #54 V14 — Decay the auto-step visual lerp. The
+            // Player uses MoveAxis directly instead of IntegrateMotion
+            // (which has the decay built in for mobs/vehicles), so we
+            // run the same decay manually here. Without this the
+            // StepLerpY accumulates on every auto-step (snow / slab /
+            // stair walk-up) and the camera sinks lower and lower
+            // because there's no path back to 0.
+            if (StepLerpY > 0f)
+            {
+                StepLerpY -= StepLerpDecayRate * dt;
+                if (StepLerpY < 0f) StepLerpY = 0f;
+            }
+
             var step = Velocity * dt;
             MoveAxis(0, step.X, world);
             MoveAxis(1, step.Y, world);

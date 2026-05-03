@@ -35,6 +35,23 @@ namespace VStudioCraft.Game
         public Vector3 Velocity;
         public bool OnGround;
 
+        // Tier 9 #54 V14 — Smooth auto-step visual. When TryAutoStep
+        // succeeds (player walks up onto a snow layer / slab / stair
+        // etc.), Position.Y teleports up by the step delta in one
+        // frame. That's correct for physics + collision but reads as
+        // a jarring snap on the camera. We capture the delta into
+        // StepLerpY ("how much LOWER the visual should appear than
+        // physics-Y right now") and decay it toward 0 each tick;
+        // the camera applies it as a Y offset so the eye smoothly
+        // catches up to the new physics altitude over a few hundred
+        // ms instead of teleporting.
+        //
+        // Positive value = visual lags BELOW physics (a step UP just
+        // happened; the camera is below the new feet position).
+        // Decays at StepLerpDecayRate m/s every tick until 0.
+        public float StepLerpY;
+        protected const float StepLerpDecayRate = 6f; // m/s settle
+
         // Phase 5 — server-assigned network identifier. -1 in singleplayer
         // and during the brief window between local construction and the
         // server's BroadcastEntityUpdates pass spotting the entity. Used
@@ -78,6 +95,18 @@ namespace VStudioCraft.Game
         // Subclasses call this after writing Velocity for the tick.
         protected void IntegrateMotion(float dt, World world)
         {
+            // Tier 9 #54 V14 — Decay the step-up visual lerp. The
+            // physics-Y has already teleported up by the step delta;
+            // StepLerpY is the remaining "visual offset below physics"
+            // that the camera/render applies. Linear decay at
+            // StepLerpDecayRate m/s gives a ~80 ms catch-up for a
+            // 0.5-block step (snow + slab + stair are all <= 0.5).
+            if (StepLerpY > 0f)
+            {
+                StepLerpY -= StepLerpDecayRate * dt;
+                if (StepLerpY < 0f) StepLerpY = 0f;
+            }
+
             var step = Velocity * dt;
             MoveAxis(0, step.X, world);
             MoveAxis(2, step.Z, world);
@@ -194,6 +223,7 @@ namespace VStudioCraft.Game
         private bool TryAutoStep(int axis, float subDelta, World world, out Vector3 stepped)
         {
             stepped = Position;
+            float oldY = Position.Y;
 
             // (1) Headroom check.
             Vector3 lifted = Position;
@@ -219,6 +249,23 @@ namespace VStudioCraft.Game
             }
 
             stepped = settled;
+
+            // Tier 9 #54 V14 — Capture the step's Y delta into
+            // StepLerpY so the camera renders the eye smoothly
+            // rising from the OLD altitude to the NEW one over
+            // the next few frames, instead of snapping. Capped at
+            // MaxAutoStepHeight so a rapid run up stairs (multiple
+            // steps within the same decay window) never makes the
+            // camera lag more than ONE step's worth — the player
+            // would otherwise see the eye "fall" further below
+            // physics with each step until decay catches up.
+            float dy = settled.Y - oldY;
+            if (dy > 0f)
+            {
+                StepLerpY += dy;
+                if (StepLerpY > MaxAutoStepHeight) StepLerpY = MaxAutoStepHeight;
+            }
+
             return true;
         }
 
