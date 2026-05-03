@@ -8055,26 +8055,21 @@ void main()
         // is currently riding is the only one that takes thrust;
         // unridden boats just float on whatever water they're in.
         // Frozen under pause / inventory same as TickArrows etc.
-        // Tier 9 #54 V1 — Edge-trigger for Sneak-to-dismount. Tracks
-        // the previous frame's Sneak state so we only dismount on
-        // a fresh press (not on every frame Sneak is held).
-        private bool _sneakHeldLastFrame;
-
-        public void TickBoats(float dt)
+        // Tier 9 #54 V1 — Sneak-to-dismount handler. Called from the
+        // host's KeyDown event when Shift (Sneak) is freshly pressed.
+        // Edge-triggered by the OS-level event firing once per press,
+        // not by per-tick state diffing — avoids the shared-flag bug
+        // the original implementation had between TickBoats and
+        // TickMinecarts (TickBoats clobbered the flag before
+        // TickMinecarts could read it). Pops the player to the side
+        // of the vehicle so the next physics tick doesn't re-collide
+        // with the AABB and fling them. No-op if the player isn't
+        // mounted in anything.
+        public void DismountAnyVehicle()
         {
-            if (_world == null) return;
-
-            // Sneak-to-dismount, edge-triggered. Outside the boat-loop
-            // so a player without any active boat doesn't churn this
-            // check unnecessarily, but we always update the previous-
-            // state flag.
-            bool sneakNow = Input != null && Input.IsDown(KeyBindings.Sneak);
-            if (Player != null && Player.MountedBoat != null
-                && sneakNow && !_sneakHeldLastFrame)
+            if (Player == null) return;
+            if (Player.MountedBoat != null)
             {
-                // Dismount: pop the player slightly to the side so the
-                // next physics tick doesn't immediately re-collide with
-                // the boat AABB and fling them.
                 var b = Player.MountedBoat;
                 Player.Position = new Vector3(
                     b.Position.X + (float)Math.Sin(b.Yaw + Math.PI * 0.5) * (b.HalfWidth + 0.5f),
@@ -8082,8 +8077,24 @@ void main()
                     b.Position.Z + (float)Math.Cos(b.Yaw + Math.PI * 0.5) * (b.HalfWidth + 0.5f));
                 Player.Velocity = OpenTK.Vector3.Zero;
                 Player.MountedBoat = null;
+                return;
             }
-            _sneakHeldLastFrame = sneakNow;
+            if (Player.MountedMinecart != null)
+            {
+                var c = Player.MountedMinecart;
+                Player.Position = new Vector3(
+                    c.Position.X + (float)Math.Sin(c.Yaw + Math.PI * 0.5) * (c.HalfWidth + 0.5f),
+                    c.Position.Y + c.Height + 0.05f,
+                    c.Position.Z + (float)Math.Cos(c.Yaw + Math.PI * 0.5) * (c.HalfWidth + 0.5f));
+                Player.Velocity = OpenTK.Vector3.Zero;
+                Player.MountedMinecart = null;
+                return;
+            }
+        }
+
+        public void TickBoats(float dt)
+        {
+            if (_world == null) return;
 
             if (_boats.Count == 0) return;
 
@@ -8149,33 +8160,12 @@ void main()
             return true;
         }
 
-        // Tier 9 #54 V2 — Minecart tick. Same shape as TickBoats:
-        // pick the rider input, anchor the player's position to the
-        // cart's seat while mounted, and apply Sneak-edge dismount.
-        // Sneak edge tracking is shared with the boat's _sneakHeldLastFrame
-        // to keep state simple — Sneak dismounts whichever vehicle
-        // the player is currently in, never both at once.
+        // Tier 9 #54 V2 — Minecart tick. Sneak-to-dismount is handled
+        // by the host's KeyDown event via DismountAnyVehicle (works
+        // for boats too); this tick just runs cart physics.
         public void TickMinecarts(float dt)
         {
             if (_world == null) return;
-
-            // Sneak edge-trigger dismount for minecart. Boat handler
-            // updates _sneakHeldLastFrame; we re-read sneakNow here
-            // for the minecart-specific case. Mutually exclusive
-            // with the boat path because the player can only be
-            // mounted in one vehicle at a time.
-            bool sneakNow = Input != null && Input.IsDown(KeyBindings.Sneak);
-            if (Player != null && Player.MountedMinecart != null
-                && sneakNow && !_sneakHeldLastFrame)
-            {
-                var c = Player.MountedMinecart;
-                Player.Position = new Vector3(
-                    c.Position.X + (float)Math.Sin(c.Yaw + Math.PI * 0.5) * (c.HalfWidth + 0.5f),
-                    c.Position.Y + c.Height + 0.05f,
-                    c.Position.Z + (float)Math.Cos(c.Yaw + Math.PI * 0.5) * (c.HalfWidth + 0.5f));
-                Player.Velocity = OpenTK.Vector3.Zero;
-                Player.MountedMinecart = null;
-            }
 
             if (_minecarts.Count == 0) return;
 

@@ -1169,6 +1169,28 @@ namespace VStudioCraft.UI
         {
             _input.KeyDown(e.KeyCode);
 
+            // Tier 9 #54 V8 — Sneak-to-dismount. KeyDown fires once
+            // per Shift press (vs IsDown which is true for the entire
+            // hold), so the dismount is naturally edge-triggered
+            // without needing to track previous-frame state. Runs
+            // BEFORE the capture-rebind / sign-editor / game-shortcut
+            // dispatch so a press doesn't ALSO fire one of those
+            // handlers on the same key. No-op if the player isn't
+            // mounted in a boat or minecart, so it's safe to run
+            // unconditionally on every Sneak press.
+            if (_renderer != null && e.KeyCode == VStudioCraft.Game.KeyBindings.Sneak)
+            {
+                if (_renderer.Player != null
+                    && (_renderer.Player.MountedBoat != null
+                     || _renderer.Player.MountedMinecart != null))
+                {
+                    _renderer.DismountAnyVehicle();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+            }
+
             // Tier 9 #53 V3 — Key-binding capture. When the Controls
             // sub-screen has armed a binding for capture, the very
             // next KeyDown commits the new key (or cancels on Escape)
