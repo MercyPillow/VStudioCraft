@@ -13078,11 +13078,18 @@ void main()
 
                 if (mob is Pig pig)
                 {
-                    var basePink   = new Vector3(0.96f, 0.55f, 0.65f);
-                    var baseSnout  = new Vector3(0.78f, 0.42f, 0.50f);
-                    var bodyColor  = Vector3.Lerp(basePink,  hurtRed, hurt);
-                    var snoutColor = Vector3.Lerp(baseSnout, hurtRed, hurt);
-                    DrawPig(rigToWorld, vp, bodyColor, snoutColor);
+                    if (_pigSkinTexture != 0 && _pigHeadMesh != null)
+                    {
+                        DrawPigRigTextured(rigToWorld, vp, hurt);
+                    }
+                    else
+                    {
+                        var basePink   = new Vector3(0.96f, 0.55f, 0.65f);
+                        var baseSnout  = new Vector3(0.78f, 0.42f, 0.50f);
+                        var bodyColor  = Vector3.Lerp(basePink,  hurtRed, hurt);
+                        var snoutColor = Vector3.Lerp(baseSnout, hurtRed, hurt);
+                        DrawPig(rigToWorld, vp, bodyColor, snoutColor);
+                    }
                     // Tier 4 #21 — Saddled pigs render an additional
                     // small dark-brown leather pad on top of the pig's
                     // back so the player has a visual "this pig is
@@ -13104,29 +13111,44 @@ void main()
                 }
                 else if (mob is Cow)
                 {
-                    // Cow body is dark brown with a paler underbelly /
-                    // snout; horns are bone white. Hurt-flash lerps the
-                    // body toward red.
-                    var hide   = Vector3.Lerp(new Vector3(0.32f, 0.20f, 0.12f), hurtRed, hurt);
-                    var udder  = Vector3.Lerp(new Vector3(0.85f, 0.62f, 0.55f), hurtRed, hurt);
-                    var horn   = new Vector3(0.85f, 0.82f, 0.74f);
-                    DrawCow(rigToWorld, vp, hide, udder, horn);
+                    if (_cowSkinTexture != 0 && _cowHeadMesh != null)
+                    {
+                        DrawCowRigTextured(rigToWorld, vp, hurt);
+                    }
+                    else
+                    {
+                        var hide  = Vector3.Lerp(new Vector3(0.32f, 0.20f, 0.12f), hurtRed, hurt);
+                        var udder = Vector3.Lerp(new Vector3(0.85f, 0.62f, 0.55f), hurtRed, hurt);
+                        var horn  = new Vector3(0.85f, 0.82f, 0.74f);
+                        DrawCow(rigToWorld, vp, hide, udder, horn);
+                    }
                 }
                 else if (mob is Sheep)
                 {
-                    // Wool off-white, head + legs the bare-skin pink-grey.
-                    var wool = Vector3.Lerp(new Vector3(0.92f, 0.92f, 0.88f), hurtRed, hurt);
-                    var skin = Vector3.Lerp(new Vector3(0.85f, 0.72f, 0.65f), hurtRed, hurt);
-                    DrawSheep(rigToWorld, vp, wool, skin);
+                    if (_sheepSkinTexture != 0 && _sheepHeadMesh != null)
+                    {
+                        DrawSheepRigTextured(rigToWorld, vp, hurt);
+                    }
+                    else
+                    {
+                        var wool = Vector3.Lerp(new Vector3(0.92f, 0.92f, 0.88f), hurtRed, hurt);
+                        var skin = Vector3.Lerp(new Vector3(0.85f, 0.72f, 0.65f), hurtRed, hurt);
+                        DrawSheep(rigToWorld, vp, wool, skin);
+                    }
                 }
                 else if (mob is Chicken)
                 {
-                    // Off-white body, yellow beak + legs, red comb +
-                    // wattle accent.
-                    var feathers = Vector3.Lerp(new Vector3(0.95f, 0.95f, 0.92f), hurtRed, hurt);
-                    var beak     = Vector3.Lerp(new Vector3(0.95f, 0.75f, 0.20f), hurtRed, hurt);
-                    var comb     = new Vector3(0.85f, 0.20f, 0.20f);
-                    DrawChicken(rigToWorld, vp, feathers, beak, comb);
+                    if (_chickenSkinTexture != 0 && _chickenHeadMesh != null)
+                    {
+                        DrawChickenRigTextured(rigToWorld, vp, hurt);
+                    }
+                    else
+                    {
+                        var feathers = Vector3.Lerp(new Vector3(0.95f, 0.95f, 0.92f), hurtRed, hurt);
+                        var beak     = Vector3.Lerp(new Vector3(0.95f, 0.75f, 0.20f), hurtRed, hurt);
+                        var comb     = new Vector3(0.85f, 0.20f, 0.20f);
+                        DrawChicken(rigToWorld, vp, feathers, beak, comb);
+                    }
                 }
             }
         }
@@ -14378,14 +14400,13 @@ void main()
         }
 
         // Textured ghast rig — single 16x16x16 body cube + 9 hanging
-        // tentacle cuboids on the underside in a 3x3 grid. Canonical
-        // Alpha 1.1.2 renders the ghast model at 9x scale so a
-        // 1m body cube fills a 9m silhouette — the AABB
-        // (HalfWidth=4.5, Height=9) is sized to match. Without the
-        // scale the body would only be 1m wide inside a 9m hitbox
+        // tentacle cuboids on the underside in a 3x3 grid. The model
+        // is rendered at 3x scale so a 1m body cube fills the
+        // 3x3x3-block AABB (HalfWidth=1.5, Height=3); without the
+        // scale the body would only be 1m wide inside a 3m hitbox
         // and arrows aimed at the visible body would miss most of the
         // collidable volume.
-        private const float GhastModelScale = 9f;
+        private const float GhastModelScale = 3f;
         private void DrawGhastRigTextured(Matrix4 rigToWorld, Matrix4 vp, HostileMob mob, float hurt)
         {
             _skinShader.Use();
@@ -14428,6 +14449,204 @@ void main()
                     new Vector3(gx * spacing, bodyBottomLocal - tentLen, gz * spacing),
                     Vector3.Zero, 0f, scaledRig, vp);
             }
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Shared bind-and-tint setup for the textured passive-mob rigs.
+        // All four (pig, cow, sheep, chicken) bind the same skin shader
+        // with the same hurt-flash uTint convention; only the texture
+        // handle differs. Helper keeps each rig method short.
+        private void BeginSkinPass(int texture, float hurt)
+        {
+            _skinShader.Use();
+            _skinShader.SetInt("uSkin", 0);
+            _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, texture);
+        }
+
+        // Textured pig rig — quadruped: head + body lying horizontally
+        // + 4 short legs. Hitbox HalfWidth=0.45, Height=0.9 so the rig
+        // sits low to the ground.
+        //
+        //   Body: 10x8x16 px = 0.625x0.5x1.0 m. Centred on rig X, Z.
+        //         Mesh local origin is bottom-centre, so place body at
+        //         (0, legY, 0) where legY ≈ 0.375 m (top of legs).
+        //   Head: 8x8x8 px = 0.5 m cube. Sits at body's +Z front,
+        //         centred on body Y.
+        //   Legs: 4x6x4 px = 0.25x0.375x0.25 m. 4 legs at body's
+        //         underside corners.
+        private void DrawPigRigTextured(Matrix4 rigToWorld, Matrix4 vp, float hurt)
+        {
+            BeginSkinPass(_pigSkinTexture, hurt);
+
+            const float LegY  = 6f / 16f;   // top of leg / bottom of body
+            const float BodyHalfZ = 8f / 16f; // body length 16/2 = 8 px each side
+            const float BodyHalfX = 5f / 16f; // body width 10/2 = 5 px each side
+
+            // Four legs at body underside corners. Mesh local origin
+            // is bottom-centre, so legs feet sit at Y=0 in rig space.
+            float legX = BodyHalfX - 2f / 16f; // 2-px inset from body edge
+            float legZ = BodyHalfZ - 2f / 16f;
+            DrawSkinCuboid(_pigLegMesh, new Vector3(+legX, 0f, +legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_pigLegMesh, new Vector3(-legX, 0f, +legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_pigLegMesh, new Vector3(+legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_pigLegMesh, new Vector3(-legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Body — sits flat on the legs. Mesh is built with d=16
+            // (Z-axis), so the body lies along Z naturally.
+            DrawSkinCuboid(_pigBodyMesh, new Vector3(0f, LegY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Head at body's front (+Z). Body front face at z = +8/16.
+            // Head is 8 px deep, so its mesh local +Z extends 4/16
+            // ahead of its origin. Place head origin so head's back
+            // edge butts against body's front edge:
+            //   head origin Z = body front (+8/16) + head depth/2 (4/16) = +12/16.
+            // No — mesh origin is bottom-centre, so head spans
+            //   z=origin.z - hz to origin.z + hz where hz = depth/2.
+            // For head depth = 8 px = 8/16 m, hz = 4/16. To butt back
+            // edge at body front +8/16: head origin.z = 8/16 + 4/16
+            // = 12/16.
+            DrawSkinCuboid(_pigHeadMesh, new Vector3(0f, LegY, 12f / 16f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Textured cow rig — same quadruped pattern as pig but bigger.
+        //
+        //   Body: 12x10x18 px = 0.75x0.625x1.125 m.
+        //   Head: 8x8x6 px = 0.5x0.5x0.375 m. Cow head is shorter
+        //         in the Z axis than its pig counterpart.
+        //   Legs: 4x12x4 px = 0.25x0.75x0.25 m — taller legs.
+        //   Horns: 1x3x1 px = 0.0625x0.1875x0.0625 m. Two on the
+        //          head top.
+        private void DrawCowRigTextured(Matrix4 rigToWorld, Matrix4 vp, float hurt)
+        {
+            BeginSkinPass(_cowSkinTexture, hurt);
+
+            const float LegY  = 12f / 16f;
+            const float BodyHalfZ = 9f / 16f;  // 18/2
+            const float BodyHalfX = 6f / 16f;  // 12/2
+
+            float legX = BodyHalfX - 2f / 16f;
+            float legZ = BodyHalfZ - 2f / 16f;
+            DrawSkinCuboid(_cowLegMesh, new Vector3(+legX, 0f, +legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_cowLegMesh, new Vector3(-legX, 0f, +legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_cowLegMesh, new Vector3(+legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_cowLegMesh, new Vector3(-legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
+
+            DrawSkinCuboid(_cowBodyMesh, new Vector3(0f, LegY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Head — origin Z = body front (BodyHalfZ) + head depth/2
+            // (3/16) = 9/16 + 3/16 = 12/16.
+            float headY = LegY + 2f / 16f;  // raised slightly relative to body top
+            DrawSkinCuboid(_cowHeadMesh, new Vector3(0f, headY, BodyHalfZ + 3f / 16f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Horns — two short cuboids on the head's top, near the
+            // back edge of the head. Head top is at headY + 8/16; place
+            // horns on top of that, slightly toward the head's back.
+            float hornY = headY + 8f / 16f;
+            float hornZ = BodyHalfZ + 1f / 16f; // toward the head's back edge
+            DrawSkinCuboid(_cowHornMesh, new Vector3(+3f / 16f, hornY, hornZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_cowHornMesh, new Vector3(-3f / 16f, hornY, hornZ), Vector3.Zero, 0f, rigToWorld, vp);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Textured sheep rig — quadruped with a wool overlay drawn
+        // around the body. Two-pass: bare body / head / legs from
+        // sheep.png, then the sheared-wool body cuboid from sheep_fur.png.
+        //
+        //   Body: 8x6x16 px (skin) and 9x7x17 px equivalent (fur, +1 px
+        //         each axis as overlay).
+        //   Head: 6x6x8 px = 0.375x0.375x0.5 m.
+        //   Legs: 4x12x4 px.
+        private void DrawSheepRigTextured(Matrix4 rigToWorld, Matrix4 vp, float hurt)
+        {
+            BeginSkinPass(_sheepSkinTexture, hurt);
+
+            const float LegY  = 12f / 16f;
+            const float BodyHalfZ = 8f / 16f;
+            const float BodyHalfX = 4f / 16f;
+
+            float legX = BodyHalfX - 1f / 16f; // legs flush with body sides for 6-wide body
+            float legZ = BodyHalfZ - 2f / 16f;
+            DrawSkinCuboid(_sheepLegMesh, new Vector3(+legX, 0f, +legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_sheepLegMesh, new Vector3(-legX, 0f, +legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_sheepLegMesh, new Vector3(+legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_sheepLegMesh, new Vector3(-legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
+
+            DrawSkinCuboid(_sheepBodyMesh, new Vector3(0f, LegY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Head — sheep head 6x6x8.
+            float headY = LegY;
+            DrawSkinCuboid(_sheepHeadMesh, new Vector3(0f, headY, BodyHalfZ + 4f / 16f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Wool overlay — second draw with sheep_fur.png bound,
+            // slightly inflated body cuboid sitting at the same
+            // position as the bare body. Drawn LAST so it occludes
+            // the bare body cleanly.
+            if (_sheepFurTexture != 0 && _sheepFurBodyMesh != null)
+            {
+                _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
+                GL.BindTexture(TextureTarget.Texture2D, _sheepFurTexture);
+                DrawSkinCuboid(_sheepFurBodyMesh, new Vector3(0f, LegY - 0.25f / 16f, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+            }
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Textured chicken rig — bird body (rotated 90° from horizontal),
+        // head + beak + wattle on top, two legs underneath, two wings
+        // hugging body sides.
+        //
+        //   Hitbox HalfWidth=0.3, Height=0.7.
+        //   Body: 6x8x6 mesh, drawn rotated so it tips onto its side
+        //         (tail back, breast forward) — but for simplicity we
+        //         leave it upright; chicken silhouette still reads
+        //         clearly as a bird from any angle.
+        //   Head: 4x6x3 px on top of body.
+        //   Beak: 4x2x2 px in front of head.
+        //   Wattle: 4x2x2 below beak.
+        //   Legs: 3x5x3 px, 2 legs at body underside.
+        //   Wings: 1x4x6 px at body sides.
+        private void DrawChickenRigTextured(Matrix4 rigToWorld, Matrix4 vp, float hurt)
+        {
+            BeginSkinPass(_chickenSkinTexture, hurt);
+
+            const float LegY = 5f / 16f;       // 5-px legs
+            const float BodyHalfX = 3f / 16f;
+            const float BodyHalfZ = 3f / 16f;
+
+            // Two legs underneath, side-by-side.
+            DrawSkinCuboid(_chickenLegMesh, new Vector3(+1.5f / 16f, 0f, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_chickenLegMesh, new Vector3(-1.5f / 16f, 0f, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Body — sits flat on legs.
+            DrawSkinCuboid(_chickenBodyMesh, new Vector3(0f, LegY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Head — sits on top of body, biased toward the front.
+            float bodyTopY = LegY + 8f / 16f;
+            DrawSkinCuboid(_chickenHeadMesh,
+                new Vector3(0f, bodyTopY, BodyHalfZ - 1f / 16f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Beak — 4x2x2 in front of head, mid-height.
+            float headMidY = bodyTopY + 3f / 16f;
+            DrawSkinCuboid(_chickenBeakMesh,
+                new Vector3(0f, headMidY, BodyHalfZ + 3f / 16f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Wattle — directly below the beak.
+            DrawSkinCuboid(_chickenWattleMesh,
+                new Vector3(0f, headMidY - 2f / 16f, BodyHalfZ + 3f / 16f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Wings — thin 1x4x6 cuboids hugging body sides. Mesh w=1
+            // so its width is 1 px = 1/16 m; place wing centerlines
+            // flush with body sides.
+            float wingX = BodyHalfX + 0.5f / 16f;
+            float wingY = LegY + 2f / 16f;
+            DrawSkinCuboid(_chickenWingMesh, new Vector3(+wingX, wingY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_chickenWingMesh, new Vector3(-wingX, wingY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
 
             GL.BindTexture(TextureTarget.Texture2D, 0);
         }

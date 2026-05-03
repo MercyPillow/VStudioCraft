@@ -218,14 +218,13 @@ namespace VStudioCraft.Game
     //   * Flying — no gravity, hovers and drifts horizontally. The base
     //     HostileMob.Update assumes a grounded chase loop; we override
     //     Update entirely and skip IntegrateMotion's gravity-bound path.
-    //   * Huge hitbox — 9×9×9 blocks (HalfWidth=4.5, Height=9). The
-    //     canonical Alpha 1.1.2 ghast renders at 4.5x model scale on
-    //     a 1m body cube, giving a 4.5m visible body inside a much
-    //     larger silhouette of dangling tentacles — the AABB needs
-    //     to cover the whole thing or arrows / fireballs only register
-    //     hits at the centre. Big target compensates for the long
-    //     detect range — an alert player can shoot one down with
-    //     arrows before it gets a fireball off.
+    //   * Hitbox — 3×3×3 blocks (HalfWidth=1.5, Height=3). The body
+    //     cube is rendered at 3x model scale on a 1m canonical
+    //     mesh, giving a 3m visible body that fits the AABB; the
+    //     dangling tentacle silhouette extends below as a cosmetic
+    //     overshoot. Big target compensates for the long detect
+    //     range — an alert player can shoot one down with arrows
+    //     before it gets a fireball off.
     //   * Squishy — only 10 HP. Two well-aimed bow shots or three
     //     close-range melee swings put one down. Canonical Alpha.
     //   * Fires a FireballProjectile every FireCooldownSeconds when
@@ -243,8 +242,8 @@ namespace VStudioCraft.Game
     // clear. Drops 0..2 Gunpowder on death (canonical Alpha).
     internal sealed class Ghast : HostileMob
     {
-        public const float HitboxHalfWidth = 4.5f;
-        public const float HitboxHeight    = 9.0f;
+        public const float HitboxHalfWidth = 1.5f;
+        public const float HitboxHeight    = 3.0f;
         public const float DriftSpeed      = 0.6f;   // m/s lazy lateral drift
         public const float BobAmplitude    = 0.4f;   // m vertical bob from sin wave
         public const float BobPeriodSec    = 4.0f;
