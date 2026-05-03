@@ -1891,17 +1891,25 @@ namespace VStudioCraft.Game
             // produce visible alpha artifacts on the top surface. The
             // 4-pixel-wide hash silhouette from any side angle is
             // already established by the four wider side planes; the
-            // top/bottom can stay tight without losing the look. UV
-            // samples 2×2 of wood just below the wood-flame transition.
+            // top/bottom can stay tight without losing the look.
+            //
+            // Inset 1 px below y1 so the cap sits at the wood-post top
+            // (10/16) while the side faces continue 1 px higher to
+            // show the flame tip (11/16). From an angled top-down view
+            // you see the cap recessed into the column with the flame-
+            // tip pixels of the side planes peeking up around it,
+            // matching the canonical Alpha torch silhouette. UV samples
+            // 2×2 of wood just below the wood-flame transition.
             const float uPostLo = 7f / 16f;
             const float uPostHi = 9f / 16f;
             const float vCapLo = 8f / 16f;
             const float vCapHi = 10f / 16f;
+            float yCap = wy + 10f / 16f;
             EmitCrossQuad(
-                x0, y1, z1, uPostLo, vCapLo,
-                x1, y1, z1, uPostHi, vCapLo,
-                x1, y1, z0, uPostHi, vCapHi,
-                x0, y1, z0, uPostLo, vCapHi,
+                x0, yCap, z1, uPostLo, vCapLo,
+                x1, yCap, z1, uPostHi, vCapLo,
+                x1, yCap, z0, uPostHi, vCapHi,
+                x0, yCap, z0, uPostLo, vCapHi,
                 0f, +1f, 0f, layer, lightPacked);
             // -Y face (bottom) — 2×2 footprint sampling a 2×2 wood
             // base region. Same rationale as the top.
