@@ -35,8 +35,13 @@ namespace VStudioCraft.Game
         public const float MaxFallSpeed      = 30f;
         public const float Friction          = 0.96f;   // per-tick multiplier on rail
         public const float OffRailFriction   = 0.85f;
-        public const float ThrustAccel       = 5.0f;
-        public const float MaxSpeed          = 8.0f;
+        // Tier 9 #54 V12 — Doubled cart speed (was 5/8). The new
+        // cell-entry curve dispatch (V11) handles any rail speed
+        // robustly so we no longer need to keep MaxSpeed under the
+        // old SnapEps-window threshold. Faster carts make long
+        // tracks more useful as actual transport.
+        public const float ThrustAccel       = 10.0f;
+        public const float MaxSpeed          = 16.0f;
         public const float RailRideOffset    = 1f / 16f + 0.02f; // sit just above rail surface
         public const int   RailMetaAxisMask  = 0x01;     // 0=N-S (Z axis), 1=E-W (X axis)
 
@@ -63,6 +68,16 @@ namespace VStudioCraft.Game
         public const int RailMetaAscWest  = 7;
         public const int RailMetaAscNorth = 8;
         public const int RailMetaAscSouth = 9;
+
+        // Tier 9 #54 V11 — Track previous cell so curve transitions
+        // can fire on cell entry (one redirect per cell, robust at
+        // any speed) rather than the V3 distance-from-centre snap
+        // (which the cart could blow past in a single frame at
+        // MaxSpeed=8 m/s × 0.0167s frame = 0.13 m, well above the
+        // 0.05 SnapEps window). int.MinValue = "no previous cell"
+        // (cart just spawned).
+        private int _prevCx = int.MinValue;
+        private int _prevCz = int.MinValue;
 
         // Yaw the cart faces (radians). Updated from the rail axis
         // each tick — the cart visually points along the track.
@@ -284,21 +299,17 @@ namespace VStudioCraft.Game
                 }
                 else
                 {
-                    // === Curve rail: redirect the cart's axis based on
-                    // which open side it's currently moving INTO ===
+                    // === Curve rail: cell-entry redirect ===
                     //
                     // Each curve has 2 open cardinal sides:
-                    //   NE = N + E (north and east)
-                    //   NW = N + W
-                    //   SE = S + E
-                    //   SW = S + W
+                    //   NE = N + E   NW = N + W
+                    //   SE = S + E   SW = S + W
                     //
-                    // The cart's incoming axis is whichever has the
-                    // larger absolute velocity; we redirect that to
-                    // the perpendicular open side. If both open sides
-                    // are along the cart's current axis (impossible
-                    // for these 4 corners — N/S is Z, E/W is X, so
-                    // any corner straddles both axes), we'd no-op.
+                    // V11: detect cell entry via _prevCx/_prevCz delta
+                    // and redirect velocity to the OTHER open side.
+                    // One redirect per cell entry — robust at any speed
+                    // (no SnapEps window the cart could miss in a
+                    // single frame).
                     bool openN = railMeta == RailMetaCornerNE || railMeta == RailMetaCornerNW;
                     bool openS = railMeta == RailMetaCornerSE || railMeta == RailMetaCornerSW;
                     bool openE = railMeta == RailMetaCornerNE || railMeta == RailMetaCornerSE;
@@ -306,90 +317,86 @@ namespace VStudioCraft.Game
 
                     float cellCx = cx + 0.5f;
                     float cellCz = cz + 0.5f;
-                    float dxFromCentre = Position.X - cellCx;
-                    float dzFromCentre = Position.Z - cellCz;
-                    float speed = (float)Math.Sqrt(Velocity.X * Velocity.X + Velocity.Z * Velocity.Z);
 
-                    // If we just crossed the cell centre, snap to the
-                    // perpendicular open side. The signed distance
-                    // tells us which side we entered from:
-                    //   * Velocity.X > 0 + cart approaching cell from
-                    //     west: we entered from W; redirect along the
-                    //     other open axis.
-                    // Specifically: if moving +X (east) and W is open,
-                    // the cart was entering from W and now needs to
-                    // continue toward whichever of N/S is open.
-                    bool axisIsX = Math.Abs(Velocity.X) > Math.Abs(Velocity.Z);
-
-                    // Aim the cart along its current axis but funnel
-                    // it through the cell centre. Centre the cart on
-                    // the perpendicular axis so it stays on the rail
-                    // visually while approaching the centre.
-                    if (axisIsX)
+                    bool justEntered = (_prevCx != cx || _prevCz != cz)
+                                       && _prevCx != int.MinValue;
+                    if (justEntered)
                     {
+                        // Direction the cart came from (in cardinal
+                        // terms, pick the dominant axis of the cell
+                        // delta). At most one of the four enter*
+                        // booleans is true.
+                        int ddx = cx - _prevCx;
+                        int ddz = cz - _prevCz;
+                        bool enteredFromW = ddx > 0;
+                        bool enteredFromE = ddx < 0;
+                        bool enteredFromN = ddz > 0;
+                        bool enteredFromS = ddz < 0;
+
+                        float speed = (float)Math.Sqrt(
+                            Velocity.X * Velocity.X + Velocity.Z * Velocity.Z);
+                        if (speed < 0.5f) speed = 0.5f; // floor so a slow cart still escapes
+
+                        // Redirect to the OPEN side opposite the side
+                        // we entered from. If we entered from a closed
+                        // side (cart cut a corner / was placed on the
+                        // curve facing wrong), we still try to find
+                        // any open exit.
+                        if (enteredFromW)
+                        {
+                            if (openN)      { Velocity.X = 0f; Velocity.Z = -speed; }
+                            else if (openS) { Velocity.X = 0f; Velocity.Z = +speed; }
+                            else if (openE) { Velocity.X = +speed; Velocity.Z = 0f; } // pass-through fallback
+                        }
+                        else if (enteredFromE)
+                        {
+                            if (openN)      { Velocity.X = 0f; Velocity.Z = -speed; }
+                            else if (openS) { Velocity.X = 0f; Velocity.Z = +speed; }
+                            else if (openW) { Velocity.X = -speed; Velocity.Z = 0f; }
+                        }
+                        else if (enteredFromN)
+                        {
+                            if (openE)      { Velocity.X = +speed; Velocity.Z = 0f; }
+                            else if (openW) { Velocity.X = -speed; Velocity.Z = 0f; }
+                            else if (openS) { Velocity.X = 0f; Velocity.Z = +speed; }
+                        }
+                        else if (enteredFromS)
+                        {
+                            if (openE)      { Velocity.X = +speed; Velocity.Z = 0f; }
+                            else if (openW) { Velocity.X = -speed; Velocity.Z = 0f; }
+                            else if (openN) { Velocity.X = 0f; Velocity.Z = -speed; }
+                        }
+
+                        // Snap to the cell's centre lines so the cart
+                        // stays on the rail mesh visually as it travels
+                        // through the curve.
+                        Position.X = cellCx;
                         Position.Z = cellCz;
-                        Velocity.Z = 0f;
                     }
                     else
                     {
-                        Position.X = cellCx;
-                        Velocity.X = 0f;
-                    }
-
-                    // At the cell centre (within a small epsilon),
-                    // hand off to the open perpendicular axis.
-                    const float SnapEps = 0.05f;
-                    if (axisIsX && Math.Abs(dxFromCentre) < SnapEps && speed > 0.01f)
-                    {
-                        // Entered along X. Was entering from W (vel +X) or E (vel -X)?
-                        bool fromW = Velocity.X > 0f;
-                        bool exitOpensN = (fromW && openW && openN) || (!fromW && openE && openN);
-                        bool exitOpensS = (fromW && openW && openS) || (!fromW && openE && openS);
-                        if (exitOpensN)
+                        // Already inside the curve cell — keep the cart
+                        // centre-aligned on the perpendicular axis to
+                        // its current motion. Same axis-lock as straights.
+                        if (Math.Abs(Velocity.X) > Math.Abs(Velocity.Z))
                         {
-                            // Redirect from +X (or -X) to -Z (north).
-                            float keep = speed;
-                            Velocity.X = 0f;
-                            Velocity.Z = -keep;
-                            Position.X = cellCx;
-                        }
-                        else if (exitOpensS)
-                        {
-                            float keep = speed;
-                            Velocity.X = 0f;
-                            Velocity.Z = +keep;
-                            Position.X = cellCx;
-                        }
-                    }
-                    else if (!axisIsX && Math.Abs(dzFromCentre) < SnapEps && speed > 0.01f)
-                    {
-                        bool fromN = Velocity.Z > 0f;
-                        bool exitOpensE = (fromN && openN && openE) || (!fromN && openS && openE);
-                        bool exitOpensW = (fromN && openN && openW) || (!fromN && openS && openW);
-                        if (exitOpensE)
-                        {
-                            float keep = speed;
-                            Velocity.Z = 0f;
-                            Velocity.X = +keep;
                             Position.Z = cellCz;
-                        }
-                        else if (exitOpensW)
-                        {
-                            float keep = speed;
                             Velocity.Z = 0f;
-                            Velocity.X = -keep;
-                            Position.Z = cellCz;
+                        }
+                        else
+                        {
+                            Position.X = cellCx;
+                            Velocity.X = 0f;
                         }
                     }
 
-                    // Cart yaw — pick a diagonal facing for visual
-                    // hint that the cart is on a curve.
+                    bool axisIsX = Math.Abs(Velocity.X) > Math.Abs(Velocity.Z);
                     Yaw = (float)Math.Atan2(Velocity.X, Velocity.Z);
 
-                    // Rider thrust on a curve — same direction-handoff
-                    // logic; pick whichever axis the cart is currently on.
-                    // Z thrust uses -cos(yaw) for the same forward-
-                    // convention reason as the straight branch.
+                    // Rider thrust on a curve — pick whichever axis
+                    // the cart is currently moving along. Z thrust
+                    // uses -cos(yaw) for the same forward-convention
+                    // reason as the straight branch.
                     if (forwardPressed && rider != null)
                     {
                         if (axisIsX)
@@ -429,6 +436,13 @@ namespace VStudioCraft.Game
                 Velocity.Z *= decay;
                 if (world != null) IntegrateMotion(dt, world);
             }
+
+            // Tier 9 #54 V11 — Track current cell for next frame's
+            // entry-detection. Updated AFTER IntegrateMotion so a
+            // cart that physics-pushes into a new cell still detects
+            // the transition on the next tick.
+            _prevCx = (int)Math.Floor(Position.X);
+            _prevCz = (int)Math.Floor(Position.Z);
         }
     }
 }
