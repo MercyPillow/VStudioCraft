@@ -3021,6 +3021,53 @@ void main()
             // we just loaded above. Pre-v17 saves leave
             // CurrentDimension at Overworld (default zero) and skip
             // the swap entirely.
+            // Tier 9 #54 V3 — Restore boats + minecarts from the v18
+            // trailing block. The loaded world is always overworld
+            // (V5 design — overworld is the primary file content);
+            // _world points at it now, _dormantWorld at the persisted
+            // nether (or null). _boats / _minecarts hold the active-
+            // dim entities, _dormantBoats / _dormantMinecarts hold
+            // the inactive-dim entities. The SwapDimension call
+            // below (if the player saved in the Nether) handles
+            // the active/dormant swap automatically — we only need
+            // to install the lists in their canonical "overworld
+            // active" arrangement here.
+            var vehicles = loadResult.vehicles;
+            if (vehicles.Overworld != null)
+            {
+                for (int i = 0; i < vehicles.Overworld.Count; i++)
+                {
+                    var v = vehicles.Overworld[i];
+                    if (v.Kind == 0)
+                    {
+                        var b = new Boat(v.Pos, v.Yaw) { Velocity = v.Vel };
+                        _boats.Add(b);
+                    }
+                    else if (v.Kind == 1)
+                    {
+                        var c = new Minecart(v.Pos, v.Yaw) { Velocity = v.Vel };
+                        _minecarts.Add(c);
+                    }
+                }
+            }
+            if (vehicles.Nether != null)
+            {
+                for (int i = 0; i < vehicles.Nether.Count; i++)
+                {
+                    var v = vehicles.Nether[i];
+                    if (v.Kind == 0)
+                    {
+                        var b = new Boat(v.Pos, v.Yaw) { Velocity = v.Vel };
+                        _dormantBoats.Add(b);
+                    }
+                    else if (v.Kind == 1)
+                    {
+                        var c = new Minecart(v.Pos, v.Yaw) { Velocity = v.Vel };
+                        _dormantMinecarts.Add(c);
+                    }
+                }
+            }
+
             if (ds.CurrentDimension == Dimension.Nether && _dormantWorld != null)
             {
                 SwapDimension(Dimension.Nether);
@@ -3461,7 +3508,54 @@ void main()
                 dimState.NetherYaw   = Camera.Yaw;
                 dimState.NetherPitch = Camera.Pitch;
             }
-            WorldSaveFormat.Save(path, header, saveWorld, players, netherWorld, dimState);
+            // Tier 9 #54 V3 — Snapshot boats + minecarts per dimension.
+            // The renderer's _boats / _minecarts hold the ACTIVE dim's
+            // entities; _dormantBoats / _dormantMinecarts hold the
+            // OPPOSITE dim's. Save needs the canonical "overworld"
+            // and "nether" buckets so post-load is symmetric — we
+            // route by which dim is currently active.
+            var vehicles = WorldSaveFormat.VehicleSet.Empty;
+            var activeBoats     = _boats;
+            var activeMinecarts = _minecarts;
+            var dormBoats       = _dormantBoats;
+            var dormMinecarts   = _dormantMinecarts;
+            List<WorldSaveFormat.VehicleSnap> ovBucket, neBucket;
+            if (_world.Dimension == Dimension.Overworld)
+            {
+                ovBucket = vehicles.Overworld;
+                neBucket = vehicles.Nether;
+            }
+            else
+            {
+                ovBucket = vehicles.Nether;
+                neBucket = vehicles.Overworld;
+            }
+            for (int i = 0; i < activeBoats.Count; i++)
+            {
+                var b = activeBoats[i];
+                ovBucket.Add(new WorldSaveFormat.VehicleSnap
+                { Kind = 0, Pos = b.Position, Vel = b.Velocity, Yaw = b.Yaw });
+            }
+            for (int i = 0; i < activeMinecarts.Count; i++)
+            {
+                var c = activeMinecarts[i];
+                ovBucket.Add(new WorldSaveFormat.VehicleSnap
+                { Kind = 1, Pos = c.Position, Vel = c.Velocity, Yaw = c.Yaw });
+            }
+            for (int i = 0; i < dormBoats.Count; i++)
+            {
+                var b = dormBoats[i];
+                neBucket.Add(new WorldSaveFormat.VehicleSnap
+                { Kind = 0, Pos = b.Position, Vel = b.Velocity, Yaw = b.Yaw });
+            }
+            for (int i = 0; i < dormMinecarts.Count; i++)
+            {
+                var c = dormMinecarts[i];
+                neBucket.Add(new WorldSaveFormat.VehicleSnap
+                { Kind = 1, Pos = c.Position, Vel = c.Velocity, Yaw = c.Yaw });
+            }
+
+            WorldSaveFormat.Save(path, header, saveWorld, players, netherWorld, dimState, vehicles);
         }
 
         public void UpdatePlayer(float dt, Vector3 wishHorizVel, bool wantJump)
@@ -4688,6 +4782,19 @@ void main()
                 {
                     DamageHeldTool(1);
                 }
+                // Tier 9 #54 V3 — Rail neighbour retro-orient. When a
+                // rail breaks, its 4 cardinal neighbours may need to
+                // re-evaluate their own orientation (a curve that now
+                // has only one neighbour collapses back to a straight,
+                // a 4-way junction collapses to a curve, etc.). Same
+                // for breaking ANY block adjacent to rails — a wall
+                // beside a rail doesn't affect topology, but the
+                // helper is a no-op for non-rail neighbours so the
+                // unconditional call is fine.
+                if (brokenType == BlockType.Rail)
+                {
+                    RetroOrientRailsAround(bx, by, bz, Camera.Yaw);
+                }
                 _breakHasTarget = false;
                 _breakProgress = 0f;
             }
@@ -4997,8 +5104,14 @@ void main()
                     if (BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))
                         && _world.GetBlock(rx, ry, rz) == BlockType.Air)
                     {
-                        byte axis = ChooseRailAxis(rx, ry, rz, Camera.Yaw);
-                        _world.SetBlockWithMeta(rx, ry, rz, BlockType.Rail, axis);
+                        byte railMeta = ChooseRailMeta(rx, ry, rz, Camera.Yaw);
+                        _world.SetBlockWithMeta(rx, ry, rz, BlockType.Rail, railMeta);
+                        // Retro-orient cardinal neighbour rails — they
+                        // may need to re-evaluate against the new
+                        // topology (e.g. an isolated rail nearby
+                        // becomes a curve now that this rail is
+                        // installed beside it).
+                        RetroOrientRailsAround(rx, ry, rz, Camera.Yaw);
                         if (GameMode == GameMode.Survival)
                             Input.Inventory.DecrementHotbar(Input.HotbarIndex);
                         SfxBank.PlayPlace(BlockType.Stone);
@@ -8087,37 +8200,78 @@ void main()
             }
         }
 
-        // Tier 9 #54 V2 — Pick a rail orientation at place time.
-        // Auto-orient: scans the 4 horizontal neighbour cells for an
-        // existing Rail. If a rail sits to the +X or -X side, the new
-        // rail is E-W (meta=1) so the two connect. If a rail sits to
-        // the +Z or -Z side, the new rail is N-S (meta=0). If both
-        // axes have a neighbour rail (T-intersection), prefer the
-        // axis matching the player's facing yaw — gives the player
-        // control over which way the new rail bridges.
-        // Falls through to "pick the axis closest to the player's
-        // current facing yaw" when there are no neighbour rails (a
-        // first-rail-of-a-track situation).
-        private byte ChooseRailAxis(int rx, int ry, int rz, float playerYaw)
+        // Tier 9 #54 V2/V3 — Pick a rail meta at place time. Six
+        // canonical orientations:
+        //   0 = N-S straight (Z axis)
+        //   1 = E-W straight (X axis)
+        //   2 = NE corner (open North + East)
+        //   3 = NW corner (open North + West)
+        //   4 = SE corner (open South + East)
+        //   5 = SW corner (open South + West)
+        //
+        // V3 adds the 4 corners. Auto-orient logic:
+        //   * 2 perpendicular neighbour rails → matching corner
+        //   * 2 parallel (both NS or both EW)  → straight in that axis
+        //   * 1 neighbour                       → straight along that direction
+        //   * 0 or 3+ neighbours                → straight by player yaw
+        //     (3+ is a T- or X-junction; we don't model curves at
+        //     junctions in V3 so the rail goes straight in the player's
+        //     facing axis; the surrounding rails will retro-orient
+        //     against this one via RetroOrientRailsAround).
+        private byte ChooseRailMeta(int rx, int ry, int rz, float playerYaw)
         {
-            bool railEast  = _world.GetBlock(rx + 1, ry, rz) == BlockType.Rail;
-            bool railWest  = _world.GetBlock(rx - 1, ry, rz) == BlockType.Rail;
-            bool railNorth = _world.GetBlock(rx, ry, rz - 1) == BlockType.Rail;
-            bool railSouth = _world.GetBlock(rx, ry, rz + 1) == BlockType.Rail;
-            bool axisXNeigh = railEast || railWest;
-            bool axisZNeigh = railNorth || railSouth;
+            bool railE = _world.GetBlock(rx + 1, ry, rz) == BlockType.Rail;
+            bool railW = _world.GetBlock(rx - 1, ry, rz) == BlockType.Rail;
+            bool railN = _world.GetBlock(rx, ry, rz - 1) == BlockType.Rail;
+            bool railS = _world.GetBlock(rx, ry, rz + 1) == BlockType.Rail;
+            int neigh = (railE ? 1 : 0) + (railW ? 1 : 0) + (railN ? 1 : 0) + (railS ? 1 : 0);
 
-            // The player's facing yaw points along ±X when sin(yaw) is
-            // dominant, ±Z when cos(yaw) is dominant. We use abs() to
-            // pick the axis only — sign is irrelevant for rail meta.
             float ax = System.Math.Abs((float)System.Math.Sin(playerYaw));
             float az = System.Math.Abs((float)System.Math.Cos(playerYaw));
             bool yawIsX = ax > az;
 
-            if (axisXNeigh && !axisZNeigh) return 1; // E-W
-            if (axisZNeigh && !axisXNeigh) return 0; // N-S
-            if (axisXNeigh && axisZNeigh)  return yawIsX ? (byte)1 : (byte)0;
-            return yawIsX ? (byte)1 : (byte)0;       // no neighbour: pick by player yaw
+            if (neigh == 2)
+            {
+                if (railN && railE) return 2; // NE corner
+                if (railN && railW) return 3; // NW corner
+                if (railS && railE) return 4; // SE corner
+                if (railS && railW) return 5; // SW corner
+                if (railN && railS) return 0; // N-S straight
+                if (railE && railW) return 1; // E-W straight
+            }
+            if (neigh == 1)
+            {
+                if (railE || railW) return 1;
+                return 0;
+            }
+            // 0 neighbours, or 3+ junctions — fall back to player yaw.
+            return yawIsX ? (byte)1 : (byte)0;
+        }
+
+        // Tier 9 #54 V3 — Re-evaluate the meta of every rail in the
+        // 4 cardinal cells around (wx, wy, wz). Called after a rail is
+        // PLACED at that cell or BROKEN from that cell. Each neighbour
+        // that's still a rail recomputes its own meta against the
+        // freshly-updated topology — a corner can collapse back to a
+        // straight, a straight can become a corner, etc. Non-rail
+        // neighbours are no-ops.
+        private void RetroOrientRailsAround(int wx, int wy, int wz, float fallbackYaw)
+        {
+            if (_world == null) return;
+            for (int i = 0; i < 4; i++)
+            {
+                int nx = wx, nz = wz;
+                switch (i)
+                {
+                    case 0: nx = wx + 1; break;
+                    case 1: nx = wx - 1; break;
+                    case 2: nz = wz + 1; break;
+                    case 3: nz = wz - 1; break;
+                }
+                if (_world.GetBlock(nx, wy, nz) != BlockType.Rail) continue;
+                byte newMeta = ChooseRailMeta(nx, wy, nz, fallbackYaw);
+                _world.SetBlockWithMeta(nx, wy, nz, BlockType.Rail, newMeta);
+            }
         }
 
         // Spawn a Minecart at the centre of the given rail cell.

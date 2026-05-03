@@ -107,7 +107,7 @@ namespace VStudioCraft.Game
         //       it lives in the chunk's metadata byte alongside the
         //       block id, so it persists through the existing v2+
         //       chunk-byte block.
-        private const byte CurrentVersion = 17;
+        private const byte CurrentVersion = 18;
 
         // Phase 8 — one entry per known player in the v13 multiplayer
         // player table. Captured at save time from `ServerHub` (or the
@@ -174,6 +174,28 @@ namespace VStudioCraft.Game
             public Dimension CurrentDimension;
         }
 
+        // Tier 9 #54 V3 — Persisted vehicle (Boat or Minecart) for the
+        // v18 trailing block. Kind: 0=Boat, 1=Minecart. Pos/Vel are
+        // world-space; Yaw is radians. Carried per dimension —
+        // VehicleSet below holds the overworld + nether buckets.
+        public struct VehicleSnap
+        {
+            public byte Kind;
+            public Vector3 Pos;
+            public Vector3 Vel;
+            public float Yaw;
+        }
+        public struct VehicleSet
+        {
+            public List<VehicleSnap> Overworld;
+            public List<VehicleSnap> Nether;
+            public static VehicleSet Empty => new VehicleSet
+            {
+                Overworld = new List<VehicleSnap>(),
+                Nether = new List<VehicleSnap>(),
+            };
+        }
+
         // Tier 8 #51 V5 — Save with an optional Nether world. The
         // overworld is always the primary file content (header + chunk
         // section + tile entities); the Nether goes in a v16 trailing
@@ -189,6 +211,14 @@ namespace VStudioCraft.Game
         // header.CameraPos as the overworld position and an empty
         // nether-position slot.
         public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld, DimensionState dimState)
+            => Save(path, header, world, players, netherWorld, dimState, VehicleSet.Empty);
+
+        // Tier 9 #54 V3 — Save with vehicle persistence. v18 trailing
+        // block carries per-dim Boat + Minecart lists so a save-and-
+        // quit in a world full of placed boats / parked minecarts
+        // reloads with everything where it was. Pre-v18 readers stop
+        // cleanly after the v17 dimState block.
+        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles)
         {
             var tmp = path + ".tmp";
             using (var fs = File.Create(tmp))
@@ -533,9 +563,42 @@ namespace VStudioCraft.Game
                 w.Write(dimState.NetherYaw);
                 w.Write(dimState.NetherPitch);
                 w.Write((byte)dimState.CurrentDimension);
+
+                // v18: Tier 9 #54 V3 — Per-dim vehicle list. Layout:
+                //   int  overworldVehicleCount
+                //   per: byte kind, 3f pos, 3f vel, 1f yaw
+                //   int  netherVehicleCount
+                //   per: byte kind, 3f pos, 3f vel, 1f yaw
+                // Pre-v18 readers stop after the v17 currentDimension
+                // byte and load with empty vehicle lists, the
+                // identical behaviour the renderer had before V3.
+                var ovList = vehicles.Overworld ?? new List<VehicleSnap>();
+                var neList = vehicles.Nether    ?? new List<VehicleSnap>();
+                w.Write(ovList.Count);
+                for (int i = 0; i < ovList.Count; i++) WriteVehicle(w, ovList[i]);
+                w.Write(neList.Count);
+                for (int i = 0; i < neList.Count; i++) WriteVehicle(w, neList[i]);
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
+        }
+
+        private static void WriteVehicle(BinaryWriter w, VehicleSnap v)
+        {
+            w.Write(v.Kind);
+            w.Write(v.Pos.X); w.Write(v.Pos.Y); w.Write(v.Pos.Z);
+            w.Write(v.Vel.X); w.Write(v.Vel.Y); w.Write(v.Vel.Z);
+            w.Write(v.Yaw);
+        }
+        private static VehicleSnap ReadVehicle(BinaryReader r)
+        {
+            return new VehicleSnap
+            {
+                Kind = r.ReadByte(),
+                Pos = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()),
+                Vel = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()),
+                Yaw = r.ReadSingle(),
+            };
         }
 
         // Tier 6 #47 — Lightweight save-file summary used by the main
@@ -697,7 +760,7 @@ namespace VStudioCraft.Game
         // DimensionState so the renderer falls back to header.CameraPos
         // for the overworld slot and starts the nether at the
         // first-time-entry path.
-        public static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState) LoadWithPlayersAndNether(string path)
+        public static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles) LoadWithPlayersAndNether(string path)
         {
             try
             {
@@ -744,7 +807,7 @@ namespace VStudioCraft.Game
             }
         }
 
-        private static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState) LoadWithPlayersInner(string path)
+        private static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles) LoadWithPlayersInner(string path)
         {
             using (var fs = File.OpenRead(path))
             using (var gz = new GZipStream(fs, CompressionMode.Decompress))
@@ -1232,7 +1295,17 @@ namespace VStudioCraft.Game
                         : Dimension.Overworld;
                 }
 
-                return (header, world, players, netherWorld, dimState);
+                // v18: Tier 9 #54 V3 — Per-dim vehicle list.
+                VehicleSet vehicles = VehicleSet.Empty;
+                if (version >= 18)
+                {
+                    int ovCount = r.ReadInt32();
+                    for (int i = 0; i < ovCount; i++) vehicles.Overworld.Add(ReadVehicle(r));
+                    int neCount = r.ReadInt32();
+                    for (int i = 0; i < neCount; i++) vehicles.Nether.Add(ReadVehicle(r));
+                }
+
+                return (header, world, players, netherWorld, dimState, vehicles);
             }
         }
 

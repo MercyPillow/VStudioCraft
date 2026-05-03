@@ -118,10 +118,14 @@ namespace VStudioCraft.Game
 
             // Forward thrust (only effective when in water — paddling
             // air does nothing). Adds along the boat's facing axis.
+            // Codebase yaw convention: forward = (sin(yaw), 0, -cos(yaw)).
+            // yaw=0 → facing -Z (north). The Z-axis component uses
+            // -cos(yaw) so paddling forward when facing north pushes
+            // the boat toward -Z (correct forward direction), not +Z.
             if (forwardPressed && rider != null && inWater)
             {
-                float fx = (float)Math.Sin(Yaw);
-                float fz = (float)Math.Cos(Yaw);
+                float fx =  (float)Math.Sin(Yaw);
+                float fz = -(float)Math.Cos(Yaw);
                 Velocity.X += fx * ThrustAccel * dt;
                 Velocity.Z += fz * ThrustAccel * dt;
 
