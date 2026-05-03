@@ -6155,6 +6155,29 @@ void main()
                     var de = _world.GetOrCreateDispenserEntity(px, py, pz);
                     de.Facing = FacingTowardPlayer(Camera.Forward);
                 }
+                else if (t == BlockType.JackOLantern)
+                {
+                    // Tier 9 #54 V10 — Jack-o-lantern carved face points
+                    // TOWARD the placer, same as the flint-and-steel-on-
+                    // pumpkin conversion path. Unlike Furnace / Chest /
+                    // Dispenser, jack-o-lanterns don't have a tile
+                    // entity — facing lives in the cell's metadata byte
+                    // directly. Without this branch the standard place
+                    // path leaves meta=0 (= North) and every placed
+                    // jack-o-lantern faces north regardless of the
+                    // player's view direction.
+                    int jcx = px >> 4, jcz = pz >> 4;
+                    var jch = _world.GetChunk(jcx, jcz);
+                    if (jch != null)
+                    {
+                        int jlx = px - (jcx << 4);
+                        int jlz = pz - (jcz << 4);
+                        BlockFacing jfacing = FacingTowardPlayer(Camera.Forward);
+                        byte jmeta = (byte)((byte)jfacing & 0x03);
+                        jch.SetMeta(jlx, py, jlz, jmeta);
+                        _world.RecordMetaChange(px, py, pz);
+                    }
+                }
                 SfxBank.PlayPlace(t);
             }
             if (placed && GameMode == GameMode.Survival)

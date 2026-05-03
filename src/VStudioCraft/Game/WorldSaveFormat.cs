@@ -107,7 +107,7 @@ namespace VStudioCraft.Game
         //       it lives in the chunk's metadata byte alongside the
         //       block id, so it persists through the existing v2+
         //       chunk-byte block.
-        private const byte CurrentVersion = 19;
+        private const byte CurrentVersion = 20;
 
         // Phase 8 — one entry per known player in the v13 multiplayer
         // player table. Captured at save time from `ServerHub` (or the
@@ -267,6 +267,14 @@ namespace VStudioCraft.Game
                     w.Write(chunk.ChunkZ);
                     w.Write((byte)(chunk.IsModified ? 1 : 0));
                     chunk.WriteTo(w);
+                    // Tier 9 #54 V9 — Per-cell metadata. Carries the
+                    // facing / orientation bits for stairs, doors,
+                    // portal frames, jack-o-lanterns, rails, dispensers,
+                    // furnaces, signs, etc. Pre-v20 saves dropped this
+                    // entire byte array on save, so a placed stair
+                    // would always reload at facing=0. v20 round-trips
+                    // it verbatim alongside the block ids.
+                    w.Write(chunk.RawMeta, 0, chunk.RawMeta.Length);
                 }
 
                 // v5: furnace tile entities. Counted at the world level
@@ -497,6 +505,9 @@ namespace VStudioCraft.Game
                         w.Write(chunk.ChunkZ);
                         w.Write((byte)(chunk.IsModified ? 1 : 0));
                         chunk.WriteTo(w);
+                        // v20 — same per-cell metadata round-trip as the
+                        // overworld chunk-section above.
+                        w.Write(chunk.RawMeta, 0, chunk.RawMeta.Length);
                     }
                     // Nether-side tile entities. Currently any of the
                     // 5 entity types could exist in the Nether (the
@@ -910,6 +921,21 @@ namespace VStudioCraft.Game
                     bool modified = version >= 2 && r.ReadByte() != 0;
                     var chunk = new Chunk(cx, cz) { IsModified = modified };
                     chunk.ReadFrom(r);
+                    // Tier 9 #54 V9 — Per-cell metadata. v20+ saves
+                    // carry it directly after the block ids; pre-v20
+                    // saves leave the meta array zero-initialised
+                    // (legacy directional blocks load at facing=0 —
+                    // matches the existing pre-v20 behaviour).
+                    if (version >= 20)
+                    {
+                        int read = 0;
+                        while (read < chunk.RawMeta.Length)
+                        {
+                            int n = r.Read(chunk.RawMeta, read, chunk.RawMeta.Length - read);
+                            if (n <= 0) break;
+                            read += n;
+                        }
+                    }
                     world.AddChunk(chunk);
                 }
 
@@ -1241,6 +1267,18 @@ namespace VStudioCraft.Game
                             bool modified = r.ReadByte() != 0;
                             var c = new Chunk(cx, cz) { IsModified = modified };
                             c.ReadFrom(r);
+                            // v20 — same per-cell metadata round-trip
+                            // as the overworld chunk-section above.
+                            if (version >= 20)
+                            {
+                                int read = 0;
+                                while (read < c.RawMeta.Length)
+                                {
+                                    int n = r.Read(c.RawMeta, read, c.RawMeta.Length - read);
+                                    if (n <= 0) break;
+                                    read += n;
+                                }
+                            }
                             netherWorld.AddChunk(c);
                         }
                         // Recompute lighting for every nether chunk so
