@@ -8224,6 +8224,20 @@ void main()
             bool railW = _world.GetBlock(rx - 1, ry, rz) == BlockType.Rail;
             bool railN = _world.GetBlock(rx, ry, rz - 1) == BlockType.Rail;
             bool railS = _world.GetBlock(rx, ry, rz + 1) == BlockType.Rail;
+            // Tier 9 #54 V4 — Vertical neighbour rails (one cell up
+            // on each cardinal side) trigger an ASCENDING variant
+            // for this rail. Picked AFTER the horizontal-flat checks
+            // because canonical Alpha prefers a flat connection
+            // when both flat and ascending neighbours exist on the
+            // same axis (the player would normally place the slope
+            // explicitly, then connect a flat rail to its base).
+            // Only fires when there's NO horizontal neighbour on
+            // that side — a flat-and-vertical pair on the same
+            // cardinal collapses to flat-only.
+            bool railUpE = !railE && _world.GetBlock(rx + 1, ry + 1, rz) == BlockType.Rail;
+            bool railUpW = !railW && _world.GetBlock(rx - 1, ry + 1, rz) == BlockType.Rail;
+            bool railUpN = !railN && _world.GetBlock(rx, ry + 1, rz - 1) == BlockType.Rail;
+            bool railUpS = !railS && _world.GetBlock(rx, ry + 1, rz + 1) == BlockType.Rail;
             int neigh = (railE ? 1 : 0) + (railW ? 1 : 0) + (railN ? 1 : 0) + (railS ? 1 : 0);
 
             float ax = System.Math.Abs((float)System.Math.Sin(playerYaw));
@@ -8244,7 +8258,18 @@ void main()
                 if (railE || railW) return 1;
                 return 0;
             }
-            // 0 neighbours, or 3+ junctions — fall back to player yaw.
+            // No flat neighbour — try ascending variants. A vertical
+            // neighbour on the +X side means THIS rail ascends east
+            // (slopes up toward the higher rail).
+            if (neigh == 0)
+            {
+                if (railUpE) return 6; // AscEast
+                if (railUpW) return 7; // AscWest
+                if (railUpN) return 8; // AscNorth
+                if (railUpS) return 9; // AscSouth
+            }
+            // 0 neighbours / 3+ junctions / no vertical match — fall
+            // back to player yaw.
             return yawIsX ? (byte)1 : (byte)0;
         }
 
@@ -8258,6 +8283,7 @@ void main()
         private void RetroOrientRailsAround(int wx, int wy, int wz, float fallbackYaw)
         {
             if (_world == null) return;
+            // Cardinal flat neighbours (same Y) — the V3 case.
             for (int i = 0; i < 4; i++)
             {
                 int nx = wx, nz = wz;
@@ -8271,6 +8297,35 @@ void main()
                 if (_world.GetBlock(nx, wy, nz) != BlockType.Rail) continue;
                 byte newMeta = ChooseRailMeta(nx, wy, nz, fallbackYaw);
                 _world.SetBlockWithMeta(nx, wy, nz, BlockType.Rail, newMeta);
+            }
+            // Tier 9 #54 V4 — Vertical neighbour retro-orient. A rail
+            // placed/broken at (wx, wy, wz) can affect rails one cell
+            // BELOW on cardinal sides (those rails may need to switch
+            // between flat and ascending) AND one cell ABOVE on
+            // cardinal sides (those rails may have BEEN ascending
+            // because of a vertical neighbour at our cell).
+            for (int i = 0; i < 4; i++)
+            {
+                int nx = wx, nz = wz;
+                switch (i)
+                {
+                    case 0: nx = wx + 1; break;
+                    case 1: nx = wx - 1; break;
+                    case 2: nz = wz + 1; break;
+                    case 3: nz = wz - 1; break;
+                }
+                // Below-neighbour rail at (nx, wy-1, nz)
+                if (_world.GetBlock(nx, wy - 1, nz) == BlockType.Rail)
+                {
+                    byte m = ChooseRailMeta(nx, wy - 1, nz, fallbackYaw);
+                    _world.SetBlockWithMeta(nx, wy - 1, nz, BlockType.Rail, m);
+                }
+                // Above-neighbour rail at (nx, wy+1, nz)
+                if (_world.GetBlock(nx, wy + 1, nz) == BlockType.Rail)
+                {
+                    byte m = ChooseRailMeta(nx, wy + 1, nz, fallbackYaw);
+                    _world.SetBlockWithMeta(nx, wy + 1, nz, BlockType.Rail, m);
+                }
             }
         }
 

@@ -500,21 +500,19 @@ namespace VStudioCraft.Game
                 }
                 else if (t == BlockType.Rail)
                 {
-                    // Tier 9 #54 V2 — Rail. 1×(1/16)×1 box pinned to
-                    // the cell floor. Texture is alpha-tested (the
-                    // canonical rail tile has transparent gaps between
-                    // the rails) so we route through the same
-                    // EmitSubCubeBox path slabs use; the chunk-mesher
-                    // tile-emit pass handles alpha-test discard for
-                    // tiles flagged in IsAlphaTestedCube — but rails
-                    // are non-cube, so the rail texture's transparent
-                    // pixels stay opaque-stream and rely on the very
-                    // thin Y extent (1/16) to keep them from visibly
-                    // covering anything.
-                    EmitSubCubeBox(
-                        x + baseX + 0f, y + 0f, z + baseZ + 0f,
-                        x + baseX + 1f, y + 1f / 16f, z + baseZ + 1f,
-                        layer, lightPacked);
+                    // Tier 9 #54 V2/V5 — Rail. Emits ONLY the top face
+                    // of the cell at y=1/16 with meta-aware UV rotation
+                    // so N-S and E-W rails look distinct (V2 used a
+                    // shared EmitSubCubeBox which mapped UVs the same
+                    // for both, making every rail appear N-S). The
+                    // side faces are skipped — at 1/16 height they
+                    // collapse to 1-pixel slivers that flicker more
+                    // than they read; the top quad alone is what the
+                    // player perceives.
+                    byte railMeta = chunk.RawMeta[Chunk.Index(x, y, z)];
+                    EmitRailTopFace(
+                        x + baseX, y, z + baseZ,
+                        railMeta, layer, lightPacked);
                 }
                 else if (t == BlockType.NetherPortal)
                 {
@@ -1353,6 +1351,136 @@ namespace VStudioCraft.Game
                 x1, y0, z1, 1f, 1f,
                 x0, y0, z1, 0f, 1f,
                 0f, -1f, 0f, layer, lightPacked);
+        }
+
+        // Tier 9 #54 V5/V6/V7 — Rail top face with meta-aware UV
+        // rotation, curve-tile dispatch, and slanted-mesh dispatch
+        // for ascending variants.
+        //
+        // Meta layout:
+        //   0 = N-S straight       → V along world Z (default rotation)
+        //   1 = E-W straight       → V along world X (90° rotation)
+        //   2 = NE corner          → curve tile, NE-arc rotation
+        //   3 = NW corner          → curve tile, NW-arc rotation
+        //   4 = SE corner          → curve tile, SE-arc rotation
+        //   5 = SW corner          → curve tile, SW-arc rotation
+        //   6 = AscEast / 7 = AscW → straight tile, slanted top quad
+        //                            with high edge at the named direction
+        //   8 = AscN  / 9 = AscS   → same, slanted along Z axis
+        //
+        // V6: curves now use TileRailCurve (terrain.png 0,7) with
+        // procedural-fallback quarter-arc. The procedural is painted
+        // as the NE corner; rot picks one of 4 rotations to map it
+        // to the actual corner this rail represents.
+        // V7: ascending variants emit a slanted top quad — the high
+        // edge corners sit at y+1+1/16, the low edge at y+1/16, so
+        // the rail visually ramps up to the next cell.
+        //
+        // Side faces are skipped because the 1/16-tall sliver reads
+        // worse with them than without.
+        private void EmitRailTopFace(float wx, float wy, float wz, byte meta, int layer, int lightPacked)
+        {
+            float x0 = wx + 0f,        x1 = wx + 1f;
+            float z0 = wz + 0f,        z1 = wz + 1f;
+            float yLo = wy + 1f / 16f;
+            float yHi = wy + 1f + 1f / 16f; // ascending high-edge
+
+            bool isCurve = meta >= 2 && meta <= 5;
+            bool isAsc   = meta >= 6 && meta <= 9;
+            int useLayer = isCurve ? BlockTextures.TileRailCurve : layer;
+
+            // Pick UV rotation: 0 = default, 1 = 90° CCW, 2 = 180°,
+            // 3 = 270° CCW. For curves the procedural tile paints an
+            // NE arc (rail entering from west edge curving to north
+            // edge — wait that's a NE corner = open N + E, so the
+            // arc connects the north edge to the east edge). We map
+            // the 4 corner metas to the 4 rotations that bring the
+            // procedural NE arc onto the correct corner.
+            int rot;
+            switch (meta)
+            {
+                case 0: rot = 0; break;            // N-S straight
+                case 1: rot = 1; break;            // E-W straight
+                case 2: rot = 0; break;            // NE corner — base rotation
+                case 3: rot = 1; break;            // NW corner — 90°
+                case 4: rot = 3; break;            // SE corner — 270°
+                case 5: rot = 2; break;            // SW corner — 180°
+                case 6: case 7: rot = 1; break;    // AscE / AscW — E-W axis
+                case 8: case 9: rot = 0; break;    // AscN / AscS — N-S axis
+                default: rot = 0; break;
+            }
+
+            // Default UV layout (rot=0): V0 at +Z corner, V1 at -Z corner,
+            // U0 at -X corner, U1 at +X corner. Identical to the +Y face
+            // pattern in EmitSubCubeBox so the procedural tile's vertical
+            // iron lines run along world Z.
+            //
+            // Per-rotation UV picks — each tuple is (uv00, uv10, uv11, uv01)
+            // for the 4 corners (x0,z1), (x1,z1), (x1,z0), (x0,z0).
+            float u00, v00, u10, v10, u11, v11, u01, v01;
+            switch (rot)
+            {
+                case 1:
+                    // 90° — texture rotated so iron lines run along X.
+                    u00 = 1f; v00 = 0f;
+                    u10 = 1f; v10 = 1f;
+                    u11 = 0f; v11 = 1f;
+                    u01 = 0f; v01 = 0f;
+                    break;
+                case 2:
+                    u00 = 1f; v00 = 1f;
+                    u10 = 0f; v10 = 1f;
+                    u11 = 0f; v11 = 0f;
+                    u01 = 1f; v01 = 0f;
+                    break;
+                case 3:
+                    u00 = 0f; v00 = 1f;
+                    u10 = 0f; v10 = 0f;
+                    u11 = 1f; v11 = 0f;
+                    u01 = 1f; v01 = 1f;
+                    break;
+                default:
+                    u00 = 0f; v00 = 0f;
+                    u10 = 1f; v10 = 0f;
+                    u11 = 1f; v11 = 1f;
+                    u01 = 0f; v01 = 1f;
+                    break;
+            }
+
+            // V7 — Per-corner Y values. For ascending variants the
+            // high-edge corners sit at yHi (one block higher); the
+            // low-edge corners stay at yLo. The 4 corners of the
+            // emitted quad in world coords are:
+            //   (x0, ?, z1)   → "south-west" corner (near +Z, -X)
+            //   (x1, ?, z1)   → "south-east" corner (near +Z, +X)
+            //   (x1, ?, z0)   → "north-east" corner (near -Z, +X)
+            //   (x0, ?, z0)   → "north-west" corner (near -Z, -X)
+            float ySW = yLo, ySE = yLo, yNE = yLo, yNW = yLo;
+            if (isAsc)
+            {
+                switch (meta)
+                {
+                    case 6: // AscEast — high at +X (east)
+                        ySE = yHi; yNE = yHi;
+                        break;
+                    case 7: // AscWest — high at -X (west)
+                        ySW = yHi; yNW = yHi;
+                        break;
+                    case 8: // AscNorth — high at -Z (north)
+                        yNE = yHi; yNW = yHi;
+                        break;
+                    case 9: // AscSouth — high at +Z (south)
+                        ySW = yHi; ySE = yHi;
+                        break;
+                }
+            }
+
+            EmitCrossQuad(
+                x0, ySW, z1, u00, v00,
+                x1, ySE, z1, u10, v10,
+                x1, yNE, z0, u11, v11,
+                x0, yNW, z0, u01, v01,
+                0f, +1f, 0f, useLayer, lightPacked);
         }
 
         // Tier 8 #42 — Pressure plate. 14×1×14 floor slab inset by 1

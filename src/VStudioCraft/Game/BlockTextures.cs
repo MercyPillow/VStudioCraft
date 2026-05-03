@@ -298,7 +298,11 @@ namespace VStudioCraft.Game
         // Tier 9 #54 V2 — Minecart item icon tile (items.png 7,8).
         public const int FirstTailMinecartItemLayer = FirstTailRailLayer + TailRailLayerCount;          // 185
         public const int TailMinecartItemLayerCount = 1;
-        public const int LayerCount = FirstTailMinecartItemLayer + TailMinecartItemLayerCount;          // 186
+        // Tier 9 #54 V6 — Curve rail tile (terrain.png 0,7). Distinct
+        // from straight at (0,8) so corners read as quarter-arcs.
+        public const int FirstTailRailCurveLayer = FirstTailMinecartItemLayer + TailMinecartItemLayerCount; // 186
+        public const int TailRailCurveLayerCount = 1;
+        public const int LayerCount = FirstTailRailCurveLayer + TailRailCurveLayerCount;                // 187
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -556,6 +560,10 @@ namespace VStudioCraft.Game
         public const int TileRail                = 184;
         // Tier 9 #54 V2 — Minecart item icon. items.png slot (7, 8).
         public const int TileMinecartItem        = 185;
+        // Tier 9 #54 V6 — Curved rail tile. terrain.png slot (0, 7).
+        // Quarter-arc with two iron rails curving from one cardinal
+        // edge to the perpendicular edge.
+        public const int TileRailCurve           = 186;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -897,6 +905,9 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileRail,            GenerateRail);
             UploadLayer(layerPixels, TileMinecartItem,    GenerateMinecartItem);
 
+            // Tier 9 #54 V6 — Curved rail tile (procedural fallback).
+            UploadLayer(layerPixels, TileRailCurve,       GenerateRailCurve);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -1061,7 +1072,9 @@ namespace VStudioCraft.Game
                 // Tier 8 #51 V13 — Nether Brick block tile from terrain.png.
                 || layer == TileNetherBrick
                 // Tier 9 #54 V2 — Rail block tile from terrain.png (0, 8).
-                || layer == TileRail;
+                || layer == TileRail
+                // Tier 9 #54 V6 — Curved rail tile from terrain.png (0, 7).
+                || layer == TileRailCurve;
                 // Note: TileNetherBrickItem + TileBoatItem + TileMinecartItem
                 // are NOT terrain-sourced — their coords reference
                 // items.png, so they route through
@@ -3931,6 +3944,8 @@ namespace VStudioCraft.Game
             /* TileRail                */ (0, 8),
             // Tier 9 #54 V2 — Minecart item icon from items.png at (7, 8).
             /* TileMinecartItem        */ (7, 8),
+            // Tier 9 #54 V6 — Curved rail tile from terrain.png at (0, 7).
+            /* TileRailCurve           */ (0, 7),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4231,6 +4246,10 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileRail,            GenerateRail);
             UploadLayer(layerPixels, TileMinecartItem,    GenerateMinecartItem);
 
+            // Tier 9 #54 V6 — Curved rail tile. Procedural fallback;
+            // overlaid from terrain.png (0, 7).
+            UploadLayer(layerPixels, TileRailCurve,       GenerateRailCurve);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4267,6 +4286,8 @@ namespace VStudioCraft.Game
                 TileNetherBrick,
                 // Tier 9 #54 V2 — Rail block tile from terrain.png (0, 8).
                 TileRail,
+                // Tier 9 #54 V6 — Curved rail tile from terrain.png (0, 7).
+                TileRailCurve,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
@@ -7401,6 +7422,95 @@ namespace VStudioCraft.Game
                     SetPixel(pixels,  5, ty - 1, ironHi.r, ironHi.g, ironHi.b);
                     SetPixel(pixels, 10, ty - 1, ironHi.r, ironHi.g, ironHi.b);
                     SetPixel(pixels, 11, ty - 1, iron.r,   iron.g,   iron.b);
+                }
+            }
+        }
+
+        // Tier 9 #54 V6 — Curved rail tile. Quarter-arc with two
+        // concentric iron rails curving from one cardinal edge to
+        // the perpendicular edge. The procedural fallback paints a
+        // canonical "NE corner" — the in-world meta encodes which
+        // of the 4 corners the rail represents and the mesher
+        // rotates the texture in the EmitRailTopFace dispatch.
+        // Wooden cross-ties are placed radially along the arc.
+        private static void GenerateRailCurve(byte[] pixels)
+        {
+            (byte r, byte g, byte b) iron   = (180, 180, 190);
+            (byte r, byte g, byte b) ironHi = (215, 215, 225);
+            (byte r, byte g, byte b) wood   = (110,  75,  40);
+            (byte r, byte g, byte b) woodHi = (140,  95,  55);
+
+            // Start fully transparent.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                pixels[(y * TileSize + x) * 4 + 3] = 0;
+
+            // Two concentric arcs centred at the (0, 0) corner of the
+            // tile (the canonical "NE" corner — high X is east, low Y
+            // is north when the texture's V axis maps to world Z).
+            // Inner radius at 4 px, outer at 11 px.
+            const int innerR = 4;
+            const int outerR = 11;
+            // Cross-tie radii (wood between the two iron lines).
+            const int tieInner = 5;
+            const int tieOuter = 10;
+
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                // Distance from the (0, 0) corner of the tile.
+                int dx = x;
+                int dy = y;
+                int r2 = dx * dx + dy * dy;
+
+                // Inner iron rail at radius ~innerR.
+                int loA = (innerR - 1) * (innerR - 1);
+                int hiA = (innerR + 0) * (innerR + 0);
+                if (r2 >= loA && r2 <= hiA)
+                {
+                    SetPixel(pixels, x, y, iron.r, iron.g, iron.b);
+                    continue;
+                }
+                int hiAHi = (innerR + 1) * (innerR + 1);
+                if (r2 > hiA && r2 <= hiAHi)
+                {
+                    SetPixel(pixels, x, y, ironHi.r, ironHi.g, ironHi.b);
+                    continue;
+                }
+                // Outer iron rail at radius ~outerR.
+                int loB = (outerR - 1) * (outerR - 1);
+                int hiB = (outerR + 0) * (outerR + 0);
+                if (r2 >= loB && r2 <= hiB)
+                {
+                    SetPixel(pixels, x, y, iron.r, iron.g, iron.b);
+                    continue;
+                }
+                int loBLo = (outerR - 2) * (outerR - 2);
+                if (r2 >= loBLo && r2 < loB)
+                {
+                    SetPixel(pixels, x, y, ironHi.r, ironHi.g, ironHi.b);
+                    continue;
+                }
+                // Cross-ties: in the band between innerR and outerR,
+                // emit a wood pixel every 4th radial step.
+                int loT = tieInner * tieInner;
+                int hiT = tieOuter * tieOuter;
+                if (r2 > loT && r2 < hiT)
+                {
+                    // Approximate angular position via atan2 — paint
+                    // ties at evenly spaced angles. With 16-tile we get
+                    // ~4 ties from 0..π/2.
+                    double angle = System.Math.Atan2(dy, dx);
+                    double step  = (System.Math.PI * 0.5) / 5.0;
+                    double mod   = (angle % step) / step;
+                    if (mod < 0.18 || mod > 0.82)
+                    {
+                        SetPixel(pixels, x, y, wood.r, wood.g, wood.b);
+                    }
+                    else if (mod < 0.30 || mod > 0.70)
+                    {
+                        SetPixel(pixels, x, y, woodHi.r, woodHi.g, woodHi.b);
+                    }
                 }
             }
         }

@@ -504,7 +504,7 @@ multiple subsystems at once.
 	
 ### Tier 9 — Infrastructure + completion
 
-54. **Minecart (328) + Boat (333) + rail blocks** — Alpha 1.0.13 / 1.0.16 vehicles. Minecart on rails, boat on water; each is a ridable entity. Storage Minecart (Beta 1.5) and Powered Minecart (Beta 1.5) explicitly DROPPED — out of scope for Alpha 1.1.2_01.
+(Tier 9 complete — all items shipped.)
 	
 ### Tier 10 — Optional Features
 51. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.

@@ -50,6 +50,20 @@ namespace VStudioCraft.Game
         public const int RailMetaCornerSE = 4;
         public const int RailMetaCornerSW = 5;
 
+        // Tier 9 #54 V4 — Ascending rail variants. The "Asc<Dir>"
+        // value means the rail SLOPES UP toward <Dir>: an AscEast
+        // rail at cell (cx, cy, cz) places the cart at altitude
+        // (cy + RailRideOffset) at X=cx (west edge) and at altitude
+        // (cy + 1 + RailRideOffset) at X=cx+1 (east edge), linearly
+        // interpolated by the cart's local X position. Cart pathing
+        // is straight-axis (X for AscE/AscW, Z for AscN/AscS) plus
+        // the Y interpolation. The visual rail mesh stays flat in V4;
+        // a slanted-mesh polish lands in V5.
+        public const int RailMetaAscEast  = 6;
+        public const int RailMetaAscWest  = 7;
+        public const int RailMetaAscNorth = 8;
+        public const int RailMetaAscSouth = 9;
+
         // Yaw the cart faces (radians). Updated from the rail axis
         // each tick — the cart visually points along the track.
         public float Yaw;
@@ -105,14 +119,50 @@ namespace VStudioCraft.Game
             if (onRail)
             {
                 bool isCurve = railMeta >= RailMetaCornerNE && railMeta <= RailMetaCornerSW;
+                bool isAsc   = railMeta >= RailMetaAscEast  && railMeta <= RailMetaAscSouth;
 
-                // Lock the cart's altitude to the rail surface (same
-                // for straights AND curves).
-                float targetY = cy + RailRideOffset;
+                // Lock the cart's altitude to the rail surface. For
+                // straights + curves: flat at cy + RailRideOffset.
+                // For ascending rails: linearly interpolate Y based on
+                // the cart's position along the slope axis (cell-local
+                // 0..1), so the cart smoothly rises or falls as it
+                // crosses the cell.
+                float targetY;
+                if (isAsc)
+                {
+                    float local; // 0 at the LOW edge, 1 at the HIGH edge
+                    switch (railMeta)
+                    {
+                        case RailMetaAscEast:
+                            // High edge at +X (east) of cell. Local = (X - cx).
+                            local = Position.X - cx;
+                            break;
+                        case RailMetaAscWest:
+                            // High edge at -X (west). Local = 1 - (X - cx).
+                            local = 1f - (Position.X - cx);
+                            break;
+                        case RailMetaAscNorth:
+                            // High edge at -Z (north). Local = 1 - (Z - cz).
+                            local = 1f - (Position.Z - cz);
+                            break;
+                        case RailMetaAscSouth:
+                            // High edge at +Z (south). Local = (Z - cz).
+                            local = Position.Z - cz;
+                            break;
+                        default: local = 0f; break;
+                    }
+                    if (local < 0f) local = 0f;
+                    else if (local > 1f) local = 1f;
+                    targetY = cy + RailRideOffset + local;
+                }
+                else
+                {
+                    targetY = cy + RailRideOffset;
+                }
                 Position.Y = targetY;
                 Velocity.Y = 0f;
 
-                if (!isCurve)
+                if (!isCurve && !isAsc)
                 {
                     // === Straight rail: original V2 axis-locked path ===
                     bool axisIsX = (railMeta & RailMetaAxisMask) != 0;
@@ -160,6 +210,77 @@ namespace VStudioCraft.Game
                     float decay = (float)Math.Pow(Friction, dt * 60.0);
                     if (axisIsX) Velocity.X *= decay;
                     else         Velocity.Z *= decay;
+                }
+                else if (isAsc)
+                {
+                    // === Ascending rail: straight-axis movement, Y
+                    // already interpolated above. Axis is implied by
+                    // the slope direction: AscE/AscW → X, AscN/AscS → Z.
+                    bool axisIsX = railMeta == RailMetaAscEast || railMeta == RailMetaAscWest;
+
+                    if (axisIsX)
+                    {
+                        Position.Z = cz + 0.5f;
+                        Velocity.Z = 0f;
+                    }
+                    else
+                    {
+                        Position.X = cx + 0.5f;
+                        Velocity.X = 0f;
+                    }
+
+                    if (axisIsX)
+                        Yaw = Velocity.X >= 0f ? (float)(Math.PI * 0.5) : -(float)(Math.PI * 0.5);
+                    else
+                        Yaw = Velocity.Z >= 0f ? 0f : (float)Math.PI;
+
+                    if (forwardPressed && rider != null)
+                    {
+                        if (axisIsX)
+                        {
+                            float fx = (float)Math.Sin(riderYaw);
+                            Velocity.X += Math.Sign(fx) * ThrustAccel * dt;
+                            if (Math.Abs(Velocity.X) > MaxSpeed)
+                                Velocity.X = Math.Sign(Velocity.X) * MaxSpeed;
+                        }
+                        else
+                        {
+                            float fz = -(float)Math.Cos(riderYaw);
+                            Velocity.Z += Math.Sign(fz) * ThrustAccel * dt;
+                            if (Math.Abs(Velocity.Z) > MaxSpeed)
+                                Velocity.Z = Math.Sign(Velocity.Z) * MaxSpeed;
+                        }
+                    }
+
+                    // Slope retardation — climbing up loses speed,
+                    // rolling down gains. Effect is small per tick;
+                    // accumulates across a long slope. This keeps a
+                    // cart from accelerating to MaxSpeed instantly on
+                    // a downhill and lets gravity-style coasting feel
+                    // natural. Determine "uphill" vs "downhill" from
+                    // the cart's velocity sign relative to the slope's
+                    // high-edge direction.
+                    bool highIsPlusX = railMeta == RailMetaAscEast;
+                    bool highIsMinusX = railMeta == RailMetaAscWest;
+                    bool highIsMinusZ = railMeta == RailMetaAscNorth;
+                    bool highIsPlusZ = railMeta == RailMetaAscSouth;
+                    bool ascending = (highIsPlusX && Velocity.X > 0)
+                                  || (highIsMinusX && Velocity.X < 0)
+                                  || (highIsMinusZ && Velocity.Z < 0)
+                                  || (highIsPlusZ && Velocity.Z > 0);
+                    const float SlopeAccel = 4f;
+                    if (axisIsX)
+                    {
+                        Velocity.X += (ascending ? -1f : +1f) * Math.Sign(Velocity.X) * SlopeAccel * dt;
+                    }
+                    else
+                    {
+                        Velocity.Z += (ascending ? -1f : +1f) * Math.Sign(Velocity.Z) * SlopeAccel * dt;
+                    }
+
+                    float decayAsc = (float)Math.Pow(Friction, dt * 60.0);
+                    if (axisIsX) Velocity.X *= decayAsc;
+                    else         Velocity.Z *= decayAsc;
                 }
                 else
                 {
