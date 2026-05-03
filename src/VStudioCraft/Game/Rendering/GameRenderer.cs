@@ -13850,18 +13850,14 @@ void main()
                 return;
             }
 
-            if (BlockData.RendersAsCubeIcon(stack.Type))
-            {
-                RenderBlockIcon3D(stack.Type, x0, y0, iconPx, iconPx, ortho);
-            }
-            else
-            {
-                // Tools, items, torches, flowers — anything that isn't a
-                // cube — use the flat sprite path. Side tile is the
-                // canonical "what does this look like in inventory" view
-                // for non-cube blocks; tools/items have dedicated tiles.
-                DrawFlatSpriteIcon(stack.Type, x0, y0, iconPx, iconPx, ortho);
-            }
+            // Tools, items, torches, flowers — anything that isn't a
+            // cube — use the flat sprite path inside DrawItemIcon.
+            // Stairs / slabs / fences / pressure plates / signs hit
+            // the multi-box model-icon branch instead. Cubes still use
+            // the iso-3D cube path. Side tile is the canonical "what
+            // does this look like in inventory" view for non-cube
+            // blocks; tools/items have dedicated tiles.
+            DrawItemIcon(stack.Type, x0, y0, iconPx, iconPx, ortho);
         }
 
         // Procedural player-arm sprite for the first-person HUD. Two
@@ -14322,6 +14318,191 @@ void main()
             GL.BindTexture(TextureTarget.Texture2DArray, 0);
         }
 
+        // True for non-cube blocks whose icon should render as their
+        // actual 3D shape (slab, stair L, fence post, thin pressure
+        // plate, post-and-board sign) rather than as a flat sprite or
+        // a full cube. Each shape's geometry is described in
+        // GetIconBoxes(); RenderModelIcon3D renders one or more sub-
+        // cubes inside the standard iso projection.
+        //
+        // Currently opted in: WoodStairs, CobblestoneStairs, the four
+        // slab variants, Fence, the two pressure plates, and SignItem.
+        // The rest of the catalog (tools, items, cross-sprite blocks)
+        // continues through DrawFlatSpriteIcon.
+        private static bool RendersAsModelIcon(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.WoodStairs:
+                case BlockType.CobblestoneStairs:
+                case BlockType.StoneSlab:
+                case BlockType.CobblestoneSlab:
+                case BlockType.BrickSlab:
+                case BlockType.WoodSlab:
+                case BlockType.Fence:
+                case BlockType.StonePressurePlate:
+                case BlockType.WoodPressurePlate:
+                case BlockType.SignItem:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        // Per-shape sub-cube extents inside the [0..1]³ unit cell.
+        // Each entry is (x0, y0, z0, x1, y1, z1). RenderModelIcon3D
+        // emits one iso-rotated cube draw per box, giving multi-box
+        // shapes (stairs L, sign post + board) the right silhouette.
+        // Coordinates use the same convention as the chunk mesher's
+        // EmitSubCubeBox so the icon reads as a smaller version of
+        // the actual placed block.
+        private static (float x0, float y0, float z0, float x1, float y1, float z1)[] GetIconBoxes(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.StoneSlab:
+                case BlockType.CobblestoneSlab:
+                case BlockType.BrickSlab:
+                case BlockType.WoodSlab:
+                    return new (float, float, float, float, float, float)[]
+                    {
+                        (0f, 0f, 0f, 1f, 0.5f, 1f),
+                    };
+                case BlockType.WoodStairs:
+                case BlockType.CobblestoneStairs:
+                    // Lower full slab + upper-back half-cube. The iso
+                    // view shows +X right / +Z left / +Y top, so place
+                    // the upper step on the -Z side of the cell — the
+                    // step face then points toward +Z (the camera-left
+                    // side of the icon) and the L-silhouette reads
+                    // clearly.
+                    return new (float, float, float, float, float, float)[]
+                    {
+                        (0f, 0f,   0f, 1f, 0.5f, 1f),
+                        (0f, 0.5f, 0f, 1f, 1f,   0.5f),
+                    };
+                case BlockType.Fence:
+                    // 4×16×4 central post only. A free-standing fence
+                    // icon has no neighbours to connect to, so we skip
+                    // the four arm boxes; the post alone is enough to
+                    // distinguish a fence from planks at icon size.
+                    return new (float, float, float, float, float, float)[]
+                    {
+                        (4f / 16f, 0f, 4f / 16f, 12f / 16f, 1f, 12f / 16f),
+                    };
+                case BlockType.StonePressurePlate:
+                case BlockType.WoodPressurePlate:
+                    // 14×1×14 thin pad inset 1 px on every horizontal
+                    // edge (matches EmitPressurePlate). At icon scale
+                    // it reads as a barely-raised tile.
+                    return new (float, float, float, float, float, float)[]
+                    {
+                        (1f / 16f, 0f, 1f / 16f, 15f / 16f, 1f / 16f, 15f / 16f),
+                    };
+                case BlockType.SignItem:
+                    // Pole + board. Pole is the centred 2×9×2 column,
+                    // board is the 12×5×2 plank set on top of it.
+                    // Board extends along the X axis with its broad
+                    // face perpendicular to Z, so from the iso angle
+                    // we see the wide face on the +Z (left) side.
+                    return new (float, float, float, float, float, float)[]
+                    {
+                        (7f / 16f, 0f,        7f / 16f,  9f / 16f,  9f / 16f, 9f / 16f),
+                        (2f / 16f, 9f / 16f,  7f / 16f, 14f / 16f, 14f / 16f, 9f / 16f),
+                    };
+                default:
+                    return null;
+            }
+        }
+
+        // Render a multi-box block icon in the same iso projection as
+        // RenderBlockIcon3D, but composed of one or more sub-cube
+        // draws. Each box gets its own model matrix; the iso transform
+        // (yaw -45° + pitch +30°) is applied uniformly so all boxes
+        // share the same camera and the silhouette reads as one
+        // coherent shape.
+        //
+        // Texture sampling uses _breakCubeMesh (UVs 0..1 on every face)
+        // — the per-box scale compresses the texture proportionally
+        // along each axis, same as the chunk mesher's EmitSubCubeBox
+        // does for in-world slabs / stairs / etc. Per-face shading
+        // matches RenderBlockIcon3D so a slab's top / left / right
+        // read as distinct surfaces even on uniform-tile materials.
+        private void RenderModelIcon3D(BlockType type, int slotX, int slotY,
+            int slotW, int slotH, Matrix4 ortho)
+        {
+            var boxes = GetIconBoxes(type);
+            if (boxes == null || boxes.Length == 0)
+            {
+                // Fallback — shouldn't normally happen because
+                // RendersAsModelIcon and GetIconBoxes are kept in sync,
+                // but if a new shape is added to one and not the other
+                // we fall back to the flat sprite rather than crash.
+                DrawFlatSpriteIcon(type, slotX, slotY, slotW, slotH, ortho);
+                return;
+            }
+
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
+            var rotY = Matrix4.CreateRotationY(MathHelper.DegreesToRadians(-45f));
+            var rotX = Matrix4.CreateRotationX(MathHelper.DegreesToRadians(30f));
+
+            const float ProjectedW = 1.42f;
+            const float ProjectedH = 1.58f;
+            const float SlotPad    = 0.92f;
+            float fitPx = System.Math.Min(
+                slotW * SlotPad / ProjectedW,
+                slotH * SlotPad / ProjectedH);
+
+            var fit = Matrix4.CreateScale(fitPx, -fitPx, 1f);
+            var screenPos = Matrix4.CreateTranslation(
+                slotX + slotW * 0.5f, slotY + slotH * 0.5f, 0f);
+
+            _multiFaceCubeShader.Use();
+            _multiFaceCubeShader.SetInt("uAtlas", 0);
+            _multiFaceCubeShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            SetCubeFaceLayers(_multiFaceCubeShader, type);
+            _multiFaceCubeShader.SetFloat("uFaceShade[0]", 1f);   // -X (hidden)
+            _multiFaceCubeShader.SetFloat("uFaceShade[1]", 0.6f); // +X right
+            _multiFaceCubeShader.SetFloat("uFaceShade[2]", 1f);   // -Y (hidden)
+            _multiFaceCubeShader.SetFloat("uFaceShade[3]", 1f);   // +Y top
+            _multiFaceCubeShader.SetFloat("uFaceShade[4]", 1f);   // -Z (hidden)
+            _multiFaceCubeShader.SetFloat("uFaceShade[5]", 0.8f); // +Z left
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.CullFace(CullFaceMode.Back);
+
+            for (int i = 0; i < boxes.Length; i++)
+            {
+                var b = boxes[i];
+                var subScale = Matrix4.CreateScale(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0);
+                var subTrans = Matrix4.CreateTranslation(b.x0, b.y0, b.z0);
+                var mvp = subScale * subTrans * localCentre * rotY * rotX * fit * screenPos * ortho;
+                _multiFaceCubeShader.SetMatrix4("uMVP", mvp);
+                _breakCubeMesh.Draw();
+            }
+
+            GL.Disable(EnableCap.CullFace);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Three-way icon dispatch — full cube (iso 3D), multi-box model
+        // icon (iso 3D composed of sub-cubes), or flat sprite. Used by
+        // every inventory / hotbar / catalog / cursor / held-item
+        // slot draw so the slab/stair/fence/plate/sign opt-in stays
+        // consistent across every UI surface.
+        private void DrawItemIcon(BlockType type, int x, int y, int w, int h, Matrix4 ortho)
+        {
+            if (BlockData.RendersAsCubeIcon(type))
+                RenderBlockIcon3D(type, x, y, w, h, ortho);
+            else if (RendersAsModelIcon(type))
+                RenderModelIcon3D(type, x, y, w, h, ortho);
+            else
+                DrawFlatSpriteIcon(type, x, y, w, h, ortho);
+        }
+
         private void RenderSelectionOutline(int width, int height)
         {
             if (_world == null) return;
@@ -14442,14 +14623,7 @@ void main()
                 if (stack.IsEmpty) continue;
                 HotbarLayout.GetIconRect(i, width, height,
                     out int xp, out int yp, out int iw, out int ih);
-                if (BlockData.RendersAsCubeIcon(stack.Type))
-                {
-                    RenderBlockIcon3D(stack.Type, xp, yp, iw, ih, ortho);
-                }
-                else
-                {
-                    DrawFlatSpriteIcon(stack.Type, xp, yp, iw, ih, ortho);
-                }
+                DrawItemIcon(stack.Type, xp, yp, iw, ih, ortho);
             }
             // RenderBlockIcon3D toggles CullFace; restore the HUD pass
             // baseline (cull off, depth off) before the next sprite draws.
@@ -16080,15 +16254,8 @@ void main()
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
 
-                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
-                {
-                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                    GL.Disable(EnableCap.CullFace);
-                }
-                else
-                {
-                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                }
+                DrawItemIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                GL.Disable(EnableCap.CullFace);
 
                 // Count badge in the same bottom-right anchor as a slot
                 // would use. Using SlotPx as the synthetic frame keeps
@@ -16280,15 +16447,8 @@ void main()
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
 
-                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
-                {
-                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                    GL.Disable(EnableCap.CullFace);
-                }
-                else
-                {
-                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                }
+                DrawItemIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                GL.Disable(EnableCap.CullFace);
                 int cursorFrame = CraftingScreen.SlotPx(width, height);
                 int cursorFrameX = cx - cursorFrame / 2;
                 int cursorFrameY = cy - cursorFrame / 2;
@@ -16536,15 +16696,8 @@ void main()
                 int iconSize = FurnaceScreen.IconPx(width, height);
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
-                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
-                {
-                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                    GL.Disable(EnableCap.CullFace);
-                }
-                else
-                {
-                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                }
+                DrawItemIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                GL.Disable(EnableCap.CullFace);
                 int cursorFrame = FurnaceScreen.SlotPx(width, height);
                 int cursorFrameX = cx - cursorFrame / 2;
                 int cursorFrameY = cy - cursorFrame / 2;
@@ -16697,15 +16850,8 @@ void main()
                 int iconSize = ChestScreen.IconPx(width, height);
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
-                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
-                {
-                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                    GL.Disable(EnableCap.CullFace);
-                }
-                else
-                {
-                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                }
+                DrawItemIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                GL.Disable(EnableCap.CullFace);
                 int cursorFrame = ChestScreen.SlotPx(width, height);
                 int cursorFrameX = cx - cursorFrame / 2;
                 int cursorFrameY = cy - cursorFrame / 2;
@@ -16860,15 +17006,8 @@ void main()
                 int iconSize = DispenserScreen.IconPx(width, height);
                 int ix = cx - iconSize / 2;
                 int iy = cy - iconSize / 2;
-                if (BlockData.RendersAsCubeIcon(inv.Cursor.Type))
-                {
-                    RenderBlockIcon3D(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                    GL.Disable(EnableCap.CullFace);
-                }
-                else
-                {
-                    DrawFlatSpriteIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
-                }
+                DrawItemIcon(inv.Cursor.Type, ix, iy, iconSize, iconSize, ortho);
+                GL.Disable(EnableCap.CullFace);
                 int cursorFrame = DispenserScreen.SlotPx(width, height);
                 int cursorFrameX = cx - cursorFrame / 2;
                 int cursorFrameY = cy - cursorFrame / 2;
@@ -17405,14 +17544,7 @@ void main()
         private void DrawSlotIcon(BlockType type, int xp, int yp, int viewW, int viewH, Matrix4 ortho)
         {
             int icon = InventoryScreen.IconPx(viewW, viewH);
-            if (BlockData.RendersAsCubeIcon(type))
-            {
-                RenderBlockIcon3D(type, xp, yp, icon, icon, ortho);
-            }
-            else
-            {
-                DrawFlatSpriteIcon(type, xp, yp, icon, icon, ortho);
-            }
+            DrawItemIcon(type, xp, yp, icon, icon, ortho);
         }
 
         // Selection highlight on a hotbar slot — same sprite the in-game
