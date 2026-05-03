@@ -171,11 +171,19 @@ flat out float vShade;
 uniform mat4 uMVP;
 uniform float uLayers[6];
 uniform float uFaceShade[6];
+uniform vec2 uFaceUvOffset[6];
+uniform vec2 uFaceUvScale[6];
 void main()
 {
     gl_Position = uMVP * vec4(aPos, 1.0);
-    vUV = aUV;
     int face = gl_VertexID / 6;
+    // Per-face UV remap. Default offset=(0,0) and scale=(1,1) leaves
+    // aUV unchanged (full-tile sampling for cube icons + drops).
+    // Multi-box model icons (slab, stair, plate) override per face so
+    // the side faces sample only the tile region the box actually
+    // occupies (e.g. V=0..0.5 of the tile for a 0.5-tall slab side)
+    // rather than compressing a full tile into the smaller geometry.
+    vUV = uFaceUvOffset[face] + aUV * uFaceUvScale[face];
     vLayer = uLayers[face];
     vShade = uFaceShade[face];
 }
@@ -12128,6 +12136,8 @@ void main()
             _multiFaceCubeShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
             SetCubeFaceShade(_multiFaceCubeShader,
                 /*top*/1f, /*side*/1f, /*bottom*/1f);
+            // Drops are full cubes — every face samples the full tile.
+            SetCubeFaceUVDefault(_multiFaceCubeShader);
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
 
@@ -13591,6 +13601,8 @@ void main()
             // the iso-icon's faux directional light because they're
             // tumbling in random orientations anyway.
             SetCubeFaceShade(_multiFaceCubeShader, 1f, 1f, 1f);
+            // Particles are tiny full-tile cubes — default UV remap.
+            SetCubeFaceUVDefault(_multiFaceCubeShader);
 
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
@@ -13678,6 +13690,64 @@ void main()
             { "uLayers[0]", "uLayers[1]", "uLayers[2]", "uLayers[3]", "uLayers[4]", "uLayers[5]" };
         private static readonly string[] _uFaceShadeNames =
             { "uFaceShade[0]", "uFaceShade[1]", "uFaceShade[2]", "uFaceShade[3]", "uFaceShade[4]", "uFaceShade[5]" };
+        private static readonly string[] _uFaceUvOffsetNames =
+            { "uFaceUvOffset[0]", "uFaceUvOffset[1]", "uFaceUvOffset[2]", "uFaceUvOffset[3]", "uFaceUvOffset[4]", "uFaceUvOffset[5]" };
+        private static readonly string[] _uFaceUvScaleNames =
+            { "uFaceUvScale[0]", "uFaceUvScale[1]", "uFaceUvScale[2]", "uFaceUvScale[3]", "uFaceUvScale[4]", "uFaceUvScale[5]" };
+
+        // Reset every face's UV remap to the identity (offset=0,
+        // scale=1). Required at every multi-face cube draw site that
+        // doesn't otherwise set the per-face UVs, because GLSL uniform
+        // arrays default to zero — leaving uFaceUvScale at (0,0) would
+        // collapse all UVs to the offset point and the cube would
+        // sample a single texel everywhere.
+        private static void SetCubeFaceUVDefault(Shader sh)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                sh.SetVector2(_uFaceUvOffsetNames[i], new Vector2(0f, 0f));
+                sh.SetVector2(_uFaceUvScaleNames[i],  new Vector2(1f, 1f));
+            }
+        }
+
+        // Per-face UV remap for a sub-cube box inside the [0..1]³ unit
+        // cell. Mirrors the chunk mesher's EmitSubCubeBox UV convention:
+        //   Side faces (±X / ±Z): U = 0..1 (full tile width), V = 0..(y1-y0)
+        //                         — only the BOTTOM (y1-y0) fraction of
+        //                         the tile is sampled, so a 0.5-tall slab
+        //                         side shows the bottom half of the tile
+        //                         at native pixel scale instead of squishing
+        //                         the full tile into the smaller face.
+        //   Top / Bottom faces  (±Y): U = 0..1, V = 0..1 (full tile).
+        // The icon then matches what the in-world placed block looks
+        // like rather than a UV-stretched approximation.
+        private static void SetCubeFaceUVForBox(Shader sh,
+            float x0, float y0, float z0, float x1, float y1, float z1)
+        {
+            float dy = y1 - y0;
+            // -X
+            sh.SetVector2(_uFaceUvOffsetNames[0], new Vector2(0f, 0f));
+            sh.SetVector2(_uFaceUvScaleNames[0],  new Vector2(1f, dy));
+            // +X
+            sh.SetVector2(_uFaceUvOffsetNames[1], new Vector2(0f, 0f));
+            sh.SetVector2(_uFaceUvScaleNames[1],  new Vector2(1f, dy));
+            // -Y (bottom)
+            sh.SetVector2(_uFaceUvOffsetNames[2], new Vector2(0f, 0f));
+            sh.SetVector2(_uFaceUvScaleNames[2],  new Vector2(1f, 1f));
+            // +Y (top)
+            sh.SetVector2(_uFaceUvOffsetNames[3], new Vector2(0f, 0f));
+            sh.SetVector2(_uFaceUvScaleNames[3],  new Vector2(1f, 1f));
+            // -Z
+            sh.SetVector2(_uFaceUvOffsetNames[4], new Vector2(0f, 0f));
+            sh.SetVector2(_uFaceUvScaleNames[4],  new Vector2(1f, dy));
+            // +Z
+            sh.SetVector2(_uFaceUvOffsetNames[5], new Vector2(0f, 0f));
+            sh.SetVector2(_uFaceUvScaleNames[5],  new Vector2(1f, dy));
+            // x0..x1 / z0..z1 are unused at the moment — chunk mesher's
+            // EmitSubCubeBox samples U=0..1 regardless of horizontal
+            // extent, so icons match that for visual consistency.
+            _ = x0; _ = x1; _ = z0; _ = z1;
+        }
 
         private static void SetCubeFaceLayers(Shader sh, BlockType type)
             => SetCubeFaceLayers(sh, type, BlockFacing.South);
@@ -14269,6 +14339,8 @@ void main()
             _multiFaceCubeShader.SetInt("uAtlas", 0);
             _multiFaceCubeShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
             SetCubeFaceLayers(_multiFaceCubeShader, type);
+            // Full cube — every face samples the full tile.
+            SetCubeFaceUVDefault(_multiFaceCubeShader);
             // Per-face shading so the three visible faces of the iso
             // cube read as distinct surfaces even on uniform-tile blocks
             // like cobblestone or planks. After yaw -45° + pitch +30°
@@ -14477,6 +14549,11 @@ void main()
             for (int i = 0; i < boxes.Length; i++)
             {
                 var b = boxes[i];
+                // Per-box UV remap so the side faces sample only the
+                // tile region this sub-cube occupies (V=0..(y1-y0))
+                // instead of compressing the full tile into the smaller
+                // face. Top + bottom continue to sample full UV.
+                SetCubeFaceUVForBox(_multiFaceCubeShader, b.x0, b.y0, b.z0, b.x1, b.y1, b.z1);
                 var subScale = Matrix4.CreateScale(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0);
                 var subTrans = Matrix4.CreateTranslation(b.x0, b.y0, b.z0);
                 var mvp = subScale * subTrans * localCentre * rotY * rotX * fit * screenPos * ortho;
@@ -14518,7 +14595,12 @@ void main()
             // shrinks it to the partial extent and a Translate puts
             // it at the cell + AABB origin.
             var hitBlock = _world.GetBlock(hit.X, hit.Y, hit.Z);
-            var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(hitBlock);
+            // Meta-aware lookup so the ladder's 1-pixel-thick hitbox
+            // hugs the visible rung sprite (facing direction comes
+            // from the meta low-2-bits). Other blocks ignore meta and
+            // route to the default per-type AABB.
+            byte hitMeta = _world.GetMeta(hit.X, hit.Y, hit.Z);
+            var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(hitBlock, hitMeta);
             var scale = Matrix4.CreateScale(b1x - b0x, b1y - b0y, b1z - b0z);
             var translate = Matrix4.CreateTranslation(hit.X + b0x, hit.Y + b0y, hit.Z + b0z);
             var model = scale * translate;

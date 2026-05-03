@@ -1196,6 +1196,44 @@ namespace VStudioCraft.Game
         // EmitModels, this just gives them a matching collision
         // shape. Non-solid blocks (IsSolid==false) skip this lookup
         // entirely in the fast path inside Entity.Collides.
+        //
+        // Meta-aware overload — currently used for the ladder, whose
+        // hitbox sits flush against one of the four cell walls (the
+        // wall depends on the facing meta low-2-bits). The 1-pixel-
+        // thick AABB matches the visible inset plane that EmitLadder
+        // draws, so the selection wireframe + LMB raycast pick area
+        // hug the actual rung sprite instead of the full cell. The
+        // climbing physics in Player.IsOnLadder is a CELL-level scan
+        // (it just asks if the block at (x,y,z) is BlockType.Ladder),
+        // so shrinking the AABB has zero effect on how the player
+        // moves up or down a ladder.
+        //
+        // Other blocks ignore meta and fall through to the legacy
+        // single-arg overload below.
+        public static (float minX, float minY, float minZ, float maxX, float maxY, float maxZ) GetCollisionAabb(BlockType t, byte meta)
+        {
+            if (t == BlockType.Ladder)
+            {
+                // Same 1/16 inset EmitLadder uses for the visible plane,
+                // and the same 1/16 thickness so the hitbox occupies
+                // exactly the inset gap between the plane and the wall.
+                const float pad = 1f / 16f;
+                BlockFacing f = (BlockFacing)(meta & 0x03);
+                switch (f)
+                {
+                    case BlockFacing.North:                  // ladder on +Z wall (plane at 15/16, wall at 1)
+                        return (0f, 0f, 1f - pad, 1f, 1f, 1f);
+                    case BlockFacing.South:                  // ladder on -Z wall (plane at 1/16, wall at 0)
+                        return (0f, 0f, 0f, 1f, 1f, pad);
+                    case BlockFacing.East:                   // ladder on -X wall (plane at 1/16, wall at 0)
+                        return (0f, 0f, 0f, pad, 1f, 1f);
+                    default:                                  // West — ladder on +X wall (plane at 15/16, wall at 1)
+                        return (1f - pad, 0f, 0f, 1f, 1f, 1f);
+                }
+            }
+            return GetCollisionAabb(t);
+        }
+
         public static (float minX, float minY, float minZ, float maxX, float maxY, float maxZ) GetCollisionAabb(BlockType t)
         {
             switch (t)
@@ -1221,6 +1259,17 @@ namespace VStudioCraft.Game
                 // Tier 8 #47 — Sapling small seedling (~0.3×0.4×0.3).
                 case BlockType.Sapling:
                     return (0.35f, 0f, 0.35f, 0.65f, 0.4f, 0.65f);
+                // Wheat sinks 1 px in the mesh so the sprite base sits
+                // flush on the 15/16-tall farmland below it (see
+                // ChunkMesher's Wheat dispatch). The selection /
+                // raycast AABB drops to y=-1/16 to match the lowered
+                // visual on the bottom edge, and stays at y=1 on top
+                // — total height = 17/16 = visible-sprite-height + 1
+                // pixel. The +1 px on top keeps the click area
+                // reaching the original cell ceiling, so picking up a
+                // wheat plant from above feels the same as before.
+                case BlockType.Wheat:
+                    return (0f, -1f / 16f, 0f, 1f, 1f, 1f);
                 // Tier 8 #42 — Redstone torch shares the regular-
                 // torch hitbox: 2×10×2 column at cell centre, same
                 // 7/16..9/16 footprint and 0..10/16 height as

@@ -62,7 +62,12 @@ namespace VStudioCraft.Game
                     // are valid hit candidates. We pick whichever
                     // yields a smaller tEnter since the ray hits
                     // that geometry first.
-                    var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(block);
+                    // Meta-aware AABB so the ladder's 1-pixel-thick
+                    // hitbox follows the facing meta. Other blocks
+                    // ignore meta in the overload and fall through to
+                    // the legacy lookup.
+                    byte rcMeta = world.GetMeta(ix, iy, iz);
+                    var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(block, rcMeta);
                     float minX = ix + b0x, maxX = ix + b1x;
                     float minY = iy + b0y, maxY = iy + b1y;
                     float minZ = iz + b0z, maxZ = iz + b1z;

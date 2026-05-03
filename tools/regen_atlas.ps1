@@ -16,8 +16,8 @@ $ErrorActionPreference = 'Stop'
 $repo       = "C:\Users\danla\source\repos\VStudioCraft"
 $terrainPng = Join-Path $repo "src\VStudioCraft\Assets\alpha_terrain.png"
 $toolsPng   = Join-Path $repo "Assets\alpha_tools.png"
-$terrainCs  = Join-Path $repo "src\VStudioCraft\Game\AlphaTerrainData.cs"
-$toolsCs    = Join-Path $repo "src\VStudioCraft\Game\AlphaToolsData.cs"
+$terrainCs  = Join-Path $repo "src\VStudioCraft\Game\Blocks\AlphaTerrainData.cs"
+$toolsCs    = Join-Path $repo "src\VStudioCraft\Game\Blocks\AlphaToolsData.cs"
 
 function Format-Base64Chunked {
     param([string]$base64)

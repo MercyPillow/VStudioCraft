@@ -677,7 +677,17 @@ namespace VStudioCraft.Game
                 }
                 else
                 {
-                    EmitCrossSprite(x + baseX, y, z + baseZ, layer, lightPacked);
+                    // Wheat sinks 1 px so its sprite base sits flush
+                    // on the farmland surface (which is itself 15/16
+                    // tall — see Block.cs Farmland AABB). Without the
+                    // offset the seeds visibly hover 1 px above the
+                    // tilled soil. The hitbox extends 1 px upward to
+                    // compensate (see Wheat case in GetCollisionAabb)
+                    // so the click area still reaches the original
+                    // cell ceiling. Other cross-sprite plants stand on
+                    // a normal 16-tall block, so they keep wy=0.
+                    float spriteY = (t == BlockType.Wheat) ? (y - 1f / 16f) : y;
+                    EmitCrossSprite(x + baseX, spriteY, z + baseZ, layer, lightPacked);
                 }
             }
         }
