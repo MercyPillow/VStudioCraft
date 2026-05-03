@@ -1842,24 +1842,24 @@ void main()
             }
 
             // ---------- Ghast ----------
-            // Bedrock skin ships at 128x64 (modern 2x scale of Alpha's
-            // 64x32). Canonical Alpha dimensions:
-            //   Body:     16x16x16 px = 1 m cube, region (0, 0)
-            //   Tentacle: 2x12x2 px (1m of 12 hangs below body),
-            //                     region (0, 0) on the modern texture
-            //                     uses a small 8x12 slot near the
-            //                     bottom; we sample (0, 32) which is
-            //                     the canonical tentacle slot on the
-            //                     128x64 texture.
-            const int GhastTexW = 128;
-            const int GhastTexH = 64;
+            // Canonical Java/Alpha skin is 64x32. Body unfolded fills
+            // (0..64, 0..32) — the entire texture. The 9 tentacles
+            // share the body's (0, 0) UV offset by canonical Alpha
+            // convention (ModelGhast in MCP source uses the same
+            // texture corner for the tentacles as for the body); a
+            // 2x12x2 cuboid only samples a 6+2+6+2=16w × 2+12=14h
+            // strip starting at the corner, which lands in the body's
+            // top + side rows where the texture happens to read as
+            // light-grey shadow — matches what Alpha actually rendered.
+            const int GhastTexW = 64;
+            const int GhastTexH = 32;
             _ghastSkinTexture = MobSkin.CreateTexture(MobSkinData.GhastBase64);
             if (_ghastSkinTexture != 0)
             {
                 _ghastBodyMesh = SkinCuboidMesh.BuildBodyPart(
                     16 * Px, 16 * Px, 16 * Px, 0, 0, 16, 16, 16, GhastTexW, GhastTexH, mirror: false);
                 _ghastTentacleMesh = SkinCuboidMesh.BuildBodyPart(
-                    2 * Px, 12 * Px, 2 * Px, 0, 32, 2, 12, 2, GhastTexW, GhastTexH, mirror: false);
+                    2 * Px, 12 * Px, 2 * Px, 0, 0, 2, 12, 2, GhastTexW, GhastTexH, mirror: false);
             }
         }
 
