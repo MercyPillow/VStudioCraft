@@ -313,7 +313,17 @@ namespace VStudioCraft.Game
                 // means the player can stand on top of the snow
                 // layer at Y = cellY + 0.125 instead of the full
                 // cellY + 1.
-                var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(t);
+                //
+                // Door-specific: the meta byte encodes facing + open +
+                // hinge state, and GetCollisionAabb returns a 3/16-thick
+                // slab pinned to the wall the door is currently swung
+                // against. Open doors point their slab to the
+                // perpendicular wall, leaving the doorway clear so the
+                // player can walk through. Cheap fast-path: only fetch
+                // meta when the block is a door, mirroring the stair
+                // pattern below.
+                byte abMeta = BlockData.IsDoor(t) ? world.GetMeta(x, y, z) : (byte)0;
+                var (b0x, b0y, b0z, b1x, b1y, b1z) = BlockData.GetCollisionAabb(t, abMeta);
                 float blockMinX = x + b0x, blockMaxX = x + b1x;
                 float blockMinY = y + b0y, blockMaxY = y + b1y;
                 float blockMinZ = z + b0z, blockMaxZ = z + b1z;

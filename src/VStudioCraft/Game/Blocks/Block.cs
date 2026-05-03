@@ -1231,6 +1231,64 @@ namespace VStudioCraft.Game
                         return (1f - pad, 0f, 0f, 1f, 1f, 1f);
                 }
             }
+            if (IsDoor(t))
+            {
+                // 3/16-thick slab pinned against whichever wall the
+                // door is currently swung to. When closed, the slab
+                // sits on the door's facing wall (DoorFacing). When
+                // open, it pivots 90° about the hinge to the
+                // perpendicular wall — same slabWall computation as
+                // EmitDoorSlab so the hitbox tracks the visual mesh
+                // exactly. Crucially, an OPEN door's slab vacates
+                // the central doorway: the player AABB no longer
+                // overlaps it and can walk straight through. The
+                // top + bottom halves share the meta byte (placement
+                // writes both cells with the same value) so this
+                // single AABB applies to either half.
+                const float thick = 3f / 16f;
+                BlockFacing f = DoorFacing(meta);
+                bool open = DoorIsOpen(meta);
+                bool hingeRight = DoorHingeRight(meta);
+                BlockFacing slabWall = f;
+                if (open)
+                {
+                    if (hingeRight)
+                    {
+                        // Right-hinge swings counter-clockwise viewed
+                        // from above (e.g. North-facing door swings to
+                        // East). Mirror of the EmitDoorSlab table.
+                        switch (f)
+                        {
+                            case BlockFacing.North: slabWall = BlockFacing.East;  break;
+                            case BlockFacing.East:  slabWall = BlockFacing.South; break;
+                            case BlockFacing.South: slabWall = BlockFacing.West;  break;
+                            default:                slabWall = BlockFacing.North; break; // West
+                        }
+                    }
+                    else
+                    {
+                        // Left-hinge swings clockwise viewed from above.
+                        switch (f)
+                        {
+                            case BlockFacing.North: slabWall = BlockFacing.West;  break;
+                            case BlockFacing.East:  slabWall = BlockFacing.North; break;
+                            case BlockFacing.South: slabWall = BlockFacing.East;  break;
+                            default:                slabWall = BlockFacing.South; break; // West
+                        }
+                    }
+                }
+                switch (slabWall)
+                {
+                    case BlockFacing.North:                       // slab on -Z wall (low Z)
+                        return (0f, 0f, 0f, 1f, 1f, thick);
+                    case BlockFacing.South:                       // slab on +Z wall (high Z)
+                        return (0f, 0f, 1f - thick, 1f, 1f, 1f);
+                    case BlockFacing.East:                        // slab on +X wall (high X)
+                        return (1f - thick, 0f, 0f, 1f, 1f, 1f);
+                    default:                                       // West — slab on -X wall (low X)
+                        return (0f, 0f, 0f, thick, 1f, 1f);
+                }
+            }
             return GetCollisionAabb(t);
         }
 
