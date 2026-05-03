@@ -153,6 +153,7 @@
     <Compile Include="Game\DispenserScreen.cs" />
     <Compile Include="Game\DispenserTileEntity.cs" />
     <Compile Include="Game\KeyBindings.cs" />
+    <Compile Include="Game\ControlsMenu.cs" />
     <Compile Include="Game\NetherTerrainGenerator.cs" />
     <Compile Include="Game\PrimedTntEntity.cs" />
     <Compile Include="Game\RedstonePowerSystem.cs" />

@@ -1144,6 +1144,33 @@ namespace VStudioCraft.UI
         {
             _input.KeyDown(e.KeyCode);
 
+            // Tier 9 #53 V3 — Key-binding capture. When the Controls
+            // sub-screen has armed a binding for capture, the very
+            // next KeyDown commits the new key (or cancels on Escape)
+            // and exits capture mode. Runs ahead of every other
+            // handler so a captured rebind doesn't leak through to
+            // game shortcuts. We swallow the event regardless so
+            // the captured key never fires its game action on the
+            // same press that bound it.
+            if (_renderer != null && _renderer.IsControlsOpen
+                && _renderer.CaptureBindingIdx >= 0)
+            {
+                int idx = _renderer.CaptureBindingIdx;
+                if (e.KeyCode != Keys.Escape)
+                {
+                    var bindings = VStudioCraft.Game.KeyBindings.All;
+                    if (idx < bindings.Length)
+                    {
+                        bindings[idx].Set(e.KeyCode);
+                        VStudioCraft.Game.KeyBindings.SaveToDisk();
+                    }
+                }
+                _renderer.CaptureBindingIdx = -1;
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
+
             // Tier 8 #44 V2 — Sign editor structural keys. Runs
             // ahead of every other handler so a sign editor in the
             // foreground takes priority over any game shortcut
@@ -1776,7 +1803,15 @@ namespace VStudioCraft.UI
                 {
                     var (px, py) = ToPhysicalCoord(e.X, e.Y);
                     var (pw, ph) = GetPhysicalSize();
-                    if (_renderer.IsOptionsOpen)
+                    if (_renderer.IsControlsOpen)
+                    {
+                        // Tier 9 #53 V3 — Controls sub-screen click
+                        // dispatch. Layered above Options under Pause.
+                        var act = VStudioCraft.Game.ControlsMenu.HitTest(pw, ph, px, py,
+                            _renderer.CaptureBindingIdx);
+                        HandleControlsMenuAction(act);
+                    }
+                    else if (_renderer.IsOptionsOpen)
                     {
                         bool isSurvival = _renderer.GameMode == VStudioCraft.Game.GameMode.Survival;
                         float masterVol = VStudioCraft.Game.AudioEngine.MasterGain;
@@ -1898,6 +1933,16 @@ namespace VStudioCraft.UI
         private void HandleTitleClick(int mx, int my, int width, int height)
         {
             if (_renderer == null) return;
+
+            // Tier 9 #53 V3 — Controls sub-screen click handling.
+            // Layered above Options, same dispatch shape.
+            if (_renderer.IsControlsOpen)
+            {
+                var act = VStudioCraft.Game.ControlsMenu.HitTest(width, height, mx, my,
+                    _renderer.CaptureBindingIdx);
+                HandleControlsMenuAction(act);
+                return;
+            }
 
             // Options layered over title (just like over PauseMenu).
             // Reuse the same options click path that the pause flow uses.
@@ -2238,7 +2283,58 @@ namespace VStudioCraft.UI
                     VStudioCraft.Game.AudioEngine.MusicGain = sliderValue;
                     VStudioCraft.Game.Settings.MusicVolume  = sliderValue;
                     break;
+                case OptionsMenu.ActionId.OpenControls:
+                    // Tier 9 #53 V3 — Push the Controls sub-screen.
+                    // Options closes (it's the parent) so dismiss
+                    // routing returns to Pause; if we leave both open
+                    // the BACK from Controls falls through to Options
+                    // which is fine but extra clicks.
+                    _renderer.IsOptionsOpen = false;
+                    _renderer.IsControlsOpen = true;
+                    _renderer.CaptureBindingIdx = -1;
+                    break;
                 case OptionsMenu.ActionId.None:
+                    break;
+            }
+        }
+
+        // Tier 9 #53 V3 — Controls sub-menu click dispatch. Mirrors
+        // HandleOptionsMenuAction's shape. Clicking a binding row
+        // arms capture mode; the next KeyDown in OnKeyDown commits
+        // the new key and saves to disk. Clicking DEFAULTS resets
+        // all bindings + saves. BACK pops the sub-screen back to
+        // Options.
+        private void HandleControlsMenuAction(VStudioCraft.Game.ControlsMenu.ActionId act)
+        {
+            if (_renderer == null) return;
+            if (act != VStudioCraft.Game.ControlsMenu.ActionId.None)
+            {
+                VStudioCraft.Game.SfxBank.PlayClick();
+            }
+            int bindIdx = VStudioCraft.Game.ControlsMenu.BindIndexFor(act);
+            if (bindIdx >= 0)
+            {
+                // Arm capture for this binding; the next KeyDown
+                // captures + saves.
+                _renderer.CaptureBindingIdx = bindIdx;
+                return;
+            }
+            switch (act)
+            {
+                case VStudioCraft.Game.ControlsMenu.ActionId.Back:
+                    _renderer.IsControlsOpen = false;
+                    _renderer.CaptureBindingIdx = -1;
+                    // Pop back to Options so the user can keep
+                    // adjusting other settings without re-opening
+                    // the parent menu.
+                    _renderer.IsOptionsOpen = true;
+                    break;
+                case VStudioCraft.Game.ControlsMenu.ActionId.Defaults:
+                    VStudioCraft.Game.KeyBindings.ResetToDefaults();
+                    VStudioCraft.Game.KeyBindings.SaveToDisk();
+                    _renderer.CaptureBindingIdx = -1;
+                    break;
+                case VStudioCraft.Game.ControlsMenu.ActionId.None:
                     break;
             }
         }

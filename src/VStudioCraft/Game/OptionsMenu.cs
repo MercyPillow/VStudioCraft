@@ -25,6 +25,10 @@ namespace VStudioCraft.Game
             // within the row and return it via HitTestEx.
             SetMasterVolume,
             SetMusicVolume,
+            // Tier 9 #53 V3 — Opens the Controls sub-screen for in-
+            // game key rebinding. Closes the Options menu and pushes
+            // the Controls menu modal in its place.
+            OpenControls,
         }
 
         private const int RowWidthBase   = 380;
@@ -102,6 +106,9 @@ namespace VStudioCraft.Game
                                       Label = "AUDIO UNAVAILABLE — " + reason.ToUpperInvariant(),
                                       IsSection = true, IsDisabled = true });
             }
+            // Tier 9 #53 V3 — Controls section + entry button.
+            rowList.Add(new Row { Id = ActionId.None, Label = "CONTROLS", IsSection = true });
+            rowList.Add(new Row { Id = ActionId.OpenControls, Label = "KEY BINDINGS..." });
             rowList.Add(new Row { Id = ActionId.Back, Label = "BACK" });
             var labels = rowList.ToArray();
 

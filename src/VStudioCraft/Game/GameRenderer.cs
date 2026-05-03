@@ -631,6 +631,26 @@ void main()
             set => _isOptionsOpen = value;
         }
 
+        // Tier 9 #53 V3 — Controls sub-screen state. Layered on top
+        // of (or replacing) the Options menu when the player clicks
+        // "KEY BINDINGS..." in OptionsMenu. Same world-halt semantics
+        // — IsWorldHalted returns true while either is open so input,
+        // physics, mob ticks all freeze. _captureBindingIdx >= 0 means
+        // we're waiting for the next KeyDown to rebind that index;
+        // -1 means no capture in progress.
+        private volatile bool _isControlsOpen;
+        public bool IsControlsOpen
+        {
+            get => _isControlsOpen;
+            set => _isControlsOpen = value;
+        }
+        private int _captureBindingIdx = -1;
+        public int CaptureBindingIdx
+        {
+            get => _captureBindingIdx;
+            set => _captureBindingIdx = value;
+        }
+
         // True while the crafting screen is open (RMB on a CraftingTable
         // block). Same world-halt semantics as IsInventoryOpen — host
         // gates ticks on IsWorldHalted, render path draws the panel on
@@ -783,7 +803,7 @@ void main()
         // Sign editor halts the world for the same reason the inventory
         // does — typing a sign mid-mine shouldn't drop a torch on the
         // player's head when ENTER finishes the message.
-        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDispenserOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None || _isLoadingWorld || _isEditingSign;
+        public bool IsWorldHalted => _isPaused || _isInventoryOpen || _isCraftingOpen || _isFurnaceOpen || _isChestOpen || _isDispenserOpen || _isDeathScreenOpen || _titleState != TitleScreenState.None || _isLoadingWorld || _isEditingSign || _isControlsOpen;
 
         // Tier 6 — Loading-screen state. Set when a world transition
         // begins (StartNewWorld / LoadFromFile / ConnectToServer);
@@ -10526,9 +10546,11 @@ void main()
             {
                 // Options is layered on top of the pause menu — draw the
                 // pause backdrop first so dismissing options reveals it
-                // without a one-frame flicker.
-                if (_isOptionsOpen) RenderOptionsMenu(width, height);
-                else                RenderPauseMenu(width, height);
+                // without a one-frame flicker. Tier 9 #53 V3 adds the
+                // Controls sub-screen as a peer of Options under Pause.
+                if (_isControlsOpen)     RenderControlsMenu(width, height);
+                else if (_isOptionsOpen) RenderOptionsMenu(width, height);
+                else                     RenderPauseMenu(width, height);
             }
         }
 
@@ -14180,7 +14202,8 @@ void main()
                 case TitleScreenState.MultiplayerConnect: RenderMultiplayerConnect(width, height); break;
             }
 
-            if (_isOptionsOpen) RenderOptionsMenu(width, height);
+            if (_isControlsOpen)     RenderControlsMenu(width, height);
+            else if (_isOptionsOpen) RenderOptionsMenu(width, height);
         }
 
         // Tier 6 #47 — Title-root menu: 4 buttons + a big "VStudioCraft"
@@ -14932,6 +14955,98 @@ void main()
                 /*centerX*/width / 2,
                 /*topY*/OptionsMenu.TitleY(width, height, HungerEnabled, isSurvival, useReal,
                                            masterVol, musicVol),
+                new Vector4(1f, 1f, 1f, 1f), ortho);
+
+            GL.Enable(EnableCap.CullFace);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Blend);
+        }
+
+        // Tier 9 #53 V3 — Controls sub-screen render. Mirrors the
+        // OptionsMenu render layout — same dim wash, same row-stack,
+        // same hover semantics — with the per-binding row carrying
+        // an action label on the left and the bound key on the
+        // right. Capturing rows are painted in a hot orange so the
+        // player sees which one is "live"; the right-side text
+        // becomes "PRESS ANY KEY..." while in capture mode.
+        private void RenderControlsMenu(int width, int height)
+        {
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            DrawSolidQuad(0, 0, width, height,
+                new Vector3(0f, 0f, 0f), 0.55f, ortho);
+
+            int mx = Input?.MenuMouseX ?? -1;
+            int my = Input?.MenuMouseY ?? -1;
+
+            var rows = ControlsMenu.BuildRows(width, height, _captureBindingIdx);
+            int rowBorder = UiScale.S(2, width, height);
+            int rowLabelScale = System.Math.Max(1, UiScale.S(2, width, height));
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                var r = rows[i];
+                if (r.IsSection)
+                {
+                    int labelTopY = r.Y + (r.H - HotbarTextures.GlyphCellH * rowLabelScale) / 2;
+                    DrawString(r.Label, /*scale*/rowLabelScale,
+                        /*centerX*/r.X + r.W / 2, labelTopY,
+                        new Vector4(0.78f, 0.82f, 0.88f, 1f), ortho);
+                    continue;
+                }
+
+                bool hover = mx >= r.X && mx < r.X + r.W && my >= r.Y && my < r.Y + r.H;
+                bool captureRow = r.IsCapturing;
+
+                Vector3 fill;
+                if (captureRow)      fill = new Vector3(0.85f, 0.45f, 0.10f); // hot orange
+                else if (hover)      fill = new Vector3(0.42f, 0.55f, 0.72f);
+                else                 fill = new Vector3(0.16f, 0.20f, 0.26f);
+                DrawSolidQuad(r.X, r.Y, r.W, r.H, fill, 0.95f, ortho);
+
+                Vector3 border;
+                if (captureRow)      border = new Vector3(1f, 0.85f, 0.40f);
+                else if (hover)      border = new Vector3(1f, 1f, 1f);
+                else                 border = new Vector3(0.78f, 0.82f, 0.88f);
+                DrawSolidQuad(r.X, r.Y, r.W, rowBorder, border, 1f, ortho);
+                DrawSolidQuad(r.X, r.Y + r.H - rowBorder, r.W, rowBorder, border, 1f, ortho);
+                DrawSolidQuad(r.X, r.Y, rowBorder, r.H, border, 1f, ortho);
+                DrawSolidQuad(r.X + r.W - rowBorder, r.Y, rowBorder, r.H, border, 1f, ortho);
+
+                int labelY = r.Y + (r.H - HotbarTextures.GlyphCellH * rowLabelScale) / 2;
+                Vector4 textCol = new Vector4(1f, 1f, 1f, 1f);
+
+                // Binding rows have a distinct left/right layout:
+                // action name on the left edge, key name on the right.
+                // Plain action rows (DEFAULTS / BACK) centre their text.
+                if (ControlsMenu.BindIndexFor(r.Id) >= 0)
+                {
+                    int padX = UiScale.S(12, width, height);
+                    DrawString(r.Label.ToUpperInvariant(), /*scale*/rowLabelScale,
+                        /*leftX*/r.X + padX + (r.Label.Length * HotbarTextures.GlyphCellW * rowLabelScale) / 2,
+                        labelY, textCol, ortho);
+
+                    string rightText = captureRow ? "PRESS ANY KEY..." : r.KeyName;
+                    int rightTextW = rightText.Length * HotbarTextures.GlyphCellW * rowLabelScale;
+                    int rightCentreX = r.X + r.W - padX - rightTextW / 2;
+                    DrawString(rightText, /*scale*/rowLabelScale,
+                        rightCentreX, labelY, textCol, ortho);
+                }
+                else
+                {
+                    DrawString(r.Label, /*scale*/rowLabelScale,
+                        /*centerX*/r.X + r.W / 2, labelY, textCol, ortho);
+                }
+            }
+
+            DrawString("CONTROLS", /*scale*/ControlsMenu.TitleFontScale(width, height),
+                /*centerX*/width / 2,
+                /*topY*/ControlsMenu.TitleY(width, height, _captureBindingIdx),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             GL.Enable(EnableCap.CullFace);
