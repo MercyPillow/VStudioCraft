@@ -485,6 +485,27 @@ void main()
         // so a single mesh suffices. (The two front legs reuse the
         // shape of the two back legs — body is symmetric front-back.)
         private SkinCuboidMesh _creeperLegMesh;
+        // Zombie pigman shares the humanoid layout with zombie + skeleton.
+        private int _zombiePigmanSkinTexture;
+        private SkinCuboidMesh _zombiePigmanHeadMesh, _zombiePigmanBodyMesh;
+        private SkinCuboidMesh _zombiePigmanArmRMesh, _zombiePigmanArmLMesh;
+        private SkinCuboidMesh _zombiePigmanLegRMesh, _zombiePigmanLegLMesh;
+        // Spider — head (cephalothorax) + body (abdomen) + 8 legs that
+        // all share one mesh. Texture region origins match the
+        // canonical Alpha 1.1.2 spider model: head 8x8x8 at (32, 4),
+        // body 14x9x6 at (0, 12), leg 16x2x2 at (18, 0).
+        private int _spiderSkinTexture;
+        private SkinCuboidMesh _spiderHeadMesh, _spiderBodyMesh, _spiderLegMesh;
+        // Blaze — head (8x8x8) + 12 rotating rod cuboids, all rods
+        // sharing one 2x8x2 mesh.
+        private int _blazeSkinTexture;
+        private SkinCuboidMesh _blazeHeadMesh, _blazeRodMesh;
+        // Ghast — single 16x16x16 body cube + 9 hanging tentacle
+        // cuboids, all sharing one 2x12x2 mesh. Skin ships at 128x64
+        // (the body cube unfolded needs 96 px) so the UV math uses
+        // TexW=128, TexH=64.
+        private int _ghastSkinTexture;
+        private SkinCuboidMesh _ghastBodyMesh, _ghastTentacleMesh;
         private OverlayMesh _crosshairMesh;
         private OverlayMesh _wireCubeMesh;
         private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
@@ -1763,6 +1784,82 @@ void main()
                     4 * Px, 12 * Px, 4 * Px, 16, 16, 4, 12, 4, TexW, TexH, mirror: false);
                 _creeperLegMesh = SkinCuboidMesh.BuildBodyPart(
                     4 * Px, 6 * Px, 4 * Px, 0, 16, 4, 6, 4, TexW, TexH, mirror: false);
+            }
+
+            // ---------- Zombie Pigman (humanoid, same layout as zombie) ----------
+            _zombiePigmanSkinTexture = MobSkin.CreateTexture(MobSkinData.ZombiePigmanBase64);
+            if (_zombiePigmanSkinTexture != 0)
+            {
+                _zombiePigmanHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
+                _zombiePigmanBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 12 * Px, 4 * Px, 16, 16, 8, 12, 4, TexW, TexH, mirror: false);
+                _zombiePigmanArmRMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 40, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                _zombiePigmanArmLMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 40, 16, 4, 12, 4, TexW, TexH, mirror: true);
+                _zombiePigmanLegRMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                _zombiePigmanLegLMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: true);
+            }
+
+            // ---------- Spider ----------
+            // Canonical Alpha 1.1.2 dimensions:
+            //   Head (cephalothorax): 8x8x8 px = 0.5 m cube, region (32, 4)
+            //   Body (abdomen):       14x9x6 px = 0.875x0.5625x0.375 m,
+            //                                     region (0, 12)
+            //   Leg:                  16x2x2 px = 1.0x0.125x0.125 m,
+            //                                     region (18, 0). All 8
+            //                                     legs share one mesh —
+            //                                     the rig places + rotates
+            //                                     them around the body.
+            _spiderSkinTexture = MobSkin.CreateTexture(MobSkinData.SpiderBase64);
+            if (_spiderSkinTexture != 0)
+            {
+                _spiderHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 8 * Px, 8 * Px, 32, 4, 8, 8, 8, TexW, TexH, mirror: false);
+                _spiderBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    14 * Px, 9 * Px, 6 * Px, 0, 12, 14, 9, 6, TexW, TexH, mirror: false);
+                _spiderLegMesh = SkinCuboidMesh.BuildBodyPart(
+                    16 * Px, 2 * Px, 2 * Px, 18, 0, 16, 2, 2, TexW, TexH, mirror: false);
+            }
+
+            // ---------- Blaze ----------
+            // Canonical Alpha 1.1.2 dimensions:
+            //   Head: 8x8x8 px at (0, 0)
+            //   Rod:  2x8x2 px at (0, 16). Twelve rods at varying angles
+            //         around the head; the existing DrawBlaze rig already
+            //         knows the geometry and rotation, we just textur-up
+            //         each rod by drawing the same mesh 12 times.
+            _blazeSkinTexture = MobSkin.CreateTexture(MobSkinData.BlazeBase64);
+            if (_blazeSkinTexture != 0)
+            {
+                _blazeHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
+                _blazeRodMesh = SkinCuboidMesh.BuildBodyPart(
+                    2 * Px, 8 * Px, 2 * Px, 0, 16, 2, 8, 2, TexW, TexH, mirror: false);
+            }
+
+            // ---------- Ghast ----------
+            // Bedrock skin ships at 128x64 (modern 2x scale of Alpha's
+            // 64x32). Canonical Alpha dimensions:
+            //   Body:     16x16x16 px = 1 m cube, region (0, 0)
+            //   Tentacle: 2x12x2 px (1m of 12 hangs below body),
+            //                     region (0, 0) on the modern texture
+            //                     uses a small 8x12 slot near the
+            //                     bottom; we sample (0, 32) which is
+            //                     the canonical tentacle slot on the
+            //                     128x64 texture.
+            const int GhastTexW = 128;
+            const int GhastTexH = 64;
+            _ghastSkinTexture = MobSkin.CreateTexture(MobSkinData.GhastBase64);
+            if (_ghastSkinTexture != 0)
+            {
+                _ghastBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    16 * Px, 16 * Px, 16 * Px, 0, 0, 16, 16, 16, GhastTexW, GhastTexH, mirror: false);
+                _ghastTentacleMesh = SkinCuboidMesh.BuildBodyPart(
+                    2 * Px, 12 * Px, 2 * Px, 0, 32, 2, 12, 2, GhastTexW, GhastTexH, mirror: false);
             }
         }
 
@@ -5363,30 +5460,29 @@ void main()
                 }
             }
 
-            // Tier 4 #15 — Bucket interactions need a fluid-aware ray
+            // Tier 4 #15 — Empty bucket needs a fluid-aware ray walk
             // because Raycast.Cast skips water and lava (they are not
             // IsRaycastTarget — that gate keeps LMB-break from
-            // targeting fluids). A bucket aimed at a water/lava source
-            // would otherwise see the wall BEHIND the fluid as its
-            // target, not the fluid itself. We do the same step-and-
-            // sample walk pattern the boat-place path uses just above.
+            // targeting fluids). Without this pass an empty bucket
+            // aimed at a fluid source sees the wall BEHIND the fluid
+            // as its target, not the fluid itself, so the scoop never
+            // fires. Walk the camera ray and scoop the first source
+            // cell we hit; stop on a solid block (the player is
+            // aiming past the fluid at the wall behind, which falls
+            // through to the standard raycast below).
             //
-            //   - Empty bucket + source cell hit  → scoop, swap held
-            //                                       bucket for filled.
-            //   - Filled bucket + replaceable hit → pour, swap held
-            //                                       bucket for empty.
-            //
-            // We stop the walk when we hit a solid block first so a
-            // bucket aimed past a water cell at a wall behind it
-            // isn't intercepted by the fluid behind the wall (the
-            // wall takes priority via the standard raycast below).
+            // Filled buckets DON'T use this walk — they place into the
+            // air cell adjacent to a solid hit, same as the standard
+            // block-place flow. The post-raycast filled-bucket branch
+            // at line ~6010 handles that. Routing filled buckets
+            // through this walk would place the source into the FIRST
+            // replaceable cell along the ray (typically the player's
+            // own head cell), which floods the player.
             if (Input != null)
             {
                 var preStackBucket = Input.Inventory.GetHotbar(Input.HotbarIndex);
                 BlockType preHeldBucket = preStackBucket.IsEmpty ? BlockType.Air : preStackBucket.Type;
-                bool isFilled = preHeldBucket == BlockType.BucketWater
-                             || preHeldBucket == BlockType.BucketLava;
-                if (preHeldBucket == BlockType.BucketEmpty || isFilled)
+                if (preHeldBucket == BlockType.BucketEmpty)
                 {
                     const float StepLen = 0.1f;
                     Vector3 rayDir = Camera.Forward;
@@ -5398,11 +5494,10 @@ void main()
                         int wz = (int)System.Math.Floor(p.Z);
                         var bt = _world.GetBlock(wx, wy, wz);
 
-                        // Empty bucket + source cell → scoop. Sources
-                        // only; flowing cells are transient and don't
-                        // qualify in canonical Alpha.
-                        if (preHeldBucket == BlockType.BucketEmpty
-                            && (bt == BlockType.Water || bt == BlockType.Lava))
+                        // Source cell → scoop. Sources only; flowing
+                        // cells are transient and don't qualify in
+                        // canonical Alpha.
+                        if (bt == BlockType.Water || bt == BlockType.Lava)
                         {
                             BlockType filled = bt == BlockType.Water
                                 ? BlockType.BucketWater
@@ -5419,48 +5514,10 @@ void main()
                             break;
                         }
 
-                        // Filled bucket + replaceable cell → pour. We
-                        // accept Air, any fluid, OR a flowing fluid of
-                        // EITHER family (you can pour water on top of
-                        // flowing lava to make obsidian/cobble in the
-                        // fluid sim, and pour lava onto water to do the
-                        // converse). Source cells of the SAME family
-                        // are also replaceable so a player can "top up"
-                        // an existing source without effect; opposite-
-                        // family sources stay protected (the player
-                        // shouldn't accidentally erase a lava source
-                        // by pointing a water bucket at it).
-                        if (isFilled)
-                        {
-                            BlockType srcType = preHeldBucket == BlockType.BucketWater
-                                ? BlockType.Water
-                                : BlockType.Lava;
-                            int srcGroup = BlockData.FluidGroup(srcType);
-                            int btGroup  = BlockData.FluidGroup(bt);
-                            bool replaceableHere = bt == BlockType.Air
-                                || (btGroup != 0 && btGroup == srcGroup)
-                                || bt == BlockType.FlowingWater
-                                || bt == BlockType.FlowingLava;
-                            if (replaceableHere)
-                            {
-                                if (_world.SetBlock(wx, wy, wz, srcType))
-                                {
-                                    int cx = wx >> 4, cz = wz >> 4;
-                                    var chunk = _world.GetChunk(cx, cz);
-                                    if (chunk != null) chunk.HasActiveFluid = true;
-                                    SwapHeldBucket(BlockType.BucketEmpty);
-                                    SfxBank.PlayPlace(BlockType.Wool);
-                                    return true;
-                                }
-                                break;
-                            }
-                        }
-
                         // Stop on a solid block — the player is aiming
                         // past the fluid (if any) at the wall behind.
                         // The standard raycast below will pick that
-                        // wall up and the existing filled-bucket
-                        // adjacent-cell path handles it.
+                        // wall up.
                         if (BlockData.IsSolid(bt)) break;
                     }
                 }
@@ -13533,14 +13590,21 @@ void main()
                 }
                 else if (mob is ZombiePigman)
                 {
-                    // Tier 8 #51 V6 — Pink-flesh skin (canonical
-                    // pigman colour); zombie-green tattered tunic
-                    // tints darker than zombie. Same DrawHumanoid
-                    // path so the body shape stays a humanoid.
-                    var skin   = Vector3.Lerp(new Vector3(0.85f, 0.55f, 0.55f), hurtRed, hurt);
-                    var shirt  = Vector3.Lerp(new Vector3(0.40f, 0.50f, 0.30f), hurtRed, hurt);
-                    var pants  = Vector3.Lerp(new Vector3(0.40f, 0.30f, 0.22f), hurtRed, hurt);
-                    DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
+                    if (_zombiePigmanSkinTexture != 0 && _zombiePigmanHeadMesh != null)
+                    {
+                        DrawZombiePigmanRigTextured(rigToWorld, vp, hurt);
+                    }
+                    else
+                    {
+                        // Tier 8 #51 V6 fallback — pink-flesh skin
+                        // (canonical pigman colour) + zombie-green
+                        // tattered tunic. Used only if the textured
+                        // skin asset failed to decode.
+                        var skin   = Vector3.Lerp(new Vector3(0.85f, 0.55f, 0.55f), hurtRed, hurt);
+                        var shirt  = Vector3.Lerp(new Vector3(0.40f, 0.50f, 0.30f), hurtRed, hurt);
+                        var pants  = Vector3.Lerp(new Vector3(0.40f, 0.30f, 0.22f), hurtRed, hurt);
+                        DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
+                    }
                 }
                 else if (mob is Skeleton)
                 {
@@ -13559,9 +13623,16 @@ void main()
                 }
                 else if (mob is Spider)
                 {
-                    var body   = Vector3.Lerp(new Vector3(0.20f, 0.10f, 0.10f), hurtRed, hurt);
-                    var eyes   = Vector3.Lerp(new Vector3(0.85f, 0.05f, 0.05f), hurtRed, hurt);
-                    DrawSpider(rigToWorld, vp, body, eyes);
+                    if (_spiderSkinTexture != 0 && _spiderHeadMesh != null)
+                    {
+                        DrawSpiderRigTextured(rigToWorld, vp, hurt);
+                    }
+                    else
+                    {
+                        var body = Vector3.Lerp(new Vector3(0.20f, 0.10f, 0.10f), hurtRed, hurt);
+                        var eyes = Vector3.Lerp(new Vector3(0.85f, 0.05f, 0.05f), hurtRed, hurt);
+                        DrawSpider(rigToWorld, vp, body, eyes);
+                    }
                 }
                 else if (mob is Creeper creeper)
                 {
@@ -13597,9 +13668,16 @@ void main()
                     // RodPhase on the mob carries the per-instance
                     // animation timer so two blazes side-by-side
                     // don't lock into perfect sync.
-                    var blazeCore = Vector3.Lerp(new Vector3(1.00f, 0.65f, 0.10f), hurtRed, hurt);
-                    var blazeRod  = new Vector3(0.10f, 0.08f, 0.05f);
-                    DrawBlaze(rigToWorld, vp, blazeCore, blazeRod, blaze);
+                    if (_blazeSkinTexture != 0 && _blazeHeadMesh != null)
+                    {
+                        DrawBlazeRigTextured(rigToWorld, vp, blaze, hurt);
+                    }
+                    else
+                    {
+                        var blazeCore = Vector3.Lerp(new Vector3(1.00f, 0.65f, 0.10f), hurtRed, hurt);
+                        var blazeRod  = new Vector3(0.10f, 0.08f, 0.05f);
+                        DrawBlaze(rigToWorld, vp, blazeCore, blazeRod, blaze);
+                    }
                 }
                 else if (mob is Ghast)
                 {
@@ -13610,10 +13688,17 @@ void main()
                     // jellyfish silhouette at expected viewing
                     // distances. Eye dots get added on the front so
                     // the player can read its facing.
-                    var ghastWhite = Vector3.Lerp(new Vector3(0.92f, 0.92f, 0.95f), hurtRed, hurt);
-                    var ghastShade = Vector3.Lerp(new Vector3(0.78f, 0.78f, 0.82f), hurtRed, hurt);
-                    var ghastEyes  = new Vector3(0.10f, 0.05f, 0.05f);
-                    DrawGhast(rigToWorld, vp, ghastWhite, ghastShade, ghastEyes, mob);
+                    if (_ghastSkinTexture != 0 && _ghastBodyMesh != null)
+                    {
+                        DrawGhastRigTextured(rigToWorld, vp, mob, hurt);
+                    }
+                    else
+                    {
+                        var ghastWhite = Vector3.Lerp(new Vector3(0.92f, 0.92f, 0.95f), hurtRed, hurt);
+                        var ghastShade = Vector3.Lerp(new Vector3(0.78f, 0.78f, 0.82f), hurtRed, hurt);
+                        var ghastEyes  = new Vector3(0.10f, 0.05f, 0.05f);
+                        DrawGhast(rigToWorld, vp, ghastWhite, ghastShade, ghastEyes, mob);
+                    }
                 }
                 else if (mob is Slime slime)
                 {
@@ -14017,6 +14102,193 @@ void main()
             // Head — sits flush on top of body.
             DrawSkinCuboid(_creeperHeadMesh, new Vector3(0f, NeckY, 0f),
                 Vector3.Zero, 0f, rigToWorld, vp);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Textured zombie pigman rig — same layout as zombie + skeleton,
+        // just a different texture. Wraps the shared humanoid helper.
+        private void DrawZombiePigmanRigTextured(Matrix4 rigToWorld, Matrix4 vp, float hurt)
+            => DrawTexturedHumanoidRig(_zombiePigmanSkinTexture,
+                _zombiePigmanHeadMesh, _zombiePigmanBodyMesh,
+                _zombiePigmanArmRMesh, _zombiePigmanArmLMesh,
+                _zombiePigmanLegRMesh, _zombiePigmanLegLMesh,
+                rigToWorld, vp, hurt);
+
+        // Textured spider rig. Anatomy:
+        //   - Body (abdomen) at the rear, 14x9x6 px = 0.875x0.5625x0.375 m.
+        //   - Head (cephalothorax) in front of the body, 8x8x8 px = 0.5 m.
+        //   - 8 long legs (each 16x2x2 px = 1.0x0.125x0.125 m) splayed
+        //     in two rows of 4 around the body. Same one mesh is drawn
+        //     8 times with different rig-local placements.
+        // Heights chosen so the rig sits within the spider's
+        // HalfWidth=0.7 / Height=0.9 hitbox. The legs visually splay
+        // OUTSIDE the AABB at their tips (matches Alpha — physics only
+        // cares about the AABB, the model overshoot is cosmetic).
+        private void DrawSpiderRigTextured(Matrix4 rigToWorld, Matrix4 vp, float hurt)
+        {
+            _skinShader.Use();
+            _skinShader.SetInt("uSkin", 0);
+            _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, _spiderSkinTexture);
+
+            // Body sits at rear, head in front. Y=0 is feet.
+            // Legs sit at the body's underside (~Y=0.20 to Y=0.35).
+            const float BodyY = 0.20f;     // bottom of abdomen (head also at this height)
+            const float LegY  = 0.20f;     // bottom of leg cuboids
+            // Body: centre at (0, 0.20+0.28, -0.10) — pushed a bit
+            // backward so the head sits at the cell centre. The mesh's
+            // local origin is bottom-centre, so footPos = bottom-mid.
+            // Place body slightly behind head along -Z.
+            DrawSkinCuboid(_spiderBodyMesh,
+                new Vector3(0f, BodyY, -3f / 16f), Vector3.Zero, 0f, rigToWorld, vp);
+            // Head in front of body. Body is 6/16 deep, head is 8/16
+            // deep — gap math: body back face -3/16-3/16 = -6/16,
+            // body front face -3/16+3/16 = 0; head sits with bottom
+            // at BodyY + (8-9)/16 ≈ BodyY (heads taller than body).
+            // Place head centre at z = +5/16 so the head's back edge
+            // (z=+1/16) butts against the body's front edge (z=0).
+            DrawSkinCuboid(_spiderHeadMesh,
+                new Vector3(0f, BodyY + 1f / 16f, +5f / 16f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Eight legs at four positions × two sides. Each leg is
+            // 1.0 m long pointing out to its side; the mesh's local
+            // origin is the inner end (X=0). We place the inner end
+            // adjacent to the body and let the leg extend outward.
+            // Forward / mid-front / mid-back / back along Z.
+            float[] legZs = { +6f / 16f, +2f / 16f, -2f / 16f, -6f / 16f };
+            for (int i = 0; i < 4; i++)
+            {
+                float lz = legZs[i];
+                // Right side leg — centred at (+3/16, LegY, lz).
+                // Mesh extends from X=0 (inner end at body) to X=16/16=1.0
+                // (outer tip). Place inner end at body edge ≈ +2/16.
+                DrawSkinCuboid(_spiderLegMesh,
+                    new Vector3(+2f / 16f, LegY, lz), Vector3.Zero, 0f, rigToWorld, vp);
+                // Left side leg — same mesh placed mirrored: inner
+                // end at -2/16, mesh runs to -1.0 in X. We use a
+                // negative scale via separate mesh draw — but the
+                // mesh's local origin assumes growth in +X. To draw
+                // a leg pointing -X we flip the X coord with a
+                // pre-rotated rig matrix. Simplest workaround: draw
+                // the mesh at -2/16 with a Y-axis 180° rotation on
+                // the rig so its +X becomes world -X. We don't have
+                // a per-cuboid Y rotate parameter on DrawSkinCuboid,
+                // so just place the leg with the mesh's outer-tip
+                // offset baked in: mesh footPos at outer tip.
+                // The mesh runs +X 0..16, so to draw a left-pointing
+                // leg we place the FOOT (mesh origin) at +X=2/16 and
+                // ... no, the right-side leg already does that.
+                // Simpler: reflect by negating X positions via a
+                // y-axis rotation of the rigToWorld for left legs.
+                var leftFlip = Matrix4.CreateRotationY((float)Math.PI) * rigToWorld;
+                // After Y-flip the mesh's +X (outer tip) points to
+                // world -X. Z is also flipped, so use -lz to keep the
+                // leg at the same anatomical position along the body.
+                DrawSkinCuboid(_spiderLegMesh,
+                    new Vector3(+2f / 16f, LegY, -lz), Vector3.Zero, 0f, leftFlip, vp);
+            }
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Textured blaze rig — head cube at the centre with 12
+        // rotating rod cuboids around it. The existing DrawBlaze
+        // procedural rig already encodes the geometry (3 vertically-
+        // stacked rings of 4 rods each, each ring rotating at its
+        // own rate, blaze.RodPhase carrying the per-instance phase);
+        // we mirror that geometry here drawing the textured rod mesh.
+        private void DrawBlazeRigTextured(Matrix4 rigToWorld, Matrix4 vp, Blaze blaze, float hurt)
+        {
+            _skinShader.Use();
+            _skinShader.SetInt("uSkin", 0);
+            _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, _blazeSkinTexture);
+
+            float w = blaze.HalfWidth * 2f;
+            float h = blaze.Height;
+
+            // Head — 8x8x8 px (0.5 m) cube near the top of the hitbox.
+            // Mesh feet at headBottomY → mesh top at headBottomY+0.5.
+            float headBottomY = h * 0.95f - 0.5f;
+            DrawSkinCuboid(_blazeHeadMesh,
+                new Vector3(0f, headBottomY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Three rings of 4 rods each, stacked vertically. Each
+            // ring rotates at its own rate driven by blaze.RodPhase.
+            // Same constants as the procedural DrawBlaze for visual
+            // continuity.
+            float[] ringYs   = { h * 0.30f - 0.25f, h * 0.55f - 0.25f, h * 0.80f - 0.25f };
+            float[] ringRots = { 0.7f,              1.0f,              -0.85f };
+            float ringR = blaze.HalfWidth + 0.05f;
+
+            for (int r = 0; r < 3; r++)
+            {
+                float baseAngle = blaze.RodPhase * ringRots[r] + r * 0.6f;
+                for (int j = 0; j < 4; j++)
+                {
+                    float a = baseAngle + j * (float)(Math.PI * 0.5);
+                    float rx = (float)Math.Cos(a) * ringR;
+                    float rz = (float)Math.Sin(a) * ringR;
+                    // Rod mesh is 2x8x2 px = 0.125x0.5x0.125 m, so
+                    // place its bottom-centre at the ring radius and
+                    // ring height. No per-rod rotation; rods stand
+                    // upright like sticks (matches Alpha).
+                    DrawSkinCuboid(_blazeRodMesh,
+                        new Vector3(rx, ringYs[r], rz), Vector3.Zero, 0f, rigToWorld, vp);
+                }
+            }
+            // Suppress unused-parameter warning equivalent: w referenced
+            // for symmetry with DrawBlaze; not strictly needed.
+            _ = w;
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Textured ghast rig — single 16x16x16 body cube + 9 hanging
+        // tentacle cuboids on the underside in a 3x3 grid. The
+        // canonical Alpha ghast model is just a 1m body cube with
+        // tentacle stalks; the hitbox is much larger (4m cube), so
+        // the model floats inside the hitbox the same way Alpha
+        // rendered it. Existing DrawGhast scales to fill the hitbox
+        // — we DON'T do that here; we use canonical 1/16 m/px
+        // scaling so the texture details read correctly.
+        private void DrawGhastRigTextured(Matrix4 rigToWorld, Matrix4 vp, HostileMob mob, float hurt)
+        {
+            _skinShader.Use();
+            _skinShader.SetInt("uSkin", 0);
+            _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, _ghastSkinTexture);
+
+            float h = mob.Height;
+
+            // Body cube — 1 m cube. Centre it horizontally; place
+            // bottom at h*0.4 so the cube floats in the upper half
+            // of the hitbox, leaving room below for the dangling
+            // tentacles. (Mesh's local origin is bottom-centre.)
+            float bodyBottomY = h * 0.4f;
+            DrawSkinCuboid(_ghastBodyMesh,
+                new Vector3(0f, bodyBottomY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Nine tentacles in a 3x3 grid hanging from the body's
+            // underside. Each is 0.125x0.75x0.125 m. Spacing roughly
+            // matches the body's footprint.
+            float spacing = 6f / 16f; // 6 px between tentacle centres
+            float tentTopY = bodyBottomY - 0f;
+            float tentLen  = 12f / 16f; // 0.75 m
+            for (int gx = -1; gx <= 1; gx++)
+            for (int gz = -1; gz <= 1; gz++)
+            {
+                // Mesh's local origin is bottom-centre, so the tentacle
+                // FOOT must be placed at the bottom of the cuboid.
+                // Foot Y = body bottom - tentacle length = tentTopY - tentLen.
+                DrawSkinCuboid(_ghastTentacleMesh,
+                    new Vector3(gx * spacing, tentTopY - tentLen, gz * spacing),
+                    Vector3.Zero, 0f, rigToWorld, vp);
+            }
 
             GL.BindTexture(TextureTarget.Texture2D, 0);
         }
