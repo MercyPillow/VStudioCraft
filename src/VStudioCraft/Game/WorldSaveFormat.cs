@@ -107,7 +107,7 @@ namespace VStudioCraft.Game
         //       it lives in the chunk's metadata byte alongside the
         //       block id, so it persists through the existing v2+
         //       chunk-byte block.
-        private const byte CurrentVersion = 18;
+        private const byte CurrentVersion = 19;
 
         // Phase 8 — one entry per known player in the v13 multiplayer
         // player table. Captured at save time from `ServerHub` (or the
@@ -196,6 +196,22 @@ namespace VStudioCraft.Game
             };
         }
 
+        // Tier 9 #54 V8 — Host's own inventory + hotbar selection.
+        // Pre-V8 the SP host's inventory was lost on every save/load
+        // round-trip (only the v13 friend table preserved item state,
+        // and the host wasn't in that table). v19 trailing block
+        // round-trips Inventory.Slots[49] + the active hotbar index.
+        // Default-zeroed members read as "no record" — pre-v19 saves
+        // load with whatever the freshly-spawned player's inventory
+        // is (typically the FillHotbar starter loadout).
+        public struct HostInventoryState
+        {
+            public ItemStack[] Slots;        // length == Inventory.TotalSlots when populated
+            public int HotbarIndex;          // 0..8 active hotbar slot
+            public bool HasData;             // false on pre-v19 / empty default
+            public static HostInventoryState Empty => new HostInventoryState();
+        }
+
         // Tier 8 #51 V5 — Save with an optional Nether world. The
         // overworld is always the primary file content (header + chunk
         // section + tile entities); the Nether goes in a v16 trailing
@@ -211,14 +227,19 @@ namespace VStudioCraft.Game
         // header.CameraPos as the overworld position and an empty
         // nether-position slot.
         public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld, DimensionState dimState)
-            => Save(path, header, world, players, netherWorld, dimState, VehicleSet.Empty);
+            => Save(path, header, world, players, netherWorld, dimState, VehicleSet.Empty, HostInventoryState.Empty);
+
+        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles)
+            => Save(path, header, world, players, netherWorld, dimState, vehicles, HostInventoryState.Empty);
 
         // Tier 9 #54 V3 — Save with vehicle persistence. v18 trailing
         // block carries per-dim Boat + Minecart lists so a save-and-
         // quit in a world full of placed boats / parked minecarts
         // reloads with everything where it was. Pre-v18 readers stop
         // cleanly after the v17 dimState block.
-        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles)
+        // V8 — adds v19 trailing block for the host's own inventory
+        // (Slots[49] + hotbar index).
+        public static void Save(string path, Header header, World world, IList<PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles, HostInventoryState hostInv)
         {
             var tmp = path + ".tmp";
             using (var fs = File.Create(tmp))
@@ -578,6 +599,27 @@ namespace VStudioCraft.Game
                 for (int i = 0; i < ovList.Count; i++) WriteVehicle(w, ovList[i]);
                 w.Write(neList.Count);
                 for (int i = 0; i < neList.Count; i++) WriteVehicle(w, neList[i]);
+
+                // v19: Tier 9 #54 V8 — Host's own inventory + hotbar
+                // index. Layout:
+                //   1 byte   hasData (0 = skip, 1 = present)
+                //   if hasData:
+                //     49 ItemStacks   — Inventory.Slots in canonical order
+                //     1 int           — HotbarIndex (0..8)
+                // Pre-v19 readers stop cleanly after the v18 vehicle
+                // section and the host's inventory falls back to the
+                // FillHotbar starter loadout (legacy behaviour).
+                w.Write((byte)(hostInv.HasData ? 1 : 0));
+                if (hostInv.HasData)
+                {
+                    var slots = hostInv.Slots ?? new ItemStack[Inventory.TotalSlots];
+                    for (int i = 0; i < Inventory.TotalSlots; i++)
+                    {
+                        var s = i < slots.Length ? slots[i] : ItemStack.Empty;
+                        WriteStack(w, s);
+                    }
+                    w.Write(hostInv.HotbarIndex);
+                }
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
@@ -760,7 +802,7 @@ namespace VStudioCraft.Game
         // DimensionState so the renderer falls back to header.CameraPos
         // for the overworld slot and starts the nether at the
         // first-time-entry path.
-        public static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles) LoadWithPlayersAndNether(string path)
+        public static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles, HostInventoryState hostInv) LoadWithPlayersAndNether(string path)
         {
             try
             {
@@ -807,7 +849,7 @@ namespace VStudioCraft.Game
             }
         }
 
-        private static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles) LoadWithPlayersInner(string path)
+        private static (Header header, World world, Dictionary<string, PersistedPlayer> players, World netherWorld, DimensionState dimState, VehicleSet vehicles, HostInventoryState hostInv) LoadWithPlayersInner(string path)
         {
             using (var fs = File.OpenRead(path))
             using (var gz = new GZipStream(fs, CompressionMode.Decompress))
@@ -1305,7 +1347,22 @@ namespace VStudioCraft.Game
                     for (int i = 0; i < neCount; i++) vehicles.Nether.Add(ReadVehicle(r));
                 }
 
-                return (header, world, players, netherWorld, dimState, vehicles);
+                // v19: Tier 9 #54 V8 — Host's own inventory + hotbar.
+                HostInventoryState hostInv = HostInventoryState.Empty;
+                if (version >= 19)
+                {
+                    byte has = r.ReadByte();
+                    if (has != 0)
+                    {
+                        hostInv.HasData = true;
+                        hostInv.Slots = new ItemStack[Inventory.TotalSlots];
+                        for (int i = 0; i < Inventory.TotalSlots; i++)
+                            hostInv.Slots[i] = ReadStack(r);
+                        hostInv.HotbarIndex = r.ReadInt32();
+                    }
+                }
+
+                return (header, world, players, netherWorld, dimState, vehicles, hostInv);
             }
         }
 

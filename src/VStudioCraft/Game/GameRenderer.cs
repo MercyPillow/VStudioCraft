@@ -3021,6 +3021,21 @@ void main()
             // we just loaded above. Pre-v17 saves leave
             // CurrentDimension at Overworld (default zero) and skip
             // the swap entirely.
+            // Tier 9 #54 V8 — Restore the host's inventory + hotbar
+            // from the v19 trailing block, OVERRIDING whatever
+            // FillHotbar starter loadout SetWorld populated above.
+            // Pre-v19 saves return HasData=false and the FillHotbar
+            // defaults stand (legacy behaviour).
+            var hostInv = loadResult.hostInv;
+            if (hostInv.HasData && Input != null && Input.Inventory != null && hostInv.Slots != null)
+            {
+                int n = System.Math.Min(hostInv.Slots.Length, Inventory.TotalSlots);
+                for (int i = 0; i < n; i++)
+                    Input.Inventory.Slots[i] = hostInv.Slots[i];
+                if (hostInv.HotbarIndex >= 0 && hostInv.HotbarIndex < Inventory.HotbarCount)
+                    Input.HotbarIndex = hostInv.HotbarIndex;
+            }
+
             // Tier 9 #54 V3 — Restore boats + minecarts from the v18
             // trailing block. The loaded world is always overworld
             // (V5 design — overworld is the primary file content);
@@ -3555,7 +3570,24 @@ void main()
                 { Kind = 1, Pos = c.Position, Vel = c.Velocity, Yaw = c.Yaw });
             }
 
-            WorldSaveFormat.Save(path, header, saveWorld, players, netherWorld, dimState, vehicles);
+            // Tier 9 #54 V8 — Snapshot the host's inventory + active
+            // hotbar slot so the player's items survive a save/load
+            // round-trip. Friend inventories already round-trip via
+            // the v13 player table; the host's was the missing slot.
+            // Inventory lives on InputState (not Player) — that's the
+            // single source of truth for the host's hotbar / main grid
+            // / armor slot contents during play.
+            var hostInv = WorldSaveFormat.HostInventoryState.Empty;
+            if (Input != null && Input.Inventory != null)
+            {
+                hostInv.HasData = true;
+                hostInv.Slots = new ItemStack[Inventory.TotalSlots];
+                for (int i = 0; i < Inventory.TotalSlots; i++)
+                    hostInv.Slots[i] = Input.Inventory.Slots[i];
+                hostInv.HotbarIndex = Input.HotbarIndex;
+            }
+
+            WorldSaveFormat.Save(path, header, saveWorld, players, netherWorld, dimState, vehicles, hostInv);
         }
 
         public void UpdatePlayer(float dt, Vector3 wishHorizVel, bool wantJump)
