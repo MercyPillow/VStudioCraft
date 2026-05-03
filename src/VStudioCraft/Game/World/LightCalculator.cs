@@ -538,8 +538,18 @@ namespace VStudioCraft.Game
 
             ProcessRemoveBlock(world, removeQ, addQ, dirty);
 
-            // Seed a new emitter if the new block luminates.
-            if (newEmit > 0 && newTrans)
+            // Seed a new emitter if the new block luminates. Note we do
+            // NOT gate on `newTrans` here — opaque emitters (Glowstone,
+            // Jack-o-lantern, LitFurnace) seed their own cell's block-
+            // light at full emission level, then the BFS dequeues the
+            // cell and TrySpread carries the (level-1) value to each
+            // light-transparent neighbour. The destination's opacity
+            // is what gates spread, not the source's. The earlier
+            // `&& newTrans` gate caused glowstone-on-place to silently
+            // never light up because the block isn't IsLightTransparent;
+            // loading a world via RecomputeChunk worked because that
+            // path seeds without an opacity check.
+            if (newEmit > 0)
             {
                 SetBlockLightW(world, wx, wy, wz, (byte)newEmit, dirty);
                 addQ.Enqueue((wx, wy, wz));
