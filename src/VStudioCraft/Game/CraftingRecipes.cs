@@ -364,6 +364,21 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Bricks, 1)));
 
+            // Tier 8 #51 V13 — Nether Brick block: 4 nether brick
+            // items in a 2×2 → 1 nether brick block. Same shape as
+            // the clay-brick recipe above. Each nether brick item is
+            // smelted from netherrack in a furnace, so a player
+            // visiting the Nether can mine netherrack, smelt it back
+            // home, and craft the bricks back into a usable block
+            // (matching canonical Alpha-era 1.1.2 build flow).
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.NetherBrickItem, BlockType.NetherBrickItem },
+                    { BlockType.NetherBrickItem, BlockType.NetherBrickItem },
+                },
+                new ItemStack(BlockType.NetherBrick, 1)));
+
             // Furnace: 8 cobblestone in a U-shape ringing an empty middle
             // cell. Alpha pattern is "CCC / C.C / CCC" — the hollow center
             // is what makes it a smelter rather than just a stone block.

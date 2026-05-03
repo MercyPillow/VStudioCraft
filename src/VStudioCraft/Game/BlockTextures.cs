@@ -283,7 +283,13 @@ namespace VStudioCraft.Game
         // Tier 8 #51 V1 — Nether Portal swirl tile.
         public const int FirstTailPortalLayer     = FirstTailSoulSandLayer + TailSoulSandLayerCount;    // 180
         public const int TailPortalLayerCount     = 1;
-        public const int LayerCount = FirstTailPortalLayer + TailPortalLayerCount;                      // 181
+        // Tier 8 #51 V13 — Nether Brick block tile (block form, terrain.png 10,6).
+        public const int FirstTailNetherBrickLayer = FirstTailPortalLayer + TailPortalLayerCount;       // 181
+        public const int TailNetherBrickLayerCount = 1;
+        // Tier 8 #51 V13 — Nether Brick item tile (items.png 12,1).
+        public const int FirstTailNetherBrickItemLayer = FirstTailNetherBrickLayer + TailNetherBrickLayerCount; // 182
+        public const int TailNetherBrickItemLayerCount = 1;
+        public const int LayerCount = FirstTailNetherBrickItemLayer + TailNetherBrickItemLayerCount;    // 183
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -526,6 +532,13 @@ namespace VStudioCraft.Game
         // canonical Alpha terrain.png (0, 14). Procedural fallback
         // paints a purple/indigo gradient with scattered bright pips.
         public const int TileNetherPortal        = 180;
+        // Tier 8 #51 V13 — Nether Brick block. Single tile on every
+        // face; terrain.png slot (10, 6). Used by V10 fortress walls
+        // and player-placed nether brick crafted from 4× NetherBrickItem.
+        public const int TileNetherBrick         = 181;
+        // Tier 8 #51 V13 — Nether Brick item icon. items.png slot
+        // (12, 1). Held in inventory; smelted from netherrack.
+        public const int TileNetherBrickItem     = 182;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -856,6 +869,10 @@ namespace VStudioCraft.Game
             // Tier 8 #51 V1 — Nether Portal swirl (procedural).
             UploadLayer(layerPixels, TileNetherPortal, GenerateNetherPortal);
 
+            // Tier 8 #51 V13 — Nether Brick block + item (procedural fallbacks).
+            UploadLayer(layerPixels, TileNetherBrick,     GenerateNetherBrick);
+            UploadLayer(layerPixels, TileNetherBrickItem, GenerateNetherBrickItem);
+
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
@@ -1016,7 +1033,12 @@ namespace VStudioCraft.Game
                 // Tier 8 #51 — Soul Sand block tile from terrain.png.
                 || layer == TileSoulSand
                 // Tier 8 #51 V1 — Nether Portal swirl from terrain.png.
-                || layer == TileNetherPortal;
+                || layer == TileNetherPortal
+                // Tier 8 #51 V13 — Nether Brick block tile from terrain.png.
+                || layer == TileNetherBrick;
+                // Note: TileNetherBrickItem is NOT terrain-sourced — its
+                // (12, 1) coord references items.png, so it routes
+                // through UploadTailItemsFromAlphaTools below.
                 // NOTE: TileStoneButtonItem is intentionally NOT in
                 // this whitelist — its (6, 4) coord references
                 // alpha_tools.png (the items atlas), not terrain.png.
@@ -3868,6 +3890,13 @@ namespace VStudioCraft.Game
             // similar to the Tier 10 animated water/lava optional
             // feature).
             /* TileNetherPortal        */ (9, 6),
+            // Tier 8 #51 V13 — Nether Brick block from terrain.png at (10, 6).
+            /* TileNetherBrick         */ (10, 6),
+            // Tier 8 #51 V13 — Nether Brick item icon from items.png at (12, 1).
+            // Routes through UploadTailItemsFromAlphaTools (NOT
+            // IsTailLayerTerrainSourced) so the item-icon coord is
+            // sliced from items.png, not terrain.png.
+            /* TileNetherBrickItem     */ (12, 1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4152,6 +4181,12 @@ namespace VStudioCraft.Game
             // fallback; overlaid from terrain.png (0, 14).
             UploadLayer(layerPixels, TileNetherPortal, GenerateNetherPortal);
 
+            // Tier 8 #51 V13 — Nether Brick block + item. Procedural
+            // fallbacks; overlaid from terrain.png (10, 6) and
+            // items.png (12, 1) respectively by the loops below.
+            UploadLayer(layerPixels, TileNetherBrick,     GenerateNetherBrick);
+            UploadLayer(layerPixels, TileNetherBrickItem, GenerateNetherBrickItem);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4184,9 +4219,14 @@ namespace VStudioCraft.Game
                 TileSoulSand,
                 // Tier 8 #51 V1 — Nether Portal swirl.
                 TileNetherPortal,
+                // Tier 8 #51 V13 — Nether Brick block tile from terrain.png (10, 6).
+                TileNetherBrick,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
+                // TileNetherBrickItem is also items-atlas-sourced,
+                // not terrain — sliced from items.png (12, 1) by
+                // UploadTailItemsFromAlphaTools.
             };
             for (int i = 0; i < biomeTailLayers.Length; i++)
             {
@@ -7127,6 +7167,101 @@ namespace VStudioCraft.Game
             int[] fy = { 1, 4,  3,  7, 9, 11, 14, 13, 14, 8 };
             for (int i = 0; i < fx.Length; i++)
                 SetPixel(pixels, fx[i], fy[i], flare.r, flare.g, flare.b);
+        }
+
+        // Tier 8 #51 V13 — Nether Brick block tile. Dark blood-red
+        // brickwork with mortar lines so the wall reads as built
+        // masonry rather than natural rock. Two staggered rows of
+        // bricks per tile, mortar between them. The alpha-textures
+        // atlas overlays from terrain.png (10, 6) on top when the
+        // user has the canonical PNG.
+        private static void GenerateNetherBrick(byte[] pixels)
+        {
+            (byte r, byte g, byte b) brick    = ( 60,  20,  25);   // dark blood-red
+            (byte r, byte g, byte b) brickHi  = ( 85,  35,  35);   // brighter face highlight
+            (byte r, byte g, byte b) mortar   = ( 25,  10,  12);   // black mortar
+            (byte r, byte g, byte b) speck    = (105,  50,  45);   // tiny mineral fleck
+
+            // Solid brick base.
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, brick.r, brick.g, brick.b);
+
+            // Horizontal mortar bands at y=4, 8, 12 (3 rows of bricks).
+            for (int y = 4; y < TileSize; y += 4)
+            for (int x = 0; x < TileSize; x++)
+                SetPixel(pixels, x, y, mortar.r, mortar.g, mortar.b);
+
+            // Vertical mortar lines staggered per row (running bond):
+            // even rows have verticals at x=0, 8; odd rows at x=4, 12.
+            for (int row = 0; row < 4; row++)
+            {
+                int yLo = row * 4 + 1;
+                int yHi = row * 4 + 3;
+                int x0 = (row & 1) == 0 ? 0 : 4;
+                int x1 = (row & 1) == 0 ? 8 : 12;
+                for (int yy = yLo; yy <= yHi && yy < TileSize; yy++)
+                {
+                    SetPixel(pixels, x0, yy, mortar.r, mortar.g, mortar.b);
+                    SetPixel(pixels, x1, yy, mortar.r, mortar.g, mortar.b);
+                }
+            }
+
+            // Brick-face highlights — small lighter pixels on each
+            // brick so the face reads as 3D rather than flat.
+            int[] hx = { 2, 6, 10, 14, 6, 14, 2, 10, 6, 14 };
+            int[] hy = { 1, 1,  1,  1, 5,  5, 9,  9, 13, 13 };
+            for (int i = 0; i < hx.Length; i++)
+                SetPixel(pixels, hx[i], hy[i], brickHi.r, brickHi.g, brickHi.b);
+
+            // Mineral fleck speckles — a few tiny brighter dots that
+            // catch the eye and break up the brickwork's regularity.
+            int[] sx = { 3, 11, 5, 13, 7 };
+            int[] sy = { 2,  6, 10, 14, 7 };
+            for (int i = 0; i < sx.Length; i++)
+                SetPixel(pixels, sx[i], sy[i], speck.r, speck.g, speck.b);
+        }
+
+        // Tier 8 #51 V13 — Nether Brick item icon. A small stack of
+        // 2 bricks centred in the tile, dark blood-red with mortar
+        // outline. Reads as the held-item form of the block. The
+        // alpha-textures atlas overlays from items.png (12, 1) on
+        // top when the user has the canonical PNG.
+        private static void GenerateNetherBrickItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) brick    = ( 60,  20,  25);
+            (byte r, byte g, byte b) brickHi  = ( 95,  40,  40);
+            (byte r, byte g, byte b) outline  = ( 25,  10,  12);
+
+            // Brick body: a 10×6 rectangle centred ~vertically.
+            int x0 = 3, x1 = 12, y0 = 5, y1 = 10;
+            for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
+                SetPixel(pixels, x, y, brick.r, brick.g, brick.b);
+
+            // Outline border — single-pixel dark frame around the brick.
+            for (int x = x0; x <= x1; x++)
+            {
+                SetPixel(pixels, x, y0, outline.r, outline.g, outline.b);
+                SetPixel(pixels, x, y1, outline.r, outline.g, outline.b);
+            }
+            for (int y = y0; y <= y1; y++)
+            {
+                SetPixel(pixels, x0, y, outline.r, outline.g, outline.b);
+                SetPixel(pixels, x1, y, outline.r, outline.g, outline.b);
+            }
+
+            // Mortar split mid-brick — vertical line in the middle so
+            // the icon reads as TWO bricks rather than one big block.
+            int xm = (x0 + x1) / 2;
+            for (int y = y0 + 1; y <= y1 - 1; y++)
+                SetPixel(pixels, xm, y, outline.r, outline.g, outline.b);
+
+            // Highlight pips — tiny brighter dots on each brick face.
+            SetPixel(pixels, x0 + 2, y0 + 2, brickHi.r, brickHi.g, brickHi.b);
+            SetPixel(pixels, x1 - 2, y0 + 2, brickHi.r, brickHi.g, brickHi.b);
+            SetPixel(pixels, x0 + 2, y1 - 1, brickHi.r, brickHi.g, brickHi.b);
+            SetPixel(pixels, x1 - 2, y1 - 1, brickHi.r, brickHi.g, brickHi.b);
         }
 
         // Helmet silhouette — a hooded square spanning the top half of

@@ -67,6 +67,10 @@ namespace VStudioCraft.Game
                 { BlockType.Cobblestone, new ItemStack(BlockType.Stone,          1) },
                 { BlockType.ClayBall,    new ItemStack(BlockType.ClayBrick,      1) },
                 { BlockType.RawPorkchop, new ItemStack(BlockType.CookedPorkchop, 1) },
+                // Tier 8 #51 V13 — Netherrack → Nether Brick item.
+                // Smelting gives 1 brick per netherrack; 4 bricks
+                // craft into 1 NetherBrick block in a 2×2 grid.
+                { BlockType.Netherrack,  new ItemStack(BlockType.NetherBrickItem, 1) },
             };
         }
 

@@ -732,6 +732,19 @@ namespace VStudioCraft.Game
         // 1=X-axis frame) so the mesher orients the swirl plane with
         // the long side of the frame.
         NetherPortal       = 174, // Alpha 90
+
+        // Tier 8 #51 V13 — Nether Brick block. Smelted from
+        // netherrack via the furnace (yields 1× NetherBrickItem
+        // per netherrack), then 4× NetherBrickItem in a 2×2
+        // crafting grid yield 1× NetherBrick block. Used by V10
+        // fortress structures as wall material; distinct from the
+        // red Bricks block (id 22) so the two don't read as the
+        // same material in inventory and on the wall.
+        NetherBrick        = 175, // Alpha 112 (modern id; not era-canonical but the closest free slot)
+
+        // Item form of nether brick — held in inventory, smelted
+        // from netherrack, and crafted into NetherBrick blocks.
+        NetherBrickItem    = 176, // Alpha 405 (modern id, see above)
     }
 
     // Parallel "ItemType" surface — a static class rather than a
@@ -883,6 +896,9 @@ namespace VStudioCraft.Game
         // BlockType only — the dust item is what crafts into the
         // glowing block and drops from breaking one).
         public const BlockType GlowstoneDust       = BlockType.GlowstoneDust;
+        // Tier 8 #51 V13 — Nether Brick item. Smelted from
+        // netherrack; 4× crafts a NetherBrick block.
+        public const BlockType NetherBrickItem     = BlockType.NetherBrickItem;
 
         // Alpha 1.1.2_01 numeric item id (256..346 + 2256/2257). Returns
         // -1 for non-items. Not yet used at runtime — kept for the
@@ -1006,6 +1022,11 @@ namespace VStudioCraft.Game
                 // same convention every other placeable-block form
                 // uses (e.g. WoodDoorBlockBottom is non-item).
                 case BlockType.GlowstoneDust:       return 348;
+                // Tier 8 #51 V13 — Nether Brick item. Modern id 405
+                // (the real-Alpha era predates this item; we use
+                // the modern id since it's the canonical anchor and
+                // doesn't collide with any Alpha 1.1.2_01 id).
+                case BlockType.NetherBrickItem:     return 405;
                 default:                       return -1;
             }
         }
@@ -1119,6 +1140,9 @@ namespace VStudioCraft.Game
                 // enum is ever renamed.
                 case BlockType.GlowstoneDust:       return "Glowstone Dust";
                 case BlockType.Glowstone:           return "Glowstone";
+                // Tier 8 #51 V13.
+                case BlockType.NetherBrickItem:     return "Nether Brick";
+                case BlockType.NetherBrick:         return "Nether Bricks";
                 default:                       return t.ToString();
             }
         }
@@ -1471,7 +1495,12 @@ namespace VStudioCraft.Game
             // Tier 8 #51 — Glowstone Dust. Block form (Glowstone)
             // is a regular cube and falls through to IsCubeShape /
             // IsSolid / IsOpaque defaults; this is just the item.
-            || t == BlockType.GlowstoneDust;
+            || t == BlockType.GlowstoneDust
+            // Tier 8 #51 V13 — NetherBrickItem. NetherBrick (the
+            // block form) is a regular cube and falls through to
+            // IsCubeShape / IsSolid / IsOpaque defaults; this slice
+            // just registers the held-item form.
+            || t == BlockType.NetherBrickItem;
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -2620,6 +2649,19 @@ namespace VStudioCraft.Game
                 // canonical Alpha terrain.png slot at (0, 14).
                 case BlockType.NetherPortal:
                     return BlockTextures.TileNetherPortal;
+                // Tier 8 #51 V13 — Nether Brick block. Single tile
+                // on every face; terrain.png slot (10, 6). Used for
+                // V10 fortress walls (replacing the regular red
+                // Bricks placeholder) and for player-placed nether
+                // brick crafted from 4× NetherBrickItem.
+                case BlockType.NetherBrick:
+                    return BlockTextures.TileNetherBrick;
+                // Item form — uses the items atlas tile (12, 1).
+                // Held-in-hand renderer dispatches on this tile id
+                // for inventory + hotbar drawings; no block-face
+                // dispatch needed.
+                case BlockType.NetherBrickItem:
+                    return BlockTextures.TileNetherBrickItem;
                 // Tier 8 #51 — Glowstone Dust item icon. Procedural;
                 // a small pile of bright yellow grain, similar in
                 // shape to bone meal but in glowstone-yellow tones.

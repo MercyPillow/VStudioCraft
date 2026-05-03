@@ -488,7 +488,19 @@ void main()
         // this is a flat list owned directly by the renderer. Drops are
         // not persisted to save files (yet); SetWorld clears them so a
         // load doesn't inherit drops from the previous session.
-        private readonly System.Collections.Generic.List<DroppedItem> _drops
+        // Tier 8 #51 V12 — readonly removed so SwapDimension can
+        // swap the active backing list with _dormantDrops on portal
+        // crossing. Drops, arrows, thrown projectiles, fireballs,
+        // and bobbers are all entity collections that belong with
+        // their dimension — without per-dim stashes the items drop
+        // in overworld and visibly reappear in nether (and vice
+        // versa) the moment the player teleports. Each of the 5
+        // lists below has a parallel _dormantX field that holds
+        // the inactive dimension's contents; SwapDimension just
+        // swaps the references.
+        private System.Collections.Generic.List<DroppedItem> _drops
+            = new System.Collections.Generic.List<DroppedItem>();
+        private System.Collections.Generic.List<DroppedItem> _dormantDrops
             = new System.Collections.Generic.List<DroppedItem>();
 
         // Tier 4 #17 — In-flight bow arrows. Each entity in this list is
@@ -506,14 +518,18 @@ void main()
         // arrow; the input-handling site flips BowDrawHeld off and
         // calls FireBowArrow which reads BowDrawSec, decrements an
         // arrow stack, and resets BowDrawSec to 0.
-        private readonly System.Collections.Generic.List<ArrowProjectile> _arrows
+        private System.Collections.Generic.List<ArrowProjectile> _arrows
+            = new System.Collections.Generic.List<ArrowProjectile>();
+        private System.Collections.Generic.List<ArrowProjectile> _dormantArrows
             = new System.Collections.Generic.List<ArrowProjectile>();
 
         // Tier 4 #20 — In-flight thrown projectiles (Snowball + Egg).
         // Same renderer-owned-list pattern as _arrows; TickThrown
         // advances physics + raycast + AABB, RenderThrown paints. Not
         // persisted (Alpha didn't either) — SetWorld clears them.
-        private readonly System.Collections.Generic.List<ThrownProjectile> _thrown
+        private System.Collections.Generic.List<ThrownProjectile> _thrown
+            = new System.Collections.Generic.List<ThrownProjectile>();
+        private System.Collections.Generic.List<ThrownProjectile> _dormantThrown
             = new System.Collections.Generic.List<ThrownProjectile>();
 
         // Tier 8 #51 V7 — Ghast fireballs in flight. Same renderer-
@@ -522,7 +538,9 @@ void main()
         // each as an orange glowing cube. Not persisted — SetWorld
         // clears them so a save/load round-trip doesn't reanimate
         // mid-flight ghast attacks.
-        private readonly System.Collections.Generic.List<FireballProjectile> _fireballs
+        private System.Collections.Generic.List<FireballProjectile> _fireballs
+            = new System.Collections.Generic.List<FireballProjectile>();
+        private System.Collections.Generic.List<FireballProjectile> _dormantFireballs
             = new System.Collections.Generic.List<FireballProjectile>();
 
         // Tier 4 #23 — Cast fishing-rod bobbers. Same renderer-owned-
@@ -532,7 +550,9 @@ void main()
         // — SetWorld clears them. Player.ActiveBobber holds a back-
         // reference to the entry in this list so TryInteract can
         // distinguish "first RMB cast" from "second RMB reel".
-        private readonly System.Collections.Generic.List<Bobber> _bobbers
+        private System.Collections.Generic.List<Bobber> _bobbers
+            = new System.Collections.Generic.List<Bobber>();
+        private System.Collections.Generic.List<Bobber> _dormantBobbers
             = new System.Collections.Generic.List<Bobber>();
 
         // Per-bobber RNG. Same pattern as _dropRng — stable seed so a
@@ -3147,6 +3167,28 @@ void main()
             foreach (var m in _chunkMeshes.Values) m.Dispose();
             _chunkMeshes.Clear();
 
+            // Tier 8 #51 V12 — Swap renderer-owned entity lists with
+            // dimension. Drops, arrows, thrown projectiles, fireballs,
+            // and bobbers all "belong" to the dimension they were
+            // spawned in — without this swap they leaked across the
+            // portal (a stack of cobble dropped in overworld appeared
+            // in the nether at the same XYZ once the player teleported,
+            // and vice versa). Each list reference swaps with its
+            // dormant counterpart in one shot.
+            //
+            // Player.ActiveBobber is a back-reference into the
+            // outgoing _bobbers list; we null it out so the player
+            // doesn't carry a stale bobber pointer across the portal.
+            // The bobber itself is preserved in _dormantBobbers and
+            // re-attaches if the player returns (Bobber.cs does the
+            // bookkeeping by entry, not by Player back-ref).
+            var swapDrops     = _drops;     _drops     = _dormantDrops;     _dormantDrops     = swapDrops;
+            var swapArrows    = _arrows;    _arrows    = _dormantArrows;    _dormantArrows    = swapArrows;
+            var swapThrown    = _thrown;    _thrown    = _dormantThrown;    _dormantThrown    = swapThrown;
+            var swapFireballs = _fireballs; _fireballs = _dormantFireballs; _dormantFireballs = swapFireballs;
+            var swapBobbers   = _bobbers;   _bobbers   = _dormantBobbers;   _dormantBobbers   = swapBobbers;
+            if (Player != null) Player.ActiveBobber = null;
+
             _world = next;
             _world.MarkAllDirty();
 
@@ -3862,6 +3904,18 @@ void main()
             // list is empty.
             _bobbers.Clear();
             if (Player != null) Player.ActiveBobber = null;
+            // Tier 8 #51 V12 — same reasoning for the dormant-dim
+            // stashes: a full world load arrives in overworld, so any
+            // entities the previous session had stashed in the
+            // nether-side stash slots are stale and need clearing
+            // too. Without this, loading a new world while a
+            // dormant nether had drops/projectiles would leak them
+            // into the next session's nether on first portal trip.
+            _dormantDrops.Clear();
+            _dormantArrows.Clear();
+            _dormantThrown.Clear();
+            _dormantFireballs.Clear();
+            _dormantBobbers.Clear();
             _bowDrawSec = 0f;
             _bowWasDrawing = false;
             // Same reasoning for cosmetic particles — a leftover lava

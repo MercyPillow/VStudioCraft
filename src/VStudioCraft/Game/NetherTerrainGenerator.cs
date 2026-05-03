@@ -520,7 +520,7 @@ namespace VStudioCraft.Game
                 bool inDoorEW = (Math.Abs(wz - centreZ) <= doorHalfWidth) && (atWestWall  || atEastWall);
 
                 // Floor slab — full 48×48.
-                c.Set(lx, FortressFloorY, lz, BlockType.Bricks);
+                c.Set(lx, FortressFloorY, lz, BlockType.NetherBrick);
 
                 if (onPerimeter)
                 {
@@ -533,7 +533,7 @@ namespace VStudioCraft.Game
                         if ((inDoorNS || inDoorEW) && !isLintel)
                             c.Set(lx, wy, lz, BlockType.Air);
                         else
-                            c.Set(lx, wy, lz, BlockType.Bricks);
+                            c.Set(lx, wy, lz, BlockType.NetherBrick);
                     }
                 }
                 else
@@ -551,7 +551,7 @@ namespace VStudioCraft.Game
                 }
 
                 // Ceiling slab — full 48×48 brick lid.
-                c.Set(lx, FortressCeilingY, lz, BlockType.Bricks);
+                c.Set(lx, FortressCeilingY, lz, BlockType.NetherBrick);
             }
 
             // Spawner cage centre. Places one MobSpawner block at
@@ -565,7 +565,7 @@ namespace VStudioCraft.Game
             {
                 int lcx = centreX - chunkX0;
                 int lcz = centreZ - chunkZ0;
-                c.Set(lcx, FortressFloorY + 1, lcz, BlockType.Bricks);     // pedestal
+                c.Set(lcx, FortressFloorY + 1, lcz, BlockType.NetherBrick);     // pedestal
                 c.Set(lcx, FortressFloorY + 2, lcz, BlockType.MobSpawner); // cage
             }
         }
