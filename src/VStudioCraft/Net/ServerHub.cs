@@ -439,6 +439,38 @@ namespace VStudioCraft.Net
             }
         }
 
+        // Tier 9 #54 V16 — Host-side observer feed for friend player poses.
+        // BroadcastEntityUpdates skips the loopback host (sending packets
+        // to a local-host has no effect since IsLoopback.Send is a no-op),
+        // which means the host can't learn about friend positions through
+        // the regular network packet path. The host's GameRenderer instead
+        // polls this iterator each frame and applies the snapshots to its
+        // _remotePlayers dictionary, mirroring what the friend-side
+        // PacketRouter does for the host's own avatar.
+        // Returns full pose for every non-loopback, in-game client that
+        // has reported a position. Same dimension filter as
+        // BroadcastEntityUpdates so a host in the Nether doesn't see the
+        // friend's overworld avatar (and vice versa).
+        public IEnumerable<(int eid, string username, OpenTK.Vector3 pos, float yaw, float pitch)> ListClientsForHost()
+        {
+            if (_hostClient == null) yield break;
+            for (int i = 0; i < _clients.Count; i++)
+            {
+                var c = _clients[i];
+                if (c.Session.IsDead) continue;
+                if (c.Session.IsLoopback) continue;
+                if (c.Phase == ClientPhase.AwaitingLogin) continue;
+                if (!c.HasReportedPos) continue;
+                if (c.CurrentDim != _hostClient.CurrentDim) continue;
+                yield return (
+                    c.EntityId,
+                    c.Username ?? "<unnamed>",
+                    new OpenTK.Vector3((float)c.LastReportedX, (float)c.LastReportedY, (float)c.LastReportedZ),
+                    c.LastReportedYaw,
+                    c.LastReportedPitch);
+            }
+        }
+
         public bool KickByUsername(string username, string reason)
         {
             if (string.IsNullOrEmpty(username)) return false;

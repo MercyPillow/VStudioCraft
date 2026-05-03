@@ -105,6 +105,38 @@ namespace VStudioCraft.Game
             ApplyTeleport(_currPos, yaw, pitch, now);
         }
 
+        // Tier 9 #54 V17 — Host-observer update. The host polls the
+        // ServerHub at frame rate (~60 Hz), but the friend whose pose
+        // is being read only sends PlayerPosLook packets at ~20 Hz —
+        // so the host sees the SAME snapshot 3 times in a row before
+        // a new packet arrives. Calling ApplyTeleport on every poll
+        // collapses _prev → _curr because each subsequent poll
+        // promotes the same value into _prev, making the interp
+        // window 0 and the lerp a no-op. Walk-cycle phase doesn't
+        // increment because RenderedPos delta is 0 every frame.
+        //
+        // This method only commits the snapshot when the pose has
+        // actually changed (epsilon comparison on position; tiny
+        // changes in yaw/pitch don't count). Between friend updates
+        // the existing _prev/_curr stay put and the lerp + walk-cycle
+        // integrator continue to advance through them naturally,
+        // matching what the friend-side packet path produces.
+        public void UpdateFromHostObserver(Vector3 pos, float yaw, float pitch, double now)
+        {
+            const float Eps = 1e-4f;
+            float dx = pos.X - _currPos.X;
+            float dy = pos.Y - _currPos.Y;
+            float dz = pos.Z - _currPos.Z;
+            float dyaw = yaw - _currYaw;
+            float dpitch = pitch - _currPitch;
+            if (dx * dx + dy * dy + dz * dz > Eps * Eps
+                || System.Math.Abs(dyaw) > 0.01f
+                || System.Math.Abs(dpitch) > 0.01f)
+            {
+                ApplyTeleport(pos, yaw, pitch, now);
+            }
+        }
+
         // Compute the rendered position+look at wall-clock `now`. We sample
         // (now - InterpDelay) inside [_prevTime, _currTime]. If the gap
         // since _currTime exceeded the buffer we extrapolate flat (hold

@@ -1893,10 +1893,74 @@ void main()
         // alongside DrainNetwork. PushHostPoseToHub keeps the phantom
         // ServerClient's last-reported pose fresh; TickHubNetwork drains
         // inbound packets + emits broadcasts at 20 Hz.
-        public void PushHostPoseToHub()
+        public void PushHostPoseToHub(float dt = 1f / 60f)
         {
             if (_serverHub == null) return;
             _serverHub.UpdateLocalHostPose(Player.Position, Camera.Yaw, Camera.Pitch);
+            SyncHostRemotePlayersFromHub(dt);
+        }
+
+        // Tier 9 #54 V16 — Host-side bridge that populates _remotePlayers
+        // from the in-process ServerHub's connected-friends list. The
+        // host has no _netClient, so the regular EntitySpawn /
+        // EntityRelMove / EntityDespawn packet path that builds
+        // _remotePlayers on a friend never fires for the host. Instead
+        // we poll the hub each frame and apply each friend's reported
+        // pose directly into the dict, then remove any RemotePlayer
+        // entry whose EID is no longer in the hub's list.
+        // Same dimension filter the hub's BroadcastEntityUpdates
+        // already applies — friend in another dim → not rendered.
+        private void SyncHostRemotePlayersFromHub(float dt)
+        {
+            if (_serverHub == null) return;
+            var seen = new System.Collections.Generic.HashSet<int>();
+            foreach (var f in _serverHub.ListClientsForHost())
+            {
+                seen.Add(f.eid);
+                if (!_remotePlayers.TryGetValue(f.eid, out var rp))
+                {
+                    rp = new RemotePlayer(f.eid, f.username, f.pos, f.yaw, f.pitch, _netClock);
+                    _remotePlayers[f.eid] = rp;
+                }
+                else
+                {
+                    // V17 — only commit the snapshot when the friend's
+                    // pose actually changed. Polling 60 fps × 20 Hz
+                    // friend updates means we'd otherwise call
+                    // ApplyTeleport with an unchanged pose 3 times in
+                    // a row, collapsing the interp window to 0 and
+                    // breaking the walk-cycle integrator. With this
+                    // gate the lerp continues to advance through the
+                    // last real snapshot pair until a new one arrives.
+                    rp.UpdateFromHostObserver(f.pos, f.yaw, f.pitch, _netClock);
+                }
+            }
+            // Remove RemotePlayer entries the hub no longer reports
+            // (friend disconnected, walked into the Nether, etc.).
+            if (_remotePlayers.Count > seen.Count)
+            {
+                var stale = new System.Collections.Generic.List<int>();
+                foreach (var kv in _remotePlayers)
+                {
+                    if (!seen.Contains(kv.Key)) stale.Add(kv.Key);
+                }
+                for (int i = 0; i < stale.Count; i++) _remotePlayers.Remove(stale[i]);
+            }
+            // Advance _netClock for the host so RemotePlayer.Tick has a
+            // monotonic time axis. DrainNetwork advances _netClock for
+            // friend clients via dt; the host doesn't go through
+            // DrainNetwork (no _netClient), so we advance it here.
+            _netClock += dt;
+
+            // Tick every remote player's interp lerp. DrainNetwork does
+            // this for friend clients but skips for the host (no
+            // _netClient). Without this, RenderedPos stays at the
+            // construction value and the friend's rig renders frozen
+            // at their spawn point.
+            foreach (var kv in _remotePlayers)
+            {
+                kv.Value.Tick(_netClock, dt);
+            }
         }
 
         public void TickHubNetwork(float dt)

@@ -659,7 +659,7 @@ namespace VStudioCraft.UI
                         // of the hub's network layer (drain inbound,
                         // broadcast block + entity changes). Both no-op
                         // if not hosting.
-                        _renderer.PushHostPoseToHub();
+                        _renderer.PushHostPoseToHub(netDt);
                         _renderer.TickHubNetwork(netDt);
                     }
 
