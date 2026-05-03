@@ -3192,6 +3192,18 @@ void main()
             }
 
             SyncCameraToPlayer();
+
+            // Tier 8 #51 V11 — Notify the LAN-host's in-process
+            // ServerHub that the host's dimension changed. The next
+            // BroadcastEntityUpdates pass uses this to filter the
+            // host out of friends' tracked-entity sets — friends in
+            // the original dimension see an EntityDespawn for the
+            // host's avatar; on return to that dimension the same
+            // pass emits a fresh EntitySpawn. Friends are otherwise
+            // unaffected: their chunks + entities + drops + tile
+            // entities all stay live in their (still Overworld)
+            // dimension. No-op if not hosting LAN.
+            _serverHub?.SetHostDimension(target);
         }
 
         // Tier 8 #51 V4 — Build a starter portal in the freshly-

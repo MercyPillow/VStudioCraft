@@ -336,6 +336,22 @@ namespace VStudioCraft.Net
             _hostClient.LastReportedPitch = pitch;
         }
 
+        // Tier 8 #51 V11 — Host dimension change notifier. Called by
+        // GameRenderer.SwapDimension when the host walks through a
+        // Nether portal (or returns). The next BroadcastEntityUpdates
+        // tick uses _hostClient.CurrentDim != viewer.CurrentDim to
+        // filter the host out of friends' tracked-entity sets — they
+        // see an EntityDespawn for the host's avatar. On return to
+        // Overworld the same pass emits an EntitySpawn (the existing
+        // "in view, not yet tracked" branch handles it). Friends
+        // are unaffected — they stay in their dimension with their
+        // chunks intact.
+        public void SetHostDimension(Game.Dimension dim)
+        {
+            if (_hostClient == null) return;
+            _hostClient.CurrentDim = dim;
+        }
+
         // Tier 8 #44 V3 — host-side hook so the open-to-LAN host's
         // local sign-edit commits propagate to friends. The host
         // doesn't go through HandleEditSign (no socket round-trip
@@ -2130,13 +2146,24 @@ namespace VStudioCraft.Net
                     int targetCz = (int)Math.Floor(target.LastReportedZ / Chunk.SizeZ);
                     bool targetInView = viewer.TrackedChunks.Contains((targetCx, targetCz));
 
+                    // Tier 8 #51 V11 — Dimension filter. A target in
+                    // a different dimension to the viewer is treated
+                    // exactly like an out-of-view target: if currently
+                    // tracked, despawn now; either way emit nothing
+                    // further this pair this tick. When the dimensions
+                    // re-align (host returns to overworld) the existing
+                    // "in view, not yet tracked" branch below emits a
+                    // fresh EntitySpawn so the viewer sees the avatar
+                    // re-appear. Friends that never leave Overworld
+                    // see this only when the host crosses a portal.
+                    bool sameDim = viewer.CurrentDim == target.CurrentDim;
+
                     bool alreadyTracked = viewer.TrackedEntities.Contains(target.EntityId);
 
-                    // Out of view: if we previously tracked them, drop them
-                    // now via Despawn (player walked far enough that the
-                    // other player should disappear). Either way, no
-                    // further packets to emit this pair.
-                    if (!targetInView)
+                    // Out of view OR different dimension: if we
+                    // previously tracked them, drop them now via
+                    // Despawn. Either way, no further packets.
+                    if (!targetInView || !sameDim)
                     {
                         if (alreadyTracked)
                         {
@@ -3144,6 +3171,22 @@ namespace VStudioCraft.Net
 
         public int SpawnX, SpawnY, SpawnZ;
         public Queue<(int cx, int cz)> PendingChunkSends = new Queue<(int, int)>();
+
+        // Tier 8 #51 V11 — Multiplayer dimension sync. Each client
+        // tracks which dimension their player is in. Defaults to
+        // Overworld (the only dimension friends can reach today —
+        // there's no friend-side portal-trigger path yet, so this
+        // field only flips for the loopback host when it walks
+        // through a portal in SP). The pair-wise BroadcastEntityUpdates
+        // pass uses this to filter same-dim viewers/targets — a
+        // friend in Overworld doesn't see the host's avatar while
+        // the host is in the Nether, and vice versa. The minimum-
+        // viable scope: friends stay in Overworld with their
+        // overworld chunks intact; the host's avatar despawns
+        // from their view on dimension cross and respawns on
+        // return. Per-dim chunk views for friends-following-host
+        // is a follow-up.
+        public Game.Dimension CurrentDim = Game.Dimension.Overworld;
 
         // Phase 3 — what chunks does this client currently believe it
         // has loaded? Populated as SendChunk ships each one, drained as
