@@ -263,6 +263,14 @@ namespace VStudioCraft.Game
             }
         }
 
+        // Release-delay window in redstone ticks (10 Hz). 2 extra
+        // ticks ≈ 200 ms — long enough for the player to walk through
+        // a door driven by the plate before the door snaps shut on
+        // them, short enough that a quick "tap" on the plate doesn't
+        // leave it stuck pressed for noticeable time afterwards.
+        // Mirrors the canonical Alpha pressure-plate hold cadence.
+        private const int PressurePlateReleaseHold = 10;
+
         private static void UpdatePressurePlates(World world, List<(int x, int y, int z)> snapshot)
         {
             int pwx = _playerCellX;
@@ -276,7 +284,23 @@ namespace VStudioCraft.Game
                 if (t != BlockType.StonePressurePlate && t != BlockType.WoodPressurePlate) continue;
                 bool playerOn = (wx == pwx) && (wz == pwz) && (wy == pwy);
                 byte meta = c.RawMeta[idx];
-                byte newMeta = (byte)((meta & 0xFE) | (playerOn ? 1 : 0));
+                int hold = (meta >> 4) & 0x0F;
+                if (playerOn)
+                {
+                    // Refresh the release timer every tick the player
+                    // stays on the plate, so the countdown only begins
+                    // when they leave.
+                    hold = PressurePlateReleaseHold;
+                }
+                else if (hold > 0)
+                {
+                    // Player has stepped off — count down toward 0.
+                    // Pressed stays asserted while hold > 0 so the
+                    // signal lingers past the player leaving the cell.
+                    hold--;
+                }
+                byte pressed = (byte)((playerOn || hold > 0) ? 1 : 0);
+                byte newMeta = (byte)((hold << 4) | (meta & 0x0E) | pressed);
                 if (newMeta != meta)
                 {
                     c.RawMeta[idx] = newMeta;
