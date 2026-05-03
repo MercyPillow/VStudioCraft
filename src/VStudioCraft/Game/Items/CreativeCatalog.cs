@@ -323,6 +323,18 @@ namespace VStudioCraft.Game
                 // valid hold-and-place form.
                 case BlockType.SignPost:
                 case BlockType.WallSign:
+                // Farmland is a runtime-only state of dirt — the player
+                // produces it by hoeing Grass / Dirt in-world. Holding
+                // a Farmland stack and placing it would skip the till
+                // step + tile-entity setup; surfacing it in the catalog
+                // doesn't fit any normal play flow, so exclude it.
+                case BlockType.Farmland:
+                // Nether Portal is the swirl PLANE that fills the inside
+                // of an obsidian portal frame. Players should never hold
+                // a stack of "portal" — it's spawned by the flint+steel
+                // ignition path on a complete frame. Same runtime-only
+                // exclusion idiom as FlowingWater / Wheat.
+                case BlockType.NetherPortal:
                     return false;
                 default:
                     return true;

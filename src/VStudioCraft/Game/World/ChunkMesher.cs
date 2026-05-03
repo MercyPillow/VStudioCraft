@@ -73,7 +73,7 @@ namespace VStudioCraft.Game
 
             // Model pass — scan for non-cube blocks and emit per-block sprite
             // geometry into the opaque stream (alpha-tested via shader discard).
-            EmitModels(chunk, baseX, baseZ, nxNeg, nxPos, nzNeg, nzPos);
+            EmitModels(world, chunk, baseX, baseZ, nxNeg, nxPos, nzNeg, nzPos);
 
             // Fluid surface lids — for each non-falling flowing-fluid cell with
             // air directly above we drop the cube sweep's full-cube top face
@@ -401,6 +401,7 @@ namespace VStudioCraft.Game
         // from any angle. Used today by torches; flowers / mushrooms / tall
         // grass will reuse this geometry once their tiles are added.
         private void EmitModels(
+            World world,
             Chunk chunk, int baseX, int baseZ,
             Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos)
         {
@@ -583,6 +584,18 @@ namespace VStudioCraft.Game
                     // remain plain dirt so a row of farmland adjacent
                     // to dirt blends seamlessly along its sides.
                     EmitFarmlandBox(x + baseX, y, z + baseZ, lightPacked);
+                }
+                else if (t == BlockType.Chest)
+                {
+                    // 14×15×14 oriented box — 1 px shorter on top and
+                    // 1 px in from each ±X / ±Z wall. Per-face
+                    // textures are picked from the chest entity's
+                    // facing so the bound metal lid silhouette stays
+                    // pointed at the player who placed it.
+                    BlockFacing facing = BlockFacing.North;
+                    var ce = world.TryGetChestEntity(x + baseX, y, z + baseZ);
+                    if (ce != null) facing = ce.Facing;
+                    EmitChestBox(x + baseX, y, z + baseZ, facing, lightPacked);
                 }
                 else if (t == BlockType.Rail)
                 {
@@ -1496,6 +1509,81 @@ namespace VStudioCraft.Game
                 x1, y0, z1, 1f, 1f,
                 x0, y0, z1, 0f, 1f,
                 0f, -1f, 0f, side, lightPacked);
+        }
+
+        // Chest — 14×15×14 inset box, oriented per the chest entity's
+        // facing. Side walls sit 1 px in from the cell edge (x = 1/16
+        // and 15/16, z = 1/16 and 15/16), the top sits 1 px below the
+        // cell ceiling (y = 15/16), the bottom is flush with the cell
+        // floor (y = 0). Per-face textures come from
+        // BlockData.GetTileIndexForOriented so the metal-bound front
+        // tile points at the player who placed the chest.
+        //
+        // UVs sample the FULL [0..1] range of each tile (not the inset
+        // sub-region of the texture) so the chest art reads at its
+        // canonical aspect — the geometry shrink is what produces the
+        // visible inset, not a crop of the texture. This matches how
+        // cactus's 14×16×14 inset works.
+        private void EmitChestBox(float wx, float wy, float wz, BlockFacing facing, int lightPacked)
+        {
+            const float inset = 1f / 16f;
+            float x0 = wx + inset,        x1 = wx + 1f - inset;
+            float z0 = wz + inset,        z1 = wz + 1f - inset;
+            float y0 = wy + 0f;
+            float y1 = wy + 15f / 16f;
+
+            // Per-face oriented tile lookup. axis: 0=X, 1=Y, 2=Z.
+            // dir: -1 / +1. Same convention the cube sweep uses for
+            // GetTileIndexForOriented (see ChunkMesher.Sweep).
+            int layNX = BlockData.GetTileIndexForOriented(BlockType.Chest, 0, -1, facing);
+            int layPX = BlockData.GetTileIndexForOriented(BlockType.Chest, 0, +1, facing);
+            int layNY = BlockData.GetTileIndexForOriented(BlockType.Chest, 1, -1, facing);
+            int layPY = BlockData.GetTileIndexForOriented(BlockType.Chest, 1, +1, facing);
+            int layNZ = BlockData.GetTileIndexForOriented(BlockType.Chest, 2, -1, facing);
+            int layPZ = BlockData.GetTileIndexForOriented(BlockType.Chest, 2, +1, facing);
+
+            // -X face
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x0, y0, z1, 1f, 0f,
+                x0, y1, z1, 1f, 1f,
+                x0, y1, z0, 0f, 1f,
+                -1f, 0f, 0f, layNX, lightPacked);
+            // +X face
+            EmitCrossQuad(
+                x1, y0, z0, 1f, 0f,
+                x1, y1, z0, 1f, 1f,
+                x1, y1, z1, 0f, 1f,
+                x1, y0, z1, 0f, 0f,
+                +1f, 0f, 0f, layPX, lightPacked);
+            // -Z face
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x0, y1, z0, 0f, 1f,
+                x1, y1, z0, 1f, 1f,
+                x1, y0, z0, 1f, 0f,
+                0f, 0f, -1f, layNZ, lightPacked);
+            // +Z face
+            EmitCrossQuad(
+                x0, y0, z1, 0f, 0f,
+                x1, y0, z1, 1f, 0f,
+                x1, y1, z1, 1f, 1f,
+                x0, y1, z1, 0f, 1f,
+                0f, 0f, +1f, layPZ, lightPacked);
+            // +Y face (top) — TileChestTop
+            EmitCrossQuad(
+                x0, y1, z1, 0f, 0f,
+                x1, y1, z1, 1f, 0f,
+                x1, y1, z0, 1f, 1f,
+                x0, y1, z0, 0f, 1f,
+                0f, +1f, 0f, layPY, lightPacked);
+            // -Y face (bottom)
+            EmitCrossQuad(
+                x0, y0, z0, 0f, 0f,
+                x1, y0, z0, 1f, 0f,
+                x1, y0, z1, 1f, 1f,
+                x0, y0, z1, 0f, 1f,
+                0f, -1f, 0f, layNY, lightPacked);
         }
 
         // Tier 9 #54 V5/V6/V7 — Rail top face with meta-aware UV

@@ -1325,6 +1325,13 @@ namespace VStudioCraft.Game
                 // height; the player AABB sinks to match the mesh top.
                 case BlockType.Farmland:
                     return (0f, 0f, 0f, 1f, 15f / 16f, 1f);
+                // Chest — 14×15×14 inset box centred in the cell.
+                // 1 px gap on each ±X / ±Z side and 1 px below cell
+                // top. Aligns with the EmitChestBox visual extents
+                // so picking + selection wireframe match what the
+                // player sees.
+                case BlockType.Chest:
+                    return (1f / 16f, 0f, 1f / 16f, 15f / 16f, 15f / 16f, 15f / 16f);
                 // Tier 9 #54 V2 — Rail. 1×(1/16)×1 footprint pinned to
                 // the cell floor. Used by raycast so LMB targeting
                 // hits only the visible rail layer, not the whole cell.
@@ -1510,6 +1517,13 @@ namespace VStudioCraft.Game
                 // while the sides + bottom use TileDirt. Mesher
                 // routes through a dedicated EmitFarmlandBox helper.
                 case BlockType.Farmland:
+                // Chest is a 14×15×14 inset box — 1 px shorter on top
+                // and 1 px in from each cell wall on the X/Z axes.
+                // Per-face textures are oriented from the chest tile
+                // entity's facing (front/sides/top/bottom) so the
+                // bound metal lid silhouette stays facing the player.
+                // Mesher routes through EmitChestBox.
+                case BlockType.Chest:
                 // Tier 8 #51 V1 — Nether Portal renders as a single
                 // axis-aligned plane (the swirl); mesher routes
                 // through EmitModels with EmitNetherPortal.
@@ -1660,6 +1674,12 @@ namespace VStudioCraft.Game
                 // visible above the farmland surface — same idiom
                 // as soul sand.
                 case BlockType.Farmland:
+                // Chest is inset on all four sides + top, leaving an
+                // air gap around the 14×15×14 box. Adjacent cube
+                // faces must still emit so the player can see the
+                // chest's recessed sides + top against the
+                // surrounding terrain.
+                case BlockType.Chest:
                 // Tier 8 #51 V1 — Nether Portal is a thin plane
                 // (most of the cell is air), so adjacent obsidian
                 // faces must still emit around the swirl.
@@ -1880,6 +1900,12 @@ namespace VStudioCraft.Game
                 // tilled top face would render dark in daylight,
                 // same gotcha as soul sand.
                 case BlockType.Farmland:
+                // Chest is a 14×15×14 inset box; the cell is mostly
+                // air around it. Light must pass through so the
+                // chest face samples its own cell's lighting and
+                // the 1-px gap around the chest stays bright in
+                // daylight.
+                case BlockType.Chest:
                 // Tier 8 #51 V1 — Nether Portal: thin plane in an
                 // otherwise-air cell, so light flows through (matches
                 // canonical Alpha — sky light still reaches the floor
