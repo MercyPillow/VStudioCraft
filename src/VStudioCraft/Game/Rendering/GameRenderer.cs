@@ -5107,28 +5107,63 @@ void main()
                 }
             }
 
+            // Tier 9 #54 V15 — Boat placement runs BEFORE the standard
+            // block raycast because Raycast.Cast skips water (water
+            // is not an IsRaycastTarget — that gate keeps LMB-break
+            // from targeting fluids). A boat held in hand needs water
+            // AS the place target, so we run a dedicated step-and-
+            // sample walk along the camera ray until we either hit
+            // water (place boat) or hit a solid block (give up).
+            // Lava is intentionally NOT a boat-place target — boats
+            // only float on water in canonical Alpha.
+            if (Input != null)
+            {
+                var heldStackBoatPre = Input.Inventory.GetHotbar(Input.HotbarIndex);
+                BlockType heldBoatPre = heldStackBoatPre.IsEmpty ? BlockType.Air : heldStackBoatPre.Type;
+                if (heldBoatPre == BlockType.Boat)
+                {
+                    const float StepLen = 0.1f;
+                    Vector3 rayDir = Camera.Forward;
+                    for (float t = 0f; t <= ReachDistance; t += StepLen)
+                    {
+                        Vector3 p = Camera.Position + rayDir * t;
+                        int wx = (int)System.Math.Floor(p.X);
+                        int wy = (int)System.Math.Floor(p.Y);
+                        int wz = (int)System.Math.Floor(p.Z);
+                        var bt = _world.GetBlock(wx, wy, wz);
+                        if (bt == BlockType.Water || bt == BlockType.FlowingWater)
+                        {
+                            // Place boat ABOVE the water cell so the
+                            // hull rests on the surface (the buoyancy
+                            // tick will settle it within a frame).
+                            var spawnPos = new Vector3(wx + 0.5f, wy + 1.0f, wz + 0.5f);
+                            SpawnBoat(spawnPos, Camera.Yaw);
+                            if (GameMode == GameMode.Survival)
+                                Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                            SfxBank.PlayPlace(BlockType.Wool);
+                            return true;
+                        }
+                        // Stop on a solid block — the player is aiming
+                        // at the wall in front of the water, not at the
+                        // water itself. Falls through to the standard
+                        // place-block path below.
+                        if (BlockData.IsSolid(bt)) break;
+                    }
+                }
+            }
+
             if (!Raycast.Cast(_world, Camera.Position, Camera.Forward, ReachDistance, out var hit))
                 return false;
             var target = _world.GetBlock(hit.X, hit.Y, hit.Z);
 
-            // Tier 9 #54 V1 — Boat placement. RMB with Boat item on a
-            // water cell spawns a Boat entity floating just above the
-            // water surface. Anywhere else (solid block, lava, air
-            // beyond reach) the boat doesn't place — Alpha matches.
             if (Input != null)
             {
-                var heldStackBoat = Input.Inventory.GetHotbar(Input.HotbarIndex);
-                BlockType heldBoat = heldStackBoat.IsEmpty ? BlockType.Air : heldStackBoat.Type;
-                if (heldBoat == BlockType.Boat
-                    && (target == BlockType.Water || target == BlockType.FlowingWater))
-                {
-                    var spawnPos = new Vector3(hit.X + 0.5f, hit.Y + 1.0f, hit.Z + 0.5f);
-                    SpawnBoat(spawnPos, Camera.Yaw);
-                    if (GameMode == GameMode.Survival)
-                        Input.Inventory.DecrementHotbar(Input.HotbarIndex);
-                    SfxBank.PlayPlace(BlockType.Wool);
-                    return true;
-                }
+                // Held-item snapshot for rail / minecart placement
+                // dispatch below. Boat is handled separately above
+                // because it requires a water-stepping raycast that
+                // the standard Raycast.Cast can't produce.
+                var heldStackPlace = Input.Inventory.GetHotbar(Input.HotbarIndex);
+                BlockType heldBoat = heldStackPlace.IsEmpty ? BlockType.Air : heldStackPlace.Type;
 
                 // Tier 9 #54 V2 — Rail placement. RMB with Rail item on
                 // top of a solid block places a Rail at the air cell

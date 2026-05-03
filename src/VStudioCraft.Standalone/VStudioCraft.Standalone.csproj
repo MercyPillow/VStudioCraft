@@ -26,9 +26,14 @@
   <ItemGroup>
     <!-- Game engine sources from the VSIX project, linked in so both targets
          share the exact same implementation. The standalone project compiles
-         them into its own assembly for running outside Visual Studio. -->
-    <Compile Include="..\VStudioCraft\Game\*.cs">
-      <Link>Game\%(Filename)%(Extension)</Link>
+         them into its own assembly for running outside Visual Studio.
+         Recursive `**` picks up files regardless of which subfolder they
+         live in (Audio/, Blocks/, Entities/, etc.). The %(RecursiveDir)
+         token preserves subfolder structure in the linked Solution Explorer
+         tree so navigating Standalone shows the same /Audio /Blocks /...
+         layout as the VSIX project. -->
+    <Compile Include="..\VStudioCraft\Game\**\*.cs">
+      <Link>Game\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </Compile>
 
     <!-- Network protocol sources. Same canonical-in-VSIX-project, linked-

@@ -48,8 +48,12 @@
          compile fine because OpenTK + WinForms references are present, and
          they're inert at runtime because nothing in Program.cs touches
          GameRenderer / GameHostControl / AudioEngine. -->
-    <Compile Include="..\VStudioCraft\Game\*.cs">
-      <Link>Game\%(Filename)%(Extension)</Link>
+    <!-- Recursive `**` picks up files regardless of which subfolder they
+         live in (Audio/, Blocks/, Entities/, etc.). The %(RecursiveDir)
+         token preserves subfolder structure in the linked Solution Explorer
+         tree. -->
+    <Compile Include="..\VStudioCraft\Game\**\*.cs">
+      <Link>Game\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </Compile>
 
     <!-- Network protocol sources. Canonical home is the VSIX project's Net\
