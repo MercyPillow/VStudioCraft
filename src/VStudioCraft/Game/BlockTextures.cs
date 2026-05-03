@@ -7458,7 +7458,10 @@ namespace VStudioCraft.Game
             for (int y = 0; y < TileSize; y++)
             for (int x = 0; x < TileSize; x++)
             {
-                // Distance from the (0, 0) corner of the tile.
+                // V13: distance from the IMAGE top-left of the tile —
+                // matches canonical Alpha curved-rail layout where
+                // the L-corner sits at image top-left. The V13 mesher
+                // rotation table is calibrated to this convention.
                 int dx = x;
                 int dy = y;
                 int r2 = dx * dx + dy * dy;

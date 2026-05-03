@@ -1396,27 +1396,22 @@ namespace VStudioCraft.Game
             // arc connects the north edge to the east edge). We map
             // the 4 corner metas to the 4 rotations that bring the
             // procedural NE arc onto the correct corner.
-            // V11 — Curve rotation table corrected. The procedural
-            // curve tile paints the arc centred at tile pixel (0, 0)
-            // = top-left = UV (0, 0) at upload. Default UV mapping
-            // (rot=0) places UV (0, 0) at the cell's SW corner, so
-            // the arc CENTRE lands at SW — meaning the rail's two
-            // open edges are the cell's S edge and W edge. That's
-            // a SW corner (open S + W = meta 5).
-            // Working backward:
-            //   rot 0 → arc centre at SW → SW corner (meta 5)
-            //   rot 1 → arc centre at NW → NW corner (meta 3)
-            //   rot 2 → arc centre at NE → NE corner (meta 2)
-            //   rot 3 → arc centre at SE → SE corner (meta 4)
+            // V13 — Curve rotation table rotated 180° from V12. The V12
+            // table assumed the canonical Alpha curve tile has its
+            // L-corner at the IMAGE bottom-right (arc centre at
+            // image top-left); turns out it's the OPPOSITE — the
+            // canonical tile has the L-corner at image top-left
+            // with the arc centre at image bottom-right. Adding 2
+            // (= 180°) to each rot value compensates.
             int rot;
             switch (meta)
             {
                 case 0: rot = 0; break;            // N-S straight
                 case 1: rot = 1; break;            // E-W straight
-                case 2: rot = 2; break;            // NE corner
-                case 3: rot = 1; break;            // NW corner
-                case 4: rot = 3; break;            // SE corner
-                case 5: rot = 0; break;            // SW corner
+                case 2: rot = 3; break;            // NE corner (was 1)
+                case 3: rot = 2; break;            // NW corner (was 0)
+                case 4: rot = 0; break;            // SE corner (was 2)
+                case 5: rot = 1; break;            // SW corner (was 3)
                 case 6: case 7: rot = 1; break;    // AscE / AscW — E-W axis
                 case 8: case 9: rot = 0; break;    // AscN / AscS — N-S axis
                 default: rot = 0; break;
