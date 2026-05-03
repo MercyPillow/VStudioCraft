@@ -90,7 +90,7 @@ in vec2 vUV;
 out vec4 FragColor;
 uniform sampler2D uTex;
 uniform vec4 uTint;
-// UV transform — selects a sub-region of the source texture so a
+// UV transform -- selects a sub-region of the source texture so a
 // single billboard quad can sample one frame of an N-frame strip
 // (used by the moon-phase 8-frame texture). Default is (0,0)
 // offset + (1,1) scale for the sun's whole-texture sample.

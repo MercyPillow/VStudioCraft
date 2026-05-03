@@ -317,7 +317,7 @@ void main()
     // Not pixel-perfect Alpha (which renders an actual rotated cube), but
     // a clear visual cue at hotbar size and zero extra geometry.
     // The block atlas convention is v=0 at the BOTTOM of each tile (see
-    // GenerateGrassSide — the green overhang lives at high y so it appears
+    // GenerateGrassSide -- the green overhang lives at high y so it appears
     // along the top of the face). The hotbar render path V-flips the UVs
     // so the icon shows top-up; that means here vUV.y=1 is the top of the
     // icon. Gradient: bright at top (vUV.y=1), dim at bottom (vUV.y=0).
