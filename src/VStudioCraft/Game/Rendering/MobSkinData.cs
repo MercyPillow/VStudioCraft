@@ -3,14 +3,18 @@ namespace VStudioCraft.Game
     // Base64-encoded bytes of canonical Alpha-style mob skins.
     // Sources:
     //   * zombie / skeleton / creeper / zombie_pigman
-    //     — Mojang's official bedrock-samples vanilla resource
-    //     pack on GitHub.
-    //   * spider / blaze / ghast — InventivetalentDev/minecraft-
-    //     assets mirror of the Java-edition vanilla resource pack
-    //     (bedrock-samples ships those at non-Alpha pixel scales,
-    //     so we use the Java mirror for the canonical 64x32 layout).
+    //     — Mojang's official bedrock-samples mirror.
+    //   * spider / blaze / ghast / pig / cow / sheep /
+    //     sheep_fur / chicken
+    //     — InventivetalentDev/minecraft-assets mirror of
+    //     the Java-edition vanilla resource pack.
     //
     // All mob skins ship at 64x32 — byte-identical to Alpha 1.1.2_01.
+    // Sheep ships TWO textures: sheep.png is the bare-sheared
+    // body, sheep_fur.png is the wool overlay drawn slightly
+    // inflated around the body. We render the fur layer for
+    // the body cube and the bare layer for head/legs so the
+    // sheep silhouette reads correctly.
     //
     // We inline as base64 strings because shipping the PNGs as
     // <EmbeddedResource> has been observed to silently disappear
@@ -136,6 +140,56 @@ namespace VStudioCraft.Game
             + "SgAbd9l7kooEeAYnGfnLDEY/RZHX+3wD4PmiKJO37yUqJRLkRMf/owQQo57IAM2m1V5KNCY1j1GPd297gvKYL+R0azKuqMQKGycj"
             + "Eusq8JwwSoC/huqaS952QV3xjHtU4+MYMr5LL0qzV9GZpAvRnfd9naU6wEpn8oE7pvbBY9ox2JkmFChNAkj63cM+JpbKc1t8dfbi"
             + "SvsiPN38mTECHgPjlN0hDl5n3wAAAABJRU5ErkJggg==";
+
+        public const string PigBase64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAgBAMAAABQs2O3AAAAKlBMVEX/k5IAAAD////7vr7upaTxnpjmkYvmhYPmeXPkaGrGYVq+"
+            + "UE2JR0YCAAEXEXvGAAAAAnRSTlMAAHaTzTgAAAG6SURBVHjahdKhbhVhEIbh9/u7hGC6M8sF0G0xyILBEuohpL2BmhoECpBoLKoW"
+            + "CYYLwKNouAE4W4Vi/1kEcofklPTQNm0fO28y5pMDu5WyCxxwUQGokFyisBRcExBXBwFXB3ZdELomII1L6GWtU9pEO1mXwEdeAeQC"
+            + "ukOgQY6SnMz5n4UAKMZdd7Hpj5GBamVJe3YSCG0/77a/3DaMpRaYaD4/pdYaRRDvst5LMIEBQeJ545MDNP08Dx7yeShdgkBZ6WhH"
+            + "sQzU/UBgudi0dkEHPg5lq43N9vcyoNOiBdmWo34yUDf0htXoAeTs+D4PWXu29ujnmz096BlDPePXgAxvQADsx3wA5HfuCBvWjwIi"
+            + "iQIkwM37L4CwmI9x1oeETGyjgQyAW0ff+EdpFSxQkno9L7o0pkMAdnr3Yl5z+EXUMm9QLKmFSFbDKGxwqozHfdYoPSszwyovUytf"
+            + "D6ustifs9B5NRoCPsCKsojYApkb9E963fzghJj95YQkBNB94CyvCJ2HVRgCCwhlmNpjjkhyhsHOBHKNSScIwoAE/u0RBNSxDFrga"
+            + "zpDMMyt4WArUnwvc3HJB7eTVSUl/AZHcr8mVkA6/AAAAAElFTkSuQmCC";
+
+        public const string CowBase64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAgCAMAAACVQ462AAAAaVBMVEX////CxM7/qKijWmRmZmZLS0sAAAD////c3Nz9s7PJycn3"
+            + "r6/ExMSzs7PUl5fTlpbOkZGhoaG3hoaBgYGWamqUaGhwcHBmZmZgYGBWVlZUVFRJSUlERERENiY/MCQzMzM1Kh8XFBQAAABehcS3"
+            + "AAAAB3RSTlMAAAAAAAAAVWTqWAAAAqFJREFUeNp9lQF3mzAMhEnbpV0zZ2jO1nSdVCX//0fudBIOrK+7B9gY3WfZiMc0TTvIVFWa"
+            + "mpm7Qfvf7/sY33/QLnQo4X5KgEKtqZpT9vrr9fVzwAzvPN9Ba4A1IYD6A30OOJwOh9MHgLRu6qV36D8AaD7coTcA4ZfexFP2AO12"
+            + "vUtrOMzco83TLPz/AAwAEMRqGwsQBjONpTVISFCbT/N8WgCmUARFgJp2UVxVuqkFNP1mIkQIADpzFwug9nWeC4DA+eeP1ngHQJO4"
+            + "asjCyyRF9e7+Po4CuH8/2vOzSsPVjkeEGgwE1Pykt05EVwBSA+BHuz4qyI9XO6aDMihb4frh5cV2qQKAYLpR+fSWPvwc52m+AWCQ"
+            + "xxNUDl8mrvsuyNz5fpzNBuAZ/HQ9n69PnCOj4Pd6xvfvTj+bLcDp+nZ+ezsHYMzDls+kZYkdKAyWexQS9RCaQrlnHSqUF8pYIx39"
+            + "LFH0NoAvawAJYaMqlypKs3qjAxAleHl5uUxUhnKCIsDjNBeA2wrZAhCMbwBQTutWkrZ6tyA0SAbAdJ1B+qGxAubcTVPR9ixKWwDQ"
+            + "BboBuIqVH2pNE4EOv10RAiwLhgrbNFVc5N378MPC8TCLNggATYDyXbMhoPIMAFQEEYRwZn6TJFgAalEjwQUQwZ0peAHgoI8flLAh"
+            + "4LawNUC5S/T7WAPTl97g7HiagCqPJpn2AMQMt4KG36QxpOVcHY9rD/ggbmsTxxdEPxUd67KQlVoAZgJvCrYqJBOx8OU/xAOwqoPR"
+            + "BYBhdXGkPU2uIQ668x9SgPSxLU4AKkGP8Jg2AFYAKP8hHqwqlEqFfQkAzXnC6gDQj24BZgBC9MfwWLE3AHImXggFIAlO5T/EqdWX"
+            + "LVkPHYDLWvygfK38h/hWffH3/f4v7bOm1XdpT80AAAAASUVORK5CYII=";
+
+        public const string SheepBase64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAgCAMAAACVQ462AAAAM1BMVEX////w+fz49vUAAAD////49vXs7Oze3t7S0tL/uLjmlJTA"
+            + "noa3lHuviGtXRjoICAgAAABdC2QvAAAABHRSTlMAAAAAs5NmmgAAAhFJREFUeNqdkgFy2zAMBOMqONC+hdv/v7YRqCSMPO0kvpFE"
+            + "UhKWwBEv29Rl5MgcUo7U5dDLf7Qdep9cFNJINeEpQCoyx8id8BxgSJHaAXoOIMWRQ16+oUfAyNSMH08BRg5lu/jDDC6HUhEjMzWG"
+            + "fgQYmRE5QhkairGv1PVo/GoFNrKjsLG3bX/7AZA0rjcL25R8u3YpzZgAsANbwvEI2H/lhn6/2q9/xI02oouZAFsIBTZRnAHz90ps"
+            + "qKzUrrYz3wEdCzZlcwJ0sVIm12v1Yq73awKEsNMCYThnoOP863ar2Qf79mN/vpvIYWBgsk6Af+tyQaCQcTFnDso29vcAKDG2yxZ0"
+            + "KCaDFTBad7hvb/MVICTseZloK3ohFg+0jcwGDOmUQSJCJjFB0DxhFsCmdq4z0DkDu2MKBcZWBUQQWkvYs8j7m8bYthWAbRVk2SSe"
+            + "HRGmlhKUYx567piHDKiykacHiTAWZmnlJnS8RmoFkBK2FdgUvYjp62Jib69j+ArQh22JwGkC265PQG/erT8fK+AwHkOY6JEG+hPg"
+            + "clFlCoxZASZQKKd5CMsWRCwmGibDprBXgA0gCQKZBgWBlwzALkw15wxIEhMVMtjOjo71FIr5CSj8FYCxQVHYCQSAzdrKmIIy9aaT"
+            + "B02WfZwfIthhImLxwEf9xT48tDImpveRBFAErCUUZeZNA76lD8B9VdX9p4C/n54rtHuYBiAAAAAASUVORK5CYII=";
+
+        public const string SheepFurBase64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAgBAMAAABQs2O3AAAAElBMVEUAAAD////4+Pjv7+/f39/U1NS+A43/AAAAAXRSTlMAQObY"
+            + "ZgAAAT1JREFUeNqtkcF1w0AIRNUCpAJADRhwA4GtwNB/K4lsbeyDZF8y7+3tvxlmdvkVM3f3ci4E/AAQvAeAPkQQ0HuA4V1EXAiB"
+            + "ED0rDgFjBSJRG23HDqKIKOI+al4EmyZwUwIE4Gv22EsjEdATMEYitOuoB0CMIMQ4gW4DQuvOehRRYXRXXc5kq63uEadAZHr+6mQz"
+            + "Nh+dpkwMdPwtPiqV7mVnqHQ/V/9as1IACf4cVJ8AIq3etlUFwAm8OABYXNvjAvgSYS8OJPcjiRF3wO4K2x3YsipDCQB42ZQRqT5r"
+            + "k2V23dwuPI8UNlFV2SMkMvuWwTAjVJS3t9dE9+oyRQLCfQURNtY5lORoDyKA3SFX8/TwHUD2a4cybBYnf9EVosxAfACIio8qY2M+"
+            + "BNRsjK4wNWY5AL4lu7u6eFT28i/6AVb4Uba64LWrAAAAAElFTkSuQmCC";
+
+        public const string ChickenBase64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAgBAMAAABQs2O3AAAALVBMVEUAAAD////i4uL85XDT09PhzGLGxsbgu2nTrlrQqT/Bk0OW"
+            + "cjRjVkH/AAAAAADtfCsnAAAAAXRSTlMAQObYZgAAAO9JREFUeNrtzMFJxFAQxvFZrGAewaMwwxQg2IA7fMzZElQecxZswHZc7CAd"
+            + "2MM72IlJVoXEbATP+7998OMj2kmHW6LXQ9/T0AUt25UuB/D+dgQ317+AXLZ7OgxN4vmJ5vGxforGXhbgSj9ElFqjrxYXomN+Griq"
+            + "mqG1H3E3B7DmQN0A0Wpk0laqKlw2gKv9AdycbRNE1dgA1SOy0hTWQCIrgqaUlnGBqkLY4aeAq0FYfT/OFRBQVGERWQddAKh7ZuFV"
+            + "UCwqorow8166jgVzoBaZWV2FRZS5iM2BYwKwBzEfjJSYg/zOIx7hDk86948+AcUmS5dD8ZFCAAAAAElFTkSuQmCC";
 
     }
 }

@@ -506,6 +506,31 @@ void main()
         // TexW=128, TexH=64.
         private int _ghastSkinTexture;
         private SkinCuboidMesh _ghastBodyMesh, _ghastTentacleMesh;
+        // Passive / friendly mobs. Each is a quadruped with the same
+        // overall pattern: head + body + 4 legs (chicken has 2 legs +
+        // wings instead). All four legs of a quadruped share one mesh
+        // because the canonical Alpha texture has one leg region that
+        // the model samples four times.
+        //
+        // Pig — head 8x8x8, body 10x16x8 (lying horizontal), legs 4x6x4.
+        private int _pigSkinTexture;
+        private SkinCuboidMesh _pigHeadMesh, _pigBodyMesh, _pigLegMesh;
+        // Cow — head 8x8x6, body 12x18x10, legs 4x12x4, horns 1x3x1.
+        private int _cowSkinTexture;
+        private SkinCuboidMesh _cowHeadMesh, _cowBodyMesh, _cowLegMesh, _cowHornMesh;
+        // Sheep — head 6x6x8, body 8x16x6 (skin layer + fur overlay),
+        // legs 4x12x4. Sheep uses TWO textures: sheep.png for the bare
+        // body underneath + sheep_fur.png for the wool overlay drawn
+        // slightly inflated around the body cube.
+        private int _sheepSkinTexture;
+        private int _sheepFurTexture;
+        private SkinCuboidMesh _sheepHeadMesh, _sheepBodyMesh, _sheepLegMesh;
+        private SkinCuboidMesh _sheepFurBodyMesh;
+        // Chicken — head 4x6x3, body 6x8x6, legs 3x5x3, beak 4x2x2,
+        // wattle 4x2x2, wings 4x6x1.
+        private int _chickenSkinTexture;
+        private SkinCuboidMesh _chickenHeadMesh, _chickenBodyMesh, _chickenLegMesh;
+        private SkinCuboidMesh _chickenBeakMesh, _chickenWattleMesh, _chickenWingMesh;
         private OverlayMesh _crosshairMesh;
         private OverlayMesh _wireCubeMesh;
         private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
@@ -1839,6 +1864,111 @@ void main()
                     8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
                 _blazeRodMesh = SkinCuboidMesh.BuildBodyPart(
                     2 * Px, 8 * Px, 2 * Px, 0, 16, 2, 8, 2, TexW, TexH, mirror: false);
+            }
+
+            // ---------- Pig ----------
+            // Canonical Alpha 1.1.2 dimensions:
+            //   Head: 8x8x8 px at (0, 0)
+            //   Body: 10x16x8 px (rotated horizontally) at (28, 8) —
+            //         the 16-axis lies along Z (head-to-tail), 10
+            //         along X (body width), 8 along Y (body height).
+            //   Leg:  4x6x4 px at (0, 16) — 4 legs share one mesh.
+            _pigSkinTexture = MobSkin.CreateTexture(MobSkinData.PigBase64);
+            if (_pigSkinTexture != 0)
+            {
+                _pigHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
+                // Pig body: width=10, height=8, depth=16. Texture
+                // params follow the same w/h/d order: w=10, h=8, d=16.
+                _pigBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    10 * Px, 8 * Px, 16 * Px, 28, 8, 10, 8, 16, TexW, TexH, mirror: false);
+                _pigLegMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 6 * Px, 4 * Px, 0, 16, 4, 6, 4, TexW, TexH, mirror: false);
+            }
+
+            // ---------- Cow ----------
+            //   Head: 8x8x6 px at (0, 0)
+            //   Body: 12x10x18 px (12 wide, 10 tall, 18 long) at (18, 4)
+            //   Leg:  4x12x4 px at (0, 16)
+            //   Horn: 1x3x1 px at (22, 0) — two horns at the head top.
+            _cowSkinTexture = MobSkin.CreateTexture(MobSkinData.CowBase64);
+            if (_cowSkinTexture != 0)
+            {
+                _cowHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 8 * Px, 6 * Px, 0, 0, 8, 8, 6, TexW, TexH, mirror: false);
+                _cowBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    12 * Px, 10 * Px, 18 * Px, 18, 4, 12, 10, 18, TexW, TexH, mirror: false);
+                _cowLegMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                _cowHornMesh = SkinCuboidMesh.BuildBodyPart(
+                    1 * Px, 3 * Px, 1 * Px, 22, 0, 1, 3, 1, TexW, TexH, mirror: false);
+            }
+
+            // ---------- Sheep ----------
+            //   Head: 6x6x8 px at (0, 0)
+            //   Body: 8x6x16 px at (28, 8) — note the swapped axes:
+            //         the 16-axis is along Z (length), 8 along X
+            //         (width), 6 along Y (height).
+            //   Leg:  4x12x4 px at (0, 16)
+            // Wool fur overlay uses sheep_fur.png with the same body
+            // region (same UV math), drawn at 1.05x scale around the
+            // bare body to give the sheep its fluffy silhouette.
+            _sheepSkinTexture = MobSkin.CreateTexture(MobSkinData.SheepBase64);
+            if (_sheepSkinTexture != 0)
+            {
+                _sheepHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    6 * Px, 6 * Px, 8 * Px, 0, 0, 6, 6, 8, TexW, TexH, mirror: false);
+                _sheepBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 6 * Px, 16 * Px, 28, 8, 8, 6, 16, TexW, TexH, mirror: false);
+                _sheepLegMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: false);
+            }
+            _sheepFurTexture = MobSkin.CreateTexture(MobSkinData.SheepFurBase64);
+            if (_sheepFurTexture != 0)
+            {
+                // Inflate the wool layer by 1 pixel (1.625 m³ effective)
+                // so it sits visibly around the bare body. The mesh's
+                // UV samples sheep_fur.png at the same body region
+                // (28, 8) since both textures share layout.
+                _sheepFurBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    8.5f * Px, 6.5f * Px, 16.5f * Px, 28, 8, 8, 6, 16, TexW, TexH, mirror: false);
+            }
+
+            // ---------- Chicken ----------
+            //   Head: 4x6x3 px at (0, 0)
+            //   Beak: 4x2x2 at (14, 0)
+            //   Wattle: 4x2x2 at (14, 4)
+            //   Body: 6x8x6 (oriented w/h/d) — actually canonical is
+            //         body 6x8 oriented as torso with the 8 axis along
+            //         Z. Rotation is built into the rig draw-position,
+            //         so the mesh is just (w=6, h=8, d=6) lying flat.
+            //         Region (0, 9).
+            //   Wing: 4x6x1 px at (24, 13) — two wings, mesh shared
+            //         (left wing drawn mirrored).
+            //   Leg:  3x5x3 px at (26, 0) — chicken has 2 legs.
+            _chickenSkinTexture = MobSkin.CreateTexture(MobSkinData.ChickenBase64);
+            if (_chickenSkinTexture != 0)
+            {
+                _chickenHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 6 * Px, 3 * Px, 0, 0, 4, 6, 3, TexW, TexH, mirror: false);
+                _chickenBeakMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 2 * Px, 2 * Px, 14, 0, 4, 2, 2, TexW, TexH, mirror: false);
+                _chickenWattleMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 2 * Px, 2 * Px, 14, 4, 4, 2, 2, TexW, TexH, mirror: false);
+                // Body is rotated to lie horizontally; w/h/d swapping
+                // for visual dimensions: width 6, height 8, depth 6.
+                // We keep the mesh upright and rotate around X in the
+                // rig (adds head/tail orientation) — actually canonical
+                // Alpha chicken model has body upright (rotated 90°
+                // around X pre-rendered), so dim = 6w, 8h, 6d but the
+                // RIG places it tipped onto its side. Simpler: build
+                // mesh as (6, 8, 6) unrotated and rotate in the draw.
+                _chickenBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    6 * Px, 8 * Px, 6 * Px, 0, 9, 6, 8, 6, TexW, TexH, mirror: false);
+                _chickenWingMesh = SkinCuboidMesh.BuildBodyPart(
+                    1 * Px, 4 * Px, 6 * Px, 24, 13, 1, 4, 6, TexW, TexH, mirror: false);
+                _chickenLegMesh = SkinCuboidMesh.BuildBodyPart(
+                    3 * Px, 5 * Px, 3 * Px, 26, 0, 3, 5, 3, TexW, TexH, mirror: false);
             }
 
             // ---------- Ghast ----------
@@ -14248,13 +14378,14 @@ void main()
         }
 
         // Textured ghast rig — single 16x16x16 body cube + 9 hanging
-        // tentacle cuboids on the underside in a 3x3 grid. The
-        // canonical Alpha ghast model is just a 1m body cube with
-        // tentacle stalks; the hitbox is much larger (4m cube), so
-        // the model floats inside the hitbox the same way Alpha
-        // rendered it. Existing DrawGhast scales to fill the hitbox
-        // — we DON'T do that here; we use canonical 1/16 m/px
-        // scaling so the texture details read correctly.
+        // tentacle cuboids on the underside in a 3x3 grid. Canonical
+        // Alpha 1.1.2 renders the ghast model at 9x scale so a
+        // 1m body cube fills a 9m silhouette — the AABB
+        // (HalfWidth=4.5, Height=9) is sized to match. Without the
+        // scale the body would only be 1m wide inside a 9m hitbox
+        // and arrows aimed at the visible body would miss most of the
+        // collidable volume.
+        private const float GhastModelScale = 9f;
         private void DrawGhastRigTextured(Matrix4 rigToWorld, Matrix4 vp, HostileMob mob, float hurt)
         {
             _skinShader.Use();
@@ -14265,29 +14396,37 @@ void main()
 
             float h = mob.Height;
 
-            // Body cube — 1 m cube. Centre it horizontally; place
-            // bottom at h*0.4 so the cube floats in the upper half
-            // of the hitbox, leaving room below for the dangling
-            // tentacles. (Mesh's local origin is bottom-centre.)
-            float bodyBottomY = h * 0.4f;
+            // Apply the canonical Alpha 9x model-scale by pre-multi-
+            // plying a uniform scale into the rig matrix. Every
+            // sub-cuboid drawn after this inherits the scale, so the
+            // 1m body cube + 0.75m tentacles all grow proportionally
+            // to fill the 9m hitbox.
+            var scale = Matrix4.CreateScale(GhastModelScale);
+            var scaledRig = scale * rigToWorld;
+
+            // Body cube — 1m cube at canonical px scale, becomes 9m
+            // after the rig scale. Centre it horizontally; place
+            // bottom inside the hitbox so the visual extents and
+            // collision AABB roughly align (model bottom = h * 0.05,
+            // model top = bottom + 9 = ~h * 1.0).
+            float bodyBottomLocal = (h * 0.05f) / GhastModelScale;
             DrawSkinCuboid(_ghastBodyMesh,
-                new Vector3(0f, bodyBottomY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+                new Vector3(0f, bodyBottomLocal, 0f), Vector3.Zero, 0f, scaledRig, vp);
 
             // Nine tentacles in a 3x3 grid hanging from the body's
-            // underside. Each is 0.125x0.75x0.125 m. Spacing roughly
-            // matches the body's footprint.
+            // underside. Each is 0.125x0.75x0.125 m at canonical px
+            // scale (0.75 → 6.75m after rig scale, well outside the
+            // hitbox below; that's fine — physics only cares about
+            // the AABB top and the model overshoots downward to give
+            // the canonical jellyfish silhouette).
             float spacing = 6f / 16f; // 6 px between tentacle centres
-            float tentTopY = bodyBottomY - 0f;
-            float tentLen  = 12f / 16f; // 0.75 m
+            float tentLen  = 12f / 16f;
             for (int gx = -1; gx <= 1; gx++)
             for (int gz = -1; gz <= 1; gz++)
             {
-                // Mesh's local origin is bottom-centre, so the tentacle
-                // FOOT must be placed at the bottom of the cuboid.
-                // Foot Y = body bottom - tentacle length = tentTopY - tentLen.
                 DrawSkinCuboid(_ghastTentacleMesh,
-                    new Vector3(gx * spacing, tentTopY - tentLen, gz * spacing),
-                    Vector3.Zero, 0f, rigToWorld, vp);
+                    new Vector3(gx * spacing, bodyBottomLocal - tentLen, gz * spacing),
+                    Vector3.Zero, 0f, scaledRig, vp);
             }
 
             GL.BindTexture(TextureTarget.Texture2D, 0);
