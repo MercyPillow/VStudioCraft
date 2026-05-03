@@ -86,16 +86,27 @@ namespace VStudioCraft.Game
             EmitFluidSurfaceLids(chunk, nxNeg, nxPos, nzNeg, nzPos, baseX, baseZ);
         }
 
-        // Top-exposed flowing fluid cell? Source cells and falling cells stay
-        // full-height (sources are full-cubes by definition; falling cells
-        // visually need to fill the column they're streaming through, otherwise
-        // a waterfall reads as floating disconnected slabs).
+        // Top-exposed fluid cell? Sources AND flowing cells with air above
+        // qualify; sources used to be excluded (full-cube fallback), but that
+        // made source water/lava render 1/16 taller than the surrounding
+        // flowing surface so the seam between a source and adjacent reach
+        // tiles read as a visible step. Now both go through the lid path
+        // and CornerLidY caps the source's free-surface contribution at
+        // 15/16, matching the "1px shorter" treatment used for soul sand
+        // and farmland. Falling cells stay full-height — they visually
+        // need to fill the column they're streaming through, otherwise a
+        // waterfall reads as floating disconnected slabs.
         internal static bool IsSurfaceFluid(Chunk chunk, int lx, int y, int lz)
         {
             int idx = Chunk.Index(lx, y, lz);
             var t = (BlockType)chunk.RawBlocks[idx];
-            if (t != BlockType.FlowingWater && t != BlockType.FlowingLava) return false;
-            if ((chunk.RawMeta[idx] & 0x10) != 0) return false;  // falling
+            bool isFluid = t == BlockType.FlowingWater || t == BlockType.FlowingLava
+                        || t == BlockType.Water        || t == BlockType.Lava;
+            if (!isFluid) return false;
+            // Falling-flag only applies to flowing fluids — sources never
+            // set bit 0x10 in their meta, so the gate is a no-op for them.
+            if ((t == BlockType.FlowingWater || t == BlockType.FlowingLava)
+                && (chunk.RawMeta[idx] & 0x10) != 0) return false;
             // Above out-of-world counts as air — surface.
             if (y + 1 >= Chunk.SizeY) return true;
             var above = (BlockType)chunk.RawBlocks[Chunk.Index(lx, y + 1, lz)];
@@ -117,10 +128,18 @@ namespace VStudioCraft.Game
             Chunk nxNeg, Chunk nxPos, Chunk nzNeg, Chunk nzPos)
         {
             byte raw = BlockOrNeighbor(chunk, lx, y, lz, nxNeg, nxPos, nzNeg, nzPos);
-            if (raw != (byte)BlockType.FlowingWater && raw != (byte)BlockType.FlowingLava)
-                return false;
-            byte meta = MetaOrNeighbor(chunk, lx, y, lz, nxNeg, nxPos, nzNeg, nzPos);
-            if ((meta & 0x10) != 0) return false;            // falling
+            bool isFluid = raw == (byte)BlockType.FlowingWater
+                        || raw == (byte)BlockType.FlowingLava
+                        || raw == (byte)BlockType.Water
+                        || raw == (byte)BlockType.Lava;
+            if (!isFluid) return false;
+            // Falling-flag is only set on flowing-fluid cells; harmless for
+            // sources (their meta never has 0x10).
+            if (raw == (byte)BlockType.FlowingWater || raw == (byte)BlockType.FlowingLava)
+            {
+                byte meta = MetaOrNeighbor(chunk, lx, y, lz, nxNeg, nxPos, nzNeg, nzPos);
+                if ((meta & 0x10) != 0) return false;        // falling
+            }
             if (y + 1 >= Chunk.SizeY) return true;           // top of world → surface
             byte above = BlockOrNeighbor(chunk, lx, y + 1, lz, nxNeg, nxPos, nzNeg, nzPos);
             return above == (byte)BlockType.Air;
@@ -167,7 +186,10 @@ namespace VStudioCraft.Game
                 int lightPacked = (y + 1 < Chunk.SizeY)
                     ? LightAt(chunk, x, y + 1, z)
                     : 15 * 16;
-                bool transparent = (t == BlockType.FlowingWater);
+                // Source water uses the same transparent shader path
+                // as flowing water — it's the same fluid, just a
+                // different lifecycle stage.
+                bool transparent = (t == BlockType.FlowingWater || t == BlockType.Water);
 
                 float wx = x + baseX, wz = z + baseZ, wy = y;
                 EmitFluidLidQuad(wx, wz, hSW, hNW, hNE, hSE, layer, lightPacked, transparent);
@@ -262,8 +284,14 @@ namespace VStudioCraft.Game
                 }
                 else if (bt == BlockType.Water || bt == BlockType.Lava)
                 {
-                    // Source — full cube, surface at the top.
-                    h = 1f;
+                    // Source with a free surface (no fluid above — that
+                    // case took the column-filled branch). The lid sits
+                    // 1/16 below the cell top so source water/lava reads
+                    // 1px shorter than a full cube, matching the canonical
+                    // Alpha look and giving the surrounding flowing
+                    // surface a continuous height with the source rather
+                    // than a 1/16 step at the boundary.
+                    h = 15f / 16f;
                 }
                 else
                 {
