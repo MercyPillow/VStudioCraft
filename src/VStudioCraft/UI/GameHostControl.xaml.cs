@@ -2107,6 +2107,17 @@ namespace VStudioCraft.UI
                     _input.WorldNameText = "";
                     _input.WorldSeedText = "";
                     _input.FocusedField = InputState.TextField.WorldName;
+                    // Reset the mode toggle to Survival every time the
+                    // Create screen opens. Without this, the toggle
+                    // shows whatever mode the renderer happens to be
+                    // in (carried over from a prior session, the
+                    // previous loaded world's mode, or a previous
+                    // visit to this same screen) — so a player who
+                    // last played in Creative would silently start
+                    // their next new world in Creative too. Defaulting
+                    // to Survival matches the canonical Alpha first-
+                    // launch experience.
+                    _renderer.GameMode = VStudioCraft.Game.GameMode.Survival;
                     _renderer.NavigateTitle(GameRenderer.TitleScreenState.WorldCreate);
                     break;
                 case WorldSelectScreen.ActionId.Back:

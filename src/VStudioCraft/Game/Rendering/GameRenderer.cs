@@ -2978,12 +2978,22 @@ void main()
             // Phase 7 — same rationale for an open LAN host: we can't
             // keep the listener bound to a stale World reference.
             CloseLan();
-            // A freshly-created world always starts in Survival —
-            // that's the canonical Alpha first-launch experience.
-            // Without this, the player toggling to Creative and then
-            // creating another new world would inherit the Creative
-            // mode from the prior session.
-            GameMode = GameMode.Survival;
+            // GameMode is left at whatever the caller set it to —
+            // HandleWorldSelectClick → CreateNew defaults it to
+            // Survival, and HandleWorldCreateClick → ToggleMode
+            // flips it to Creative when the player wants creative.
+            // A fresh world ALWAYS starts with an empty inventory
+            // regardless of mode: survival players have to gather
+            // their first wood, creative players use the catalog.
+            // Without this clear the InputState's starter hotbar
+            // (9 stacks of Grass/Dirt/Stone/etc, seeded once at
+            // app launch) leaks into every new world the player
+            // creates in this session, even after they've crafted
+            // their own loadout in a prior world.
+            for (int i = 0; i < Inventory.TotalSlots; i++)
+                Input.Inventory.Slots[i] = ItemStack.Empty;
+            Input.Inventory.Cursor = ItemStack.Empty;
+            Input.HotbarIndex = 0;
             SetWorld(World.Generate(seed));
             // Tier 6 #47 — Spawn directly on the surface column at the
             // origin instead of dropping from the height limit. Scan
@@ -6257,6 +6267,43 @@ void main()
             else if (!BlockData.IsCubeShape(t))
             {
                 if (!BlockData.IsSolid(_world.GetBlock(px, py - 1, pz))) return false;
+            }
+            // Reject the placement if the new block would overlap the
+            // player's AABB. Without this the player can place a cube
+            // they're standing inside, then either get stuck (the
+            // collision integrator pushes them out unevenly and they
+            // can ride up walls) or worse, drop the world out from
+            // under their feet by placing into the cell below them
+            // and getting wedged when gravity tries to settle. Only
+            // solid placements need the check — non-solid placements
+            // (torches, flowers, ladders, signs) don't block movement
+            // and the player can stand inside them without issue.
+            //
+            // We test the placed block's actual collision AABB (which
+            // may be sub-cell for slabs / stairs / soul sand / chests
+            // / doors) so a player can still stand on top of a slab
+            // they're placing at their own foot height — a half-block
+            // against the player's lower body doesn't overlap the
+            // mostly-vertical AABB.
+            if (BlockData.IsSolid(placedType))
+            {
+                var (b0x, b0y, b0z, b1x, b1y, b1z) =
+                    BlockData.GetCollisionAabb(placedType);
+                float bMinX = px + b0x, bMaxX = px + b1x;
+                float bMinY = py + b0y, bMaxY = py + b1y;
+                float bMinZ = pz + b0z, bMaxZ = pz + b1z;
+                float pMinX = Player.Position.X - Player.HalfWidth;
+                float pMaxX = Player.Position.X + Player.HalfWidth;
+                float pMinY = Player.Position.Y;
+                float pMaxY = Player.Position.Y + Player.Height;
+                float pMinZ = Player.Position.Z - Player.HalfWidth;
+                float pMaxZ = Player.Position.Z + Player.HalfWidth;
+                if (pMaxX > bMinX && pMinX < bMaxX
+                    && pMaxY > bMinY && pMinY < bMaxY
+                    && pMaxZ > bMinZ && pMinZ < bMaxZ)
+                {
+                    return false;
+                }
             }
             bool placed = _world.SetBlock(px, py, pz, placedType);
             if (placed)
