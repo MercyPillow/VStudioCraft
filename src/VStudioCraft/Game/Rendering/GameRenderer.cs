@@ -460,6 +460,31 @@ void main()
         private SkinCuboidMesh _steveArmLMesh;
         private SkinCuboidMesh _steveLegRMesh;
         private SkinCuboidMesh _steveLegLMesh;
+
+        // Mob skin handles + body-part meshes. Same per-part decomposition
+        // the Steve rig uses; meshes are shared across all instances of
+        // each mob type (one zombie mesh set drives every zombie). When
+        // a skin fails to decode, the texture stays 0 and the mob
+        // continues to render via the legacy DrawHumanoid / DrawCreeper
+        // colour-cuboid path — so a busted asset never breaks the
+        // render. Zombie + skeleton share the humanoid layout
+        // (head/body/2 arms/2 legs); creeper has 4 short legs and no
+        // arms so it gets its own mesh set.
+        private int _zombieSkinTexture;
+        private SkinCuboidMesh _zombieHeadMesh, _zombieBodyMesh;
+        private SkinCuboidMesh _zombieArmRMesh, _zombieArmLMesh;
+        private SkinCuboidMesh _zombieLegRMesh, _zombieLegLMesh;
+        private int _skeletonSkinTexture;
+        private SkinCuboidMesh _skeletonHeadMesh, _skeletonBodyMesh;
+        private SkinCuboidMesh _skeletonArmRMesh, _skeletonArmLMesh;
+        private SkinCuboidMesh _skeletonLegRMesh, _skeletonLegLMesh;
+        private int _creeperSkinTexture;
+        private SkinCuboidMesh _creeperHeadMesh, _creeperBodyMesh;
+        // Creeper uses one leg mesh + draws it 4 times — all four legs
+        // share the same texture region and same dimensions in Alpha,
+        // so a single mesh suffices. (The two front legs reuse the
+        // shape of the two back legs — body is symmetric front-back.)
+        private SkinCuboidMesh _creeperLegMesh;
         private OverlayMesh _crosshairMesh;
         private OverlayMesh _wireCubeMesh;
         private OverlayMesh _unitQuadMesh; // [0,0]-[1,1] quad; scaled via MVP for full-screen tints + HUD sprites.
@@ -1658,6 +1683,87 @@ void main()
             _steveLegLMesh = SkinCuboidMesh.BuildBodyPart(
                 4 * Px, 12 * Px, 4 * Px,
                 0, 16, 4, 12, 4, TexW, TexH, mirror: true);
+
+            // Mob skin meshes share the same constants — see the
+            // build helper for per-mob layout differences.
+            BuildMobSkins(Px);
+        }
+
+        // Build the per-mob skin texture + body-part meshes. The Alpha
+        // 1.1.2_01 mob skins are 64x32 PNGs that follow the same UV
+        // unfolding rules as Steve, with one variation: the creeper has
+        // no arms and uses 4 short legs at 4x6x4 instead of the
+        // humanoid 4x12x4 single pair.
+        //
+        // Pixel dimensions reference the canonical Alpha 1.1.2 mob
+        // models (mob/MobBase.java decomp from MCP):
+        //   Zombie / Skeleton — head 8x8x8, body 8x12x4, arms+legs 4x12x4
+        //   Creeper           — head 8x8x8, body 4x12x4, legs 4x6x4
+        //
+        // Texture region origins (matches the Bedrock-samples textures
+        // we ship in MobSkinData):
+        //   Head        (0, 0)
+        //   Body        (16, 16)
+        //   Right arm   (40, 16)   ← absent on creeper
+        //   Right leg   (0, 16)    ← creeper uses (0, 16) too, smaller box
+        private void BuildMobSkins(float Px)
+        {
+            const int TexW = 64;
+            const int TexH = 32; // mob skins ship 64x32; UV math handles either height
+
+            // ---------- Zombie (humanoid) ----------
+            _zombieSkinTexture = MobSkin.CreateTexture(MobSkinData.ZombieBase64);
+            if (_zombieSkinTexture != 0)
+            {
+                _zombieHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
+                _zombieBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 12 * Px, 4 * Px, 16, 16, 8, 12, 4, TexW, TexH, mirror: false);
+                _zombieArmRMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 40, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                _zombieArmLMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 40, 16, 4, 12, 4, TexW, TexH, mirror: true);
+                _zombieLegRMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                _zombieLegLMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: true);
+            }
+
+            // ---------- Skeleton (humanoid, same layout as zombie) ----------
+            _skeletonSkinTexture = MobSkin.CreateTexture(MobSkinData.SkeletonBase64);
+            if (_skeletonSkinTexture != 0)
+            {
+                _skeletonHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
+                _skeletonBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 12 * Px, 4 * Px, 16, 16, 8, 12, 4, TexW, TexH, mirror: false);
+                _skeletonArmRMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 40, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                _skeletonArmLMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 40, 16, 4, 12, 4, TexW, TexH, mirror: true);
+                _skeletonLegRMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                _skeletonLegLMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: true);
+            }
+
+            // ---------- Creeper (no arms, 4 short legs) ----------
+            // Body is 4x12x4 (thinner than zombie's 8x12x4) and legs are
+            // 4x6x4 (shorter than zombie's 4x12x4). The legs all share
+            // the same texture region (0,16); a single non-mirrored mesh
+            // covers all four — the rig draws it four times at the four
+            // corners. Mirroring isn't needed because creeper legs have
+            // no chirality.
+            _creeperSkinTexture = MobSkin.CreateTexture(MobSkinData.CreeperBase64);
+            if (_creeperSkinTexture != 0)
+            {
+                _creeperHeadMesh = SkinCuboidMesh.BuildBodyPart(
+                    8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
+                _creeperBodyMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 12 * Px, 4 * Px, 16, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                _creeperLegMesh = SkinCuboidMesh.BuildBodyPart(
+                    4 * Px, 6 * Px, 4 * Px, 0, 16, 4, 6, 4, TexW, TexH, mirror: false);
+            }
         }
 
         // Phase 2c — connect to a dedicated server. Performs the synchronous
@@ -13304,12 +13410,23 @@ void main()
 
                 if (mob is Zombie)
                 {
-                    // Saturated zombie green for skin, dark teal for the
-                    // tattered shirt + pants; lerp to red on hit.
-                    var skin   = Vector3.Lerp(new Vector3(0.30f, 0.55f, 0.32f), hurtRed, hurt);
-                    var shirt  = Vector3.Lerp(new Vector3(0.20f, 0.35f, 0.50f), hurtRed, hurt);
-                    var pants  = Vector3.Lerp(new Vector3(0.18f, 0.20f, 0.32f), hurtRed, hurt);
-                    DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
+                    // Prefer the canonical Alpha skin texture if it
+                    // decoded successfully; fall back to the colour-
+                    // cuboid rig (saturated zombie-green skin + dark
+                    // teal tattered shirt + dark blue pants) if the
+                    // skin asset failed for any reason. Same pattern
+                    // the Steve rig uses.
+                    if (_zombieSkinTexture != 0 && _zombieHeadMesh != null)
+                    {
+                        DrawZombieRigTextured(rigToWorld, vp, hurt);
+                    }
+                    else
+                    {
+                        var skin   = Vector3.Lerp(new Vector3(0.30f, 0.55f, 0.32f), hurtRed, hurt);
+                        var shirt  = Vector3.Lerp(new Vector3(0.20f, 0.35f, 0.50f), hurtRed, hurt);
+                        var pants  = Vector3.Lerp(new Vector3(0.18f, 0.20f, 0.32f), hurtRed, hurt);
+                        DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
+                    }
                 }
                 else if (mob is ZombiePigman)
                 {
@@ -13324,10 +13441,18 @@ void main()
                 }
                 else if (mob is Skeleton)
                 {
-                    // Bone-white head + torso + limbs. Skeletons in Alpha
-                    // are a single colour all over.
-                    var bone   = Vector3.Lerp(new Vector3(0.85f, 0.85f, 0.82f), hurtRed, hurt);
-                    DrawHumanoid(rigToWorld, vp, bone, bone, bone);
+                    if (_skeletonSkinTexture != 0 && _skeletonHeadMesh != null)
+                    {
+                        DrawSkeletonRigTextured(rigToWorld, vp, hurt);
+                    }
+                    else
+                    {
+                        // Bone-white head + torso + limbs. Skeletons in
+                        // Alpha are a single colour all over in the
+                        // colour-cuboid fallback.
+                        var bone = Vector3.Lerp(new Vector3(0.85f, 0.85f, 0.82f), hurtRed, hurt);
+                        DrawHumanoid(rigToWorld, vp, bone, bone, bone);
+                    }
                 }
                 else if (mob is Spider)
                 {
@@ -13352,7 +13477,14 @@ void main()
                     var flashWhite   = new Vector3(1.00f, 1.00f, 0.90f);
                     var color = Vector3.Lerp(creeperGreen, flashWhite, fuseT);
                     color = Vector3.Lerp(color, hurtRed, hurt);
-                    DrawCreeper(rigToWorld, vp, color);
+                    if (_creeperSkinTexture != 0 && _creeperHeadMesh != null)
+                    {
+                        DrawCreeperRigTextured(rigToWorld, vp, color, hurt);
+                    }
+                    else
+                    {
+                        DrawCreeper(rigToWorld, vp, color);
+                    }
                 }
                 else if (mob is Blaze blaze)
                 {
@@ -13632,6 +13764,158 @@ void main()
             // Head — 0.50 cube sat on top, y=1.25..1.70.
             var headSize = new Vector3(0.50f, 0.45f, 0.50f);
             DrawPigCuboid(new Vector3(0f, 1.475f, 0f), headSize, rigToWorld, vp, color);
+        }
+
+        // Textured humanoid rig — shared helper used by Zombie / Skeleton.
+        // Mesh dimensions match the 1/16-m-per-skin-pixel convention the
+        // Steve rig uses: head 8x8x8 px = 0.5 m cube, body 8x12x4 px =
+        // 0.5x0.75x0.25 m, arms+legs 4x12x4 px = 0.25x0.75x0.25 m. Total
+        // rig height = 0.75 (legs) + 0.75 (body) + 0.5 (head) = 2.0 m,
+        // slightly above the 1.8-m hitbox — matches Alpha behaviour
+        // (the model overshoots the hitbox top by 0.2 m).
+        //
+        // No walk-cycle / arm-swing yet; mob anim plumbing isn't in the
+        // mob structs. Holding the rig in a static A-pose still reads
+        // far better than the colour-cuboid fallback.
+        private void DrawTexturedHumanoidRig(int skinTexture,
+            SkinCuboidMesh head, SkinCuboidMesh body,
+            SkinCuboidMesh armR, SkinCuboidMesh armL,
+            SkinCuboidMesh legR, SkinCuboidMesh legL,
+            Matrix4 rigToWorld, Matrix4 vp, float hurt)
+        {
+            _skinShader.Use();
+            _skinShader.SetInt("uSkin", 0);
+            _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, skinTexture);
+
+            const float HipY      = 0.75f;
+            const float ShoulderY = 1.50f;
+            const float NeckY     = 1.50f;
+
+            // Right + left leg. Inner edge of each leg flush with body
+            // centerline (X=0); leg half-width 0.125 places leg
+            // centerlines at ±0.125.
+            DrawSkinCuboid(legR, new Vector3(+0.125f, 0f, 0f),
+                new Vector3(+0.125f, HipY, 0f), 0f, rigToWorld, vp);
+            DrawSkinCuboid(legL, new Vector3(-0.125f, 0f, 0f),
+                new Vector3(-0.125f, HipY, 0f), 0f, rigToWorld, vp);
+
+            // Body — static.
+            DrawSkinCuboid(body, new Vector3(0f, HipY, 0f),
+                Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Arms — body half-width 0.25 + arm half-width 0.125 puts
+            // arm centerline at ±0.375. Hung straight down (no swing
+            // since mobs don't have a walk-phase counter yet).
+            DrawSkinCuboid(armR, new Vector3(+0.375f, HipY, 0f),
+                new Vector3(+0.375f, ShoulderY, 0f), 0f, rigToWorld, vp);
+            DrawSkinCuboid(armL, new Vector3(-0.375f, HipY, 0f),
+                new Vector3(-0.375f, ShoulderY, 0f), 0f, rigToWorld, vp);
+
+            // Head — static, no pitch (mobs don't track a look pitch).
+            DrawSkinCuboid(head, new Vector3(0f, NeckY, 0f),
+                new Vector3(0f, NeckY, 0f), 0f, rigToWorld, vp);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Textured zombie rig — convenience wrapper that picks the
+        // zombie's mesh set + texture handle.
+        private void DrawZombieRigTextured(Matrix4 rigToWorld, Matrix4 vp, float hurt)
+            => DrawTexturedHumanoidRig(_zombieSkinTexture,
+                _zombieHeadMesh, _zombieBodyMesh,
+                _zombieArmRMesh, _zombieArmLMesh,
+                _zombieLegRMesh, _zombieLegLMesh,
+                rigToWorld, vp, hurt);
+
+        // Textured skeleton rig — same humanoid layout; arms could be
+        // narrowed to 2x12x2 in a future pass for the canonical Alpha
+        // bony silhouette, but the 4x12x4 humanoid box matches what the
+        // 64x32 skeleton skin's arm region was painted for.
+        private void DrawSkeletonRigTextured(Matrix4 rigToWorld, Matrix4 vp, float hurt)
+            => DrawTexturedHumanoidRig(_skeletonSkinTexture,
+                _skeletonHeadMesh, _skeletonBodyMesh,
+                _skeletonArmRMesh, _skeletonArmLMesh,
+                _skeletonLegRMesh, _skeletonLegLMesh,
+                rigToWorld, vp, hurt);
+
+        // Textured creeper rig. Body sits at HipY (=0.75 if legs were
+        // 12 px, but creeper legs are 6 px = 0.375 m so HipY = 0.375).
+        // Body is 4x12x4 px = 0.25x0.75x0.25 m, head sits on top of
+        // body. Total height = 0.375 + 0.75 + 0.5 = 1.625 m, just under
+        // the 1.7 m hitbox top — matches the canonical creeper
+        // silhouette. Caller bakes hurt + fuse-flash into the existing
+        // tint pipeline.
+        private void DrawCreeperRigTextured(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 tint, float hurt)
+        {
+            _skinShader.Use();
+            _skinShader.SetInt("uSkin", 0);
+            // Tint mixes the texture toward the colour the caller
+            // computed (creeperGreen → flashWhite as fuse counts down).
+            // The 4th component carries the hurt-flash alpha and tints
+            // toward red. We can not feed both colours through one tint
+            // uniform, so the mob render loop only ever passes ONE of
+            // them at a time: hurt > 0 wins (red flash), else fuse
+            // colour applies as a soft modulation. Fold them here:
+            //   if hurt > 0 → red flash overrides fuse.
+            //   else        → fuse-tint multiplies texture, alpha=0.
+            Vector4 finalTint;
+            if (hurt > 0f)
+            {
+                finalTint = new Vector4(1.00f, 0.30f, 0.30f, hurt);
+            }
+            else
+            {
+                // Tint mode: alpha=0 disables the lerp, so the texture
+                // shows untinted. The fuse-flash effect (white pulse)
+                // is approximated by lerping toward white via alpha.
+                // tint.rgb=tint colour, alpha=blend amount toward it.
+                // Only kicks in when fuse is active (tint != base
+                // creeper green). We approximate "tint" against the
+                // canonical creeper green to compute a blend factor.
+                var baseGreen = new Vector3(0.30f, 0.65f, 0.25f);
+                float dr = tint.X - baseGreen.X;
+                float dg = tint.Y - baseGreen.Y;
+                float db = tint.Z - baseGreen.Z;
+                float drift = (float)System.Math.Sqrt(dr * dr + dg * dg + db * db);
+                float fuseAlpha = System.Math.Min(1f, drift * 1.5f);
+                finalTint = new Vector4(tint.X, tint.Y, tint.Z, fuseAlpha);
+            }
+            _skinShader.SetVector4("uTint", finalTint);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, _creeperSkinTexture);
+
+            // Joint heights for the creeper — legs 6 px tall = 0.375 m,
+            // body 12 px = 0.75 m, head 8 px = 0.5 m.
+            const float HipY  = 6f / 16f;        // 0.375 — top of legs / bottom of body
+            const float NeckY = HipY + 12f / 16f; // 1.125 — top of body / bottom of head
+
+            // Four legs at the four corners of the body footprint. Body
+            // is 4x4 px = 0.25 m square, so the leg centerlines sit at
+            // ±2 px / 2 = ±0.0625 m on each axis. Front/back is in Z;
+            // left/right is in X.
+            const float LegX = 2f / 16f;
+            const float LegZ = 2f / 16f;
+            DrawSkinCuboid(_creeperLegMesh, new Vector3(+LegX, 0f, +LegZ),
+                Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_creeperLegMesh, new Vector3(-LegX, 0f, +LegZ),
+                Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_creeperLegMesh, new Vector3(+LegX, 0f, -LegZ),
+                Vector3.Zero, 0f, rigToWorld, vp);
+            DrawSkinCuboid(_creeperLegMesh, new Vector3(-LegX, 0f, -LegZ),
+                Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Body — sits flush on top of legs.
+            DrawSkinCuboid(_creeperBodyMesh, new Vector3(0f, HipY, 0f),
+                Vector3.Zero, 0f, rigToWorld, vp);
+
+            // Head — sits flush on top of body.
+            DrawSkinCuboid(_creeperHeadMesh, new Vector3(0f, NeckY, 0f),
+                Vector3.Zero, 0f, rigToWorld, vp);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
         }
 
         // Draw every live particle as a tiny tumbling cube. Reuses the
