@@ -109,6 +109,29 @@ namespace VStudioCraft.Game
             // carved-out air).
             CarveRavinesPass(c, seed);
 
+            // Tier 8 #51 V10 — Nether fortress structures. Stamps a
+            // 3×3-chunk fortress into the cavern (y=72..77, well above
+            // the netherrack mass surface at y=64) at deterministically-
+            // anchored 8×8-chunk grid points. Each anchor rolls 1-in-2
+            // — an 8×8 grid sized roughly to the player's wandering
+            // radius means a player walking out from the spawn portal
+            // finds a fortress within ~10 chunks on average.
+            //
+            // Each chunk inspects 9 candidate anchors (the 3×3 grid
+            // of chunk positions where an anchor could affect this
+            // chunk); for each anchor that rolled true, the chunk
+            // stamps the fortress's intersection with its own bounds.
+            // Same chunk-seam pattern as the ravine pass.
+            //
+            // Inserted AFTER the ravine pass so a ravine doesn't
+            // carve through fortress walls (the fortress is meant
+            // to be a discoverable intact structure, not pre-decayed).
+            // Inserted BEFORE the lava/glowstone passes so those
+            // passes don't accidentally spawn lava INSIDE the fortress
+            // floor; the brick floor reads the netherrack underneath
+            // it as already-set so subsequent surface passes skip it.
+            StampFortressesPass(c, seed);
+
             // Lava lakes at y=LavaLakeY. V6: bumped from 0..2 to
             // 1..3 lakes per chunk and lake radius from 2..4 to
             // 3..6 — wider visible lava seas matching canonical
@@ -389,6 +412,161 @@ namespace VStudioCraft.Game
                         c.Set(lx, wy, lz, BlockType.Air);
                     }
                 }
+            }
+        }
+
+        // V10 — Fortress anchor + stamp pass. For each of the 9
+        // candidate anchor chunk positions that could overlap this
+        // chunk's bounds, check if it lands on the 8×8 anchor grid
+        // AND rolled a fortress, and stamp the fortress's intersection
+        // with this chunk if so. Same neighbour-walk pattern the
+        // ravine pass uses — keeps multi-chunk structures continuous
+        // across chunk seams.
+        //
+        // FortressFloorY (=72) sits in the open cavern between the
+        // netherrack mass surface (y=NetherrackTop=64) and the
+        // ceiling band (y≈117..120), so the fortress reads as a
+        // freestanding structure floating in the cavern with the
+        // player approaching it from below or from a side.
+        public const int FortressFloorY    = NetherrackTop + 8;   // 72
+        public const int FortressWallTopY  = FortressFloorY + 4;  // 76 — walls 4 tall
+        public const int FortressCeilingY  = FortressFloorY + 5;  // 77 — single-thick brick ceiling
+        public const int FortressGridStep  = 8;                   // anchor every 8 chunks
+        public const int FortressFootprint = 3;                   // 3×3 chunks footprint
+
+        private static void StampFortressesPass(Chunk c, int seed)
+        {
+            for (int axOff = 0; axOff < FortressFootprint; axOff++)
+            for (int azOff = 0; azOff < FortressFootprint; azOff++)
+            {
+                int ax = c.ChunkX - axOff;
+                int az = c.ChunkZ - azOff;
+                // Anchors live on the 8-chunk grid. Tested via bitmask
+                // since FortressGridStep is a power of two — slightly
+                // faster than mod and avoids the negative-mod sign issue.
+                if ((ax & (FortressGridStep - 1)) != 0) continue;
+                if ((az & (FortressGridStep - 1)) != 0) continue;
+
+                int hash = (int)((uint)seed * 0x71C4F39Du
+                    + (uint)(ax * 0xA1B7C5E3)
+                    + (uint)(az * 0x5F8B2D71));
+                var rng = new Random(hash);
+                if (rng.Next(2) != 0) continue; // 1-in-2 anchors actually spawn
+
+                StampFortressIntoChunk(c, ax, az, rng);
+            }
+        }
+
+        // V10 — Stamp the fortress anchored at world chunk (ax, az)
+        // into this chunk's bounds. Walks the fortress's full world
+        // footprint, computes the chunk-local intersection, and
+        // sets cells.
+        //
+        // Layout (footprint = 48×48 horizontal, walls 4 tall + ceiling):
+        //   * Floor at y=72 — full 48×48 brick slab.
+        //   * Outer wall around the 48-perimeter, y=73..76 — brick.
+        //     Doors (5-wide gaps) cut through the wall on each of
+        //     the 4 sides at the cardinal centre, so a player can
+        //     enter from any direction.
+        //   * Interior y=73..76 — air (carves out any netherrack
+        //     that the existing terrain pass placed underneath, in
+        //     case a ravine or surface column happened to reach
+        //     this altitude — rare but possible at edge cases).
+        //   * Ceiling at y=77 — full 48×48 brick slab.
+        //   * MobSpawner block at the centre cell on y=73 — the
+        //     canonical "blaze spawner cage" anchor. The blaze-
+        //     spawner data attached to MobSpawner is implicit
+        //     today (the block is just an aesthetic marker until
+        //     functional spawners ship); when blaze spawners
+        //     become functional the placement carries through.
+        private static void StampFortressIntoChunk(Chunk c, int anchorChunkX, int anchorChunkZ, Random rng)
+        {
+            int wx0 = anchorChunkX * Chunk.SizeX;
+            int wz0 = anchorChunkZ * Chunk.SizeZ;
+            int wx1 = wx0 + Chunk.SizeX * FortressFootprint - 1;
+            int wz1 = wz0 + Chunk.SizeZ * FortressFootprint - 1;
+
+            int chunkX0 = c.ChunkX * Chunk.SizeX;
+            int chunkZ0 = c.ChunkZ * Chunk.SizeZ;
+            int chunkX1 = chunkX0 + Chunk.SizeX - 1;
+            int chunkZ1 = chunkZ0 + Chunk.SizeZ - 1;
+
+            int loX = Math.Max(wx0, chunkX0);
+            int hiX = Math.Min(wx1, chunkX1);
+            int loZ = Math.Max(wz0, chunkZ0);
+            int hiZ = Math.Min(wz1, chunkZ1);
+            if (loX > hiX || loZ > hiZ) return;
+
+            int centreX = (wx0 + wx1) / 2;
+            int centreZ = (wz0 + wz1) / 2;
+            const int doorHalfWidth = 2; // door 5 wide centred
+
+            for (int wx = loX; wx <= hiX; wx++)
+            for (int wz = loZ; wz <= hiZ; wz++)
+            {
+                int lx = wx - chunkX0;
+                int lz = wz - chunkZ0;
+                bool atWestWall  = wx == wx0;
+                bool atEastWall  = wx == wx1;
+                bool atNorthWall = wz == wz0;
+                bool atSouthWall = wz == wz1;
+                bool onPerimeter = atWestWall || atEastWall || atNorthWall || atSouthWall;
+
+                // Door cutouts — 5-wide gap on each cardinal wall,
+                // centred on the fortress's middle axis. Lower 3 of
+                // the wall's 4 rows so the player ducks under the
+                // top brick lintel like a real doorway.
+                bool inDoorNS = (Math.Abs(wx - centreX) <= doorHalfWidth) && (atNorthWall || atSouthWall);
+                bool inDoorEW = (Math.Abs(wz - centreZ) <= doorHalfWidth) && (atWestWall  || atEastWall);
+
+                // Floor slab — full 48×48.
+                c.Set(lx, FortressFloorY, lz, BlockType.Bricks);
+
+                if (onPerimeter)
+                {
+                    // Walls — full height except where a door cuts
+                    // through; doors leave the top row (wallTop) intact
+                    // as a lintel.
+                    for (int wy = FortressFloorY + 1; wy <= FortressWallTopY; wy++)
+                    {
+                        bool isLintel = wy == FortressWallTopY;
+                        if ((inDoorNS || inDoorEW) && !isLintel)
+                            c.Set(lx, wy, lz, BlockType.Air);
+                        else
+                            c.Set(lx, wy, lz, BlockType.Bricks);
+                    }
+                }
+                else
+                {
+                    // Interior — clear netherrack so the fortress is
+                    // a hollow interior. Bedrock is preserved
+                    // defensively, though at FortressFloorY+1 (=73)
+                    // there shouldn't be any.
+                    for (int wy = FortressFloorY + 1; wy <= FortressWallTopY; wy++)
+                    {
+                        var t = (BlockType)c.RawBlocks[Chunk.Index(lx, wy, lz)];
+                        if (t != BlockType.Bedrock)
+                            c.Set(lx, wy, lz, BlockType.Air);
+                    }
+                }
+
+                // Ceiling slab — full 48×48 brick lid.
+                c.Set(lx, FortressCeilingY, lz, BlockType.Bricks);
+            }
+
+            // Spawner cage centre. Places one MobSpawner block at
+            // (centre, FloorY+2) sitting on a 1-cell brick pedestal at
+            // (centre, FloorY+1). Confined to the chunk holding the
+            // centre cell so we don't stamp partial pedestals across
+            // chunk seams (the centre always falls inside exactly one
+            // chunk's bounds).
+            if (centreX >= chunkX0 && centreX <= chunkX1
+             && centreZ >= chunkZ0 && centreZ <= chunkZ1)
+            {
+                int lcx = centreX - chunkX0;
+                int lcz = centreZ - chunkZ0;
+                c.Set(lcx, FortressFloorY + 1, lcz, BlockType.Bricks);     // pedestal
+                c.Set(lcx, FortressFloorY + 2, lcz, BlockType.MobSpawner); // cage
             }
         }
 
