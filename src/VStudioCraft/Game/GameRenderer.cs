@@ -7517,13 +7517,21 @@ void main()
                 {
                     var mob = hostiles[h];
                     if (mob.IsDead) continue;
-                    // Ignore hits on the firing ghast — any ghast
-                    // very close to the spawn origin is treated as
-                    // the shooter.
+                    // Ignore hits on the firing nether-ranged mob —
+                    // any Ghast or Blaze very close to the spawn
+                    // origin is treated as the shooter. Without this
+                    // a fireball would instantly self-detonate inside
+                    // the muzzle. Blaze's threshold is smaller than
+                    // ghast's because the blaze body is ~5x smaller.
                     if (mob is Ghast)
                     {
                         var d = mob.Position - p.Origin;
                         if (d.LengthSquared < 9f) continue;
+                    }
+                    else if (mob is Blaze)
+                    {
+                        var d = mob.Position - p.Origin;
+                        if (d.LengthSquared < 1.5f) continue;
                     }
                     mob.GetAabb(out var min, out var max);
                     if (RayAabbIntersect(p.Position, stepDir, min, max, stepLen, out float t))
@@ -7573,9 +7581,13 @@ void main()
         // Tier 8 #51 V7 — Ghast firing pass. Walks the world's hostile
         // list, identifies Ghasts whose cooldown expired AND have LOS
         // to the player, and spawns a FireballProjectile from each.
+        // Tier 8 #51 V8 — Extended to cover Blaze too. Blazes fire in
+        // 3-shot volleys with a small spread; the polled WantsToFire/
+        // NotifyFired contract is identical so the dispatch loop
+        // covers both in one pass.
         // Called from the host's render-tick alongside TickFireballs
-        // so a paused world doesn't have ghasts silently shooting in
-        // the background.
+        // so a paused world doesn't have nether mobs silently
+        // shooting in the background.
         public void TickGhastFiring(float dt)
         {
             if (_world == null || Player == null) return;
@@ -7590,40 +7602,84 @@ void main()
 
             for (int i = 0; i < hostiles.Count; i++)
             {
-                if (!(hostiles[i] is Ghast g)) continue;
-                if (g.IsDead) continue;
-                if (!g.WantsToFire(playerEye)) continue;
+                var mob = hostiles[i];
+                if (mob.IsDead) continue;
 
-                // Ghast body centre (Position is the AABB foot for
-                // entities; we want the visible body's middle so the
-                // fireball doesn't appear to spawn from the ghast's
-                // feet).
-                Vector3 muzzle = g.Position + new Vector3(0f, g.Height * 0.5f, 0f);
-                Vector3 toPlayer = playerEye - muzzle;
-                float dist = toPlayer.Length;
-                if (dist < 1e-3f) continue;
-                Vector3 aimDir = toPlayer / dist;
-
-                // LOS — voxel raycast from muzzle to player. If any
-                // solid block is between, the ghast can see the
-                // player but can't shoot through it. The raycast
-                // returns a Hit at the first solid voxel; we accept
-                // LOS only if the hit (if any) lies past the player.
-                bool blockHit = Raycast.Cast(_world, muzzle, aimDir, dist + 1f, out var rh);
-                if (blockHit)
+                if (mob is Ghast g)
                 {
-                    float hitDist = DistanceToHit(muzzle, aimDir, rh);
-                    if (hitDist < dist - 0.5f) continue; // wall in the way
+                    if (!g.WantsToFire(playerEye)) continue;
+
+                    // Ghast body centre (Position is the AABB foot for
+                    // entities; we want the visible body's middle so the
+                    // fireball doesn't appear to spawn from the ghast's
+                    // feet).
+                    Vector3 muzzle = g.Position + new Vector3(0f, g.Height * 0.5f, 0f);
+                    Vector3 toPlayer = playerEye - muzzle;
+                    float dist = toPlayer.Length;
+                    if (dist < 1e-3f) continue;
+                    Vector3 aimDir = toPlayer / dist;
+
+                    // LOS — voxel raycast from muzzle to player. If any
+                    // solid block is between, the ghast can see the
+                    // player but can't shoot through it.
+                    bool blockHit = Raycast.Cast(_world, muzzle, aimDir, dist + 1f, out var rh);
+                    if (blockHit)
+                    {
+                        float hitDist = DistanceToHit(muzzle, aimDir, rh);
+                        if (hitDist < dist - 0.5f) continue;
+                    }
+
+                    _fireballs.Add(new FireballProjectile
+                    {
+                        Position = muzzle + aimDir * (g.HalfWidth + 0.5f),
+                        Velocity = aimDir * FireballProjectile.MuzzleSpeed,
+                        Origin   = muzzle,
+                        TimeAliveSeconds = 0f,
+                    });
+                    g.NotifyFired();
                 }
-
-                _fireballs.Add(new FireballProjectile
+                else if (mob is Blaze b)
                 {
-                    Position = muzzle + aimDir * (g.HalfWidth + 0.5f),
-                    Velocity = aimDir * FireballProjectile.MuzzleSpeed,
-                    Origin   = muzzle,
-                    TimeAliveSeconds = 0f,
-                });
-                g.NotifyFired();
+                    if (!b.WantsToFire(playerEye)) continue;
+
+                    // Muzzle at the body's mid-height — same shape as
+                    // the ghast pass.
+                    Vector3 muzzle = b.Position + new Vector3(0f, b.Height * 0.6f, 0f);
+                    Vector3 toPlayer = playerEye - muzzle;
+                    float dist = toPlayer.Length;
+                    if (dist < 1e-3f) continue;
+                    Vector3 aimDir = toPlayer / dist;
+
+                    // LOS — same voxel raycast as ghast. If a wall is
+                    // between, the volley counter still ticks down on
+                    // NotifyFired (we choose to consume a shot regardless
+                    // of LOS so the volley duration stays predictable);
+                    // we just don't actually spawn the fireball. That
+                    // way a player ducking behind cover mid-volley
+                    // wastes the blaze's shots rather than queuing them.
+                    bool blockHit = Raycast.Cast(_world, muzzle, aimDir, dist + 1f, out var rh);
+                    bool losClear = true;
+                    if (blockHit)
+                    {
+                        float hitDist = DistanceToHit(muzzle, aimDir, rh);
+                        if (hitDist < dist - 0.5f) losClear = false;
+                    }
+
+                    if (losClear)
+                    {
+                        // Per-shot spread so a 3-shot volley doesn't
+                        // paint a perfect line on the player.
+                        Vector3 spreadDir = b.PerturbAim(aimDir);
+                        _fireballs.Add(new FireballProjectile
+                        {
+                            Position = muzzle + spreadDir * (b.HalfWidth + 0.4f),
+                            Velocity = spreadDir * FireballProjectile.MuzzleSpeed,
+                            Origin   = muzzle,
+                            TimeAliveSeconds = 0f,
+                        });
+                    }
+                    b.NotifyFired();
+                }
             }
         }
 
@@ -12233,6 +12289,18 @@ void main()
                     color = Vector3.Lerp(color, hurtRed, hurt);
                     DrawCreeper(rigToWorld, vp, color);
                 }
+                else if (mob is Blaze blaze)
+                {
+                    // Tier 8 #51 V8 — Blaze body. Bright orange-yellow
+                    // core cube with three rings of black rod cuboids
+                    // rotating around it. Rotation rate is constant;
+                    // RodPhase on the mob carries the per-instance
+                    // animation timer so two blazes side-by-side
+                    // don't lock into perfect sync.
+                    var blazeCore = Vector3.Lerp(new Vector3(1.00f, 0.65f, 0.10f), hurtRed, hurt);
+                    var blazeRod  = new Vector3(0.10f, 0.08f, 0.05f);
+                    DrawBlaze(rigToWorld, vp, blazeCore, blazeRod, blaze);
+                }
                 else if (mob is Ghast)
                 {
                     // Tier 8 #51 V7 — Ghast body. Soft white blob
@@ -12361,6 +12429,61 @@ void main()
             // Mouth — small dark slot below the eyes for visual focus.
             var mouthSize = new Vector3(w * 0.20f, h * 0.04f, eyeS);
             DrawPigCuboid(new Vector3(0f, eyeY - h * 0.10f, +eyeForward), mouthSize, rigToWorld, vp, eyes);
+        }
+
+        // Tier 8 #51 V8 — Blaze body. A small orange-yellow core
+        // cube at the centre of the hitbox, with three vertically-
+        // stacked rings of dark rod-shaped cuboids rotating around
+        // it. The rotation gives a clear "this thing is a blaze"
+        // silhouette even at a glance, and the per-mob RodPhase
+        // means two blazes side-by-side don't lock into perfect sync.
+        private void DrawBlaze(Matrix4 rigToWorld, Matrix4 vp,
+            Vector3 core, Vector3 rod, Blaze blaze)
+        {
+            float w = blaze.HalfWidth * 2f;
+            float h = blaze.Height;
+
+            // Core cube — bright orange, sized as the body's centre.
+            float coreS = w * 0.7f;
+            var coreSize = new Vector3(coreS, h * 0.45f, coreS);
+            DrawPigCuboid(new Vector3(0f, h * 0.55f, 0f), coreSize, rigToWorld, vp, core);
+
+            // Three rings of 4 rods each, stacked vertically. Each
+            // ring rotates at a different rate (top fastest, bottom
+            // slowest) to give a layered-orbiter look.
+            float[] ringYs   = { h * 0.30f, h * 0.55f, h * 0.80f };
+            float[] ringRots = { 0.7f,      1.0f,      -0.85f };
+            float ringR = blaze.HalfWidth + 0.05f;
+            float rodLen = h * 0.35f;
+            float rodW   = w * 0.10f;
+
+            for (int r = 0; r < 3; r++)
+            {
+                float baseAngle = blaze.RodPhase * ringRots[r] + r * 0.6f;
+                for (int j = 0; j < 4; j++)
+                {
+                    float a = baseAngle + j * (float)(Math.PI * 0.5);
+                    float rx = (float)Math.Cos(a) * ringR;
+                    float rz = (float)Math.Sin(a) * ringR;
+                    var rodSize = new Vector3(rodW, rodLen, rodW);
+                    DrawPigCuboid(new Vector3(rx, ringYs[r], rz), rodSize, rigToWorld, vp, rod);
+                }
+            }
+
+            // Head — small bright cube on top, eyes painted as small
+            // dark squares on the front face.
+            float headS = w * 0.5f;
+            var headSize = new Vector3(headS, headS, headS);
+            DrawPigCuboid(new Vector3(0f, h * 0.95f, 0f), headSize, rigToWorld, vp, core);
+
+            float eyeS = w * 0.08f;
+            float eyeY = h * 0.97f;
+            float eyeSpacing = headS * 0.30f;
+            float eyeForward = headS * 0.5f + 0.005f;
+            var eyeColor = new Vector3(0.10f, 0.05f, 0.05f);
+            var eyeSize = new Vector3(eyeS, eyeS, eyeS);
+            DrawPigCuboid(new Vector3(+eyeSpacing, eyeY, +eyeForward), eyeSize, rigToWorld, vp, eyeColor);
+            DrawPigCuboid(new Vector3(-eyeSpacing, eyeY, +eyeForward), eyeSize, rigToWorld, vp, eyeColor);
         }
 
         // Humanoid (Zombie / Skeleton): head + torso + 2 arms + 2 legs

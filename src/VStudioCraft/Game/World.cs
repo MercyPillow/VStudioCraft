@@ -393,6 +393,43 @@ namespace VStudioCraft.Game
                 int mobSeed = hash ^ unchecked((int)0xC4A57);
                 output.Add(new Ghast(pos, mobSeed));
             }
+
+            // Tier 8 #51 V8 — Blaze spawn pass. Slightly more common
+            // than ghasts (1-in-1500 per column) since the blaze is
+            // smaller and harder to land hits on; the higher density
+            // gives the player more practice volleys to dodge. Same
+            // hover-altitude band as ghasts but with a 2-block air-
+            // pocket clearance (smaller body). When V10 fortresses
+            // ship, this pass should move into spawner-cage rooms.
+            for (int lx = 0; lx < Chunk.SizeX; lx++)
+            for (int lz = 0; lz < Chunk.SizeZ; lz++)
+            {
+                int hash = (int)((uint)seed * 0x8B5C9D7Fu
+                    + (uint)(c.ChunkX * 0xD3A53B91)
+                    + (uint)(c.ChunkZ * 0x4E7C8FAB)
+                    + (uint)(lx * 0xA1B2C3D4)
+                    + (uint)(lz * 0x71C8E5F3));
+                if ((uint)hash % 1500u != 0) continue;
+
+                int bandLo = NetherTerrainGenerator.NetherrackTop + 6;
+                int bandHi = NetherTerrainGenerator.CeilingBaseY - 4;
+                if (bandHi <= bandLo) continue;
+                int hoverY = bandLo + (int)((uint)(hash >> 8) % (uint)(bandHi - bandLo));
+
+                bool clear = true;
+                for (int dy = 0; dy <= 1 && clear; dy++)
+                {
+                    var cellT = (BlockType)c.RawBlocks[Chunk.Index(lx, hoverY + dy, lz)];
+                    if (cellT != BlockType.Air) clear = false;
+                }
+                if (!clear) continue;
+
+                int wx = c.ChunkX * Chunk.SizeX + lx;
+                int wz = c.ChunkZ * Chunk.SizeZ + lz;
+                var pos = new OpenTK.Vector3(wx + 0.5f, hoverY, wz + 0.5f);
+                int mobSeed = hash ^ unchecked((int)0xB1A2E);
+                output.Add(new Blaze(pos, mobSeed));
+            }
         }
 
         // Tier 8 #51 V4 — Lazy nether-chunk generation for chunks

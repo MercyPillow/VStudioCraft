@@ -390,6 +390,235 @@ namespace VStudioCraft.Game
         }
     }
 
+    // Tier 8 #51 V8 — Blaze: smaller flying ranged Nether mob, fires
+    // fireballs in a 3-shot volley with a long rest between volleys.
+    // Designed to share FireballProjectile with Ghast so the same
+    // physics + collision + impact-explode pipeline handles both.
+    //
+    // Differences from Ghast:
+    //   * Smaller hitbox — humanoid-ish footprint (HalfWidth=0.4, h=2.0)
+    //     so the player can pick one off with arrows from cover.
+    //   * Lower HP (20) but smaller body makes hits harder to land.
+    //   * 3-shot volley: when cooldown expires + LOS clear, fires
+    //     three fireballs spaced 0.30 s apart, then rests for 4 s.
+    //     This rhythm gives the player a brief "sidestep window"
+    //     between volleys; ducking behind cover during the rest is
+    //     the canonical counter.
+    //   * Each shot in the volley has a small random spread so a
+    //     stationary blaze doesn't paint a perfect line on the
+    //     player — sidestep dodging works against the spread.
+    //   * Drops 0..1 GoldIngot — Alpha didn't have BlazeRod (item
+    //     introduced Beta 1.9 alongside brewing); GoldIngot stands
+    //     in as a small Nether-treasure trophy until brewing ships.
+    //
+    // Spawn: rare per-column roll same as the Ghast pass. We don't
+    // gate by fortress structures (they're V10 and don't exist yet),
+    // so for V8 the blaze spawns in the open Nether cavern at
+    // 1-in-1500 — slightly more common than ghasts. When fortresses
+    // ship, that pass can move blaze spawns into spawner-cage rooms.
+    internal sealed class Blaze : HostileMob
+    {
+        public const float HitboxHalfWidth = 0.4f;
+        public const float HitboxHeight    = 2.0f;
+        public const float DriftSpeed      = 0.5f;
+        public const float BobAmplitude    = 0.25f;
+        public const float BobPeriodSec    = 3.0f;
+        public const float DetectRangeBlocks   = 24f;
+        public const float DetectRangeSq       = DetectRangeBlocks * DetectRangeBlocks;
+        public const float VolleyRestSeconds   = 4.0f;
+        public const float VolleyShotInterval  = 0.30f;
+        public const int   VolleyShotCount     = 3;
+        public const float ShotSpreadRadians   = 0.05f; // ±~3° per shot
+
+        // Volley state machine.
+        //   * RestTimer counts DOWN from VolleyRestSeconds. When 0,
+        //     the next firing decision starts a volley.
+        //   * ShotsRemaining counts shots left in the current volley
+        //     (3 → 2 → 1 → 0). When > 0 the mob fires one shot per
+        //     ShotInterval and decrements; when it hits 0 we reset
+        //     RestTimer to VolleyRestSeconds.
+        //   * ShotCooldown counts down between shots within a volley.
+        public float RestTimer;
+        public int   ShotsRemaining;
+        public float ShotCooldown;
+
+        // Animation phase for the rotating-rod render. Updated each
+        // tick — incremented by dt so the rotation rate is consistent
+        // regardless of frame rate.
+        public float RodPhase;
+
+        // Vertical bob phase + drift heading + hover anchor — same
+        // shape as Ghast.
+        private float _bobPhase;
+        private float _driftYaw;
+        private float _hoverY;
+
+        public Blaze(Vector3 spawnPos, int seed) : base(spawnPos, seed)
+        {
+            HalfWidth = HitboxHalfWidth;
+            Height    = HitboxHeight;
+            RestTimer = (float)(_rng.NextDouble() * VolleyRestSeconds);
+            ShotsRemaining = 0;
+            _bobPhase = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            _driftYaw = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            _hoverY   = spawnPos.Y;
+        }
+
+        public override int   MaxHealth             => 20;
+        public override float WalkSpeed             => 0f;
+        public override float DetectRange           => DetectRangeBlocks;
+        public override float AttackRange           => 0f;
+        public override int   AttackDamage          => 0;
+        public override float AttackCooldownSeconds => 0f;
+
+        public override void Update(float dt, World world, Vector3 playerPos, IPlayerDamageSink damageSink)
+        {
+            if (IsDead) return;
+            if (HurtTimer > 0f) { HurtTimer -= dt; if (HurtTimer < 0f) HurtTimer = 0f; }
+
+            // Rod animation timer — wraps every 4π so float precision
+            // stays stable indefinitely. Used only by the renderer.
+            RodPhase += dt;
+            if (RodPhase > 12.566f) RodPhase -= 12.566f; // 4π
+
+            // Volley-state timers.
+            if (RestTimer > 0f)        RestTimer    -= dt;
+            if (ShotCooldown > 0f)     ShotCooldown -= dt;
+
+            // Drift + bob — same shape as Ghast. Keeps the mob alive
+            // visually even between volleys.
+            _wanderTimer -= dt;
+            if (_wanderTimer <= 0f)
+            {
+                _wanderTimer = WanderInterval;
+                _driftYaw   += ((float)_rng.NextDouble() - 0.5f) * 1.0f;
+            }
+
+            float dx = playerPos.X - Position.X;
+            float dz = playerPos.Z - Position.Z;
+            float horizDistSq = dx * dx + dz * dz;
+            float yawTarget;
+            if (horizDistSq <= DetectRangeSq * 4f)
+            {
+                yawTarget = (float)Math.Atan2(dx, dz);
+                Yaw = yawTarget;
+            }
+            else
+            {
+                yawTarget = _driftYaw;
+            }
+
+            Velocity.X = (float)Math.Sin(yawTarget) * DriftSpeed;
+            Velocity.Z = (float)Math.Cos(yawTarget) * DriftSpeed;
+
+            _bobPhase += dt * (float)(Math.PI * 2.0 / BobPeriodSec);
+            if (_bobPhase > (float)(Math.PI * 2.0)) _bobPhase -= (float)(Math.PI * 2.0);
+            float targetY = _hoverY + (float)Math.Sin(_bobPhase) * BobAmplitude;
+            Velocity.Y = (targetY - Position.Y) / Math.Max(dt, 1e-3f);
+
+            IntegrateMotion(dt, world);
+
+            if (Math.Abs(Position.Y - targetY) > BobAmplitude * 1.5f)
+            {
+                _hoverY = Position.Y;
+            }
+        }
+
+        // Returns true if the blaze wants to fire a single shot on
+        // this tick. The renderer polls each frame and on a true
+        // result spawns one fireball + calls NotifyFired.
+        // Logic:
+        //   * If a volley is in progress (ShotsRemaining > 0) and
+        //     ShotCooldown <= 0, fire one shot.
+        //   * Else if RestTimer <= 0 and the player is in range, start
+        //     a new volley by setting ShotsRemaining = VolleyShotCount.
+        //     The first shot fires this same tick.
+        public bool WantsToFire(Vector3 playerPos)
+        {
+            if (IsDead) return false;
+            float dx = playerPos.X - Position.X;
+            float dy = playerPos.Y - Position.Y;
+            float dz = playerPos.Z - Position.Z;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > DetectRangeSq) return false;
+
+            if (ShotsRemaining > 0 && ShotCooldown <= 0f) return true;
+            if (ShotsRemaining == 0 && RestTimer <= 0f)
+            {
+                // Lazy volley start — _next call to WantsToFire returns
+                // true because ShotsRemaining will be > 0. We start it
+                // right here so the first shot fires this same tick.
+                ShotsRemaining = VolleyShotCount;
+                return true;
+            }
+            return false;
+        }
+
+        public void NotifyFired()
+        {
+            if (ShotsRemaining > 0) ShotsRemaining--;
+            ShotCooldown = VolleyShotInterval;
+            if (ShotsRemaining == 0)
+            {
+                RestTimer = VolleyRestSeconds;
+            }
+        }
+
+        // Random spread direction for one shot in the volley. Caller
+        // computes the base aim, we perturb it by a small angle on
+        // both yaw and pitch axes so the three shots in a volley
+        // don't paint a perfect line.
+        public Vector3 PerturbAim(Vector3 aim)
+        {
+            // Build a basis around aim — easier than rotating in
+            // world space. Right = perpendicular to aim on XZ; Up =
+            // perpendicular to both.
+            Vector3 fwd = aim;
+            if (fwd.LengthSquared < 1e-6f) return aim;
+            fwd.Normalize();
+            Vector3 right;
+            // Avoid the gimbal-lock degeneracy where fwd is straight
+            // up/down — almost never happens for a horizontal-facing
+            // blaze, but the safety branch is cheap.
+            if (Math.Abs(fwd.Y) < 0.99f)
+            {
+                right = Vector3.Cross(fwd, Vector3.UnitY);
+            }
+            else
+            {
+                right = Vector3.Cross(fwd, Vector3.UnitZ);
+            }
+            right.Normalize();
+            Vector3 up = Vector3.Cross(right, fwd);
+
+            float dx = ((float)_rng.NextDouble() * 2f - 1f) * ShotSpreadRadians;
+            float dy = ((float)_rng.NextDouble() * 2f - 1f) * ShotSpreadRadians;
+            Vector3 perturbed = fwd + right * dx + up * dy;
+            perturbed.Normalize();
+            return perturbed;
+        }
+
+        public override void SpawnDeathDrops(IDropSink drops)
+        {
+            // 0..1 gold ingot. Canonical Blaze drop (BlazeRod) is
+            // tied to brewing which is out of scope; gold ingot
+            // routes through the existing item drop path and reads
+            // as Nether treasure.
+            if (_rng.Next(2) == 0)
+            {
+                float angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
+                float speed = 1.5f + (float)_rng.NextDouble() * 1.0f;
+                drops.SpawnDrop(
+                    Position + new Vector3(0, Height * 0.5f, 0),
+                    BlockType.GoldIngot, 1,
+                    new Vector3(
+                        (float)Math.Cos(angle) * speed,
+                        3.0f + (float)_rng.NextDouble() * 1.5f,
+                        (float)Math.Sin(angle) * speed));
+            }
+        }
+    }
+
     // Skeleton — same humanoid shape as Zombie but with the bow-drop
     // niche. Slightly faster (1.1 m/s) but lower HP (20 → matches
     // Zombie in Alpha; skeletons share the zombie HP pool). Attacks
