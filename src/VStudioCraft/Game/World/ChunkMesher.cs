@@ -1809,9 +1809,16 @@ namespace VStudioCraft.Game
         private void EmitTorchBox(float wx, float wy, float wz, int layer, int lightPacked)
         {
             // Structural column — collision-matching 2×2 cross-section,
-            // 10 pixels tall, centred on the cell.
+            // 11 pixels tall (10-pixel wood post + 1-pixel flame nub
+            // at the top). The collision AABB still stops at 10/16
+            // (matches BlockData.GetCollisionBox) — the extra pixel
+            // is purely visual, exposing the topmost row of the torch
+            // sprite that would otherwise get chopped off where the
+            // wood column ends. Without this, the redstone torch's
+            // glow nub and the regular torch's flame tip both look
+            // truncated by 1 px along the side faces.
             const float colHalf = 1f / 16f;     // 2-pixel column → 1px each side of cell centre
-            const float colTop  = 10f / 16f;    // 10 pixels tall
+            const float colTop  = 11f / 16f;    // 11 pixels tall (10 wood + 1 flame tip)
             // Visual overhang — 1 pixel past the column on each
             // perpendicular axis. Side planes still SIT at the column
             // boundary along their facing axis; only their orthogonal
@@ -1840,11 +1847,13 @@ namespace VStudioCraft.Game
             // Side-face UV: U samples the 4-pixel-wide centre strip
             // of the tile (U=6/16..10/16) so the wider parts of the
             // sprite are no longer chopped off by the narrow column.
-            // V samples the wood height (V=0..10/16).
+            // V samples the full visible height of the torch sprite,
+            // V=0..11/16, including the 1-pixel flame tip at the top
+            // (the previous V=0..10/16 stop chopped that row off).
             const float uColLo = 6f / 16f;
             const float uColHi = 10f / 16f;
             const float vBase  = 0f;
-            const float vTop   = 10f / 16f;
+            const float vTop   = 11f / 16f;
 
             // -X face (dir<0): plane at x0, perpendicular extent zv0..zv1
             EmitCrossQuad(
