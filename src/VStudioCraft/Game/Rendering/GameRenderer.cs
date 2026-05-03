@@ -1311,11 +1311,15 @@ void main()
         // doesn't re-advance the accumulator — both lists step in lockstep.
         private int _mobStepsThisFrame;
 
-        // Survival is opt-in; the existing game loop starts in Creative so we
-        // don't break the creative-lite flow everybody already has. Toggled
-        // from the UI thread via F3 — the single enum write is atomic on
-        // x86/x64, so no lock is needed for cross-thread reads.
-        public GameMode GameMode { get; set; } = GameMode.Creative;
+        // New worlds default to Survival — that's the canonical Alpha
+        // first-launch experience (you spawn with no inventory and have
+        // to chop your first tree). Toggle Creative via F3. The single
+        // enum write is atomic on x86/x64, so no lock is needed for
+        // cross-thread reads. Saved worlds restore whatever mode they
+        // had at save time (see WorldSaveFormat.LoadInto); legacy v<3
+        // saves that pre-date the mode field default to Creative
+        // because that was the behaviour at the time of save.
+        public GameMode GameMode { get; set; } = GameMode.Survival;
 
         public Camera Camera { get; } = new Camera();
         public Player Player { get; } = new Player();
@@ -2966,6 +2970,12 @@ void main()
             // Phase 7 — same rationale for an open LAN host: we can't
             // keep the listener bound to a stale World reference.
             CloseLan();
+            // A freshly-created world always starts in Survival —
+            // that's the canonical Alpha first-launch experience.
+            // Without this, the player toggling to Creative and then
+            // creating another new world would inherit the Creative
+            // mode from the prior session.
+            GameMode = GameMode.Survival;
             SetWorld(World.Generate(seed));
             // Tier 6 #47 — Spawn directly on the surface column at the
             // origin instead of dropping from the height limit. Scan

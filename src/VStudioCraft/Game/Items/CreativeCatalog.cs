@@ -22,16 +22,227 @@ namespace VStudioCraft.Game
     // user-driven UI.
     internal static class CreativeCatalog
     {
-        // Master list of every catalog entry, in enum declaration order.
+        // Hand-curated catalog ordering that mirrors Minecraft Alpha
+        // 1.1.2_01's block / item presentation order. Each section is
+        // grouped with comments so adding a new block is just an
+        // insertion in the right group. Only the ORDER is curated;
+        // IsCatalogEntry below still filters out runtime-only variants
+        // (FlowingWater, TorchEast/West/..., LitFurnace, etc.).
+        //
+        // CRITICAL: this MUST be declared before `All` below — static
+        // field initializers run in textual order, and BuildAll() reads
+        // CanonicalOrder. If All is declared first, BuildAll runs while
+        // CanonicalOrder is still null and the catalog NREs on the
+        // first creative-mode toggle of the session.
+        private static readonly BlockType[] CanonicalOrder = new BlockType[]
+        {
+            // === Building blocks ===
+            BlockType.Stone,
+            BlockType.Cobblestone,
+            BlockType.MossyCobblestone,
+            BlockType.Bricks,
+            BlockType.Dirt,
+            BlockType.Grass,
+            BlockType.Sand,
+            BlockType.Gravel,
+            BlockType.Clay,
+            BlockType.Planks,
+            BlockType.WoodLog,
+            BlockType.Bedrock,
+            BlockType.Obsidian,
+
+            // === Decorative ===
+            BlockType.Sponge,
+            BlockType.Glass,
+            BlockType.Wool,
+            BlockType.Bookshelf,
+
+            // === Liquids ===
+            BlockType.Water,
+            BlockType.Lava,
+
+            // === Ores + ingot blocks ===
+            BlockType.CoalOre,
+            BlockType.IronOre,
+            BlockType.GoldOre,
+            BlockType.DiamondOre,
+            BlockType.RedstoneOre,
+            BlockType.IronBlock,
+            BlockType.GoldBlock,
+            BlockType.DiamondBlock,
+
+            // === Plant life ===
+            BlockType.Sapling,
+            BlockType.Leaves,
+            BlockType.Dandelion,
+            BlockType.Rose,
+            BlockType.RedMushroom,
+            BlockType.BrownMushroom,
+            BlockType.Cactus,
+            BlockType.SugarCane,
+
+            // === Functional blocks ===
+            BlockType.Torch,
+            BlockType.CraftingTable,
+            BlockType.Furnace,
+            BlockType.Chest,
+            BlockType.Tnt,
+            BlockType.NoteBlock,
+            BlockType.Jukebox,
+            BlockType.Dispenser,
+            BlockType.MobSpawner,
+
+            // === Stairs + slabs ===
+            BlockType.WoodStairs,
+            BlockType.CobblestoneStairs,
+            BlockType.StoneSlab,
+            BlockType.CobblestoneSlab,
+            BlockType.BrickSlab,
+            BlockType.WoodSlab,
+
+            // === Doors / fences / ladders ===
+            BlockType.WoodDoorItem,
+            BlockType.IronDoorItem,
+            BlockType.Fence,
+            BlockType.Ladder,
+
+            // === Redstone ===
+            BlockType.RedstoneTorchOn,
+            BlockType.RedstoneDust,
+            BlockType.Lever,
+            BlockType.StoneButton,
+            BlockType.StonePressurePlate,
+            BlockType.WoodPressurePlate,
+
+            // === Snow / ice / fire ===
+            BlockType.SnowBlock,
+            BlockType.Ice,
+            BlockType.Fire,
+
+            // === Halloween / Nether ===
+            BlockType.Pumpkin,
+            BlockType.JackOLantern,
+            BlockType.Glowstone,
+            BlockType.Netherrack,
+            BlockType.SoulSand,
+            BlockType.NetherBrick,
+
+            // === Rails + minecart-rails ===
+            BlockType.Rail,
+
+            // ============================================================
+            // ITEMS (Alpha id range 256+)
+            // ============================================================
+
+            // === Tools — material-major (wood / stone / iron / diamond / gold) ===
+            BlockType.WoodSword,    BlockType.WoodShovel,    BlockType.WoodPickaxe,    BlockType.WoodAxe,    BlockType.WoodHoe,
+            BlockType.StoneSword,   BlockType.StoneShovel,   BlockType.StonePickaxe,   BlockType.StoneAxe,   BlockType.StoneHoe,
+            BlockType.IronSword,    BlockType.IronShovel,    BlockType.IronPickaxe,    BlockType.IronAxe,    BlockType.IronHoe,
+            BlockType.DiamondSword, BlockType.DiamondShovel, BlockType.DiamondPickaxe, BlockType.DiamondAxe, BlockType.DiamondHoe,
+            BlockType.GoldSword,    BlockType.GoldShovel,    BlockType.GoldPickaxe,    BlockType.GoldAxe,    BlockType.GoldHoe,
+
+            // === Combat / utility ===
+            BlockType.Bow,
+            BlockType.Arrow,
+            BlockType.FlintAndSteel,
+            BlockType.FishingRod,
+            BlockType.Compass,
+            BlockType.Saddle,
+
+            // === Buckets ===
+            BlockType.BucketEmpty,
+            BlockType.BucketWater,
+            BlockType.BucketLava,
+            BlockType.BucketMilk,
+
+            // === Food ===
+            BlockType.Apple,
+            BlockType.RawPorkchop,
+            BlockType.CookedPorkchop,
+            BlockType.Bread,
+            BlockType.MushroomStew,
+
+            // === Crops + farming ===
+            BlockType.WheatSeeds,
+            BlockType.WheatItem,
+
+            // === Resource drops ===
+            BlockType.Stick,
+            BlockType.Coal,
+            BlockType.IronIngot,
+            BlockType.GoldIngot,
+            BlockType.Diamond,
+            BlockType.Flint,
+            BlockType.ClayBall,
+            BlockType.ClayBrick,
+            BlockType.Bowl,
+            BlockType.Leather,
+            BlockType.Feather,
+            BlockType.Egg,
+            BlockType.Gunpowder,
+            BlockType.String,
+            BlockType.Snowball,
+            BlockType.Slimeball,
+            BlockType.Bone,
+            BlockType.BoneMeal,
+            BlockType.SugarCaneItem,
+            BlockType.Paper,
+            BlockType.Book,
+            BlockType.GlowstoneDust,
+            BlockType.NetherBrickItem,
+
+            // === Music discs ===
+            BlockType.Disc13,
+            BlockType.DiscCat,
+
+            // === Decoration items ===
+            BlockType.Painting,
+            BlockType.SignItem,
+
+            // === Vehicles ===
+            BlockType.Boat,
+            BlockType.Minecart,
+
+            // === Armor — material-major (leather / chain / iron / diamond / gold) ===
+            BlockType.LeatherHelmet,    BlockType.LeatherChestplate,    BlockType.LeatherLeggings,    BlockType.LeatherBoots,
+            BlockType.ChainmailHelmet,  BlockType.ChainmailChestplate,  BlockType.ChainmailLeggings,  BlockType.ChainmailBoots,
+            BlockType.IronHelmet,       BlockType.IronChestplate,       BlockType.IronLeggings,       BlockType.IronBoots,
+            BlockType.DiamondHelmet,    BlockType.DiamondChestplate,    BlockType.DiamondLeggings,    BlockType.DiamondBoots,
+            BlockType.GoldHelmet,       BlockType.GoldChestplate,       BlockType.GoldLeggings,       BlockType.GoldBoots,
+        };
+
+        // Master list of every catalog entry, in canonical Alpha 1.1.2_01
+        // creative-tab order: building blocks → decorative → liquids →
+        // ores → plants → functional → redstone → halloween/nether →
+        // rails → tools (per material) → combat/utility → buckets →
+        // food → crops → drops → discs → vehicles → armor.
+        // Anything not listed in CanonicalOrder is appended at the end
+        // in enum order so a newly-added block never silently disappears.
+        // MUST be declared after CanonicalOrder above — see the comment
+        // there for why.
         public static readonly BlockType[] All = BuildAll();
 
         private static BlockType[] BuildAll()
         {
+            var seen = new HashSet<BlockType>();
+            var list = new List<BlockType>(CanonicalOrder.Length + 16);
+            // Pass 1: walk the canonical-order list. Skip non-catalog
+            // entries (Air, runtime-only variants, etc.).
+            foreach (var t in CanonicalOrder)
+            {
+                if (!IsCatalogEntry(t)) continue;
+                if (!seen.Add(t)) continue; // dedupe defensively
+                list.Add(t);
+            }
+            // Pass 2: append any catalog entry that didn't make it into
+            // the curated order. Keeps the catalog complete even if a
+            // newly-introduced BlockType wasn't yet placed in
+            // CanonicalOrder above.
             var values = (BlockType[])System.Enum.GetValues(typeof(BlockType));
-            var list = new List<BlockType>(values.Length);
             foreach (var t in values)
             {
                 if (!IsCatalogEntry(t)) continue;
+                if (!seen.Add(t)) continue;
                 list.Add(t);
             }
             return list.ToArray();

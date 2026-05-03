@@ -1,61 +1,263 @@
 namespace VStudioCraft.Game
 {
+    // ====================================================================
+    // BlockType — every voxel and held-item id in one byte-wide enum.
+    //
+    // The NUMERIC VALUES are frozen for save / wire-format compatibility:
+    // every world chunk on disk + every BlockChange packet over the wire
+    // stores a raw byte that must round-trip through this enum unchanged
+    // (bumping save version v20 just to renumber would orphan every save
+    // ever produced). The values therefore reflect "the order things were
+    // ADDED to the codebase" — which is fine because the right-hand sides
+    // are pinned regardless.
+    //
+    // The SOURCE-LINE ORDER below, however, IS curated. Lines are grouped
+    // to read like canonical Minecraft Alpha 1.1.2_01's block + item table:
+    // building blocks → liquids → ores → decorative → plants → functional →
+    // stairs/slabs → doors → fences/ladders → redstone → snow/ice/fire →
+    // halloween/nether → rails → signs → farmland → tools → combat →
+    // buckets → food → crops → resource drops → discs → decoration →
+    // vehicles → door items → armor.
+    //
+    // Adding a new BlockType: pick the next free numeric id (after the
+    // current tail) and insert the line in whichever group fits its
+    // semantic role, NOT in numeric order. Recipes, mesher dispatch, and
+    // creative-catalog ordering all index by name; numeric order is a
+    // save-format implementation detail nobody else looks at.
+    // ====================================================================
     internal enum BlockType : byte
     {
         Air = 0,
-        Grass = 1,
-        Dirt = 2,
-        Stone = 3,
-        Sand = 4,
-        Cobblestone = 5,
-        Bedrock = 6,
-        Gravel = 7,
-        Clay = 8,
-        CoalOre = 9,
-        IronOre = 10,
-        GoldOre = 11,
-        DiamondOre = 12,
-        RedstoneOre = 13,
-        WoodLog = 14,
-        Planks = 15,
-        Leaves = 16,
-        Water = 17,
-        Lava = 18,
-        GoldBlock = 19,
-        IronBlock = 20,
-        DiamondBlock = 21,
-        Bricks = 22,
-        Tnt = 23,
-        Bookshelf = 24,
-        MossyCobblestone = 25,
-        Obsidian = 26,
-        Sponge = 27,
-        Glass = 28,
-        Wool = 29,
-        Torch = 30,
-        Dandelion = 31,
-        Rose = 32,
-        BrownMushroom = 33,
-        RedMushroom = 34,
-        // CraftingTable slots into the previously-vacant id 35. Placed
-        // here (not appended after items) so the enum stays "blocks
-        // first, then tools 38+, then items 58+" — pushing tool ids
-        // would invalidate every save the project has produced. The
-        // open slot was always intended for a block, this just spends
-        // it. Texture is multi-face: planks on the bottom, work-bench
-        // top on top, tool-rack side on the four sides.
-        CraftingTable = 35,
-        FlowingWater = 36,
-        FlowingLava = 37,
 
-        // Tools — non-block items that share the BlockType id space so the
-        // existing ItemStack / inventory / save plumbing keeps working
-        // without a separate ItemId enum. Marked non-solid, non-targetable,
-        // non-cube, non-opaque and excluded from placement (TryPlace
-        // rejects IsTool stacks). Renderers route them through the flat-
-        // sprite path because tool sprites are 2D, not cubes. Order is
-        // material-major so a quick `(byte)t - WoodSword` chunked into 5s
-        // recovers material; kind is the chunk index.
+        // === Building blocks ===
+        Stone               = 3,
+        Grass               = 1,
+        Dirt                = 2,
+        Cobblestone         = 5,
+        Planks              = 15,
+        Bedrock             = 6,
+        Sand                = 4,
+        Gravel              = 7,
+        Clay                = 8,
+        WoodLog             = 14,
+        Leaves              = 16,
+
+        // === Liquids — source variant + flowing variant for each ===
+        Water               = 17,
+        FlowingWater        = 36,
+        Lava                = 18,
+        FlowingLava         = 37,
+
+        // === Ores + ingot/gem blocks ===
+        CoalOre             = 9,
+        IronOre             = 10,
+        GoldOre             = 11,
+        DiamondOre          = 12,
+        RedstoneOre         = 13,
+        GoldBlock           = 19,
+        IronBlock           = 20,
+        DiamondBlock        = 21,
+
+        // === Decorative ===
+        Sponge              = 27,
+        Glass               = 28,
+        Wool                = 29,
+        Bricks              = 22,
+        Bookshelf           = 24,
+        MossyCobblestone    = 25,
+        Obsidian            = 26,
+
+        // === Plant life ===
+        Dandelion           = 31,
+        Rose                = 32,
+        BrownMushroom       = 33,
+        RedMushroom         = 34,
+        Cactus              = 142,
+        SugarCane           = 94,
+        Sapling             = 145,
+
+        // === Functional blocks ===
+        Tnt                 = 23,
+        Torch               = 30,
+        // Wall-torch variants. Default Torch (id 30) is the floor
+        // placement; the four cardinal wall variants encode their
+        // own facing directly in the BlockType so we don't need a
+        // per-cell metadata byte for it. All four share the floor-
+        // torch tile, drop a generic Torch when broken, emit the
+        // same light=14, and route through EmitModels' tilted-
+        // billboard branch.
+        TorchEast           = 70, // mounted on west wall, points east  (+X)
+        TorchWest           = 71, // mounted on east wall, points west  (-X)
+        TorchSouth          = 72, // mounted on north wall, points south (+Z)
+        TorchNorth          = 73, // mounted on south wall, points north (-Z)
+        CraftingTable       = 35,
+        // Furnace tile-entity pair. Furnace = idle, LitFurnace =
+        // actively smelting. The tile-entity tick swaps the cell
+        // between them as fuel burns down; both share a per-position
+        // entry on World holding input/fuel/output stacks + cook /
+        // burn timers.
+        Furnace             = 67,
+        LitFurnace          = 68,
+        // Chest — wood-planks chest with iron banding. Holds a 27-
+        // slot inventory in a per-position ChestTileEntity. Alpha-
+        // style "single chest" only (no double-chest pairing).
+        Chest               = 69,
+        // Dispenser — 9-slot tile entity facing outward. Redstone
+        // signal pops a random non-empty slot and ejects it as a
+        // DroppedItem in the facing direction. Front face shows the
+        // canonical "loaded crossbow" tile; sides + top/bottom reuse
+        // furnace tiles (stone cap + iron vent).
+        Dispenser           = 171, // Alpha 23
+        // Jukebox — stores an inserted Music Disc (Disc13 / DiscCat)
+        // in a JukeboxTileEntity. RMB with disc inserts + plays;
+        // RMB empty-handed ejects + stops the music.
+        Jukebox             = 116, // Alpha 84
+        // Note Block — RMB increments per-cell pitch (0..24, low 5
+        // bits of meta) and plays a click placeholder sound. Real
+        // procedural pitched audio is a follow-up; redstone trigger
+        // is also pending.
+        NoteBlock           = 146, // Alpha 25
+        // Mob Spawner — placed by the dungeon generator at the
+        // centre of each cobble room. Decorative cage cube; functional
+        // spawning is a follow-up.
+        MobSpawner          = 139, // Alpha 52
+
+        // === Stairs + slabs ===
+        // Stairs encode facing (low-2-bits of meta) for the upper
+        // half-step direction. Geometry = lower 1×0.5×1 step + an
+        // upper 0.5×0.5×1 (or 1×0.5×0.5) on the back half. Collision
+        // uses two AABBs per cell.
+        WoodStairs          = 169, // Alpha 53
+        CobblestoneStairs   = 170, // Alpha 67
+        // Slabs render as 1×0.5×1 sub-cubes pinned to the cell
+        // bottom. Material variants live in distinct BlockTypes
+        // rather than a metadata-discriminated single id (avoids
+        // facing-vs-material collision in the meta byte).
+        StoneSlab           = 163, // Alpha 44:0
+        CobblestoneSlab     = 164, // Alpha 44:3
+        BrickSlab           = 165, // Alpha 44:4
+        WoodSlab            = 166, // Alpha 44:2
+
+        // === Doors (block halves; corresponding ITEM forms live below) ===
+        // Per-pair metadata byte:
+        //   bit 0       — open flag (0=closed, 1=open)
+        //   bits 1..2   — facing (0=N, 1=E, 2=S, 3=W; outward normal of closed door)
+        //   bit 3       — hinge side (0=left, 1=right)
+        // Both halves stay synchronised — TryInteract toggles open
+        // on both. Block ids are not orientation-specific; encoding
+        // facing here would explode the enum (4 facings × 2 halves
+        // × 2 open states = 16 ids per material).
+        WoodDoorBlockBottom = 98,
+        WoodDoorBlockTop    = 99,
+        IronDoorBlockBottom = 100,
+        IronDoorBlockTop    = 101,
+
+        // === Fences + ladders ===
+        // Wooden Fence — 4×16×4 post + 2×3×8 connection arms
+        // toward neighbouring fences / solid full-cube blocks. The
+        // mesher samples the four horizontal neighbours and emits
+        // an arm only where there's an actual connector.
+        Fence               = 161, // Alpha 85
+        // Ladder — wall-mounted climbing block. Meta low-2-bits
+        // stores the BlockFacing of the wall it's attached to.
+        // Player physics overrides gravity inside a ladder cell:
+        // Space → climb up, Sneak → climb down, idle → slow descent.
+        Ladder              = 160, // Alpha 65
+
+        // === Redstone (block forms) ===
+        // RedstoneTorchOn = lit (emits 7); RedstoneTorchOff = unlit
+        // (emits 0). The simulation pass swaps between them when
+        // power state changes; placed-by-hand is permanently On
+        // until the simulation lands.
+        RedstoneTorchOn     = 147, // Alpha 76
+        RedstoneTorchOff    = 148, // Alpha 75
+        // Wire is a 1/16-tall slab on top of its supporting block;
+        // drops as RedstoneDust item when broken.
+        RedstoneWire        = 150, // Alpha 55
+        // Input devices feeding the power BFS.
+        Lever               = 151, // Alpha 69
+        StoneButton         = 152, // Alpha 77 (Wood Button is Beta-era — out of scope)
+        StonePressurePlate  = 153, // Alpha 70
+        WoodPressurePlate   = 154, // Alpha 72
+
+        // === Snow / ice / fire ===
+        // SnowBlock — full opaque cube of packed snow used as the
+        // top surface in the Snow biome (no separate snow-LAYER
+        // partial-cube id; we keep the block list small).
+        SnowBlock           = 141, // Alpha 80
+        // Ice — translucent cube capping water surfaces in cold biomes.
+        Ice                 = 143, // Alpha 79
+        // Fire — placed by Flint and Steel above flammable blocks.
+        // Cross-sprite render, non-solid, instant-break, emits 14.
+        // Spreads via per-tick random walk; lava re-ignites it.
+        Fire                = 140, // Alpha 51
+
+        // === Halloween / Nether ===
+        Pumpkin             = 144, // Alpha 86
+        // Jack-o-lantern — lit pumpkin variant via Flint and Steel
+        // RMB on a placed Pumpkin. Emits 15. Meta low-2-bits stores
+        // the BlockFacing the carved face points (the side of the
+        // player when they ignited it).
+        JackOLantern        = 162, // Alpha 91
+        // Glowstone block — full opaque cube emitting 15. Drops
+        // 2..4 GlowstoneDust on break; 4 dust craft back into a block.
+        Glowstone           = 167, // Alpha 89
+        // Netherrack — soft red rock filling the bulk of the Nether.
+        Netherrack          = 172, // Alpha 87
+        // Soul Sand — 14/16-tall haunted sand variant. Slows player
+        // horizontal speed to ~40% while standing on it.
+        SoulSand            = 173, // Alpha 88
+        // Nether Portal — animated purple-swirl plane inside a lit
+        // 4×5 obsidian frame. Meta low-bit picks frame axis
+        // (0=Z-axis, 1=X-axis) so the mesher orients the swirl.
+        NetherPortal        = 174, // Alpha 90
+        // Nether Brick block — smelted from netherrack into
+        // NetherBrickItem, then 4 items 2×2-craft into a block.
+        NetherBrick         = 175, // Alpha 112 (modern id; not era-canonical but free here)
+
+        // === Rails ===
+        // Rail — placed on top of a solid block. Meta encodes one
+        // of 10 orientations:
+        //   0 = N-S straight, 1 = E-W straight,
+        //   2..5 = NE/NW/SE/SW corner curves,
+        //   6..9 = AscEast/AscWest/AscNorth/AscSouth ascending slopes.
+        // 1/16-tall on the cell floor, non-solid, light-transparent.
+        Rail                = 178, // Alpha 66
+
+        // === Signs (block forms; corresponding ITEM form below) ===
+        // SignPost = free-standing post on top of a solid block;
+        // WallSign = wall-mounted board on the side face of a block.
+        // Both reuse the existing planks-oak tile per user direction.
+        SignPost            = 155, // Alpha 63
+        WallSign            = 156, // Alpha 68
+
+        // === Farmland + crops ===
+        // Farmland — what hoes till grass / dirt into. Only Farmland
+        // accepts WheatSeeds.
+        Farmland            = 88,
+        // Wheat — cross-sprite crop block with 8 growth stages
+        // (low-4-bits of meta), ticked probabilistically by the
+        // world tick (light ≥ 9 + RNG advance a stage; ~30–60s
+        // real time to reach stage 7).
+        Wheat               = 89,
+
+        // ============================================================
+        // ITEMS — non-placeable held inventory entries. Live in the
+        // BlockType id space so ItemStack / Inventory / save plumbing
+        // stays unchanged. BlockData.IsItem range-checks this slice
+        // the way IsTool does for tools; renderers / placement /
+        // mesher all fall through identically (non-solid, non-cube,
+        // non-opaque, flat-sprite icon). Alpha numeric id (256+) is
+        // recorded as a comment beside each entry.
+        // ============================================================
+
+        // === Tools — material-major (wood/stone/iron/diamond/gold) ===
+        // Order is calibrated so `(byte)t - WoodSword` chunked into
+        // groups of 5 recovers the material; the chunk index inside
+        // each material recovers the kind. Hoes (id 83..87) are
+        // appended past Egg=82 because the original [WoodSword..GoldAxe]
+        // tool slice was frozen at id 57 long before hoes shipped —
+        // helpers OR the hoe range in.
         WoodSword     = 38,
         StoneSword    = 39,
         IronSword     = 40,
@@ -76,328 +278,101 @@ namespace VStudioCraft.Game
         IronAxe       = 55,
         DiamondAxe    = 56,
         GoldAxe       = 57,
+        WoodHoe       = 83, // Alpha 290
+        StoneHoe      = 84, // Alpha 291
+        IronHoe       = 85, // Alpha 292
+        DiamondHoe    = 86, // Alpha 293
+        GoldHoe       = 87, // Alpha 294
 
-        // Items — non-placeable, non-tool inventory entries (the Alpha
-        // 1.1.2 "ingredient" set: sticks, coal, ingots, gem, flint, clay
-        // ball + brick, bowl). Same trick as tools: live in the BlockType
-        // id space so ItemStack / Inventory / save plumbing stays
-        // unchanged. Alpha numeric ids (256+) are preserved as comments
-        // and exposed via ItemType.AlphaId for future save-format work.
-        // BlockData.IsItem range-checks this slice the way IsTool does
-        // for tools; renderers / placement / mesher all fall through
-        // identically (non-solid, non-cube, non-opaque, flat-sprite icon).
-        Stick      = 58, // Alpha 280
-        Coal       = 59, // Alpha 263
-        IronIngot  = 60, // Alpha 265
-        GoldIngot  = 61, // Alpha 266
-        Diamond    = 62, // Alpha 264
-        Flint      = 63, // Alpha 318
-        ClayBall   = 64, // Alpha 337
-        ClayBrick  = 65, // Alpha 336
-        Bowl       = 66, // Alpha 281
-
-        // Tail blocks — appended past the tools+items slice. Adding new
-        // block ids here doesn't shift IsTool / IsItem ranges (both are
-        // bounded above by Bowl=66), so all existing save files keep
-        // loading without a migration. Furnace is the unlit / idle state;
-        // LitFurnace is the actively-smelting variant — the tile-entity
-        // tick swaps the world cell between them as fuel burns down.
-        // Both share a tile-entity (per-position input/fuel/output stacks
-        // + cook/burn timers) keyed on world coordinate.
-        Furnace    = 67,
-        LitFurnace = 68,
-
-        // Chest — wood-planks chest with iron banding. Holds a 27-slot
-        // inventory stored in a per-position ChestTileEntity (same
-        // dictionary-on-World pattern as Furnace). Same id-space rule:
-        // appended past the tools+items slice so existing saves stay
-        // valid. Alpha-style "single chest" only — double-chest pairing
-        // (two adjacent chests merging into a 54-slot inventory) is not
-        // implemented; each chest is independent.
-        Chest      = 69,
-
-        // Wall-torch variants. The default Torch (id 30) is the floor
-        // placement; the four cardinal wall variants encode their own
-        // "facing" directly in the BlockType so we don't need a per-cell
-        // metadata byte (chunk metadata is already used by the fluid sim
-        // and isn't persisted, which would lose torch orientation across
-        // save/load). Same id-space trick the tools / items / furnace /
-        // chest blocks use: appended past the tail so existing saves
-        // load identically. Facing semantics match BlockFacing — the
-        // cardinal direction the torch's flame POINTS (i.e. away from
-        // the supporting wall, into the air). All four variants share
-        // the floor torch's tile, drop a generic Torch when broken,
-        // and emit the same 14 light. The mesher branches in EmitModels
-        // to draw a tilted billboard against the wall instead of the
-        // upright X cross used for the floor variant.
-        TorchEast  = 70, // mounted on west wall, points east  (+X)
-        TorchWest  = 71, // mounted on east wall, points west  (-X)
-        TorchSouth = 72, // mounted on north wall, points south (+Z)
-        TorchNorth = 73, // mounted on south wall, points north (-Z)
-
-        // Tier 3 #9 — Pig drops. Both live in the BlockType id-space the
-        // same way tools and ingredient items do (see ItemType wrapper
-        // below): they're flagged via BlockData.IsItem so placement /
-        // mesher / collision treat them as non-block items. Append-only
-        // past TorchNorth so v7 saves continue to load.
-        RawPorkchop    = 74, // Alpha 319
-        CookedPorkchop = 75, // Alpha 320
-
-        // Tier 3 #10 — Hostile mob drops. All four ship as inert
-        // collectibles for now — Bow + Arrow get real combat in
-        // Tier 4 #17, Gunpowder fuels TNT priming in Tier 8 #43, and
-        // String unlocks the Bow recipe + Fishing Rod (Tier 4). They
-        // live in the BlockType id-space the same way other items do
-        // (IsItem branches the mesher / placement / collision paths).
-        // Append-only past CookedPorkchop so v7 saves continue to load.
-        Bow       = 76, // Alpha 261
-        Arrow     = 77, // Alpha 262
-        String    = 78, // Alpha 287
-        Gunpowder = 79, // Alpha 289
-
-        // Tier 3 #12 — Cow / Sheep / Chicken passive-mob drops. Cow drops
-        // Leather + Raw Porkchop (the Alpha 1.1.2_01 era — beef wasn't
-        // added until Beta 1.8 so cows shared the pig drop), Chicken
-        // drops Feather on death and lays Egg every ~5 min while alive,
-        // Sheep drops Wool (block, already exists). Same id-space trick
-        // as the other items. Append-only past Gunpowder so existing
-        // saves continue to load.
-        Leather = 80, // Alpha 334
-        Feather = 81, // Alpha 288
-        Egg     = 82, // Alpha 344
-
-        // Tier 4 #14 — Hoes (5 materials). Appended past Egg=82 instead
-        // of being slotted into the canonical [WoodSword..GoldAxe] tool
-        // slice because that slice was frozen at id 57 long before hoes
-        // landed; renumbering would shift Stick=58 and every subsequent
-        // item / block, breaking every existing v7 save. The trade-off
-        // is that the contiguous "tool slice" the original IsTool /
-        // GetKind / GetMaterial helpers range-checked is now two ranges
-        // ([WoodSword..GoldAxe] + [WoodHoe..GoldHoe]) — the helpers below
-        // OR the second range in. Material order matches the rest of the
-        // tool ladder (wood, stone, iron, diamond, gold), Alpha numeric
-        // ids 290..294. Hoes function ONLY as a Farmland-tilling RMB
-        // tool — they don't speed-mine any block and don't gate any
-        // drop, just transform Grass / Dirt → Farmland under
-        // GameRenderer.TryInteract.
-        WoodHoe    = 83, // Alpha 290
-        StoneHoe   = 84, // Alpha 291
-        IronHoe    = 85, // Alpha 292
-        DiamondHoe = 86, // Alpha 293
-        GoldHoe    = 87, // Alpha 294
-
-        // Tier 4 #14 — Farming blocks. Farmland is what hoes till grass
-        // and dirt into; only Farmland accepts WheatSeeds. Wheat is the
-        // crop block itself — cross-sprite (like flowers) with 8 growth
-        // stages 0..7 stored in chunk metadata low-4-bits and ticked
-        // probabilistically by the world tick (light ≥ 9 + RNG advance
-        // a stage; ~30–60s real time to reach stage 7). Append-only
-        // past the hoe slice so all existing saves stay valid.
-        Farmland = 88,
-        Wheat    = 89,
-
-        // Tier 4 #14 — Items. WheatSeeds drops from breaking Wheat at
-        // any stage and (rarely) from breaking a Grass block bare-
-        // handed; it's the seed the player plants on Farmland to start
-        // a new crop. Wheat (the item) drops from breaking a stage-7
-        // Wheat block. Bread is the 3-wheat-in-a-row craft. MushroomStew
-        // is shapeless { Bowl, BrownMushroom, RedMushroom } and is the
-        // first food that returns its container item (Bowl) to the
-        // inventory on consume. Alpha numeric ids: 295/296/297/282.
-        // Same id-space trick as the rest of the items.
-        WheatSeeds   = 90, // Alpha 295
-        WheatItem    = 91, // Alpha 296
-        Bread        = 92, // Alpha 297
-        MushroomStew = 93, // Alpha 282
-
-        // Tier 4 #26 — Sugar cane block + paper/book items. Sugar cane is
-        // a cross-sprite multi-block-tall plant that grows next to water
-        // (Alpha behaviour). The water-adjacency rule is applied at
-        // PLACEMENT time only — once a cane is placed, the random tick
-        // grows it upward without re-checking water (matches Alpha 1.1.2
-        // exactly: real Alpha had no per-tick moisture/water gate for
-        // cane growth, only a "needs water within 1 cell of the bottom
-        // block at placement" rule). Cap height is 3, same as canon.
-        // SugarCaneItem is the harvested-cane item the player gets back
-        // when the in-world block breaks; Paper + Book are the crafting
-        // outputs (3 cane → 3 paper, 3 paper → 1 book). Append-only past
-        // the Tier 4 #14 farming items so existing v8 saves keep loading.
-        SugarCane     = 94,
-        SugarCaneItem = 95, // Alpha 338
-        Paper         = 96, // Alpha 339
-        Book          = 97, // Alpha 340
-
-        // Tier 4 #16 — Wooden + Iron doors. Two block ids per material
-        // (top + bottom half) is the simplest correct geometry for a
-        // 2-tall block: Alpha used a metadata bit for top/bottom, but
-        // dedicating separate enum slots keeps the render/collision
-        // switch tables straight without a per-cell metadata read for
-        // half-id resolution. The four block ids share a SINGLE
-        // metadata byte that encodes mutable state across both halves:
-        //   bit 0 (mask 0x01): open flag (0=closed, 1=open)
-        //   bits 1..2 (mask 0x06, >>1): facing — direction the closed
-        //                               door's OUTWARD normal points
-        //                               (0=North, 1=East, 2=South, 3=West)
-        //   bit 3 (mask 0x08): hinge side (0=left, 1=right)
-        // Both halves of a door must keep their open/facing/hinge bits
-        // synchronised — TryInteract toggles open on both. The block
-        // ids themselves are not orientation-specific, unlike the
-        // wall-torch family — encoding facing in the BlockType would
-        // explode the enum (4 facings × 2 open/closed × 2 halves = 16
-        // ids per material), so we use Chunk._meta + WriteSparseMeta
-        // persistence (the same path Wheat uses for stage). Append-
-        // only past Book=97 so existing v8 saves keep loading without
-        // an id remap.
-        WoodDoorBlockBottom = 98,
-        WoodDoorBlockTop    = 99,
-        IronDoorBlockBottom = 100,
-        IronDoorBlockTop    = 101,
-        // Tier 4 #16 — Door ITEMS. The player crafts / picks up the
-        // item form; placement spawns the two block halves. Match
-        // Alpha numeric ids 324 (wooden) and 330 (iron). Same
-        // BlockType id-space trick the rest of the items use; IsItem
-        // range below is extended to cover [WoodDoorItem..IronDoorItem]
-        // so renderers / placement / mesher take the flat-sprite
-        // branch.
-        WoodDoorItem = 102, // Alpha 324
-        IronDoorItem = 103, // Alpha 330
-
-        // Tier 4 #17 — Flint and Steel + Apple. Both are simple item
-        // ids appended past IronDoorItem so existing v8 saves stay
-        // byte-stable (no enum renumber). FlintAndSteel is the bow's
-        // companion fire-starter; Alpha used it on TNT (prime → fuse)
-        // and on solid blocks (place a Fire block adjacent to the
-        // clicked face). Both downstream targets are roadmap-deferred
-        // (TNT priming = Tier 8 #43, Fire block = Tier 6 #34), so
-        // V1 RMB does nothing — this is a faithful staged drop, not
-        // a bug. Apple is a 4-HP food item that drops rarely (~0.5%)
-        // from breaking oak leaves; same eat-on-RMB shape as Bread /
-        // RawPorkchop / CookedPorkchop.
+        // === Combat / utility ===
+        Bow           = 76, // Alpha 261
+        Arrow         = 77, // Alpha 262
         FlintAndSteel = 104, // Alpha 259
-        Apple         = 105, // Alpha 260
+        FishingRod    = 114, // Alpha 346
+        Compass       = 112, // Alpha 345
+        Saddle        = 113, // Alpha 329 (mob-mount; dungeon-loot only)
 
-        // Tier 4 #20 — Snowball. Throwable RMB projectile (Alpha 332).
-        // Egg already exists at id 82 (Tier 3 #12 — chicken lays them);
-        // this entry adds Snowball as a NEW item, and the projectile
-        // entity ThrownProjectile carries both kinds at runtime.
-        // Snowball stack-cap is 16 in Alpha (vs 64 default) — see
-        // ItemStack.MaxStackSizeFor for the exception. V1 Snowball is a
-        // creative-catalog-only entry: Alpha obtained it via shovel-on-
-        // snow, but snow blocks are roadmap-deferred (Tier 6/8). NO
-        // recipe ships with this tier; the catalog gives creative
-        // players one and survival has no obtain path until snow lands.
-        // Append-only past Apple=105 so existing v8 saves stay byte-
-        // stable (same trick every preceding tier used).
-        Snowball = 106, // Alpha 332
+        // === Buckets ===
+        // Empty bucket scoops Water/Lava sources or milks a Cow on
+        // RMB; filled bucket places its source back. Filled three
+        // are stack-cap-1 (Alpha behaviour — carrying a fluid is
+        // meant to be a meaningful trip).
+        BucketEmpty   = 107, // Alpha 325
+        BucketWater   = 108, // Alpha 326
+        BucketLava    = 109, // Alpha 327
+        BucketMilk    = 110, // Alpha 335
 
-        // Tier 4 #15 — Buckets. Empty bucket scoops Water/Lava sources or
-        // milks a Cow on RMB; filled bucket places its source back into
-        // the world. All four ids ship as items (IsItem range extends to
-        // BucketMilk), and the filled three are stack-cap-1 in Alpha
-        // 1.1.2_01 so a player can't carry an unlimited fluid reservoir
-        // in a single slot — the carry cost is what makes ferrying lava
-        // up from cave-level a meaningful trip. Append-only past
-        // Snowball=106 so existing v8 saves stay byte-stable.
-        BucketEmpty = 107, // Alpha 325
-        BucketWater = 108, // Alpha 326
-        BucketLava  = 109, // Alpha 327
-        BucketMilk  = 110, // Alpha 335
+        // === Food ===
+        Apple          = 105, // Alpha 260
+        RawPorkchop    = 74,  // Alpha 319
+        CookedPorkchop = 75,  // Alpha 320
+        Bread          = 92,  // Alpha 297
+        // MushroomStew is shapeless { Bowl, BrownMushroom, RedMushroom };
+        // first food that returns its container (Bowl) on consume.
+        MushroomStew   = 93,  // Alpha 282
 
-        // Tier 4 #18 — Slimeball. Drops only from small slimes; the in-
-        // world Slime mob is the obtain path. No recipes consume it
-        // (sticky pistons + magma cream + slime block all post-date
-        // Alpha 1.1.2_01), so the item is a cosmetic collectible kept
-        // for completeness — same "audited Alpha id, no downstream
-        // craft" story as Snowball. Append-only past BucketMilk=110 so
-        // existing v8 saves stay byte-stable.
-        Slimeball   = 111, // Alpha 341
+        // === Crops + farming items ===
+        WheatSeeds     = 90,  // Alpha 295
+        WheatItem      = 91,  // Alpha 296
 
-        // Tier 4 #22 — Compass (Alpha 345). Held item; small textual
-        // direction marker on the hotbar slot points toward world
-        // spawn from anywhere on the map. The Alpha craft is 4 iron
-        // ingots in a + with a single redstone in the middle; redstone
-        // dust doesn't exist yet (Tier 8 #42) so the item ships as a
-        // creative-catalog-only entry — the recipe is deferred until
-        // redstone arrives. Append-only past Slimeball=111 so existing
-        // v8 saves stay byte-stable; v9 of the save format adds the
-        // world-spawn vector (see WorldSaveFormat) so a freshly-loaded
-        // save can point the compass at the same spawn the player
-        // originally appeared at, not just wherever they happened to be
-        // when the save was written.
-        Compass     = 112, // Alpha 345
+        // === Resource drops + raw ingredients ===
+        Stick          = 58,  // Alpha 280
+        Coal           = 59,  // Alpha 263
+        IronIngot      = 60,  // Alpha 265
+        GoldIngot      = 61,  // Alpha 266
+        Diamond        = 62,  // Alpha 264
+        Flint          = 63,  // Alpha 318
+        ClayBall       = 64,  // Alpha 337
+        ClayBrick      = 65,  // Alpha 336
+        Bowl           = 66,  // Alpha 281
+        // Mob drops.
+        Leather        = 80,  // Alpha 334 (cow drop in our era — beef was Beta 1.8)
+        Feather        = 81,  // Alpha 288 (chicken drop)
+        Egg            = 82,  // Alpha 344 (chicken lay; throwable like snowball)
+        Gunpowder      = 79,  // Alpha 289
+        String         = 78,  // Alpha 287
+        Snowball       = 106, // Alpha 332 (throwable; obtain via shovel-on-snow once snow lands)
+        Slimeball      = 111, // Alpha 341 (small-slime drop)
+        Bone           = 158, // Alpha 352 (skeleton drop)
+        BoneMeal       = 159, // Alpha 351:15
+        SugarCaneItem  = 95,  // Alpha 338
+        Paper          = 96,  // Alpha 339
+        Book           = 97,  // Alpha 340
+        GlowstoneDust  = 168, // Alpha 348
+        NetherBrickItem= 176, // Alpha 405 (modern id, see NetherBrick comment)
+        // RedstoneDust — dropped + held form of RedstoneWire. RMB
+        // onto top of solid block places a RedstoneWire.
+        RedstoneDust   = 149, // Alpha 331
 
-        // Tier 4 #21 — Saddle (Alpha 329). Held item; RMB on a Pig
-        // equips it (sets Pig.Saddled), and RMB on a saddled pig (with
-        // a non-saddle held stack) mounts the player. Alpha saddles are
-        // unstackable (one slot per saddle) and obtained ONLY from
-        // dungeon chests — there's no craft recipe in Alpha 1.1.2_01.
-        // Dungeons don't exist yet (Tier 6 #32), so until they ship the
-        // saddle is a creative-catalog-only entry. Append-only past
-        // Compass=112 so existing v8/v9 saves stay byte-stable.
-        Saddle      = 113, // Alpha 329
+        // === Music discs (Jukebox cartridges; dungeon-loot only) ===
+        Disc13         = 117, // Alpha 2256
+        DiscCat        = 118, // Alpha 2257
 
-        // Tier 4 #23 — Fishing Rod (Alpha 346). Held item; RMB casts a
-        // Bobber entity at the camera-forward raycast endpoint (or
-        // 5 blocks ahead if the ray misses). Second RMB while the rod
-        // has an active bobber reels it in — if a catch landed (random
-        // 5..30s timer) the player gets one Raw Porkchop, otherwise
-        // nothing. Unstackable (one rod per slot — Alpha behaviour;
-        // damage values would distinguish two rods anyway). Append-only
-        // past Saddle=113 so existing v8/v9 saves stay byte-stable.
-        FishingRod  = 114, // Alpha 346
+        // === Decoration items ===
+        // Painting — RMB on a wall mounts a Painting entity. V1
+        // ships 5 variants (1×1, 1×2, 2×1, 2×2, 4×3) chosen randomly
+        // on placement.
+        Painting       = 115, // Alpha 321
+        // SignItem — crafts + holds the sign. RMB places SignPost
+        // (top face) or WallSign (side face), opens the editor, and
+        // consumes one from the stack.
+        SignItem       = 157, // Alpha 323
 
-        // Tier 4 #24 — Painting (Alpha 321). Held item; RMB on a wall
-        // mounts a Painting entity onto the air-side cell adjacent to
-        // the targeted block. The painting is a flat textured rectangle
-        // in the wall plane (not a block — it occupies no cell, the
-        // player walks through it the same way they do a torch). V1
-        // ships 5 painting variants (1×1, 1×2, 2×1, 2×2, 4×3) chosen at
-        // random on placement; auto-sizing to the largest available
-        // rectangle is a polish TODO. Paintings persist via World's
-        // Paintings list (see WorldSaveFormat v10). Append-only past
-        // FishingRod=114 so existing v8/v9 saves stay byte-stable.
-        Painting    = 115, // Alpha 321
+        // === Vehicles (entity-spawning items) ===
+        Boat           = 177, // Alpha 333
+        Minecart       = 179, // Alpha 328
 
-        // Tier 4 #25 — Jukebox (Alpha 1.0.14, id 84). Solid cube block.
-        // Stores an inserted Music Disc (Disc13 / DiscCat) via a
-        // JukeboxTileEntity keyed by world coord — same tile-entity
-        // pattern Furnace and Chest use. RMB with a disc in hand inserts
-        // the disc + starts streaming the matching music track; RMB
-        // again with no disc held ejects the disc as a DroppedItem and
-        // stops the music. Append-only past Painting=115 so existing
-        // v8/v9/v10 saves stay byte-stable.
-        Jukebox     = 116, // Alpha 84
+        // === Door items (paired with door BLOCK halves above) ===
+        WoodDoorItem   = 102, // Alpha 324
+        IronDoorItem   = 103, // Alpha 330
 
-        // Tier 4 #25 — Music Discs. Two variants ship in Alpha 1.1.2_01:
-        // "13" (eerie static) at id 2256 and "cat" (mellow synth) at id
-        // 2257. Disc13 / DiscCat are the held items the player slots
-        // into a Jukebox. Stack-cap 1 (matches Alpha — each disc has a
-        // distinct numeric id, they never stacked even before durability
-        // metadata distinguished them). No Alpha recipe — discs are
-        // dungeon-loot only; ship as creative-only entries until dungeons
-        // arrive in Tier 6 #32. Append-only past Jukebox=116.
-        Disc13      = 117, // Alpha 2256
-        DiscCat     = 118, // Alpha 2257
-
-        // Tier 4 #19 — Armor. 20 pieces in 5 materials × 4 slots
-        // (Helmet/Chestplate/Leggings/Boots). Held items, not placeable
-        // blocks; equipped via the four armor slots appended to the
-        // inventory at indices 45..48 (see Inventory.ArmorStart). Each
-        // piece reduces incoming damage by a flat point value (see
-        // BlockData.GetArmorReduction); the per-tier sums match Alpha
-        // 1.1.2_01: leather=7, chain=12, iron=15, diamond=20, gold=11.
-        //
-        // Chainmail (Alpha 302..305) is mob-drop-ONLY — no recipe, no
-        // creative-catalog gap. Zombie / Skeleton roll a 0.5 % chance
-        // per piece on death (see HostileMobs SpawnDeathDrops). The
-        // Alpha numeric ids are baked into ItemType.AlphaId for future
-        // multiplayer-protocol parity.
-        //
-        // The block-id slice is contiguous and ordered material-major,
-        // slot-minor (Helmet, Chestplate, Leggings, Boots) so
-        // GetArmorSlot can compute the slot from `((byte)t -
-        // LeatherHelmet) % 4` without a switch. Append-only past
-        // DiscCat=118 keeps existing v8..v11 saves byte-stable.
+        // === Armor — material-major (helmet, chest, leggings, boots) ===
+        // 5 materials × 4 slots = 20 pieces. GetArmorSlot computes
+        // slot from `((byte)t - LeatherHelmet) % 4` without a switch.
+        // Per-material damage reductions (canonical Alpha 1.1.2_01
+        // sums): leather=7, chain=12, iron=15, diamond=20, gold=11.
+        // Chainmail (Alpha 302..305) is mob-drop-only — Zombie /
+        // Skeleton roll 0.5% per piece on death.
         LeatherHelmet      = 119, // Alpha 298
         LeatherChestplate  = 120, // Alpha 299
         LeatherLeggings    = 121, // Alpha 300
@@ -418,356 +393,6 @@ namespace VStudioCraft.Game
         GoldChestplate     = 136, // Alpha 315
         GoldLeggings       = 137, // Alpha 316
         GoldBoots          = 138, // Alpha 317
-
-        // Tier 6 #32 — Mob spawner block. Placed by the dungeon
-        // generator at the centre of each cobble room. Alpha 1.1.2
-        // numeric id is 52. Append-only past GoldBoots=138 keeps
-        // existing v8..v13 saves byte-stable. Functional spawning
-        // behaviour is a follow-up; the block currently sits as a
-        // decorative cage cube the player can break (drops nothing —
-        // matches Alpha — and is not obtainable from the catalog).
-        MobSpawner         = 139, // Alpha 52
-
-        // Tier 6 #34 — Fire block. Placed by Flint and Steel; lives
-        // in air cells above flammable blocks. Cross-sprite render
-        // (like flowers), non-solid, instant-break, emits light=14.
-        // Spreads via a per-tick random walk to neighbouring flammable
-        // cells; eventually goes out unless adjacent to lava (which
-        // re-ignites it). Damages the player on contact (cosmetic
-        // damage tick — handled in ApplySurvivalDamage).
-        Fire               = 140, // Alpha 51
-        // Tier 6 #37 — Snow biome surface block. Full opaque cube of
-        // packed snow used as the topmost surface in the Snow biome.
-        // Distinct from grass-with-a-snow-layer (which Alpha had as a
-        // separate "snow layer" 1/8-block partial occluder) — we use
-        // a full cube to keep the block list small and the chunk
-        // mesher simple. SilkTouch-only drop (no item form yet).
-        SnowBlock          = 141, // Alpha 80
-        // Tier 6 #37 — Desert biome flora. Cactus is a 3-tall column
-        // (placed by terrain gen, the player can stack-break it but
-        // it doesn't auto-grow yet — Phase 3+). Ice is a translucent
-        // cube that caps water surfaces in the Snow biome. DeadBush
-        // is a cross-sprite plant scattered sparsely on desert sand
-        // (matches Alpha's brown twigs).
-        Cactus             = 142, // Alpha 81
-        Ice                = 143, // Alpha 79
-        // Tier 6 #37 — Pumpkin patch block (re-added after the
-        // earlier removal). Halloween Update / Alpha 1.1.0 added it,
-        // which is in scope for our Alpha 1.1.2_01 target. Plain
-        // orange-ridged cube with a stem-on-top tile; the carved
-        // jack-o-lantern variant is a separate id Alpha had at 91 —
-        // Tier 8 #51 will wire that as the lit variant.
-        Pumpkin            = 144, // Alpha 86
-        // Tier 8 #47 — Sapling. Cross-sprite plant placed on
-        // grass/dirt; grows into an oak tree over a randomised
-        // tick window (TickSaplings inside World). Drops from
-        // leaves at ~5 % per break (Alpha rate), and the same id
-        // serves as both the placeable block and the carryable
-        // item — Alpha kept those unified for sapling.
-        Sapling            = 145, // Alpha 6
-        // Tier 8 #48 — Note Block. Right-click increments the per-
-        // cell pitch (0..24, stored in low 5 bits of meta) and
-        // plays a click placeholder sound. Real procedural pitched
-        // audio is a follow-up; without redstone (Tier 8 #42 still
-        // pending) the only trigger is the right-click itself,
-        // which mirrors Alpha's "click to advance + play" coupling.
-        NoteBlock          = 146, // Alpha 25
-        // Tier 8 #42 — Redstone primitives, first slice. The torch is
-        // implemented in two block types: RedstoneTorchOn (emits
-        // light = 7, the canonical Alpha glow) and RedstoneTorchOff
-        // (zero emission, dark red sprite). Without the power-prop
-        // simulation those state transitions never fire on their
-        // own — the torch placed by hand is permanently the "on"
-        // variant — but having both block types in the enum means
-        // the simulation pass landing later is a one-line SetBlock
-        // swap rather than another save-format bump. RedstoneDust
-        // is the inventory item that wires + torches both craft
-        // from / drop as.
-        RedstoneTorchOn    = 147, // Alpha 76
-        RedstoneTorchOff   = 148, // Alpha 75
-        RedstoneDust       = 149, // Alpha 331
-        // Tier 8 #42 — Redstone Wire (placed-block form). Lies flat
-        // on top of its supporting block as a 1-pixel slab. Drops
-        // as RedstoneDust item when broken; placed by right-clicking
-        // a RedstoneDust onto the top face of a solid block. Power
-        // propagation simulation is the follow-up — for now the
-        // wire is a passive visual without signal flow.
-        RedstoneWire       = 150, // Alpha 55
-        // Tier 8 #42 — Input blocks. All five drive the power
-        // propagation system: lever (toggle on/off), buttons (press
-        // for ~10 ticks then release), pressure plates (pressed
-        // while any entity stands on them). Metadata low bit = on/
-        // pressed state; the power BFS reads this each tick and
-        // pushes 15-level signal into adjacent wires.
-        Lever              = 151, // Alpha 69
-        StoneButton        = 152, // Alpha 77 (Wood Button was Beta-era — out of scope)
-        StonePressurePlate = 153, // Alpha 70
-        WoodPressurePlate  = 154, // Alpha 72
-
-        // Tier 8 #44 — Signs. Three entries cover the full feature:
-        //   SignPost (Alpha 63) — free-standing sign-on-a-post block
-        //     placed on top of a solid block. Renders as a 2×16×2
-        //     pole + a 16×8×1 board oriented to one of 16 yaw steps.
-        //     We expose 4 cardinal facings (matching the existing
-        //     BlockFacing enum) — finer rotation is a future polish
-        //     item if the canonical Alpha 16-step rotation matters
-        //     more than the implementation simplicity.
-        //   WallSign (Alpha 68) — wall-mounted sign placed on the
-        //     side face of a block. Renders as a 16×8×1.5 board
-        //     hugging the supporting wall, oriented along the same
-        //     BlockFacing space.
-        //   SignItem (Alpha 323) — the inventory item the player
-        //     crafts and holds. Right-clicking with one held places
-        //     either SignPost (top face) or WallSign (side face),
-        //     opens the editor, and consumes one from the stack.
-        //
-        // All three are append-only past WoodPressurePlate=154 so
-        // existing v8..v13 saves stay byte-stable. Pre-v14 worlds
-        // load with no signs in the world (the BlockType range
-        // wasn't populated, so chunk byte streams couldn't reference
-        // these ids); v14 adds a trailing per-sign tile-entity block
-        // to persist the typed text + facing alongside the existing
-        // furnace/chest/jukebox tail blocks.
-        //
-        // Texture: per user direction, signs reuse the existing
-        // PlanksOak atlas tile rather than carrying a sign-specific
-        // texture. The board, post, and wall plate all sample the
-        // plank tile so a placed sign looks like a panel of the same
-        // wood the rest of the world's planks-grade structures use.
-        SignPost           = 155, // Alpha 63
-        WallSign           = 156, // Alpha 68
-        SignItem           = 157, // Alpha 323
-
-        // Tier 8 #50 — Bone + Bone Meal. Skeleton drop + crafted
-        // dye. Bone is the canonical Alpha 1.0.14 skeleton drop
-        // (1..2 per kill); 1 Bone crafts shapelessly into 3 Bone
-        // Meal. Right-clicking a wheat block / sapling with Bone
-        // Meal advances its growth stage — wheat ticks one stage
-        // closer to ripe; saplings have a 50% chance to grow into
-        // a tree immediately.
-        //
-        // Both are pure inventory items (no in-world block form),
-        // so they fold into the existing IsItem range past
-        // SignItem with no per-block IsCube / IsSolid / IsOpaque
-        // branches needed.
-        Bone               = 158, // Alpha 352
-        BoneMeal           = 159, // Alpha 351 (variant 15)
-
-        // Tier 8 #46 — Ladder. Wall-mounted climbing block placed
-        // on the side face of a solid block. Per-cell metadata
-        // low-2-bits stores the BlockFacing of the wall the ladder
-        // is attached to (0=North, 1=East, 2=South, 3=West) — same
-        // packing convention every other facing-aware block uses.
-        // Player physics overrides gravity when the player AABB
-        // overlaps a ladder cell: hold Space → climb up, hold
-        // Sneak → climb down, neither → slow descent. Drops as a
-        // Ladder block on break and crafts from 7 sticks in an
-        // H-shape (rails on cols 0 + 2, rungs on col 1 rows 0-2).
-        Ladder             = 160, // Alpha 65
-
-        // Tier 8 #46 part 2 — Wooden Fence. Alpha 85 — placed-block
-        // form is a 4×16×4 wood post pinned at the cell centre with
-        // 2×3×8 connection arms reaching toward each neighbouring
-        // fence / solid full-cube block. The mesher samples the four
-        // horizontal neighbours and emits an arm only on sides that
-        // actually have a connector — the player can walk diagonally
-        // through a row of fences so a single picket doesn't form a
-        // 4-arm cross of geometry that protrudes into empty cells.
-        //
-        // Player-collision uses the same central post as a partial
-        // AABB; jumping a single fence is technically possible with a
-        // running start (the v1 collision is full-cell-height = 16/16
-        // rather than the canonical 24/16 that extends into the cell
-        // above). The 1.5-cell height is a follow-up; v1 ships
-        // 16/16 for simplicity.
-        //
-        // Texture: reuses TilePlanks for every face of every box —
-        // canonical Alpha shipped fences with the planks tile too.
-        Fence              = 161, // Alpha 85
-
-        // Tier 8 #51 — Halloween Update: Jack-o-lantern. Lit pumpkin
-        // variant created by right-clicking a placed Pumpkin block
-        // with Flint and Steel held. Emits light=15 (same as the
-        // brightest sources in Alpha — torch is 14, this is a hair
-        // brighter so a Halloween-themed cave reads visibly different
-        // from a torch-lit one). Per-cell metadata low-2-bits stores
-        // a BlockFacing for which side the carved face points (the
-        // side the player was on when they ignited the pumpkin) —
-        // the mesher's GetTileIndexForOriented samples
-        // TileJackOLanternFront on that face and TilePumpkinSide
-        // on the other three sides + bottom, mirroring the
-        // furnace's front/side dispatch.
-        //
-        // Drops as a JackOLantern block (not a Pumpkin) when broken,
-        // so the lit state survives mining-and-replacing — no need
-        // to re-flint after every move.
-        JackOLantern       = 162, // Alpha 91
-
-        // Tier 8 #45 V1 — Half-block slabs. Four material variants
-        // mirror canonical Alpha 1.0.5_01's slab metadata family
-        // (44:0=Stone, 44:2=Wood, 44:3=Cobblestone, 44:4=Brick) but
-        // we use four distinct BlockTypes rather than a metadata-
-        // discriminated single id because per-cell metadata in this
-        // codebase already encodes facing for several other block
-        // types — keeping slabs in their own id space avoids a
-        // facing-vs-material collision in the meta byte.
-        //
-        // All four variants render as a 1×0.5×1 sub-cube pinned to
-        // the cell bottom (no top-half / upside-down slabs in V1 —
-        // that's a Beta 1.3 mechanic which we'll add when stairs
-        // ship in #45 V2). Collision matches the visual mesh, so
-        // the player auto-steps onto a slab without jumping
-        // (MaxAutoStepHeight = 0.55 covers it).
-        //
-        // Stairs (Alpha 53 + 67) are deferred to #45 V2 — they need
-        // a multi-AABB collision system for their L-shape, which is
-        // a bigger refactor than the slab work itself.
-        StoneSlab          = 163, // Alpha 44:0
-        CobblestoneSlab    = 164, // Alpha 44:3
-        BrickSlab          = 165, // Alpha 44:4
-        WoodSlab           = 166, // Alpha 44:2
-
-        // Tier 8 #51 — Halloween Update: Glowstone block + dust.
-        //
-        // Glowstone is a full opaque cube emitting light=15 (the
-        // brightest fixed source in Alpha; matches Jack-o-lantern).
-        // In canonical Alpha 1.1.2_01 it generated only in the
-        // Nether, which we haven't shipped yet — so for now the
-        // block is creative-catalog only on the inventory side. The
-        // crafting loop still works: place + break a glowstone block
-        // (drops 2..4 dust), then 4 dust → 1 block in a 2×2 craft.
-        //
-        // GlowstoneDust is a pure inventory item — drops from a
-        // broken glowstone block, crafts back into one. Folds into
-        // the existing IsItem range past the slabs with no per-block
-        // mesher / collision branches needed.
-        Glowstone          = 167, // Alpha 89
-        GlowstoneDust      = 168, // Alpha 348
-
-        // Tier 8 #45 V2 — Wooden + Cobblestone stairs. Canonical
-        // Alpha 1.0.5_01 staircase blocks. Per-cell metadata
-        // low-2-bits stores the facing direction (the side the
-        // upper half-step sits on — i.e., the direction the player
-        // ascends UP when climbing). 0=North, 1=East, 2=South,
-        // 3=West using the standard BlockFacing enum.
-        //
-        // Geometry is an L-shape from the side: a 1×0.5×1 lower
-        // step (full cell footprint, half height) PLUS a
-        // 0.5×0.5×1 (or 1×0.5×0.5) upper step on the back half.
-        // Collision uses two AABBs per cell — see
-        // BlockData.TryGetExtraCollisionAabb.
-        //
-        // Player auto-step (MaxAutoStepHeight = 0.55) covers both
-        // the lower step (0.5 tall) and the lower → upper jump
-        // within the same cell, so a continuous staircase climbs
-        // smoothly without the player having to jump on each step.
-        WoodStairs         = 169, // Alpha 53
-        CobblestoneStairs  = 170, // Alpha 67
-
-        // Tier 8 #49 V1 — Dispenser. 9-slot tile entity facing
-        // outward; redstone signal pops one item from a random
-        // non-empty slot and ejects it as a DroppedItem in the
-        // facing direction. Reuses the chest tile-entity dictionary
-        // pattern (per-position persistent state on World) plus
-        // furnace-style facing on the entity (mesher reads facing
-        // for the front-face tile via GetTileIndexForOriented).
-        //
-        // Texture: front face = canonical Alpha terrain.png (14, 2)
-        // (the "loaded crossbow" silhouette); 3 lateral sides
-        // reuse the furnace side panel; top + bottom reuse the
-        // furnace top tile (stone cap with iron vent).
-        //
-        // V1 ships block + facing + crafting + redstone-driven
-        // ejection + drop-on-break (with inventory spill). V2
-        // polish: a 3×3 inventory UI so the player can manually
-        // load items rather than relying on creative + future
-        // hopper-equivalent tiers.
-        Dispenser          = 171, // Alpha 23
-
-        // Tier 8 #51 — Halloween Update: Netherrack. Soft red rock
-        // that generates the bulk of the Nether dimension's terrain.
-        // V1 ships the block — proper texture, low hardness (axe-
-        // bypassable like stone), drops itself on break, full cube
-        // shape. The Alpha-canonical "lava and fire never burn out
-        // when adjacent to netherrack" behaviour is V2 polish: it
-        // requires the fluid sim to special-case the block (currently
-        // lava spreads identically through all flowable cells), and
-        // the fire system to skip the burn-out timer when the
-        // supporting block is netherrack.
-        //
-        // No natural source until the nether dimension lands; V1 is
-        // creative-catalog-only on the obtain side, mirroring how
-        // glowstone shipped without a vanilla spawn route.
-        Netherrack         = 172, // Alpha 87
-
-        // Tier 8 #51 — Halloween Update: Soul Sand. Brown haunted-
-        // looking sand variant native to the Nether. 14/16 tall (the
-        // top 2/16 is air — the player visually sinks into it) with
-        // a horizontal-velocity slowdown that drops the player's
-        // speed to ~40% while standing on it. The slowdown is the
-        // signature gameplay feature; the slight subsidence is
-        // visual polish that pairs with it.
-        //
-        // Drops itself on break. Hardness 0.5 (soft like sand).
-        // No natural source until the nether dimension lands;
-        // creative-catalog-only on the obtain side, mirroring
-        // glowstone + netherrack.
-        SoulSand           = 173, // Alpha 88
-
-        // Tier 8 #51 V1 — Nether Portal block. Animated purple swirl
-        // inside a lit 4×5 obsidian frame. V1 ships the BLOCK + the
-        // frame-detection-on-flint-and-steel ignition mechanic + the
-        // visual; teleportation to a parallel nether dimension is V2
-        // (the dimension itself doesn't exist yet — separate chunk
-        // store + generation pass).
-        //
-        // Block flags: non-cube (the portal is an axis-aligned plane,
-        // 1×2 cells per portal cell), non-solid (player walks through
-        // it — touching is what triggers teleport in V2), light-
-        // transparent (light passes through — matches Alpha; the swirl
-        // glows but doesn't block sky / block light propagation),
-        // alpha-blended (the swirl has translucent regions).
-        //
-        // Per-cell metadata low-2-bits stores axis (0=Z-axis frame,
-        // 1=X-axis frame) so the mesher orients the swirl plane with
-        // the long side of the frame.
-        NetherPortal       = 174, // Alpha 90
-
-        // Tier 8 #51 V13 — Nether Brick block. Smelted from
-        // netherrack via the furnace (yields 1× NetherBrickItem
-        // per netherrack), then 4× NetherBrickItem in a 2×2
-        // crafting grid yield 1× NetherBrick block. Used by V10
-        // fortress structures as wall material; distinct from the
-        // red Bricks block (id 22) so the two don't read as the
-        // same material in inventory and on the wall.
-        NetherBrick        = 175, // Alpha 112 (modern id; not era-canonical but the closest free slot)
-
-        // Item form of nether brick — held in inventory, smelted
-        // from netherrack, and crafted into NetherBrick blocks.
-        NetherBrickItem    = 176, // Alpha 405 (modern id, see above)
-
-        // Tier 9 #54 V1 — Boat. Player crafts from 5 planks (U-shape),
-        // RMB on a water cell to spawn a Boat entity at that location.
-        // Item-only id; boats are entities in the world (renderer-
-        // owned per-dim list, like drops/projectiles), not blocks —
-        // so this BlockType only ever appears in inventory / hotbar
-        // and never in the chunk block array.
-        Boat               = 177, // Alpha 333
-
-        // Tier 9 #54 V2 — Rail block. Placed on top of a solid block
-        // via RMB; the per-cell metadata low-2-bits encodes the rail
-        // axis: 0 = N-S (runs along Z), 1 = E-W (runs along X).
-        // V2 ships straight rails only — curves + ascending rails are
-        // V3 polish (require neighbour-aware mesh + slope physics).
-        // Non-cube (1/16 tall on the cell floor), non-solid (player
-        // walks through), light-transparent, alpha-tested texture.
-        Rail               = 178, // Alpha 66
-
-        // Tier 9 #54 V2 — Minecart. Ridable cart that follows rails.
-        // Item-only id (the cart-in-world is a renderer-owned entity,
-        // like Boat); RMB on a rail with this held spawns a Minecart
-        // entity at that cell.
-        Minecart           = 179, // Alpha 328
     }
 
     // Parallel "ItemType" surface — a static class rather than a
