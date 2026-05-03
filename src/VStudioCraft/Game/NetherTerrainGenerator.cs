@@ -89,6 +89,26 @@ namespace VStudioCraft.Game
                     c.Set(x, y, z, BlockType.Netherrack);
             }
 
+            // Tier 8 #51 V9 — Nether ravines. Each chunk inspects its
+            // own anchor + the 8 surrounding chunks' anchors; for any
+            // anchor that rolled a ravine (1-in-12), we walk that
+            // ravine's full path and carve the cells that land within
+            // THIS chunk's bounds. The neighbour-walk pattern is what
+            // makes ravines span chunk seams seamlessly — without it
+            // a ravine that starts in chunk (0,0) and curves into
+            // (1,0) would only carve in (0,0), leaving a sharp cliff
+            // at the chunk boundary. Cost is bounded: 9 anchors ×
+            // ~50 steps × ~500 cells/step ≈ 225k cell checks per
+            // chunk worst case, cheap inside the parallel gen pass.
+            //
+            // Order matters: ravines run AFTER the netherrack mass
+            // is placed (so we have rock to carve through) but BEFORE
+            // lava lakes (so a ravine that cuts through the y=31
+            // lava plane lets the lava settle into the ravine floor
+            // instead of generating floating lava blobs above
+            // carved-out air).
+            CarveRavinesPass(c, seed);
+
             // Lava lakes at y=LavaLakeY. V6: bumped from 0..2 to
             // 1..3 lakes per chunk and lake radius from 2..4 to
             // 3..6 — wider visible lava seas matching canonical
@@ -246,6 +266,129 @@ namespace VStudioCraft.Game
                 int sq = dx * dx + dz * dz;
                 if (sq > radius * radius) continue;
                 c.Set(x, cy, z, BlockType.Lava);
+            }
+        }
+
+        // V9 — Walk this chunk's anchor + its 8 horizontal neighbours.
+        // For each anchor that rolled a ravine, simulate the full
+        // ravine path and carve cells that land within THIS chunk's
+        // bounds. Same RNG for the same anchor regardless of which
+        // chunk is doing the carving, so neighbouring chunks agree
+        // on the path geometry — the seam across chunk boundaries
+        // is continuous.
+        private static void CarveRavinesPass(Chunk c, int seed)
+        {
+            for (int ndz = -1; ndz <= 1; ndz++)
+            for (int ndx = -1; ndx <= 1; ndx++)
+            {
+                int nx = c.ChunkX + ndx;
+                int nz = c.ChunkZ + ndz;
+                int hash = (int)((uint)seed * 0xA76B5C9Du
+                    + (uint)(nx * 0xD7E2A831)
+                    + (uint)(nz * 0x91A37FBD));
+                var rng = new Random(hash);
+                if (rng.Next(12) != 0) continue; // 1-in-12 chunks anchor a ravine
+
+                // Random start point in the (nx, nz) chunk. Y bound
+                // to mid-mass so ravines never clip the bedrock floor
+                // or the ceiling band.
+                float sx = nx * Chunk.SizeX + rng.Next(Chunk.SizeX);
+                float sz = nz * Chunk.SizeZ + rng.Next(Chunk.SizeZ);
+                float sy = 18f + rng.Next(28);   // y in 18..45
+                float yaw = (float)(rng.NextDouble() * Math.PI * 2.0);
+
+                int   steps        = 30 + rng.Next(31);              // 30..60 steps
+                float radius       = 2.5f + (float)rng.NextDouble() * 1.5f;   // 2.5..4 horizontal
+                float vertExtent   = 6.0f + (float)rng.NextDouble() * 4.0f;   // 6..10 vertical half-extent
+                const float StepLen = 1.5f;
+                const float YawJitter   = 0.30f;
+                const float PitchJitter = 0.20f;
+
+                float curX = sx, curY = sy, curZ = sz;
+                for (int s = 0; s < steps; s++)
+                {
+                    yaw += ((float)rng.NextDouble() - 0.5f) * YawJitter;
+                    float pitch = ((float)rng.NextDouble() - 0.5f) * PitchJitter;
+
+                    CarveRavineSegment(c, curX, curY, curZ, radius, vertExtent);
+
+                    float dx = (float)Math.Cos(yaw) * (float)Math.Cos(pitch);
+                    float dy = (float)Math.Sin(pitch) * 0.4f; // damped vertical drift
+                    float dz = (float)Math.Sin(yaw) * (float)Math.Cos(pitch);
+                    curX += dx * StepLen;
+                    curY += dy * StepLen;
+                    curZ += dz * StepLen;
+
+                    // Early-out if the path drifted far past the
+                    // chunk we're carving into — saves the ellipsoid
+                    // sweep on cells that can never land in this
+                    // chunk's bounds. Rough bound: if the path is
+                    // more than 16 + radius blocks outside the
+                    // chunk, no further step's capsule can reach
+                    // back into the chunk.
+                    int chunkX0 = c.ChunkX * Chunk.SizeX;
+                    int chunkZ0 = c.ChunkZ * Chunk.SizeZ;
+                    float distX = curX < chunkX0 ? chunkX0 - curX
+                                : curX > chunkX0 + Chunk.SizeX - 1 ? curX - (chunkX0 + Chunk.SizeX - 1)
+                                : 0;
+                    float distZ = curZ < chunkZ0 ? chunkZ0 - curZ
+                                : curZ > chunkZ0 + Chunk.SizeZ - 1 ? curZ - (chunkZ0 + Chunk.SizeZ - 1)
+                                : 0;
+                    if (distX > radius + 1f && distZ > radius + 1f) break;
+                    // Y bound: keep ravines inside the netherrack mass.
+                    if (curY < 6f || curY > NetherrackTop - 4f) break;
+                }
+            }
+        }
+
+        // V9 — Carve one capsule (vertically-stretched ellipsoid)
+        // centred at world coords (cx, cy, cz). Iterates only the
+        // bounding box that intersects this chunk; cells outside the
+        // chunk are clipped, cells inside whose ellipsoid distance
+        // is ≤ 1 get cleared to Air. Bedrock is preserved (ravines
+        // can't punch through the dimensional floor).
+        private static void CarveRavineSegment(Chunk c, float cx, float cy, float cz, float radius, float vertExtent)
+        {
+            int chunkX0 = c.ChunkX * Chunk.SizeX;
+            int chunkZ0 = c.ChunkZ * Chunk.SizeZ;
+            int rXZ = (int)Math.Ceiling(radius);
+            int rY  = (int)Math.Ceiling(vertExtent);
+            int icx = (int)Math.Floor(cx);
+            int icy = (int)Math.Floor(cy);
+            int icz = (int)Math.Floor(cz);
+
+            int loX = Math.Max(icx - rXZ, chunkX0);
+            int hiX = Math.Min(icx + rXZ, chunkX0 + Chunk.SizeX - 1);
+            int loZ = Math.Max(icz - rXZ, chunkZ0);
+            int hiZ = Math.Min(icz + rXZ, chunkZ0 + Chunk.SizeZ - 1);
+            int loY = Math.Max(icy - rY, FloorY + 1);
+            int hiY = Math.Min(icy + rY, CeilingBaseY - 1);
+            if (loX > hiX || loZ > hiZ || loY > hiY) return;
+
+            float invRadius = 1f / radius;
+            float invVert   = 1f / vertExtent;
+
+            for (int wy = loY; wy <= hiY; wy++)
+            {
+                float fy = (wy - cy) * invVert;
+                float fySq = fy * fy;
+                if (fySq > 1f) continue;
+                for (int wx = loX; wx <= hiX; wx++)
+                {
+                    float fx = (wx - cx) * invRadius;
+                    float fxSq = fx * fx;
+                    if (fxSq + fySq > 1f) continue;
+                    for (int wz = loZ; wz <= hiZ; wz++)
+                    {
+                        float fz = (wz - cz) * invRadius;
+                        if (fxSq + fySq + fz * fz > 1f) continue;
+                        int lx = wx - chunkX0;
+                        int lz = wz - chunkZ0;
+                        var t = (BlockType)c.RawBlocks[Chunk.Index(lx, wy, lz)];
+                        if (t == BlockType.Bedrock) continue;
+                        c.Set(lx, wy, lz, BlockType.Air);
+                    }
+                }
             }
         }
 
