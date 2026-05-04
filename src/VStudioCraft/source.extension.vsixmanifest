@@ -5,7 +5,6 @@
     <DisplayName>VStudioCraft</DisplayName>
     <Description xml:space="preserve">A voxel sandbox that opens inside Visual Studio as an editor tab. Create and load .voxworld save files.</Description>
     <Tags>voxel, game, fun, editor, sandbox</Tags>
-    <Icon>Assets\app_icon_90.png</Icon>
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0,19.0)">
