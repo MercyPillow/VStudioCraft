@@ -771,14 +771,25 @@ namespace VStudioCraft.Game
     // give it the standard 16-block range like the others). Lower HP
     // (16). Drops 0..2 String. Attack damage matches Zombie.
     //
-    // Note: Alpha spiders climb walls, but vertical pathing is a much
-    // bigger surface than the chase AI we have today — wall-climb is
-    // documented as missing in features.md and slated for the
-    // pathfinding overhaul that would also unlock A*.
+    // Wall-climb (Tier 10 #52): Alpha spiders climb walls when their
+    // pathfinding needs vertical traversal. Without a real path
+    // planner we approximate the same effect by gating on "target
+    // meaningfully above + solid block in front of the body in chase
+    // direction" and pushing a small upward velocity that outpaces
+    // gravity on the next tick. The climb naturally terminates when
+    // the wall ends (probe reads air) or the target stops being above
+    // — at that point gravity resumes and the spider settles back
+    // onto a ledge or the ground.
     internal sealed class Spider : HostileMob
     {
         public const float HitboxHalfWidth = 0.7f;
         public const float HitboxHeight    = 0.9f;
+        // Upward velocity applied per tick while climbing. ~3.5 m/s
+        // outruns the next tick's gravity drag (Gravity * dt ≈ 0.5
+        // at 60 Hz, ~0.93 at 30 Hz) so the spider gains altitude
+        // smoothly, but stays slow enough that a tall wall doesn't
+        // launch it into the sky.
+        public const float ClimbSpeed = 3.5f;
 
         public Spider(Vector3 spawnPos, int seed) : base(spawnPos, seed)
         {
@@ -792,6 +803,44 @@ namespace VStudioCraft.Game
         public override float AttackRange           => 1.6f;
         public override int   AttackDamage          => 2;
         public override float AttackCooldownSeconds => 1.0f;
+
+        public override void Update(float dt, World world, Vector3 playerPos, IPlayerDamageSink damageSink)
+        {
+            base.Update(dt, world, playerPos, damageSink);
+            if (IsDead) return;
+
+            float dx = playerPos.X - Position.X;
+            float dy = playerPos.Y - Position.Y;
+            float dz = playerPos.Z - Position.Z;
+            float horizDist = (float)Math.Sqrt(dx * dx + dz * dz);
+            // Only climb while in chase mode — wandering spiders
+            // don't scale random walls.
+            if (horizDist > DetectRange) return;
+            // Target must be meaningfully above the spider's feet —
+            // 0.5 blocks dead-bands tiny floor-jitter from triggering
+            // a climb when the player is on the same step.
+            if (dy < 0.5f) return;
+            // Avoid divide-by-zero when the player is directly on top.
+            if (horizDist < 1e-3f) return;
+
+            // Probe the cell directly in front of the body at chest
+            // height (mid-Height). Same shape as the base class's
+            // auto-jump probe but lifted upward. If the probe is solid
+            // we're pressed against a wall in the chase direction and
+            // need vertical assist.
+            float fx = dx / horizDist;
+            float fz = dz / horizDist;
+            int probeX = (int)Math.Floor(Position.X + fx * (HalfWidth + 0.1f));
+            int probeZ = (int)Math.Floor(Position.Z + fz * (HalfWidth + 0.1f));
+            int probeY = (int)Math.Floor(Position.Y + Height * 0.5f);
+            var wall = world.GetBlock(probeX, probeY, probeZ);
+            if (!BlockData.IsSolid(wall)) return;
+
+            // Climb. Use max so a still-rising spider from the
+            // hurt-pop or a previous climb tick doesn't get stomped
+            // back down to ClimbSpeed mid-arc.
+            if (Velocity.Y < ClimbSpeed) Velocity.Y = ClimbSpeed;
+        }
 
         public override void SpawnDeathDrops(IDropSink drops)
         {

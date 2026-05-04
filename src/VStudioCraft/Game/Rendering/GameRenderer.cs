@@ -12903,19 +12903,24 @@ void main()
                 Matrix4 orient = OrientUpToDir(dir);
                 var trans = Matrix4.CreateTranslation(a.Position);
 
-                // Quad 1 — pre-rotate (texture diagonal → mesh +Y),
-                // then orient (mesh +Y → flight direction).
-                var model1 = localCentre * sizeScale * preRot * orient * trans;
+                // Cross-sprite — two quads sharing the FLIGHT-AXIS
+                // edge, each rotated ±45° around the flight axis from
+                // a reference perpendicular direction. Both quads have
+                // their arrow-head vertex on the flight axis (so both
+                // tips point forward, "aligned in direction"); they
+                // intersect along the spine and splay outward at 45°
+                // each, forming an X silhouette when viewed down the
+                // flight axis. Same idiom the chunk mesher uses for
+                // the flower cross-sprite (two diagonal planes that
+                // cross down the cell's vertical axis), just oriented
+                // along velocity instead of vertical.
+                var rotPlus45  = Matrix4.CreateFromAxisAngle(dir, +MathHelper.PiOver4);
+                var rotMinus45 = Matrix4.CreateFromAxisAngle(dir, -MathHelper.PiOver4);
+                var model1 = localCentre * sizeScale * preRot * orient * rotPlus45  * trans;
                 _crackShader.SetMatrix4("uMVP", model1 * vp);
                 _paintingQuadMesh.Draw();
 
-                // Quad 2 — same orientation, plus a 90° spin around
-                // the flight axis (which is the world-space `dir` after
-                // orient). Gives the cross-sprite the perpendicular
-                // plane that makes the arrow read from any angle —
-                // same shape as the flower / wheat cross-sprite mesh.
-                var rot90 = Matrix4.CreateFromAxisAngle(dir, MathHelper.PiOver2);
-                var model2 = localCentre * sizeScale * preRot * orient * rot90 * trans;
+                var model2 = localCentre * sizeScale * preRot * orient * rotMinus45 * trans;
                 _crackShader.SetMatrix4("uMVP", model2 * vp);
                 _paintingQuadMesh.Draw();
             }
