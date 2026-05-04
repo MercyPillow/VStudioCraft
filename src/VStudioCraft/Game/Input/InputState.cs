@@ -257,6 +257,20 @@ namespace VStudioCraft.Game
         // your inventory + coords side by side, then flip it off.
         public bool DebugOverlayVisible;
 
+        // F1 hide-HUD toggle. Suppresses the held item, hotbar, hearts /
+        // hunger / breath rows, crosshair, debug overlay, LAN host chip,
+        // and autosave notice — leaves the world / mobs / particles +
+        // any modals untouched so you can take clean screenshots and
+        // still navigate menus. Canonical Alpha F1 binding.
+        public bool HudHidden;
+
+        // F2 screenshot request. Set true on key-down; the renderer
+        // reads it at the end of a frame, captures the back buffer to a
+        // dated PNG under %APPDATA%\VStudioCraft\screenshots\, then
+        // resets the flag. One-shot signal — multi-press accumulates a
+        // single screenshot per frame, which is fine.
+        public bool ScreenshotPending;
+
         // Tier 5 #31 — Hotbar-change label timer. The renderer reads the
         // currently-held block name above the hotbar; without a timer the
         // label sat there permanently and just polluted the bottom of the

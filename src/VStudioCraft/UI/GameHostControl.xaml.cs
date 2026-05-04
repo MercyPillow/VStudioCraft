@@ -1461,6 +1461,35 @@ namespace VStudioCraft.UI
                         e.SuppressKeyPress = true;
                     }
                     break;
+                case Keys.F1:
+                    // Hide-HUD toggle. Atomic bool flip on InputState;
+                    // the renderer skips the chrome stack on the next
+                    // frame. Modals stay visible. Survives pause /
+                    // inventory just like the F3 debug overlay.
+                    if (_input != null) _input.HudHidden = !_input.HudHidden;
+                    e.SuppressKeyPress = true;
+                    break;
+                case Keys.F2:
+                    // Screenshot. One-shot signal — the renderer reads
+                    // the back buffer at end-of-frame, encodes a PNG to
+                    // %APPDATA%\VStudioCraft\screenshots\, then resets
+                    // the flag. Multi-press in a single frame still
+                    // produces only one screenshot.
+                    if (_input != null) _input.ScreenshotPending = true;
+                    e.SuppressKeyPress = true;
+                    break;
+                case Keys.F11:
+                    // Borderless-fullscreen toggle. Hop to the WPF
+                    // dispatcher because Window.WindowState /
+                    // WindowStyle live on the UI thread, then walk up
+                    // the visual tree from `this` (the WPF host) to the
+                    // owning Window. We swap to WindowStyle=None +
+                    // WindowState=Maximized for the canonical Alpha
+                    // borderless-fullscreen feel; toggling back
+                    // restores the prior style + state.
+                    Dispatcher.BeginInvoke(new System.Action(ToggleFullscreen));
+                    e.SuppressKeyPress = true;
+                    break;
                 // (Tier 9 #53 V2 — Drop and Inventory are now handled
                 // by the configurable-binding dispatch ABOVE this
                 // switch, so a rebound key fires the right action
@@ -1535,6 +1564,45 @@ namespace VStudioCraft.UI
             _input.InventorySearchText += c;
             _input.InventoryScrollRows = 0; // any edit resets scroll to top
             e.Handled = true;
+        }
+
+        // F11 — borderless-fullscreen toggle on the parent WPF window.
+        // Walks the visual tree up from `this` (the host control) to
+        // find the owning `Window`. Swaps WindowStyle=None +
+        // WindowState=Maximized for fullscreen; toggling back restores
+        // the prior style + state. The first call captures the
+        // pre-fullscreen values into `_savedWindowStyle` /
+        // `_savedWindowState` so multi-press cycles back to the
+        // original (potentially custom) style. VSIX hosts can ignore
+        // this — they tend to host the control inside a Visual Studio
+        // tool window which doesn't honour WindowState anyway, and
+        // FindParentWindow returns null in that case so the toggle
+        // silently no-ops.
+        private System.Windows.WindowStyle? _savedWindowStyle;
+        private System.Windows.WindowState? _savedWindowState;
+        private bool _isFullscreen;
+        private void ToggleFullscreen()
+        {
+            var owner = System.Windows.Window.GetWindow(this);
+            if (owner == null) return;
+            if (!_isFullscreen)
+            {
+                _savedWindowStyle = owner.WindowStyle;
+                _savedWindowState = owner.WindowState;
+                // WindowState change while WindowStyle=None on an
+                // already-maximised window is a no-op, so set Normal
+                // first to force the maximise transition to fire.
+                owner.WindowStyle = System.Windows.WindowStyle.None;
+                owner.WindowState = System.Windows.WindowState.Normal;
+                owner.WindowState = System.Windows.WindowState.Maximized;
+                _isFullscreen = true;
+            }
+            else
+            {
+                if (_savedWindowStyle.HasValue) owner.WindowStyle = _savedWindowStyle.Value;
+                if (_savedWindowState.HasValue) owner.WindowState = _savedWindowState.Value;
+                _isFullscreen = false;
+            }
         }
 
         private void TogglePause()

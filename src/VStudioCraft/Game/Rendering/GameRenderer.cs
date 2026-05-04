@@ -11869,46 +11869,60 @@ void main()
             // the dimension swap.
             RenderPortalTeleportFlash(width, height);
             RenderSelectionOutline(width, height);
-            RenderCrosshair(width, height);
 
-            // First-person held-item gizmo. Layered before the survival HUD
-            // / hotbar in the render order so the chrome sits on top —
-            // Alpha hides the held tool behind the hotbar at the bottom of
-            // the screen the same way. Drives the arm-swing animation off
-            // Player.SwingTimer (TriggerSwing called from break + attack).
-            // Suppressed in third-person — the held item rides on the
-            // player's right hand in the rig itself, so drawing the
-            // first-person gizmo at the same time would double up.
-            if (!ThirdPersonMode) RenderHeldItem(width, height);
-
-            if (GameMode == GameMode.Survival)
+            // F1 hide-HUD short-circuit. When the player has F1'd the
+            // chrome away, skip the entire crosshair / held-item /
+            // hotbar / hearts / debug-overlay / LAN-chip / autosave-
+            // notice stack. Modals (inventory, pause menu, sign
+            // editor, death screen) still draw below — F1 is a
+            // chrome-hide, not a modal-dismiss. Cheap branch: most
+            // frames pay one bool check.
+            bool hudHidden = Input != null && Input.HudHidden;
+            if (!hudHidden)
             {
-                RenderSurvivalHud(width, height);
+                RenderCrosshair(width, height);
+
+                // First-person held-item gizmo. Layered before the
+                // survival HUD / hotbar so the chrome sits on top —
+                // Alpha hides the held tool behind the hotbar at the
+                // bottom of the screen the same way. Drives the arm-
+                // swing animation off Player.SwingTimer (TriggerSwing
+                // called from break + attack). Suppressed in third-
+                // person — the held item rides on the player's right
+                // hand in the rig itself, so drawing the first-person
+                // gizmo at the same time would double up.
+                if (!ThirdPersonMode) RenderHeldItem(width, height);
+
+                if (GameMode == GameMode.Survival)
+                {
+                    RenderSurvivalHud(width, height);
+                }
+
+                RenderHotbar(width, height);
+
+                // Tier 5 #30 — F3 debug overlay. Drawn after the
+                // hotbar and before the modal stack so it survives a
+                // paused world view (you can hit Esc, read coords,
+                // then dismiss). Toggle is a single flag on
+                // InputState; pre-toggle frames pay only a branch.
+                if (Input != null && Input.DebugOverlayVisible) RenderDebugOverlay(width, height);
+
+                // Phase 7 — Open-to-LAN status chip. Visible whenever
+                // we're hosting so the player knows the world is
+                // exposed without having to pause each time. Sits
+                // top-right so it doesn't overlap the F3 overlay
+                // (top-left). Cheap branch when not hosting — most
+                // frames pay one bool check.
+                if (IsHostingLan) RenderLanHostChip(width, height);
+
+                // Tier 9 #53 V1 — Autosave HUD notice. Briefly drawn
+                // top-centre after every successful autosave so the
+                // player isn't surprised by the brief frame hitch and
+                // knows their progress is committed. Fades in on the
+                // first frame and out on the last; mid-life is full
+                // opacity. Cheap branch when no notice is active.
+                if (_autosaveNoticeTimer > 0f) RenderAutosaveNotice(width, height);
             }
-
-            RenderHotbar(width, height);
-
-            // Tier 5 #30 — F3 debug overlay. Drawn after the hotbar and
-            // before the modal stack so it survives a paused world view
-            // (you can hit Esc, read coords, then dismiss). Toggle is
-            // a single flag on InputState; pre-toggle frames pay only
-            // a branch.
-            if (Input != null && Input.DebugOverlayVisible) RenderDebugOverlay(width, height);
-
-            // Phase 7 — Open-to-LAN status chip. Visible whenever we're
-            // hosting so the player knows the world is exposed without
-            // having to pause each time. Sits top-right so it doesn't
-            // overlap the F3 overlay (top-left). Cheap branch when not
-            // hosting — most frames pay one bool check.
-            if (IsHostingLan) RenderLanHostChip(width, height);
-
-            // Tier 9 #53 V1 — Autosave HUD notice. Briefly drawn
-            // top-centre after every successful autosave so the
-            // player isn't surprised by the brief frame hitch and
-            // knows their progress is committed. Fades in on the
-            // first frame and out on the last; mid-life is full
-            // opacity. Cheap branch when no notice is active.
-            if (_autosaveNoticeTimer > 0f) RenderAutosaveNotice(width, height);
 
             // Modal overlays. Only one is shown at a time — the host
             // never opens the inventory over an active pause menu, but
@@ -11930,6 +11944,17 @@ void main()
                 if (_isControlsOpen)     RenderControlsMenu(width, height);
                 else if (_isOptionsOpen) RenderOptionsMenu(width, height);
                 else                     RenderPauseMenu(width, height);
+            }
+
+            // F2 screenshot — last thing in the frame so the captured
+            // image includes every modal + chrome layer drawn above.
+            // Read-back is cheap (one glReadPixels at viewport size,
+            // ~10-20 ms for a 1080p frame on an integrated GPU) and
+            // only fires the frame the player presses F2.
+            if (Input != null && Input.ScreenshotPending)
+            {
+                Input.ScreenshotPending = false;
+                CaptureScreenshot(width, height);
             }
         }
 
@@ -15746,6 +15771,78 @@ void main()
             _overlayShader.SetFloat("uAlpha", 1f);
             GL.LineWidth(2f);
             _wireCubeMesh.Draw();
+        }
+
+        // F2 screenshot — read the back buffer as an RGBA pixel array
+        // via glReadPixels, then encode and write to disk. Output goes
+        // to %APPDATA%\VStudioCraft\screenshots\YYYY-MM-DD_HH-mm-ss.png
+        // (matches the canonical Minecraft screenshot folder pattern,
+        // just under the project's existing AppData root). The PNG
+        // encode goes through System.Drawing — no extra dependency,
+        // and the same GDI+ stack the embedded skin assets already use.
+        //
+        // OpenGL's glReadPixels gives bottom-row-first pixels in BGRA
+        // order on most drivers; we flip vertically while copying into
+        // the Bitmap (top-row first, GDI Argb format). All errors are
+        // swallowed silently (full disk, AppData missing, GDI+ throw)
+        // so a misconfigured machine can never crash the renderer
+        // mid-frame.
+        private void CaptureScreenshot(int width, int height)
+        {
+            try
+            {
+                int byteCount = width * height * 4;
+                byte[] pixels = new byte[byteCount];
+                // Force the GL pipeline to flush before we read back —
+                // without it the read can race with in-flight draws on
+                // some drivers and produce a partially-painted frame.
+                GL.Finish();
+                GL.ReadPixels(0, 0, width, height,
+                    OpenTK.Graphics.OpenGL.PixelFormat.Bgra,
+                    OpenTK.Graphics.OpenGL.PixelType.UnsignedByte, pixels);
+
+                using (var bmp = new System.Drawing.Bitmap(width, height,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                {
+                    var rect = new System.Drawing.Rectangle(0, 0, width, height);
+                    var data = bmp.LockBits(rect,
+                        System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                        System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                    try
+                    {
+                        // Flip vertically: glReadPixels is bottom-row-
+                        // first; GDI bitmap is top-row-first. Copy one
+                        // scanline at a time, source row N → dest row
+                        // (height-1-N).
+                        int dstStride = data.Stride; // bytes per row in dest, may be padded
+                        int srcStride = width * 4;
+                        for (int y = 0; y < height; y++)
+                        {
+                            int srcRow = (height - 1 - y) * srcStride;
+                            var dstPtr = System.IntPtr.Add(data.Scan0, y * dstStride);
+                            System.Runtime.InteropServices.Marshal.Copy(
+                                pixels, srcRow, dstPtr, srcStride);
+                        }
+                    }
+                    finally
+                    {
+                        bmp.UnlockBits(data);
+                    }
+
+                    string appdata = System.Environment.GetFolderPath(
+                        System.Environment.SpecialFolder.ApplicationData);
+                    string dir = System.IO.Path.Combine(appdata, "VStudioCraft", "screenshots");
+                    System.IO.Directory.CreateDirectory(dir);
+                    string stamp = System.DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+                    string path = System.IO.Path.Combine(dir, stamp + ".png");
+                    bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                }
+            }
+            catch
+            {
+                // Silent — a screenshot failure is never worth
+                // crashing the renderer over.
+            }
         }
 
         private void RenderCrosshair(int width, int height)
