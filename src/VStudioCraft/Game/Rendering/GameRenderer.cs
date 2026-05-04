@@ -8214,39 +8214,67 @@ void main()
                 // the step. Gated to only apply if it's nearer than
                 // the block hit (resolved below) — the renderer
                 // already has a similar pattern in TryHitMob.
+                //
+                // Player-fired arrows (FromMob=false) damage mobs and
+                // skip the player. Mob-fired arrows (FromMob=true)
+                // damage the player and skip all mobs (avoids the
+                // skeleton chain-killing other mobs / friendly fire
+                // back into the shooter).
                 float bestMobT = float.MaxValue;
                 PassiveMob hitPassive = null;
                 HostileMob hitHostile = null;
-                var passives = _world.Passives;
-                var hostiles = _world.Hostiles;
-                for (int p = 0; p < passives.Count; p++)
+                bool hitPlayer = false;
+                if (!a.FromMob)
                 {
-                    var mob = passives[p];
-                    if (mob.IsDead) continue;
-                    mob.GetAabb(out var min, out var max);
-                    if (RayAabbIntersect(a.Position, stepDir, min, max, stepLen, out float t))
+                    var passives = _world.Passives;
+                    var hostiles = _world.Hostiles;
+                    for (int p = 0; p < passives.Count; p++)
                     {
-                        if (t < bestMobT)
+                        var mob = passives[p];
+                        if (mob.IsDead) continue;
+                        mob.GetAabb(out var min, out var max);
+                        if (RayAabbIntersect(a.Position, stepDir, min, max, stepLen, out float t))
                         {
-                            bestMobT = t;
-                            hitPassive = mob;
-                            hitHostile = null;
+                            if (t < bestMobT)
+                            {
+                                bestMobT = t;
+                                hitPassive = mob;
+                                hitHostile = null;
+                            }
+                        }
+                    }
+                    for (int h = 0; h < hostiles.Count; h++)
+                    {
+                        var mob = hostiles[h];
+                        if (mob.IsDead) continue;
+                        mob.GetAabb(out var min, out var max);
+                        if (RayAabbIntersect(a.Position, stepDir, min, max, stepLen, out float t))
+                        {
+                            if (t < bestMobT)
+                            {
+                                bestMobT = t;
+                                hitHostile = mob;
+                                hitPassive = null;
+                            }
                         }
                     }
                 }
-                for (int h = 0; h < hostiles.Count; h++)
+                else
                 {
-                    var mob = hostiles[h];
-                    if (mob.IsDead) continue;
-                    mob.GetAabb(out var min, out var max);
-                    if (RayAabbIntersect(a.Position, stepDir, min, max, stepLen, out float t))
+                    // Mob arrow vs. player. Player AABB is centred on
+                    // X/Z, sits Position.Y..Position.Y+Height tall.
+                    var pmin = new Vector3(
+                        Player.Position.X - Player.HalfWidth,
+                        Player.Position.Y,
+                        Player.Position.Z - Player.HalfWidth);
+                    var pmax = new Vector3(
+                        Player.Position.X + Player.HalfWidth,
+                        Player.Position.Y + Player.Height,
+                        Player.Position.Z + Player.HalfWidth);
+                    if (RayAabbIntersect(a.Position, stepDir, pmin, pmax, stepLen, out float t))
                     {
-                        if (t < bestMobT)
-                        {
-                            bestMobT = t;
-                            hitHostile = mob;
-                            hitPassive = null;
-                        }
+                        bestMobT = t;
+                        hitPlayer = true;
                     }
                 }
 
@@ -8258,11 +8286,15 @@ void main()
                 float blockT = blockHit ? DistanceToHit(a.Position, stepDir, rh) : float.MaxValue;
 
                 // Resolve nearest event.
-                if (bestMobT <= blockT && (hitPassive != null || hitHostile != null))
+                if (bestMobT <= blockT && (hitPassive != null || hitHostile != null || hitPlayer))
                 {
-                    // Mob hit wins. Apply damage, drop the death
-                    // drops if the mob died, despawn the arrow.
-                    if (hitPassive != null)
+                    // Hit wins. Apply damage to whichever entity was
+                    // closest along the step, then despawn the arrow.
+                    if (hitPlayer)
+                    {
+                        Player.TakeDamage(a.Damage);
+                    }
+                    else if (hitPassive != null)
                     {
                         hitPassive.TakeDamage(a.Damage);
                         if (hitPassive.IsDead) hitPassive.SpawnDeathDrops(this);
@@ -8721,6 +8753,64 @@ void main()
                         });
                     }
                     b.NotifyFired();
+                }
+                else if (mob is Skeleton sk)
+                {
+                    // Skeleton ranged AI. Same WantsToFire / NotifyFired
+                    // pattern as ghast / blaze, but spawns an
+                    // ArrowProjectile (FromMob=true) instead of a
+                    // FireballProjectile. Muzzle at the skeleton's
+                    // shoulder height so the arrow doesn't appear to
+                    // come out of its feet.
+                    if (!sk.WantsToFire(playerEye)) continue;
+
+                    // Aim at a point slightly UP from the player's eye
+                    // to compensate for arrow gravity over the flight
+                    // time. Without this, distant arrows drop short and
+                    // skeletons miss every shot past ~8 m. The lift is
+                    // proportional to range — a quick parabola estimate
+                    // (h = 0.5 * g * t^2 with t = dist / speed).
+                    Vector3 muzzle = sk.Position + new Vector3(0f, sk.Height * 0.85f, 0f);
+                    Vector3 toPlayer = playerEye - muzzle;
+                    float dist = toPlayer.Length;
+                    if (dist < 1e-3f) continue;
+                    // Use a fixed mid-power skeleton draw — 70% of full
+                    // bow draw — so skeleton arrows hit hard but not
+                    // instantly-lethal. Damage = 0.7 * MaxDamage.
+                    const float drawFrac = 0.7f;
+                    float speed = ArrowProjectile.MinMuzzleSpeed
+                        + (ArrowProjectile.MaxMuzzleSpeed - ArrowProjectile.MinMuzzleSpeed) * drawFrac;
+                    float flightTime = dist / speed;
+                    float gravityLift = 0.5f * ArrowProjectile.GravityPerSec * flightTime * flightTime;
+                    Vector3 aimTarget = playerEye + new Vector3(0f, gravityLift, 0f);
+                    Vector3 aimDir = (aimTarget - muzzle);
+                    float aimLen = aimDir.Length;
+                    if (aimLen < 1e-3f) continue;
+                    aimDir /= aimLen;
+
+                    // LOS — voxel raycast from muzzle to player. Same
+                    // gate as ghast: a wall in the way cancels the shot.
+                    bool blockHit = Raycast.Cast(_world, muzzle, aimDir, dist + 1f, out var rh);
+                    if (blockHit)
+                    {
+                        float hitDist = DistanceToHit(muzzle, aimDir, rh);
+                        if (hitDist < dist - 0.5f) continue;
+                    }
+
+                    int dmg = (int)System.Math.Round(drawFrac * ArrowProjectile.MaxDamage);
+                    if (dmg < 1) dmg = 1;
+                    _arrows.Add(new ArrowProjectile
+                    {
+                        Position    = muzzle + aimDir * 0.5f,
+                        Velocity    = aimDir * speed,
+                        Origin      = muzzle,
+                        Damage      = dmg,
+                        FromMob     = true,
+                        HasLanded   = false,
+                        LandedTimer = 0f,
+                    });
+                    sk.NotifyFired();
+                    SfxBank.PlayPlace(BlockType.Wool);
                 }
             }
         }

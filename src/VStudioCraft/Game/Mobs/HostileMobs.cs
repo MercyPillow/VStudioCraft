@@ -637,10 +637,27 @@ namespace VStudioCraft.Game
         public const float HitboxHalfWidth = 0.3f;
         public const float HitboxHeight    = 1.8f;
 
+        // Ranged AI cadence. Canonical Alpha 1.1.2_01 skeleton cooldown
+        // is ~1 s between arrows when in line-of-sight; we run a
+        // slightly slower 1.5 s so the player has reaction time and
+        // multiple skeletons aren't pelting non-stop. Detect range
+        // matches the base detect range — once the skeleton sees the
+        // player it both chases AND fires.
+        public const float ArrowCooldownSeconds = 1.5f;
+        public const float ArrowDetectRange     = 16f;
+        public const float ArrowDetectRangeSq   = ArrowDetectRange * ArrowDetectRange;
+
+        // Cooldown timer between arrows. Counts down each tick;
+        // refilled to ArrowCooldownSeconds after a successful shot
+        // (LOS clear, in range). Starts at a small random offset so a
+        // group of skeletons doesn't fire in lockstep.
+        public float ArrowCooldown;
+
         public Skeleton(Vector3 spawnPos, int seed) : base(spawnPos, seed)
         {
             HalfWidth = HitboxHalfWidth;
             Height    = HitboxHeight;
+            ArrowCooldown = (float)(_rng.NextDouble() * ArrowCooldownSeconds);
         }
 
         public override int   MaxHealth             => 20;
@@ -649,6 +666,32 @@ namespace VStudioCraft.Game
         public override float AttackRange           => 1.4f;
         public override int   AttackDamage          => 2;
         public override float AttackCooldownSeconds => 1.0f;
+
+        // Tier 4 #17 follow-up — base HostileMob.Update advances the
+        // chase / melee path; we override only to tick the arrow
+        // cooldown alongside it. The renderer polls WantsToFire each
+        // frame and spawns the projectile when ready.
+        public override void Update(float dt, World world, OpenTK.Vector3 playerPos, IPlayerDamageSink damageSink)
+        {
+            base.Update(dt, world, playerPos, damageSink);
+            if (ArrowCooldown > 0f) ArrowCooldown -= dt;
+        }
+
+        // Returns true when the skeleton wants to fire on this tick.
+        // The renderer's TickSkeletonFiring runs the LOS raycast and
+        // spawns the ArrowProjectile if true.
+        public bool WantsToFire(OpenTK.Vector3 playerPos)
+        {
+            if (IsDead) return false;
+            if (ArrowCooldown > 0f) return false;
+            float dx = playerPos.X - Position.X;
+            float dy = playerPos.Y - Position.Y;
+            float dz = playerPos.Z - Position.Z;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            return distSq <= ArrowDetectRangeSq;
+        }
+
+        public void NotifyFired() { ArrowCooldown = ArrowCooldownSeconds; }
 
         public override void SpawnDeathDrops(IDropSink drops)
         {

@@ -53,6 +53,13 @@ namespace VStudioCraft.Game
         // mid-air at the impact point until despawn.
         public bool HasLanded;
 
+        // True for arrows fired by a hostile mob (Skeleton). Mob arrows
+        // damage the player on AABB intersection; player-fired arrows
+        // damage mobs. The flag avoids friendly fire from a player's
+        // own bow shot back into themselves and stops mob arrows from
+        // chain-killing other hostiles.
+        public bool FromMob;
+
         // Seconds since the arrow landed. Counts up while
         // HasLanded; arrow despawns once this exceeds
         // LandedDespawnSec. Reset is irrelevant — landed arrows
