@@ -547,6 +547,10 @@ void main()
         private int _hotbarBarTexture;
         private int _hotbarHighlightTexture;
         private int _fontTexture;
+        // Tier 10 #51 — Compass needle sprite (16×16 RGBA), drawn
+        // rotated on top of the dial-face icon while a Compass stack
+        // is in the hotbar. Generated once at startup.
+        private int _compassNeedleTexture;
         private int _crackTexture;
 
         // Block-break progress (survival only). Tracks the cell currently being
@@ -1547,6 +1551,7 @@ void main()
             _hotbarBarTexture = HotbarTextures.CreateBarTexture();
             _hotbarHighlightTexture = HotbarTextures.CreateSelectedHighlightTexture();
             _fontTexture = HotbarTextures.CreateFontTexture();
+            _compassNeedleTexture = HotbarTextures.CreateCompassNeedleTexture();
             _sky = new SkyRenderer();
             _sky.Initialize();
             _weather = new WeatherSystem();
@@ -15438,6 +15443,15 @@ void main()
             // does this look like in inventory" view for non-cube
             // blocks; tools/items have dedicated tiles.
             DrawItemIcon(stack.Type, x0, y0, iconPx, iconPx, ortho);
+
+            // Tier 10 #51 — Compass needle on the first-person held
+            // item. Reuses the same rotated-needle pass the hotbar
+            // overlay uses so the dial reads identically whether the
+            // player looks at the hotbar slot or the held item.
+            if (stack.Type == BlockType.Compass)
+            {
+                DrawCompassDirectionMark(x0, y0, iconPx, iconPx, ortho);
+            }
         }
 
         // Procedural player-arm sprite for the first-person HUD. Two
@@ -16474,49 +16488,44 @@ void main()
             if (Player == null || Camera == null) return;
             float dx = _spawnPos.X - Player.Position.X;
             float dz = _spawnPos.Z - Player.Position.Z;
-            // Degenerate case: standing on the spawn pixel. Show "N" so
-            // the slot still draws SOMETHING readable — atan2(0, 0) is
-            // implementation-defined and the player visibly stops moving
-            // when they're at spawn anyway, so the marker isn't load-
-            // bearing here.
+            // Tier 10 #51 — real rotated needle quad. Compute the
+            // angle to spawn relative to the camera's facing and draw
+            // the needle texture rotated to match. Z-axis rotation is
+            // CCW in the orthographic HUD layer (which has Y growing
+            // downwards), so a positive angle spins the needle
+            // visually clockwise — the same direction the player turns
+            // to face the bearing.
             const float Eps = 1e-4f;
-            string letter;
+            float angle;
             if (System.Math.Abs(dx) < Eps && System.Math.Abs(dz) < Eps)
             {
-                letter = "N";
+                // Standing on spawn — no meaningful bearing. Park the
+                // needle at 0 so the dial still reads visually.
+                angle = 0f;
             }
             else
             {
-                // World yaw that points at spawn. Camera.Yaw=0 → forward = -Z.
+                // Camera.Yaw = 0 → forward = -Z; same convention used
+                // by the world bearing math elsewhere in this file.
                 float bearing = (float)System.Math.Atan2(dx, -dz);
-                float rel = bearing - Camera.Yaw;
-                // Wrap to [-π, π] so the quadrant test is clean.
-                const float TwoPi = (float)(System.Math.PI * 2.0);
-                while (rel >  System.Math.PI) rel -= TwoPi;
-                while (rel < -System.Math.PI) rel += TwoPi;
-                // Eighth-π boundaries: [-π/4, π/4) = N, [π/4, 3π/4) = E,
-                // [3π/4, π] ∪ [-π, -3π/4) = S, [-3π/4, -π/4) = W.
-                float quart = (float)(System.Math.PI / 4.0);
-                if      (rel >= -quart       && rel <  quart)        letter = "N";
-                else if (rel >=  quart       && rel <  3f * quart)   letter = "E";
-                else if (rel >= -3f * quart  && rel < -quart)        letter = "W";
-                else                                                  letter = "S";
+                angle = bearing - Camera.Yaw;
             }
-            // Centre a scale-2 glyph on the icon rect. The bitmap glyph
-            // is 6×8 source pixels; scale 2 puts it at 12×16 — large
-            // enough to read on the dial but smaller than the icon so
-            // the static N pip painted into the atlas tile stays visible
-            // at the top of the bezel.
-            int scale = 2;
-            int glyphW = HotbarTextures.GlyphCellW * scale;
-            int glyphH = HotbarTextures.GlyphCellH * scale;
-            int cx = iconX + iconW / 2;
-            int topY = iconY + iconH / 2 - glyphH / 2;
-            // Drop-shadow first for contrast against the pale dial face.
-            DrawString(letter, scale, cx + 1, topY + 1,
-                new Vector4(0f, 0f, 0f, 0.85f), ortho);
-            DrawString(letter, scale, cx, topY,
-                new Vector4(1f, 0.25f, 0.25f, 1f), ortho);
+
+            // Inset the needle a touch inside the bezel so the static
+            // N pip on the dial face stays visible on every frame.
+            int inset = System.Math.Max(1, iconW / 8);
+            int nx = iconX + inset;
+            int ny = iconY + inset;
+            int nw = iconW - inset * 2;
+            int nh = iconH - inset * 2;
+
+            _spriteShader.Use();
+            _spriteShader.SetInt("uSprite", 0);
+            _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
+            _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
+            GL.BindTexture(TextureTarget.Texture2D, _compassNeedleTexture);
+            DrawSpriteQuadRotated(nx, ny, nw, nh, angle, ortho);
         }
 
         // Draw an inventory-stack count (e.g. "64") right-aligned to the
@@ -19345,6 +19354,23 @@ void main()
             _unitQuadMesh.Draw();
         }
 
+        // Tier 10 #51 — Sprite quad with arbitrary Z-axis rotation
+        // around the quad's centre. Same orthographic HUD-layer
+        // pipeline as DrawSpriteQuad; the unit-quad mesh occupies
+        // (0,0)..(1,1) so we recentre to (-0.5,-0.5), rotate, scale,
+        // and translate to (x + w/2, y + h/2). Used by the compass-
+        // needle pass.
+        private void DrawSpriteQuadRotated(int x, int y, int w, int h,
+            float angleRadians, Matrix4 ortho)
+        {
+            var model = Matrix4.CreateTranslation(-0.5f, -0.5f, 0f)
+                      * Matrix4.CreateRotationZ(angleRadians)
+                      * Matrix4.CreateScale(w, h, 1f)
+                      * Matrix4.CreateTranslation(x + w / 2f, y + h / 2f, 0f);
+            _spriteShader.SetMatrix4("uMVP", model * ortho);
+            _unitQuadMesh.Draw();
+        }
+
         public void Dispose()
         {
             _jobs?.Dispose();
@@ -19407,6 +19433,11 @@ void main()
             {
                 GL.DeleteTexture(_fontTexture);
                 _fontTexture = 0;
+            }
+            if (_compassNeedleTexture != 0)
+            {
+                GL.DeleteTexture(_compassNeedleTexture);
+                _compassNeedleTexture = 0;
             }
             if (_crackTexture != 0)
             {

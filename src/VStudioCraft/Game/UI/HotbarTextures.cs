@@ -206,6 +206,66 @@ namespace VStudioCraft.Game
         public const float GlyphUvW = 1f / FontSheetCols;
         public const float GlyphUvH = 1f / FontSheetRows;
 
+        // Tier 10 #51 — Compass needle sprite. 16×16 transparent sprite
+        // with a centred vertical needle: red top half (the north-
+        // pointing tip), white bottom half (the south tail), a 1-px
+        // dark outline so the needle reads against the pale dial face,
+        // and a tiny black dot at the pivot. Drawn rotated by the
+        // HUD pass on top of the static dial-face icon.
+        public const int CompassNeedleSize = 16;
+        public static int CreateCompassNeedleTexture()
+        {
+            int W = CompassNeedleSize, H = CompassNeedleSize;
+            var pixels = new byte[W * H * 4];
+            // Solid 0 alpha everywhere by default.
+            void Px(int x, int y, byte r, byte g, byte b, byte a)
+            {
+                if ((uint)x >= W || (uint)y >= H) return;
+                int i = (y * W + x) * 4;
+                pixels[i] = r; pixels[i + 1] = g; pixels[i + 2] = b; pixels[i + 3] = a;
+            }
+            byte tipR = 220, tipG = 50,  tipB = 50,  tipA = 255;
+            byte tailR = 235, tailG = 235, tailB = 230, tailA = 255;
+            byte outR = 30,   outG = 30,   outB = 30,   outA = 255;
+            byte pivot = 20;
+            // Needle: y=2..13 along the column at x=7..8. Top half
+            // (y=2..7) is red, bottom half (y=8..13) is white.
+            for (int y = 2; y <= 13; y++)
+            {
+                bool topHalf = y <= 7;
+                byte r = topHalf ? tipR  : tailR;
+                byte g = topHalf ? tipG  : tailG;
+                byte b = topHalf ? tipB  : tailB;
+                byte a = topHalf ? tipA  : tailA;
+                Px(7, y, r, g, b, a);
+                Px(8, y, r, g, b, a);
+            }
+            // Pointed tips — narrow to 1 px at the very top + bottom
+            // so the needle reads as an arrow rather than a bar.
+            Px(7, 1, tipR, tipG, tipB, tipA);
+            Px(8, 1, tipR, tipG, tipB, tipA);
+            Px(7, 14, tailR, tailG, tailB, tailA);
+            Px(8, 14, tailR, tailG, tailB, tailA);
+            // Dark outline column on each side of the shaft so the
+            // needle silhouette stays visible against bright dial pixels.
+            for (int y = 1; y <= 14; y++)
+            {
+                Px(6, y, outR, outG, outB, outA);
+                Px(9, y, outR, outG, outB, outA);
+            }
+            // Top + bottom outline pips.
+            Px(7, 0, outR, outG, outB, outA);
+            Px(8, 0, outR, outG, outB, outA);
+            Px(7, 15, outR, outG, outB, outA);
+            Px(8, 15, outR, outG, outB, outA);
+            // Small dark pivot dot at the centre — sells the rotation.
+            Px(7, 7, pivot, pivot, pivot, 255);
+            Px(8, 7, pivot, pivot, pivot, 255);
+            Px(7, 8, pivot, pivot, pivot, 255);
+            Px(8, 8, pivot, pivot, pivot, 255);
+            return UploadRgba(pixels, W, H);
+        }
+
         // ---- helpers ------------------------------------------------------
         private static int UploadRgba(byte[] pixels, int w, int h)
         {

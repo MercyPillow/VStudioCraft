@@ -1498,6 +1498,14 @@ namespace VStudioCraft.Game
                 // it apart from the flat sand item form. Same opt-in
                 // shape as Cactus.
                 case BlockType.SoulSand:
+                // Tier 10 #53 follow-up — Chest's in-world mesh is a
+                // 14×15×14 inset box (mesher routes through
+                // EmitChestBox), but the inventory / hotbar / held-
+                // item icon should still read as a 3D cube with the
+                // canonical chest top + side + front textures. Without
+                // this opt-in DrawItemIcon falls through to the flat
+                // sprite path, which only shows the side tile.
+                case BlockType.Chest:
                     return true;
                 default:
                     return false;
