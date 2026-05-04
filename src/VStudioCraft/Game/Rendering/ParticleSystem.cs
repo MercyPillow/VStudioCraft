@@ -233,6 +233,39 @@ namespace VStudioCraft.Game
             });
         }
 
+        // Spawn a melee crit "ping" burst — small bright particles
+        // radiating from a hit point. Caller passes the struck mob's
+        // AABB centre. Uses the torch tile (bright, small) with a warm
+        // yellow-white tint so they read as star-like sparks against
+        // any backdrop without needing a new atlas slot.
+        public void SpawnCritBurst(float wx, float wy, float wz)
+        {
+            int layer = BlockData.GetTileIndex(BlockType.Torch, 2);
+            const int Count = 6;
+            for (int i = 0; i < Count; i++)
+            {
+                Spawn(new Particle
+                {
+                    Position = new Vector3(
+                        wx + ((float)_rng.NextDouble() - 0.5f) * 0.3f,
+                        wy + ((float)_rng.NextDouble() - 0.5f) * 0.3f,
+                        wz + ((float)_rng.NextDouble() - 0.5f) * 0.3f),
+                    Velocity = new Vector3(
+                        ((float)_rng.NextDouble() - 0.5f) * 3.5f,
+                        1.0f + (float)_rng.NextDouble() * 1.8f,
+                        ((float)_rng.NextDouble() - 0.5f) * 3.5f),
+                    Age = 0f,
+                    Lifetime = 0.30f + (float)_rng.NextDouble() * 0.20f,
+                    TileLayer = layer,
+                    Size = 0.04f + (float)_rng.NextDouble() * 0.02f,
+                    Gravity = true,
+                    TintR = 1.5f, TintG = 1.4f, TintB = 0.6f,
+                    SpinAxis = NormalisedRandomAxis(),
+                    SpinRate = ((float)_rng.NextDouble() - 0.5f) * 14f,
+                });
+            }
+        }
+
         // Per-frame physics + lifetime sweep. Compacts the live-particle
         // prefix in place so render iteration touches only the live
         // entries — RemoveAt-style would be O(n²) for a worst-case

@@ -9695,6 +9695,13 @@ void main()
             if (bestT >= blockDist) return false;
 
             int dmg = MeleeDamageForHeldItem();
+            // Alpha 1.1.2 crit rule: a melee strike landed while the
+            // attacker has a negative Y velocity (mid-air, descending)
+            // does +50% damage with a small particle burst on the
+            // struck mob. Player.Velocity is the inherited Entity
+            // field, refreshed each tick by the physics integrator.
+            bool isCrit = Player.Velocity.Y < 0f;
+            if (isCrit) dmg += dmg / 2;
             DamageHeldTool(1);
             SfxBank.PlayPlace(BlockType.Wool);
 
@@ -9713,6 +9720,14 @@ void main()
                 {
                     bestHostile.SpawnDeathDrops(this);
                 }
+            }
+            if (isCrit)
+            {
+                Vector3 mobMin, mobMax;
+                if (bestPassive != null) bestPassive.GetAabb(out mobMin, out mobMax);
+                else                     bestHostile.GetAabb(out mobMin, out mobMax);
+                var c = (mobMin + mobMax) * 0.5f;
+                _particles.SpawnCritBurst(c.X, c.Y, c.Z);
             }
             return true;
         }
@@ -12816,31 +12831,119 @@ void main()
         {
             if (_arrows.Count == 0) return;
 
-            _overlayShader.Use();
-            _overlayShader.SetFloat("uAlpha", 1f);
-            // Mid-grey body — easy to spot against grass, sky, and
-            // most block textures without being neon. Embedded
-            // arrows could in principle pulse a tint or shift to a
-            // darker shade once HasLanded; we keep one colour for V1.
-            var arrowColor = new Vector3(0.55f, 0.55f, 0.55f);
-            _overlayShader.SetVector3("uColor", arrowColor);
+            // Textured cross-sprite render, oriented so the arrow's tip
+            // points along its current velocity vector. Two perpen-
+            // dicular planes share the velocity axis (cross-sprite, same
+            // shape as flowers / torches in the chunk mesher) — gives a
+            // recognisable arrow silhouette from any viewing angle, with
+            // the head leading the trajectory. Reuses the painting unit
+            // quad (BuildPaintingQuadMesh: (0,0)..(1,1) XY plane, UVs
+            // (0,1)..(1,0)) and the crack shader (pos+uv → sampler2DArray).
+            // The arrow tile is `BlockTextures.TileArrow` on the main
+            // atlas — the same item icon the inventory shows.
+            _crackShader.Use();
+            _crackShader.SetInt("uCrack", 0);
+            _crackShader.SetFloat("uLayer", BlockTextures.TileArrow);
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
+            // Double-sided — disable cull so a quad viewed from behind
+            // still shows the alpha-tested sprite. (The arrow texture
+            // has transparent pixels around the silhouette so the cube-
+            // shape outline doesn't read as a square.)
+            GL.Disable(EnableCap.CullFace);
 
             var vp = _frameVp;
 
-            // _breakCubeMesh spans [0,1]^3 — translate by -0.5 to
-            // centre on origin then scale to 2 × HalfSize.
-            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
-            var sizeScale   = Matrix4.CreateScale(ArrowProjectile.RenderHalfSize * 2f);
+            // Visible arrow size. Uniform scale keeps the texture
+            // un-distorted after the 45° pre-rotation below — non-
+            // uniform scaling around a rotated mesh shears the
+            // square into a parallelogram. The arrow's pixel-art
+            // silhouette is mostly transparent (just a thin shaft
+            // diagonal), so a uniform 0.6 m square reads as a
+            // 0.6 × √2 ≈ 0.85 m long arrow when rotated to vertical
+            // — close to the canonical Alpha visual length.
+            const float arrowSize = 0.6f;
+
+            // Centre the unit quad on origin (BuildPaintingQuadMesh
+            // ships it at [0..1]² in local space; translate by
+            // (-0.5, -0.5, 0) to put its centre at origin), then
+            // uniform-scale, then pre-rotate +45° around Z so the
+            // texture's diagonal arrow (head at upper-right of the
+            // 16×16 tile, fletching at lower-left — see
+            // BlockTextures.GenerateArrowItem) aligns with mesh +Y.
+            // After this pre-rotation, mesh +Y points at the arrow
+            // head, and the orient matrix below maps mesh +Y to the
+            // flight direction so the head ends up forward.
+            var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, 0f);
+            var sizeScale   = Matrix4.CreateScale(arrowSize);
+            var preRot      = Matrix4.CreateRotationZ(MathHelper.PiOver4);
 
             for (int i = 0; i < _arrows.Count; i++)
             {
                 var a = _arrows[i];
+
+                // Pick the orientation direction. In-flight arrows use
+                // the velocity vector; landed arrows have Velocity=0
+                // after the block-hit snap, so we default to a downward
+                // orientation, reading as "the arrow stuck nose-down
+                // into the surface" — close enough to canonical Alpha
+                // for stuck arrows that the player rarely re-examines.
+                Vector3 dir = a.Velocity;
+                float velLenSq = dir.LengthSquared;
+                if (velLenSq < 1e-6f)
+                {
+                    dir = new Vector3(0f, -1f, 0f);
+                }
+                else
+                {
+                    dir.Normalize();
+                }
+
+                Matrix4 orient = OrientUpToDir(dir);
                 var trans = Matrix4.CreateTranslation(a.Position);
-                var model = localCentre * sizeScale * trans;
-                var mvp = model * vp;
-                _overlayShader.SetMatrix4("uMVP", mvp);
-                _breakCubeMesh.Draw();
+
+                // Quad 1 — pre-rotate (texture diagonal → mesh +Y),
+                // then orient (mesh +Y → flight direction).
+                var model1 = localCentre * sizeScale * preRot * orient * trans;
+                _crackShader.SetMatrix4("uMVP", model1 * vp);
+                _paintingQuadMesh.Draw();
+
+                // Quad 2 — same orientation, plus a 90° spin around
+                // the flight axis (which is the world-space `dir` after
+                // orient). Gives the cross-sprite the perpendicular
+                // plane that makes the arrow read from any angle —
+                // same shape as the flower / wheat cross-sprite mesh.
+                var rot90 = Matrix4.CreateFromAxisAngle(dir, MathHelper.PiOver2);
+                var model2 = localCentre * sizeScale * preRot * orient * rot90 * trans;
+                _crackShader.SetMatrix4("uMVP", model2 * vp);
+                _paintingQuadMesh.Draw();
             }
+
+            GL.Enable(EnableCap.CullFace);
+            GL.BindTexture(TextureTarget.Texture2DArray, 0);
+        }
+
+        // Build a rotation matrix that maps the mesh-local +Y axis to
+        // the supplied unit-length world direction. Used by RenderArrows
+        // (and reusable for any future "billboarded along a velocity
+        // vector" entity) so the textured quad's "up" edge ends up
+        // pointing along the flight path. Edge cases:
+        //   * direction is already +Y → identity (no rotation needed)
+        //   * direction is exactly -Y → 180° around any horizontal axis
+        //     (we pick X for determinism)
+        //   * everything else → axis = +Y × dir (normalised),
+        //                       angle = acos(+Y · dir).
+        private static Matrix4 OrientUpToDir(Vector3 dir)
+        {
+            const float Eps = 1e-4f;
+            float dot = dir.Y;
+            if (dot >= 1f - Eps) return Matrix4.Identity;
+            if (dot <= -1f + Eps) return Matrix4.CreateRotationX((float)System.Math.PI);
+            var axis = Vector3.Cross(new Vector3(0f, 1f, 0f), dir);
+            axis.Normalize();
+            float angle = (float)System.Math.Acos(dot);
+            return Matrix4.CreateFromAxisAngle(axis, angle);
         }
 
         // Tier 4 #20 — Render every in-flight thrown projectile as a
