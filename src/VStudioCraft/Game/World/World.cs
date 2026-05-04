@@ -2079,6 +2079,29 @@ namespace VStudioCraft.Game
             return ce;
         }
 
+        // Tier 10 #53 — Double chest pair detection. Scans the four
+        // horizontal neighbours of (wx,wy,wz) and returns the
+        // coordinate of the first one whose block is a Chest. The
+        // caller stamps a canonical primary/secondary ordering (low
+        // X then low Z first) so both halves of a pair always agree on
+        // which entity owns slots 0..26 vs 27..53. Returns false if
+        // there's no pair-eligible neighbour. Alpha 1.1.2 has no
+        // facing constraint on pairing — any two adjacent chests
+        // form a large chest.
+        public bool TryFindChestPair(int wx, int wy, int wz, out (int x, int y, int z) other)
+        {
+            // Order matters only insofar as we want a deterministic
+            // "first found" — caller normalises afterwards. -X, +X,
+            // -Z, +Z is the same scan order ChunkMesher uses for
+            // adjacency probes.
+            if (GetBlock(wx - 1, wy, wz) == BlockType.Chest) { other = (wx - 1, wy, wz); return true; }
+            if (GetBlock(wx + 1, wy, wz) == BlockType.Chest) { other = (wx + 1, wy, wz); return true; }
+            if (GetBlock(wx, wy, wz - 1) == BlockType.Chest) { other = (wx, wy, wz - 1); return true; }
+            if (GetBlock(wx, wy, wz + 1) == BlockType.Chest) { other = (wx, wy, wz + 1); return true; }
+            other = default;
+            return false;
+        }
+
         // Tier 8 #49 V1 — Dispenser tile-entity accessors. Same
         // shape as the chest helpers above: get-or-create installs
         // a fresh entity, try-get returns null if absent, remove

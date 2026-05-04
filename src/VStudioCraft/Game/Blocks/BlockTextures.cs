@@ -302,7 +302,14 @@ namespace VStudioCraft.Game
         // from straight at (0,8) so corners read as quarter-arcs.
         public const int FirstTailRailCurveLayer = FirstTailMinecartItemLayer + TailMinecartItemLayerCount; // 186
         public const int TailRailCurveLayerCount = 1;
-        public const int LayerCount = FirstTailRailCurveLayer + TailRailCurveLayerCount;                // 187
+        // Tier 10 #53 — Double-chest left/right front tiles. Sourced
+        // from terrain.png at (9, 2) and (10, 2) (Alpha 1.1.2 large-
+        // chest front halves). Procedural fallbacks are mirrored
+        // halves of the single-chest front so the lock + door split
+        // line up at the seam between the two cells.
+        public const int FirstTailDoubleChestLayer = FirstTailRailCurveLayer + TailRailCurveLayerCount; // 187
+        public const int TailDoubleChestLayerCount = 2;
+        public const int LayerCount = FirstTailDoubleChestLayer + TailDoubleChestLayerCount;            // 189
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -564,6 +571,8 @@ namespace VStudioCraft.Game
         // Quarter-arc with two iron rails curving from one cardinal
         // edge to the perpendicular edge.
         public const int TileRailCurve           = 186;
+        public const int TileChestFrontLeft      = 187;
+        public const int TileChestFrontRight     = 188;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -755,6 +764,8 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileChestTop, GenerateChestTop);
             UploadLayer(layerPixels, TileChestSide, GenerateChestSide);
             UploadLayer(layerPixels, TileChestFront, GenerateChestFront);
+            UploadLayer(layerPixels, TileChestFrontLeft,  GenerateChestFrontLeft);
+            UploadLayer(layerPixels, TileChestFrontRight, GenerateChestFrontRight);
 
             // Tier 4 #14 — Farming tail-block layers (FarmlandTop +
             // 8 wheat growth stages). Always procedural in the no-PNG
@@ -1074,7 +1085,14 @@ namespace VStudioCraft.Game
                 // Tier 9 #54 V2 — Rail block tile from terrain.png (0, 8).
                 || layer == TileRail
                 // Tier 9 #54 V6 — Curved rail tile from terrain.png (0, 7).
-                || layer == TileRailCurve;
+                || layer == TileRailCurve
+                // Tier 10 #53 — Double-chest front halves from
+                // terrain.png at (9, 2) and (10, 2). Without this
+                // gate UploadTailItemsFromAlphaTools would re-slice
+                // the same coords out of the items sheet and overwrite
+                // the correct terrain tiles painted by biomeTailLayers.
+                || layer == TileChestFrontLeft
+                || layer == TileChestFrontRight;
                 // Note: TileNetherBrickItem + TileBoatItem + TileMinecartItem
                 // are NOT terrain-sourced — their coords reference
                 // items.png, so they route through
@@ -3946,6 +3964,12 @@ namespace VStudioCraft.Game
             /* TileMinecartItem        */ (7, 8),
             // Tier 9 #54 V6 — Curved rail tile from terrain.png at (0, 7).
             /* TileRailCurve           */ (0, 7),
+            // Tier 10 #53 — Double-chest front halves from terrain.png.
+            // Left at (9, 2) carries the left half of the lock plate +
+            // the left door panel; right at (10, 2) is the mirror.
+            // Mesher picks per-half based on partner direction.
+            /* TileChestFrontLeft      */ (9, 2),
+            /* TileChestFrontRight     */ (10, 2),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4250,6 +4274,12 @@ namespace VStudioCraft.Game
             // overlaid from terrain.png (0, 7).
             UploadLayer(layerPixels, TileRailCurve,       GenerateRailCurve);
 
+            // Tier 10 #53 — Double-chest front halves. Procedural
+            // fallback; overlaid from terrain.png (9, 2) and (10, 2)
+            // by the biomeTailLayers slicer below.
+            UploadLayer(layerPixels, TileChestFrontLeft,  GenerateChestFrontLeft);
+            UploadLayer(layerPixels, TileChestFrontRight, GenerateChestFrontRight);
+
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are
             // the safe fallback if the embedded terrain.png is missing
@@ -4288,6 +4318,12 @@ namespace VStudioCraft.Game
                 TileRail,
                 // Tier 9 #54 V6 — Curved rail tile from terrain.png (0, 7).
                 TileRailCurve,
+                // Tier 10 #53 — Double-chest front halves from terrain.png
+                // (9, 2) and (10, 2). Procedural pixels above are the
+                // safe fallback if the embedded sheet doesn't carry
+                // these tiles; the slice below replaces them when present.
+                TileChestFrontLeft,
+                TileChestFrontRight,
                 // TileStoneButtonItem is sliced from alpha_tools.png
                 // (items atlas) in UploadTailItemsFromAlphaTools,
                 // not from terrain.png — it does NOT belong here.
@@ -5757,6 +5793,100 @@ namespace VStudioCraft.Game
             // Keyhole — two near-black pixels at the plate centre.
             SetPixel(pixels, 7, 7, 30, 30, 30);
             SetPixel(pixels, 8, 7, 30, 30, 30);
+        }
+
+        // Tier 10 #53 — TileChestFrontLeft (terrain.png 9, 2) is the
+        // tile that ends up on the chest sitting on the player's
+        // RIGHT side of a pair. That chest's connecting seam is on
+        // its left edge (x=0..1), so the procedural fallback paints
+        // the lock plate + door split there. Pairing with
+        // TileChestFrontRight on the partner produces one continuous
+        // lock + door silhouette centred on the seam between them.
+        private static void GenerateChestFrontLeft(byte[] pixels)
+        {
+            var rng = new Random(0xCE73);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)115 : (byte)150;
+                byte g = groove ? (byte)82  : (byte)112;
+                byte b = groove ? (byte)44  : (byte)64;
+                SetJittered(pixels, x, y, r, g, b, 6, rng);
+            }
+            // Iron band — same y range as the single chest so a paired
+            // and a single chest at the same Y read with continuous
+            // bands.
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 4, 130, 130, 130);
+                SetPixel(pixels, x, 5, 96, 96, 96);
+            }
+            for (int x = 2; x < TileSize; x += 5)
+            {
+                SetPixel(pixels, x, 4, 180, 180, 180);
+            }
+            // Door split on the LEFT edge (x=0) — runs y=6..15.
+            for (int y = 6; y < TileSize; y++)
+            {
+                SetPixel(pixels, 0, y, 70, 46, 24);
+            }
+            // Lock plate — left half of a 4×3 plate centred on the
+            // seam. This tile carries x=0..1, y=6..8.
+            for (int y = 6; y <= 8; y++)
+            for (int x = 0; x <= 1; x++)
+            {
+                SetPixel(pixels, x, y, 110, 110, 110);
+            }
+            for (int x = 0; x <= 1; x++)
+            {
+                SetPixel(pixels, x, 6, 150, 150, 150);
+                SetPixel(pixels, x, 8, 70, 70, 70);
+            }
+            // Keyhole's left dot at (0, 7).
+            SetPixel(pixels, 0, 7, 30, 30, 30);
+        }
+
+        // Mirror of GenerateChestFrontLeft — TileChestFrontRight
+        // (terrain.png 10, 2) lands on the chest sitting on the
+        // player's LEFT side of a pair, whose seam is on its right
+        // edge (x=14..15).
+        private static void GenerateChestFrontRight(byte[] pixels)
+        {
+            var rng = new Random(0xCE73);
+            for (int y = 0; y < TileSize; y++)
+            for (int x = 0; x < TileSize; x++)
+            {
+                bool groove = (y % 4 == 0);
+                byte r = groove ? (byte)115 : (byte)150;
+                byte g = groove ? (byte)82  : (byte)112;
+                byte b = groove ? (byte)44  : (byte)64;
+                SetJittered(pixels, x, y, r, g, b, 6, rng);
+            }
+            for (int x = 0; x < TileSize; x++)
+            {
+                SetPixel(pixels, x, 4, 130, 130, 130);
+                SetPixel(pixels, x, 5, 96, 96, 96);
+            }
+            for (int x = 2; x < TileSize; x += 5)
+            {
+                SetPixel(pixels, x, 4, 180, 180, 180);
+            }
+            for (int y = 6; y < TileSize; y++)
+            {
+                SetPixel(pixels, 15, y, 70, 46, 24);
+            }
+            for (int y = 6; y <= 8; y++)
+            for (int x = 14; x <= 15; x++)
+            {
+                SetPixel(pixels, x, y, 110, 110, 110);
+            }
+            for (int x = 14; x <= 15; x++)
+            {
+                SetPixel(pixels, x, 6, 150, 150, 150);
+                SetPixel(pixels, x, 8, 70, 70, 70);
+            }
+            SetPixel(pixels, 15, 7, 30, 30, 30);
         }
 
         private static void GenerateMossyCobblestone(byte[] pixels)

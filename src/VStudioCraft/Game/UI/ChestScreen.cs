@@ -1,6 +1,6 @@
 namespace VStudioCraft.Game
 {
-    // Chest screen layout. Alpha single-chest UI:
+    // Chest screen layout. Alpha single-chest UI (chestRows=3):
     //
     //   ┌──────────── CHEST ─────────────────┐
     //   │  □ □ □ □ □ □ □ □ □                 │   <- chest row 0
@@ -15,25 +15,36 @@ namespace VStudioCraft.Game
     //   │  □ □ □ □ □ □ □ □ □                 │   <- player hotbar
     //   └─────────────────────────────────────┘
     //
-    // Slot indexing convention:
-    //   0..26    chest slots (mirrors ChestTileEntity.Slots[0..26])
-    //   27..62   player main inventory (36 slots, mirrors Inventory.Slots[0..35])
-    //   63..71   player hotbar (mirrors Inventory.Slots[36..44])
+    // Tier 10 #53 — large-chest variant (chestRows=6) doubles the chest
+    // grid to 6×9=54 slots. The lower 27 slots map to the secondary
+    // half of the pair; GameRenderer.HandleChestClick splits the click
+    // across the two ChestTileEntities.
+    //
+    // Slot indexing convention (chestRows = number of chest rows, 3 or 6):
+    //   0..(chestRows*9 - 1)              chest slots (top→bottom, left→right)
+    //   chestRows*9 .. chestRows*9+35     player main inventory (36 slots)
+    //   chestRows*9+36 .. chestRows*9+44  player hotbar (9 slots)
     //
     // The player inventory backing array is the SAME Inventory used by the
-    // hotbar — opening a chest doesn't fork inventory state. The 27 chest
-    // slots live in the ChestTileEntity for the block the player opened;
-    // the screen merely binds to it for the duration of the modal.
+    // hotbar — opening a chest doesn't fork inventory state. The chest
+    // slots live in the ChestTileEntity / pair the player opened; the
+    // screen merely binds to it for the duration of the modal.
     internal static class ChestScreen
     {
-        public const int ChestSlotCount = ChestTileEntity.SlotCount; // 27
+        // Single-chest constants — kept for backward compat with call
+        // sites that don't care about double chests (server protocol,
+        // multiplayer-only paths).
+        public const int ChestSlotCount  = ChestTileEntity.SlotCount; // 27
+        public const int ChestStart      = 0;
+        public const int InvMainStart    = ChestSlotCount;             // 27
+        public const int InvMainCount    = 36;
+        public const int InvHotbarStart  = InvMainStart + InvMainCount; // 63
+        public const int InvHotbarCount  = 9;
+        public const int TotalSlots      = InvHotbarStart + InvHotbarCount; // 72
 
-        public const int ChestStart    = 0;
-        public const int InvMainStart  = ChestSlotCount;             // 27
-        public const int InvMainCount  = 36;
-        public const int InvHotbarStart = InvMainStart + InvMainCount; // 63
-        public const int InvHotbarCount = 9;
-        public const int TotalSlots     = InvHotbarStart + InvHotbarCount; // 72
+        public const int DoubleChestSlotCount = ChestTileEntity.SlotCount * 2; // 54
+        public const string Title            = "CHEST";
+        public const string DoubleTitle      = "LARGE CHEST";
 
         // ---- base (scale=1) pixel sizes — match FurnaceScreen so the
         // panels feel consistent.
@@ -48,8 +59,6 @@ namespace VStudioCraft.Game
         // Vertical gap between the chest grid and the player inventory.
         private const int ChestInvGapBase  = 14;
         private const int HotbarGapAboveBase = 40;
-
-        public const string Title = "CHEST";
 
         public static int SlotPx(int viewW, int viewH)         => UiScale.S(SlotPxBase, viewW, viewH);
         public static int IconPx(int viewW, int viewH)         => UiScale.S(IconPxBase, viewW, viewH);
@@ -68,29 +77,34 @@ namespace VStudioCraft.Game
         public static int TitleHeight(int viewW, int viewH)
             => HotbarTextures.GlyphCellH * TitleScale(viewW, viewH);
 
-        // 9-wide grid is shared between the chest section and the player
-        // inventory section, so PanelWidth uses one slot grid width.
+        // ---- per-row layout helpers ------------------------------------
+        public static int ChestSlotsFor(int chestRows)   => chestRows * 9;
+        public static int InvMainStartFor(int chestRows) => chestRows * 9;
+        public static int InvHotbarStartFor(int chestRows) => chestRows * 9 + 36;
+        public static int TotalSlotsFor(int chestRows)   => chestRows * 9 + 45;
+        public static string TitleFor(int chestRows)     => chestRows >= 6 ? DoubleTitle : Title;
+
         private static int GridWidthPx(int viewW, int viewH)
             => SlotPx(viewW, viewH) * 9;
-        private static int ChestGridHeightPx(int viewW, int viewH)
-            => SlotPx(viewW, viewH) * 3;
+        private static int ChestGridHeightPx(int viewW, int viewH, int chestRows)
+            => SlotPx(viewW, viewH) * chestRows;
         private static int InvGridHeightPx(int viewW, int viewH)
             => SlotPx(viewW, viewH) * 4 + HotbarGap(viewW, viewH) + SlotPx(viewW, viewH);
 
         public static int PanelWidth(int viewW, int viewH)
             => GridWidthPx(viewW, viewH) + PanelPadX(viewW, viewH) * 2;
-        public static int PanelHeight(int viewW, int viewH)
+        public static int PanelHeight(int viewW, int viewH, int chestRows = 3)
         {
             return PanelPadY(viewW, viewH) + TitleHeight(viewW, viewH) + TitleGap(viewW, viewH)
-                 + ChestGridHeightPx(viewW, viewH) + ChestInvGap(viewW, viewH)
+                 + ChestGridHeightPx(viewW, viewH, chestRows) + ChestInvGap(viewW, viewH)
                  + InvGridHeightPx(viewW, viewH) + PanelPadY(viewW, viewH);
         }
 
         public static void GetPanelRect(int screenW, int screenH,
-            out int x, out int y, out int w, out int h)
+            out int x, out int y, out int w, out int h, int chestRows = 3)
         {
             w = PanelWidth(screenW, screenH);
-            h = PanelHeight(screenW, screenH);
+            h = PanelHeight(screenW, screenH, chestRows);
             x = (screenW - w) / 2;
 
             int centeredY = (screenH - h) / 2;
@@ -102,40 +116,43 @@ namespace VStudioCraft.Game
             if (y < 0) y = 0;
         }
 
-        public static int TitleY(int screenW, int screenH)
+        public static int TitleY(int screenW, int screenH, int chestRows = 3)
         {
-            GetPanelRect(screenW, screenH, out _, out int py, out _, out _);
+            GetPanelRect(screenW, screenH, out _, out int py, out _, out _, chestRows);
             return py + PanelPadY(screenW, screenH);
         }
 
         public static void GetSlotRect(int slotIndex, int screenW, int screenH,
-            out int x, out int y, out int w, out int h)
+            out int x, out int y, out int w, out int h, int chestRows = 3)
         {
             int slot = SlotPx(screenW, screenH);
             int padX = PanelPadX(screenW, screenH);
             int padY = PanelPadY(screenW, screenH);
-            GetPanelRect(screenW, screenH, out int px, out int py, out _, out _);
+            GetPanelRect(screenW, screenH, out int px, out int py, out _, out _, chestRows);
             int titleH = TitleHeight(screenW, screenH);
             int titleGap = TitleGap(screenW, screenH);
             int chestTop = py + padY + titleH + titleGap;
-            int chestBottom = chestTop + ChestGridHeightPx(screenW, screenH);
+            int chestBottom = chestTop + ChestGridHeightPx(screenW, screenH, chestRows);
             int invTop = chestBottom + ChestInvGap(screenW, screenH);
             int gridX0 = px + padX;
             int gap = HotbarGap(screenW, screenH);
 
-            if (slotIndex < InvMainStart)
+            int invMainStart   = InvMainStartFor(chestRows);
+            int invHotbarStart = InvHotbarStartFor(chestRows);
+
+            if (slotIndex < invMainStart)
             {
-                // Chest slots — 9×3 grid, row-major.
-                int local = slotIndex - ChestStart;
+                // Chest slots — chestRows×9 grid, row-major.
+                int local = slotIndex;
                 int row = local / 9;
                 int col = local % 9;
                 x = gridX0 + col * slot;
                 y = chestTop + row * slot;
             }
-            else if (slotIndex < InvHotbarStart)
+            else if (slotIndex < invHotbarStart)
             {
                 // Player main — 9×4 grid below the chest grid.
-                int local = slotIndex - InvMainStart;
+                int local = slotIndex - invMainStart;
                 int row = local / 9;
                 int col = local % 9;
                 x = gridX0 + col * slot;
@@ -144,7 +161,7 @@ namespace VStudioCraft.Game
             else
             {
                 // Player hotbar — 9×1, with HotbarGap above.
-                int hCol = slotIndex - InvHotbarStart;
+                int hCol = slotIndex - invHotbarStart;
                 x = gridX0 + hCol * slot;
                 y = invTop + 4 * slot + gap;
             }
@@ -152,11 +169,12 @@ namespace VStudioCraft.Game
             h = slot;
         }
 
-        public static int HitTest(int screenW, int screenH, int mx, int my)
+        public static int HitTest(int screenW, int screenH, int mx, int my, int chestRows = 3)
         {
-            for (int i = 0; i < TotalSlots; i++)
+            int total = TotalSlotsFor(chestRows);
+            for (int i = 0; i < total; i++)
             {
-                GetSlotRect(i, screenW, screenH, out int sx, out int sy, out int sw, out int sh);
+                GetSlotRect(i, screenW, screenH, out int sx, out int sy, out int sw, out int sh, chestRows);
                 if (mx >= sx && mx < sx + sw && my >= sy && my < sy + sh) return i;
             }
             return -1;
@@ -164,17 +182,20 @@ namespace VStudioCraft.Game
 
         // Map screen-space slot index to backing inventory index, or -1
         // for chest slots (caller handles those separately).
-        public static int InventoryIndexFor(int slotIndex)
+        public static int InventoryIndexFor(int slotIndex, int chestRows = 3)
         {
-            if (slotIndex < InvMainStart) return -1;
-            return slotIndex - InvMainStart;
+            int invMainStart = InvMainStartFor(chestRows);
+            if (slotIndex < invMainStart) return -1;
+            return slotIndex - invMainStart;
         }
 
         // Map screen-space slot index to chest entity index, or -1 for
-        // inventory slots.
-        public static int ChestIndexFor(int slotIndex)
+        // inventory slots. For double-chest the index is in 0..53; the
+        // caller dispatches 0..26→primary, 27..53→secondary.
+        public static int ChestIndexFor(int slotIndex, int chestRows = 3)
         {
-            if (slotIndex >= ChestStart && slotIndex < InvMainStart) return slotIndex;
+            int invMainStart = InvMainStartFor(chestRows);
+            if (slotIndex >= 0 && slotIndex < invMainStart) return slotIndex;
             return -1;
         }
     }

@@ -582,10 +582,52 @@ namespace VStudioCraft.Game
                     // textures are picked from the chest entity's
                     // facing so the bound metal lid silhouette stays
                     // pointed at the player who placed it.
+                    //
+                    // Tier 10 #53 — when this chest has a horizontally
+                    // adjacent partner, drop the inset on the connecting
+                    // side so the two halves meet flush, and pick the
+                    // left/right front tile based on which half this
+                    // is from the player's POV. Partner direction is
+                    // recomputed per-mesh so a chunk reload always
+                    // matches the current world state.
                     BlockFacing facing = BlockFacing.North;
                     var ce = world.TryGetChestEntity(x + baseX, y, z + baseZ);
                     if (ce != null) facing = ce.Facing;
-                    EmitChestBox(x + baseX, y, z + baseZ, facing, lightPacked);
+                    int partnerDX = 0, partnerDZ = 0;
+                    bool isLeftHalf = false, isRightHalf = false;
+                    if (world.TryFindChestPair(x + baseX, y, z + baseZ, out var partner))
+                    {
+                        partnerDX = partner.x - (x + baseX);
+                        partnerDZ = partner.z - (z + baseZ);
+                        // Player-perspective right vector (computed
+                        // from view = -facing-normal, right = up × view):
+                        //   North → +X, South → -X, East → +Z, West → -Z.
+                        int rDX = 0, rDZ = 0;
+                        switch (facing)
+                        {
+                            case BlockFacing.North: rDX = +1; rDZ =  0; break;
+                            case BlockFacing.South: rDX = -1; rDZ =  0; break;
+                            case BlockFacing.East:  rDX =  0; rDZ = +1; break;
+                            case BlockFacing.West:  rDX =  0; rDZ = -1; break;
+                        }
+                        // Partner on player's right → I'm the right
+                        // half (canonical Alpha tile (10, 2) — the
+                        // texture's "right" name refers to which side
+                        // of the player's view it occupies, not which
+                        // side of the chest model the seam falls on).
+                        if (partnerDX == rDX && partnerDZ == rDZ)
+                            isRightHalf = true;
+                        else if (partnerDX == -rDX && partnerDZ == -rDZ)
+                            isLeftHalf = true;
+                        // Otherwise the pair runs along the facing
+                        // axis (chest's front faces its partner) — no
+                        // sensible left/right split; fall through to
+                        // single-chest visuals. Inventory pairing in
+                        // GameRenderer still works.
+                    }
+                    EmitChestBox(x + baseX, y, z + baseZ, facing,
+                        partnerDX, partnerDZ, isLeftHalf, isRightHalf,
+                        lightPacked);
                 }
                 else if (t == BlockType.Rail)
                 {
@@ -1524,13 +1566,24 @@ namespace VStudioCraft.Game
         // canonical aspect — the geometry shrink is what produces the
         // visible inset, not a crop of the texture. This matches how
         // cactus's 14×16×14 inset works.
-        private void EmitChestBox(float wx, float wy, float wz, BlockFacing facing, int lightPacked)
+        private void EmitChestBox(float wx, float wy, float wz, BlockFacing facing,
+            int partnerDX, int partnerDZ, bool isLeftHalf, bool isRightHalf,
+            int lightPacked)
         {
             const float inset = 1f / 16f;
             float x0 = wx + inset,        x1 = wx + 1f - inset;
             float z0 = wz + inset,        z1 = wz + 1f - inset;
             float y0 = wy + 0f;
             float y1 = wy + 15f / 16f;
+
+            // Tier 10 #53 — drop the 1px inset on the connecting side
+            // so paired chests meet flush. partnerDX/DZ encode the
+            // partner's relative position; non-zero on exactly one
+            // axis when paired horizontally, zero otherwise.
+            if (partnerDX > 0) x1 = wx + 1f;          // partner at +X
+            else if (partnerDX < 0) x0 = wx + 0f;     // partner at -X
+            if (partnerDZ > 0) z1 = wz + 1f;          // partner at +Z
+            else if (partnerDZ < 0) z0 = wz + 0f;     // partner at -Z
 
             // Per-face oriented tile lookup. axis: 0=X, 1=Y, 2=Z.
             // dir: -1 / +1. Same convention the cube sweep uses for
@@ -1542,34 +1595,67 @@ namespace VStudioCraft.Game
             int layNZ = BlockData.GetTileIndexForOriented(BlockType.Chest, 2, -1, facing);
             int layPZ = BlockData.GetTileIndexForOriented(BlockType.Chest, 2, +1, facing);
 
-            // -X face
-            EmitCrossQuad(
-                x0, y0, z0, 0f, 0f,
-                x0, y0, z1, 1f, 0f,
-                x0, y1, z1, 1f, 1f,
-                x0, y1, z0, 0f, 1f,
-                -1f, 0f, 0f, layNX, lightPacked);
-            // +X face
-            EmitCrossQuad(
-                x1, y0, z0, 1f, 0f,
-                x1, y1, z0, 1f, 1f,
-                x1, y1, z1, 0f, 1f,
-                x1, y0, z1, 0f, 0f,
-                +1f, 0f, 0f, layPX, lightPacked);
-            // -Z face
-            EmitCrossQuad(
-                x0, y0, z0, 0f, 0f,
-                x0, y1, z0, 0f, 1f,
-                x1, y1, z0, 1f, 1f,
-                x1, y0, z0, 1f, 0f,
-                0f, 0f, -1f, layNZ, lightPacked);
-            // +Z face
-            EmitCrossQuad(
-                x0, y0, z1, 0f, 0f,
-                x1, y0, z1, 1f, 0f,
-                x1, y1, z1, 1f, 1f,
-                x0, y1, z1, 0f, 1f,
-                0f, 0f, +1f, layPZ, lightPacked);
+            // Tier 10 #53 — replace the front-face tile with the
+            // matching half of the double-chest front when paired.
+            // The original GetTileIndexForOriented call returned
+            // TileChestFront for the (axis, dir) that matches facing;
+            // we just overwrite that one slot.
+            if (isLeftHalf || isRightHalf)
+            {
+                int frontTile = isLeftHalf
+                    ? BlockTextures.TileChestFrontLeft
+                    : BlockTextures.TileChestFrontRight;
+                switch (facing)
+                {
+                    case BlockFacing.North: layNZ = frontTile; break;
+                    case BlockFacing.South: layPZ = frontTile; break;
+                    case BlockFacing.East:  layPX = frontTile; break;
+                    case BlockFacing.West:  layNX = frontTile; break;
+                }
+            }
+
+            // -X face — skipped when partner sits at -X (the two
+            // halves merge into one volume; the inner face would
+            // z-fight with the partner's +X face).
+            if (partnerDX >= 0)
+            {
+                EmitCrossQuad(
+                    x0, y0, z0, 0f, 0f,
+                    x0, y0, z1, 1f, 0f,
+                    x0, y1, z1, 1f, 1f,
+                    x0, y1, z0, 0f, 1f,
+                    -1f, 0f, 0f, layNX, lightPacked);
+            }
+            // +X face — skipped when partner sits at +X.
+            if (partnerDX <= 0)
+            {
+                EmitCrossQuad(
+                    x1, y0, z0, 1f, 0f,
+                    x1, y1, z0, 1f, 1f,
+                    x1, y1, z1, 0f, 1f,
+                    x1, y0, z1, 0f, 0f,
+                    +1f, 0f, 0f, layPX, lightPacked);
+            }
+            // -Z face — skipped when partner sits at -Z.
+            if (partnerDZ >= 0)
+            {
+                EmitCrossQuad(
+                    x0, y0, z0, 0f, 0f,
+                    x0, y1, z0, 0f, 1f,
+                    x1, y1, z0, 1f, 1f,
+                    x1, y0, z0, 1f, 0f,
+                    0f, 0f, -1f, layNZ, lightPacked);
+            }
+            // +Z face — skipped when partner sits at +Z.
+            if (partnerDZ <= 0)
+            {
+                EmitCrossQuad(
+                    x0, y0, z1, 0f, 0f,
+                    x1, y0, z1, 1f, 0f,
+                    x1, y1, z1, 1f, 1f,
+                    x0, y1, z1, 0f, 1f,
+                    0f, 0f, +1f, layPZ, lightPacked);
+            }
             // +Y face (top) — TileChestTop
             EmitCrossQuad(
                 x0, y1, z1, 0f, 0f,

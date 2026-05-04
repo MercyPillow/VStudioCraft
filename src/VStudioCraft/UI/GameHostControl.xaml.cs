@@ -2649,7 +2649,7 @@ namespace VStudioCraft.UI
             }
             if (_renderer.IsChestOpen)
             {
-                return ChestScreen.HitTest(pw, ph, mx, my);
+                return ChestScreen.HitTest(pw, ph, mx, my, _renderer.ChestRows);
             }
             if (_renderer.IsInventoryOpen)
             {

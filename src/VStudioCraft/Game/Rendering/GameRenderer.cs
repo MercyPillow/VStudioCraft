@@ -857,6 +857,15 @@ void main()
             set => _isChestOpen = value;
         }
         private (int x, int y, int z) _chestPos;
+        // Tier 10 #53 — Double chest. When the opened chest has a
+        // horizontally-adjacent chest neighbour, _isDoubleChest is set
+        // and _chestPos2 holds the secondary half. _chestPos is the
+        // canonical primary (slots 0..26); _chestPos2 is the secondary
+        // (slots 27..53). Pair detection runs on RMB-open and on close
+        // (or if either half is broken). Single-chest is the default.
+        private volatile bool _isDoubleChest;
+        private (int x, int y, int z) _chestPos2;
+        public int ChestRows => _isDoubleChest ? 6 : 3;
 
         // Tier 8 #49 V2 — Same open/close pattern for the dispenser.
         // RMB-opening a Dispenser sets _isDispenserOpen + _dispenserPos
@@ -5003,12 +5012,16 @@ void main()
             {
                 // Same pattern as furnace creative-break: discard the
                 // entity (creative breaks don't drop) and close the
-                // chest UI if it was bound to this cell.
+                // chest UI if it was bound to this cell. Tier 10 #53
+                // — also close when either half of an open pair is
+                // broken.
                 _world.RemoveChestEntity(hit.X, hit.Y, hit.Z);
                 if (_isChestOpen
-                    && _chestPos.x == hit.X && _chestPos.y == hit.Y && _chestPos.z == hit.Z)
+                    && (( _chestPos.x == hit.X && _chestPos.y == hit.Y && _chestPos.z == hit.Z)
+                      || (_isDoubleChest && _chestPos2.x == hit.X && _chestPos2.y == hit.Y && _chestPos2.z == hit.Z)))
                 {
                     _isChestOpen = false;
+                    _isDoubleChest = false;
                 }
             }
             else if (t == BlockType.Dispenser)
@@ -5207,12 +5220,18 @@ void main()
                 {
                     // Chest break in survival: pop the entity so we can
                     // spill its contents as drops, and close the screen
-                    // if it's currently bound to this cell.
+                    // if it's currently bound to this cell. Tier 10 #53
+                    // — also close when either half of an open double
+                    // pair is broken (the surviving half stays a
+                    // normal single chest; player can re-open as a
+                    // single 27-slot screen).
                     spilledChest = _world.RemoveChestEntity(bx, by, bz);
                     if (_isChestOpen
-                        && _chestPos.x == bx && _chestPos.y == by && _chestPos.z == bz)
+                        && (( _chestPos.x == bx && _chestPos.y == by && _chestPos.z == bz)
+                          || (_isDoubleChest && _chestPos2.x == bx && _chestPos2.y == by && _chestPos2.z == bz)))
                     {
                         _isChestOpen = false;
+                        _isDoubleChest = false;
                     }
                 }
                 else if (brokenType == BlockType.Dispenser)
@@ -6405,9 +6424,44 @@ void main()
                     // Get-or-create so a freshly placed chest gets an
                     // empty entity on first open. No tick — chests are
                     // passive containers.
-                    _chestPos = (hit.X, hit.Y, hit.Z);
-                    _world.GetOrCreateChestEntity(hit.X, hit.Y, hit.Z);
-                    _isChestOpen = true;
+                    //
+                    // Tier 10 #53 — pair detection. If a horizontally-
+                    // adjacent neighbour is also a Chest, open the
+                    // 54-slot double-chest screen with the lower-coord
+                    // half as primary so both halves of the same pair
+                    // always agree on slot ownership. Net mode skips
+                    // pairing for V1 — server protocol still treats
+                    // chests as single 27-slot windows.
+                    {
+                        int cx = hit.X, cy = hit.Y, cz = hit.Z;
+                        bool paired = false;
+                        (int x, int y, int z) other = default;
+                        if (_netClient == null && _world.TryFindChestPair(cx, cy, cz, out other))
+                        {
+                            paired = true;
+                            // Canonical ordering: lower X wins; if X
+                            // matches, lower Z wins.
+                            if (other.x < cx || (other.x == cx && other.z < cz))
+                            {
+                                _chestPos  = other;
+                                _chestPos2 = (cx, cy, cz);
+                            }
+                            else
+                            {
+                                _chestPos  = (cx, cy, cz);
+                                _chestPos2 = other;
+                            }
+                            _world.GetOrCreateChestEntity(_chestPos.x,  _chestPos.y,  _chestPos.z);
+                            _world.GetOrCreateChestEntity(_chestPos2.x, _chestPos2.y, _chestPos2.z);
+                        }
+                        else
+                        {
+                            _chestPos = (cx, cy, cz);
+                            _world.GetOrCreateChestEntity(cx, cy, cz);
+                        }
+                        _isDoubleChest = paired;
+                        _isChestOpen   = true;
+                    }
                     return true;
                 case BlockType.Dispenser:
                     // Tier 8 #49 V2 — Dispenser screen binds to the
@@ -10429,16 +10483,27 @@ void main()
             if (Input == null || _world == null) return;
             var inv = Input.Inventory;
             if (inv.Cursor.IsEmpty) return;
-            var ce = _world.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            int rows = ChestRows;
+            var ce  = _world.TryGetChestEntity(_chestPos.x,  _chestPos.y,  _chestPos.z);
+            var ce2 = _isDoubleChest
+                ? _world.TryGetChestEntity(_chestPos2.x, _chestPos2.y, _chestPos2.z)
+                : null;
             if (ce == null) return;
 
-            int chestIdx = ChestScreen.ChestIndexFor(slotIndex);
+            int chestIdx = ChestScreen.ChestIndexFor(slotIndex, rows);
             if (chestIdx >= 0)
             {
-                DepositOneFromCursor(ref ce.Slots[chestIdx], inv);
+                if (chestIdx < ChestTileEntity.SlotCount)
+                {
+                    DepositOneFromCursor(ref ce.Slots[chestIdx], inv);
+                }
+                else if (ce2 != null)
+                {
+                    DepositOneFromCursor(ref ce2.Slots[chestIdx - ChestTileEntity.SlotCount], inv);
+                }
                 return;
             }
-            int invIdx = ChestScreen.InventoryIndexFor(slotIndex);
+            int invIdx = ChestScreen.InventoryIndexFor(slotIndex, rows);
             if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
             DepositOneFromCursor(ref inv.Slots[invIdx], inv);
         }
@@ -10987,12 +11052,16 @@ void main()
             if (_world == null) return;
             var inv = Input.Inventory;
 
-            int slot = ChestScreen.HitTest(screenW, screenH, mx, my);
+            int rows = ChestRows;
+            int slot = ChestScreen.HitTest(screenW, screenH, mx, my, rows);
             // Phase 6c — net mode: intercept and forward. Chest slots
             // (0..26) → WindowClick targeting the open window. Player
             // inventory slots (27..71) → InventoryClick targeting the
             // player's ServerInventory. Outside-click with cursor →
             // InventoryClick(0xFF) which tosses the cursor server-side.
+            // Double-chest is forced off in net mode (see TryInteract),
+            // so rows == 3 here and the legacy single-chest protocol
+            // path applies unchanged.
             if (_netClient != null && _currentNetWindowId != 0)
             {
                 if (slot < 0)
@@ -11001,14 +11070,14 @@ void main()
                         _netClient.SendInventoryClick(0xFF, (byte)(button == 2 ? 1 : 0), shift);
                     return;
                 }
-                int netChestIdx = ChestScreen.ChestIndexFor(slot);
+                int netChestIdx = ChestScreen.ChestIndexFor(slot, rows);
                 if (netChestIdx >= 0)
                 {
                     _netClient.SendWindowClick(_currentNetWindowId, (byte)netChestIdx,
                         (byte)(button == 2 ? 1 : 0), shift);
                     return;
                 }
-                int netInvIdx = ChestScreen.InventoryIndexFor(slot);
+                int netInvIdx = ChestScreen.InventoryIndexFor(slot, rows);
                 if (netInvIdx >= 0 && netInvIdx < Inventory.TotalSlots)
                 {
                     _netClient.SendInventoryClick((byte)netInvIdx,
@@ -11018,26 +11087,44 @@ void main()
                 return;
             }
 
-            var ce = _world.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            var ce  = _world.TryGetChestEntity(_chestPos.x,  _chestPos.y,  _chestPos.z);
+            var ce2 = _isDoubleChest
+                ? _world.TryGetChestEntity(_chestPos2.x, _chestPos2.y, _chestPos2.z)
+                : null;
             if (ce == null) return; // safety: entity vanished mid-screen — caller should also reject
+            if (_isDoubleChest && ce2 == null) return; // safety: secondary half vanished
             if (slot < 0)
             {
                 if (!inv.Cursor.IsEmpty) TossCursorStack();
                 return;
             }
 
-            int chestIdx = ChestScreen.ChestIndexFor(slot);
+            int chestIdx = ChestScreen.ChestIndexFor(slot, rows);
             if (chestIdx >= 0)
             {
                 // Chest slot — direct cursor exchange. Shift-click
                 // pushes the slot's contents into the player inventory
-                // (top-up matching, then first-empty).
+                // (top-up matching, then first-empty). For double
+                // chests, slots 0..26 → primary entity, 27..53 →
+                // secondary entity.
+                ChestTileEntity targetEntity;
+                int targetIdx;
+                if (chestIdx < ChestTileEntity.SlotCount)
+                {
+                    targetEntity = ce;
+                    targetIdx    = chestIdx;
+                }
+                else
+                {
+                    targetEntity = ce2;
+                    targetIdx    = chestIdx - ChestTileEntity.SlotCount;
+                }
                 if (shift)
                 {
-                    ce.Slots[chestIdx] = inv.TryAdd(ce.Slots[chestIdx]);
+                    targetEntity.Slots[targetIdx] = inv.TryAdd(targetEntity.Slots[targetIdx]);
                 }
-                else if (button == 2) HandleRightClickSlotRef(ref ce.Slots[chestIdx], inv);
-                else                  HandleLeftClickSlotRef(ref ce.Slots[chestIdx], inv);
+                else if (button == 2) HandleRightClickSlotRef(ref targetEntity.Slots[targetIdx], inv);
+                else                  HandleLeftClickSlotRef(ref targetEntity.Slots[targetIdx], inv);
                 return;
             }
 
@@ -11045,8 +11132,10 @@ void main()
             // inventory screen. Shift-click on a player slot pushes
             // the stack into the chest first (top up, then first empty)
             // before falling back to cross-section moves inside the
-            // player inventory.
-            int invIdx = ChestScreen.InventoryIndexFor(slot);
+            // player inventory. For double chests the shift-click
+            // walks both halves: primary first, secondary second
+            // (matches Alpha left-to-right slot ordering).
+            int invIdx = ChestScreen.InventoryIndexFor(slot, rows);
             if (invIdx < 0 || invIdx >= Inventory.TotalSlots) return;
             if (shift)
             {
@@ -11054,6 +11143,8 @@ void main()
                 if (!src.IsEmpty)
                 {
                     bool moved = TryShiftIntoChest(ref src, ce);
+                    if (!src.IsEmpty && ce2 != null)
+                        moved |= TryShiftIntoChest(ref src, ce2);
                     if (!moved) inv.HandleShiftClickSlot(invIdx);
                 }
             }
@@ -11232,11 +11323,13 @@ void main()
                 _netClient.SendCloseWindow(_currentNetWindowId);
                 _currentNetWindowId = 0;
                 _isChestOpen = false;
+                _isDoubleChest = false;
                 return;
             }
             if (Input == null)
             {
                 _isChestOpen = false;
+                _isDoubleChest = false;
                 return;
             }
             var inv = Input.Inventory;
@@ -11247,6 +11340,7 @@ void main()
                 if (!leftover.IsEmpty) ThrowStack(leftover);
             }
             _isChestOpen = false;
+            _isDoubleChest = false;
         }
 
         // Close the crafting screen. Anything left in the 3×3 grid is
@@ -12900,27 +12994,86 @@ void main()
                     dir.Normalize();
                 }
 
-                Matrix4 orient = OrientUpToDir(dir);
+                // Build an explicit orthonormal frame around the
+                // flight direction so the quad's perpendicular axis is
+                // consistent regardless of flight direction. The
+                // simpler OrientUpToDir uses a geodesic rotation whose
+                // resulting "side" axis varies with `dir` — for an arrow
+                // flying +X it lands on -Y (quad ends up upright /
+                // vertical), for one flying +Z it lands on +X (quad
+                // ends up horizontal / flat). Using a hand-built frame
+                // pins quad 1 to ALWAYS be upright (vertical plane
+                // through spine, perpendicular axis = world-up
+                // component perpendicular to dir), so when quad 2
+                // rolls 90° around the spine it ALWAYS becomes the
+                // horizontal plane.
+                //
+                //   dir        — spine direction (mesh +Y maps here)
+                //   vUp        — world up projected perpendicular to dir
+                //                (mesh +X maps here; this is the
+                //                "vertical" side axis in quad 1)
+                //   wRight     — dir × vUp (mesh +Z maps here; the
+                //                "horizontal" side axis that becomes
+                //                quad 2's perpendicular after the
+                //                90° roll around mesh +Y)
+                var worldUp = new Vector3(0f, 1f, 0f);
+                Vector3 vUp = worldUp - Vector3.Dot(worldUp, dir) * dir;
+                if (vUp.LengthSquared < 1e-6f)
+                {
+                    // Flight is straight up or straight down — world up
+                    // is parallel to dir, no perpendicular projection.
+                    // Fall back to world +X as the side axis; the
+                    // visual still reads as "two perpendicular planes
+                    // through a vertical spine".
+                    vUp = new Vector3(1f, 0f, 0f);
+                }
+                vUp.Normalize();
+                Vector3 wRight = Vector3.Cross(dir, vUp);
+                wRight.Normalize();
+                // Row-vector orient: row 0 is mesh +X mapping, row 1
+                // is mesh +Y mapping, row 2 is mesh +Z mapping.
+                Matrix4 orient = new Matrix4(
+                    vUp.X,    vUp.Y,    vUp.Z,    0f,
+                    dir.X,    dir.Y,    dir.Z,    0f,
+                    wRight.X, wRight.Y, wRight.Z, 0f,
+                    0f,       0f,       0f,       1f);
                 var trans = Matrix4.CreateTranslation(a.Position);
 
-                // Cross-sprite — two quads sharing the FLIGHT-AXIS
-                // edge, each rotated ±45° around the flight axis from
-                // a reference perpendicular direction. Both quads have
-                // their arrow-head vertex on the flight axis (so both
-                // tips point forward, "aligned in direction"); they
-                // intersect along the spine and splay outward at 45°
-                // each, forming an X silhouette when viewed down the
-                // flight axis. Same idiom the chunk mesher uses for
-                // the flower cross-sprite (two diagonal planes that
-                // cross down the cell's vertical axis), just oriented
-                // along velocity instead of vertical.
-                var rotPlus45  = Matrix4.CreateFromAxisAngle(dir, +MathHelper.PiOver4);
-                var rotMinus45 = Matrix4.CreateFromAxisAngle(dir, -MathHelper.PiOver4);
-                var model1 = localCentre * sizeScale * preRot * orient * rotPlus45  * trans;
+                // Cross-sprite. Both quads share the FLIGHT-AXIS edge:
+                // the arrow's head vertex (UV 1,0 — the upper-right
+                // texture pixel where the arrowhead is painted) sits
+                // on the flight axis after preRot+orient, so rotating
+                // the quad around that axis leaves the head exactly
+                // where it was — both tips coincide on the flight
+                // line, both arrows point straight forward.
+                //
+                // Quad 1 has zero rotation around the flight axis.
+                // Quad 2 has a 90° rotation around the flight axis,
+                // putting its plane perpendicular to quad 1. From any
+                // viewing angle the player sees at least one quad
+                // face-on (the other goes edge-on). Same shape the
+                // chunk mesher's EmitCrossSprite produces for
+                // flowers, just oriented along velocity instead of
+                // vertical.
+                var model1 = localCentre * sizeScale * preRot * orient * trans;
                 _crackShader.SetMatrix4("uMVP", model1 * vp);
                 _paintingQuadMesh.Draw();
 
-                var model2 = localCentre * sizeScale * preRot * orient * rotMinus45 * trans;
+                // Pitch the second quad's plane 90° around its mesh
+                // local +Y axis (the arrow's spine after preRot, before
+                // orient). This swaps the quad's perpendicular axis
+                // from mesh +X to mesh +Z. After orient the spine
+                // still maps to the flight direction (Y axis is the
+                // rotation axis, unchanged), but the quad's
+                // perpendicular plane has flipped from "side-side"
+                // (horizontal axis perpendicular to flight) to
+                // "top-bottom" (vertical axis perpendicular to flight)
+                // — i.e. for a horizontally-flying arrow quad 1 stays
+                // upright (vertical plane) and quad 2 lies flat
+                // (horizontal plane). Plain Y-axis rotation, no
+                // axis-angle math.
+                var pitch = Matrix4.CreateRotationY(MathHelper.PiOver2);
+                var model2 = localCentre * sizeScale * preRot * pitch * orient * trans;
                 _crackShader.SetMatrix4("uMVP", model2 * vp);
                 _paintingQuadMesh.Draw();
             }
@@ -18244,9 +18397,14 @@ void main()
             DrawSolidQuad(0, 0, width, height,
                 new Vector3(0f, 0f, 0f), 0.55f, ortho);
 
+            int rows = ChestRows;
+            int chestSlots   = ChestScreen.ChestSlotsFor(rows);
+            int totalSlots   = ChestScreen.TotalSlotsFor(rows);
+            int invMainStart = ChestScreen.InvMainStartFor(rows);
+
             // ---- panel chrome ------------------------------------------
             ChestScreen.GetPanelRect(width, height,
-                out int panelX, out int panelY, out int panelW, out int panelH);
+                out int panelX, out int panelY, out int panelW, out int panelH, rows);
             DrawSolidQuad(panelX, panelY, panelW, panelH,
                 new Vector3(0.16f, 0.16f, 0.18f), 0.95f, ortho);
             var border = new Vector3(0.78f, 0.82f, 0.88f);
@@ -18257,98 +18415,103 @@ void main()
             DrawSolidQuad(panelX + panelW - pb, panelY, pb, panelH, border, 1f, ortho);
 
             // ---- title -------------------------------------------------
-            DrawString(ChestScreen.Title, ChestScreen.TitleScale(width, height),
-                width / 2, ChestScreen.TitleY(width, height),
+            DrawString(ChestScreen.TitleFor(rows), ChestScreen.TitleScale(width, height),
+                width / 2, ChestScreen.TitleY(width, height, rows),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
-            // ---- slot wells (all 72 slots) -----------------------------
+            // ---- slot wells (all slots, both halves + inventory) ------
             var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
             var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
             var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
-            for (int i = 0; i < ChestScreen.TotalSlots; i++)
+            for (int i = 0; i < totalSlots; i++)
             {
                 ChestScreen.GetSlotRect(i, width, height,
-                    out int sx, out int sy, out int sw, out int sh);
+                    out int sx, out int sy, out int sw, out int sh, rows);
                 DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
             }
 
-            ChestTileEntity ce = _world?.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            ChestTileEntity ce  = _world?.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            ChestTileEntity ce2 = _isDoubleChest
+                ? _world?.TryGetChestEntity(_chestPos2.x, _chestPos2.y, _chestPos2.z)
+                : null;
             var inv = Input?.Inventory;
             int iconPad = (ChestScreen.SlotPx(width, height) - ChestScreen.IconPx(width, height)) / 2;
 
-            // ---- icons in chest + inventory ----------------------------
-            if (ce != null)
+            // Local helper — read chest slot `i` (0..chestSlots-1) from
+            // either the primary or secondary half. ItemStack.Empty when
+            // the underlying entity is missing (shouldn't happen in
+            // practice — open path get-or-creates both halves).
+            ItemStack ReadChestSlot(int i)
             {
-                for (int i = 0; i < ChestScreen.ChestSlotCount; i++)
-                {
-                    var stack = ce.Slots[i];
-                    if (stack.IsEmpty) continue;
-                    ChestScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
-                    DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
-                }
+                if (i < ChestTileEntity.SlotCount) return ce?.Slots[i] ?? ItemStack.Empty;
+                int j = i - ChestTileEntity.SlotCount;
+                return ce2?.Slots[j] ?? ItemStack.Empty;
+            }
+
+            // ---- icons in chest + inventory ----------------------------
+            for (int i = 0; i < chestSlots; i++)
+            {
+                var stack = ReadChestSlot(i);
+                if (stack.IsEmpty) continue;
+                ChestScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _, rows);
+                DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
             }
             if (inv != null)
             {
-                for (int i = ChestScreen.InvMainStart; i < ChestScreen.TotalSlots; i++)
+                for (int i = invMainStart; i < totalSlots; i++)
                 {
-                    int invIdx = ChestScreen.InventoryIndexFor(i);
+                    int invIdx = ChestScreen.InventoryIndexFor(i, rows);
                     if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
                     var stack = inv.Slots[invIdx];
                     if (stack.IsEmpty) continue;
-                    ChestScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _);
+                    ChestScreen.GetSlotRect(i, width, height, out int sx, out int sy, out _, out _, rows);
                     DrawSlotIcon(stack.Type, sx + iconPad, sy + iconPad, width, height, ortho);
                 }
                 GL.Disable(EnableCap.CullFace);
             }
 
             // ---- stack counts on every visible non-empty stack --------
-            if (ce != null)
+            for (int i = 0; i < chestSlots; i++)
             {
-                for (int i = 0; i < ChestScreen.ChestSlotCount; i++)
-                {
-                    var stack = ce.Slots[i];
-                    if (stack.IsEmpty || stack.Count <= 1) continue;
-                    ChestScreen.GetSlotRect(i, width, height,
-                        out int sx, out int sy, out int sw, out int sh);
-                    DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
-                }
+                var stack = ReadChestSlot(i);
+                if (stack.IsEmpty || stack.Count <= 1) continue;
+                ChestScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh, rows);
+                DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
             }
             if (inv != null)
             {
-                for (int i = ChestScreen.InvMainStart; i < ChestScreen.TotalSlots; i++)
+                for (int i = invMainStart; i < totalSlots; i++)
                 {
-                    int invIdx = ChestScreen.InventoryIndexFor(i);
+                    int invIdx = ChestScreen.InventoryIndexFor(i, rows);
                     if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
                     var stack = inv.Slots[invIdx];
                     if (stack.IsEmpty || stack.Count <= 1) continue;
                     ChestScreen.GetSlotRect(i, width, height,
-                        out int sx, out int sy, out int sw, out int sh);
+                        out int sx, out int sy, out int sw, out int sh, rows);
                     DrawStackCount(stack.Count, sx, sy, sw, sh, ortho);
                 }
             }
 
             // ---- durability bars (chest + inventory) ------------------
-            if (ce != null)
+            for (int i = 0; i < chestSlots; i++)
             {
-                for (int i = 0; i < ChestScreen.ChestSlotCount; i++)
-                {
-                    var stack = ce.Slots[i];
-                    if (stack.IsEmpty) continue;
-                    ChestScreen.GetSlotRect(i, width, height,
-                        out int sx, out int sy, out int sw, out int sh);
-                    DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
-                }
+                var stack = ReadChestSlot(i);
+                if (stack.IsEmpty) continue;
+                ChestScreen.GetSlotRect(i, width, height,
+                    out int sx, out int sy, out int sw, out int sh, rows);
+                DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
             }
             if (inv != null)
             {
-                for (int i = ChestScreen.InvMainStart; i < ChestScreen.TotalSlots; i++)
+                for (int i = invMainStart; i < totalSlots; i++)
                 {
-                    int invIdx = ChestScreen.InventoryIndexFor(i);
+                    int invIdx = ChestScreen.InventoryIndexFor(i, rows);
                     if (invIdx < 0 || invIdx >= Inventory.TotalSlots) continue;
                     var stack = inv.Slots[invIdx];
                     if (stack.IsEmpty) continue;
                     ChestScreen.GetSlotRect(i, width, height,
-                        out int sx, out int sy, out int sw, out int sh);
+                        out int sx, out int sy, out int sw, out int sh, rows);
                     DrawDurabilityBar(stack, sx, sy, sw, sh, width, height, ortho);
                 }
             }
