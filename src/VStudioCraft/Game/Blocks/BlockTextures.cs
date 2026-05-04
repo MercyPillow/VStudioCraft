@@ -309,12 +309,7 @@ namespace VStudioCraft.Game
         // line up at the seam between the two cells.
         public const int FirstTailDoubleChestLayer = FirstTailRailCurveLayer + TailRailCurveLayerCount; // 187
         public const int TailDoubleChestLayerCount = 2;
-        // Tier 10 #51 — Clock dial. Procedural-only; the renderer
-        // rotates a single sprite per frame from TimeOfDay rather
-        // than animating the atlas.
-        public const int FirstTailClockLayer = FirstTailDoubleChestLayer + TailDoubleChestLayerCount;   // 189
-        public const int TailClockLayerCount = 1;
-        public const int LayerCount = FirstTailClockLayer + TailClockLayerCount;                        // 190
+        public const int LayerCount = FirstTailDoubleChestLayer + TailDoubleChestLayerCount;            // 189
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -578,7 +573,6 @@ namespace VStudioCraft.Game
         public const int TileRailCurve           = 186;
         public const int TileChestFrontLeft      = 187;
         public const int TileChestFrontRight     = 188;
-        public const int TileClock               = 189;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -772,7 +766,6 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileChestFront, GenerateChestFront);
             UploadLayer(layerPixels, TileChestFrontLeft,  GenerateChestFrontLeft);
             UploadLayer(layerPixels, TileChestFrontRight, GenerateChestFrontRight);
-            UploadLayer(layerPixels, TileClock,           GenerateClockItem);
 
             // Tier 4 #14 — Farming tail-block layers (FarmlandTop +
             // 8 wheat growth stages). Always procedural in the no-PNG
@@ -2673,47 +2666,6 @@ namespace VStudioCraft.Game
             SetPixel(pixels, 8, 4, nMark.r, nMark.g, nMark.b);
         }
 
-        // Tier 10 #51 — Clock dial face. Brass-tinted bezel ring
-        // (distinguishes it from the compass's grey at a glance),
-        // cream upper half representing daylight sky with a 2×2
-        // gold sun pip, deep-blue lower half representing night sky
-        // with a 2×2 pale moon pip. The renderer rotates the whole
-        // sprite by an angle indexed off TimeOfDay at draw time —
-        // sun-up at noon, moon-up at midnight, intermediate quarter
-        // turns through dawn / dusk.
-        private static void GenerateClockItem(byte[] pixels)
-        {
-            (byte r, byte g, byte b) bezel = (140, 110, 50);
-            (byte r, byte g, byte b) face  = (235, 230, 220);
-            (byte r, byte g, byte b) inner = (250, 245, 235);
-            (byte r, byte g, byte b) sun   = (235, 200, 60);
-            (byte r, byte g, byte b) moon  = (200, 200, 230);
-            (byte r, byte g, byte b) sky   = (60, 100, 180);
-            for (int y = 3; y <= 12; y++)
-            for (int x = 3; x <= 12; x++)
-            {
-                bool corner = (x == 3 || x == 12) && (y == 3 || y == 12);
-                if (corner) continue;
-                bool edge = (x == 3 || x == 12 || y == 3 || y == 12);
-                if (edge) SetPixel(pixels, x, y, bezel.r, bezel.g, bezel.b);
-                else
-                {
-                    if (y <= 7) SetPixel(pixels, x, y, face.r, face.g, face.b);
-                    else        SetPixel(pixels, x, y, sky.r,  sky.g,  sky.b);
-                }
-            }
-            for (int x = 6; x <= 9; x++)
-                SetPixel(pixels, x, 6, inner.r, inner.g, inner.b);
-            SetPixel(pixels, 7, 5, sun.r, sun.g, sun.b);
-            SetPixel(pixels, 8, 5, sun.r, sun.g, sun.b);
-            SetPixel(pixels, 7, 6, sun.r, sun.g, sun.b);
-            SetPixel(pixels, 8, 6, sun.r, sun.g, sun.b);
-            SetPixel(pixels, 7, 10, moon.r, moon.g, moon.b);
-            SetPixel(pixels, 8, 10, moon.r, moon.g, moon.b);
-            SetPixel(pixels, 7, 11, moon.r, moon.g, moon.b);
-            SetPixel(pixels, 8, 11, moon.r, moon.g, moon.b);
-        }
-
         // Tier 4 #18 — Slimeball sprite. Centred 6×6 rounded square
         // (corners trimmed) on transparent so the silhouette reads as
         // a soft sphere. Saturated lime body, bright highlight on the
@@ -4018,10 +3970,6 @@ namespace VStudioCraft.Game
             // Mesher picks per-half based on partner direction.
             /* TileChestFrontLeft      */ (9, 2),
             /* TileChestFrontRight     */ (10, 2),
-            // Tier 10 #51 — Clock dial. Always procedural; the
-            // sentinel keeps the alpha-textures slicer from picking
-            // a foreign tile.
-            /* TileClock               */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4331,10 +4279,6 @@ namespace VStudioCraft.Game
             // by the biomeTailLayers slicer below.
             UploadLayer(layerPixels, TileChestFrontLeft,  GenerateChestFrontLeft);
             UploadLayer(layerPixels, TileChestFrontRight, GenerateChestFrontRight);
-
-            // Tier 10 #51 — Clock dial. Always procedural; no overlay
-            // pass needed (sentinel coord in AlphaTileCoords).
-            UploadLayer(layerPixels, TileClock, GenerateClockItem);
 
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are

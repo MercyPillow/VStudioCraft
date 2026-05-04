@@ -6528,8 +6528,25 @@ void main()
                         je.Disc = held;
                         if (GameMode == GameMode.Survival && Input != null)
                             Input.Inventory.DecrementHotbar(Input.HotbarIndex);
-                        int buf = (held == BlockType.Disc13) ? _disc13Buffer : _discCatBuffer;
-                        AudioEngine.PlayMusic(buf);
+                        // Tier 10 #51 — Music disc audio playback.
+                        // Resolve the disc's audio asset path via the
+                        // user-side locator (exe / Music / Downloads
+                        // folder) and route through MCI. If the file
+                        // isn't present the call is a soft no-op
+                        // (silent insert), and the legacy OpenAL
+                        // buffer path stays as a fallback for any
+                        // future PCM-uploaded disc audio.
+                        string musicPath = AudioEngine.FindMusicAsset(
+                            held == BlockType.Disc13 ? "13" : "Cat");
+                        if (musicPath != null)
+                        {
+                            AudioEngine.PlayMusicFile(musicPath);
+                        }
+                        else
+                        {
+                            int buf = (held == BlockType.Disc13) ? _disc13Buffer : _discCatBuffer;
+                            AudioEngine.PlayMusic(buf);
+                        }
                         SfxBank.PlayPlace(BlockType.Wool); // close-fit thunk
                         return true;
                     }

@@ -74,7 +74,14 @@ namespace VStudioCraft.Game
         public static float MusicGain
         {
             get => _musicGain;
-            set => _musicGain = value < 0f ? 0f : (value > 1f ? 1f : value);
+            set
+            {
+                _musicGain = value < 0f ? 0f : (value > 1f ? 1f : value);
+                // Tier 10 #51 — Push the new volume into any in-flight
+                // MCI music stream so the options-menu music slider
+                // affects the currently-playing disc immediately.
+                RefreshMusicFileVolume();
+            }
         }
 
         // Idempotent. Safe to call from the renderer's init path; any
@@ -295,11 +302,142 @@ namespace VStudioCraft.Game
 
         // Tier 4 #25 — Stop the music source. Idempotent (a Stop on an
         // already-stopped source is a no-op in OpenAL). Called from the
-        // jukebox eject path and on world unload.
+        // jukebox eject path and on world unload. Also tears down the
+        // MCI file-stream path (Tier 10 #51) so callers don't have to
+        // know which playback mode is active.
         public static void StopMusic()
         {
-            if (_muted || !_musicSourceCreated) return;
-            try { AL.SourceStop(_musicSource); } catch { }
+            if (_musicSourceCreated)
+            {
+                try { AL.SourceStop(_musicSource); } catch { }
+            }
+            StopMusicFile();
+        }
+
+        // ---- Tier 10 #51 — Music file playback (MCI) -------------------
+        // OpenAL needs raw PCM to play a buffer, and decoding MP3 / Vorbis
+        // would mean adding a dependency. The Windows Media Control
+        // Interface (`mciSendString`) is built into Windows since
+        // Win2K, plays MP3 files directly via the system codec, and
+        // doesn't need a window handle for audio-only playback. So we
+        // route disc music through MCI on a single named alias and
+        // expose the same Play/Stop verbs the OpenAL music path uses.
+        // The OpenAL music source still exists for any future PCM
+        // music; the two paths coexist without conflict because
+        // StopMusic stops both.
+
+        [DllImport("winmm.dll", CharSet = CharSet.Auto)]
+        private static extern int mciSendString(string command, System.Text.StringBuilder buffer, int bufferSize, IntPtr hwndCallback);
+
+        // The currently-open MCI alias. "vsccmusic" is unique enough to
+        // avoid colliding with any other MCI-using process. Tracked so
+        // we know whether to issue a `close` before opening a new file
+        // (consecutive PlayMusicFile calls without a StopMusicFile
+        // between them).
+        private const string McMusicAlias = "vsccmusic";
+        private static bool _mciMusicOpen;
+        private static string _mciCurrentPath;
+
+        // Best-effort path lookup helper. Looks for the music file in
+        // the executable's directory (and a `Music` subfolder), then in
+        // the user's Downloads. Returns null if no candidate exists.
+        // Caller is expected to handle null silently — the disc still
+        // inserts/ejects normally with no audio.
+        public static string FindMusicAsset(string fileNameWithoutExt)
+        {
+            try
+            {
+                string exeDir = AppDomain.CurrentDomain.BaseDirectory ?? string.Empty;
+                string user   = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) ?? string.Empty;
+                string[] exts = { ".mp3", ".ogg", ".wav", ".m4a", ".wma" };
+                string[] roots =
+                {
+                    Path.Combine(exeDir, "Music"),
+                    exeDir,
+                    Path.Combine(user, "Downloads"),
+                };
+                foreach (var root in roots)
+                {
+                    if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) continue;
+                    foreach (var ext in exts)
+                    {
+                        string candidate = Path.Combine(root, fileNameWithoutExt + ext);
+                        if (File.Exists(candidate)) return candidate;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        // Play a music file via MCI. Stops any in-flight music first
+        // (whether MCI- or OpenAL-sourced) so the caller doesn't have
+        // to bracket the call. Path can be MP3 / WAV / OGG / etc. —
+        // anything Windows has a codec for. A null or missing file is
+        // a soft no-op so the disc still inserts cleanly.
+        public static void PlayMusicFile(string path, float gain = 1f)
+        {
+            if (_muted) return;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            // Stop OpenAL music if any (the two music paths share the
+            // jukebox's "currently playing" semantics).
+            if (_musicSourceCreated)
+            {
+                try { AL.SourceStop(_musicSource); } catch { }
+            }
+            StopMusicFile();
+            try
+            {
+                // MCI can't take certain characters in unquoted paths
+                // (spaces, parentheses) — wrap the path in double quotes.
+                string openCmd = "open \"" + path + "\" type mpegvideo alias " + McMusicAlias;
+                int rc = mciSendString(openCmd, null, 0, IntPtr.Zero);
+                if (rc != 0)
+                {
+                    // Fall back to letting MCI infer the type — works
+                    // for WAV / OGG without the explicit type alias.
+                    openCmd = "open \"" + path + "\" alias " + McMusicAlias;
+                    rc = mciSendString(openCmd, null, 0, IntPtr.Zero);
+                }
+                if (rc != 0) return;
+                _mciMusicOpen = true;
+                _mciCurrentPath = path;
+                if (gain < 0f) gain = 0f;
+                if (gain > 1f) gain = 1f;
+                int volume = (int)(gain * _musicGain * _masterGain * 1000f);
+                if (volume < 0)    volume = 0;
+                if (volume > 1000) volume = 1000;
+                mciSendString("setaudio " + McMusicAlias + " volume to " + volume, null, 0, IntPtr.Zero);
+                mciSendString("play " + McMusicAlias, null, 0, IntPtr.Zero);
+            }
+            catch { }
+        }
+
+        // Stop and close the MCI alias. Idempotent.
+        public static void StopMusicFile()
+        {
+            if (!_mciMusicOpen) return;
+            try { mciSendString("stop " + McMusicAlias, null, 0, IntPtr.Zero); } catch { }
+            try { mciSendString("close " + McMusicAlias, null, 0, IntPtr.Zero); } catch { }
+            _mciMusicOpen = false;
+            _mciCurrentPath = null;
+        }
+
+        // Apply the live music volume (master × music slider) to the
+        // currently-playing MCI stream. Called by the options-menu
+        // sliders so dragging the music slider takes effect mid-track
+        // instead of waiting for the next disc swap.
+        public static void RefreshMusicFileVolume()
+        {
+            if (!_mciMusicOpen) return;
+            try
+            {
+                int volume = (int)(_musicGain * _masterGain * 1000f);
+                if (volume < 0)    volume = 0;
+                if (volume > 1000) volume = 1000;
+                mciSendString("setaudio " + McMusicAlias + " volume to " + volume, null, 0, IntPtr.Zero);
+            }
+            catch { }
         }
 
         // Tier 4 #25 — True while the music source has a buffer that's
@@ -347,6 +485,11 @@ namespace VStudioCraft.Game
         // call retries device acquisition from scratch.
         public static void Shutdown()
         {
+            // Tier 10 #51 — Close any in-flight MCI music stream before
+            // tearing down the AL context. MCI playback is independent
+            // of OpenAL but lives on the same "music" semantic, so it
+            // gets cleaned up alongside the rest of the audio engine.
+            StopMusicFile();
             if (_context == null && !_initTried) return;
             try
             {
