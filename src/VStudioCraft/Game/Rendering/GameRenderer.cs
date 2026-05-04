@@ -1267,6 +1267,14 @@ void main()
         // hurts. Resets when the player steps clear.
         private float _cactusDamageTimer;
 
+        // Lava-contact damage accumulator. Same accumulator pattern as
+        // fire, but ticks 4 HP per half-second — canonical Alpha 1.1.2_01
+        // lava damage cadence. Player has 20 HP, so brushing through
+        // lava (~0.5 s contact) leaves you alive at 16 HP; standing
+        // still in it kills in ~2.5 s. Resets when the player steps
+        // clear of fluid lava cells.
+        private float _lavaDamageTimer;
+
         // Tier 6 #34 — True if any of the 8 corner samples of the
         // player's AABB lands on a Fire block. Cheap per-frame check
         // — the AABB is 0.6 × 1.8 m, sampled at the 8 corners is
@@ -1289,6 +1297,33 @@ void main()
                 int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
                 int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
                 if (_world.GetBlock(wx, wy, wz) == BlockType.Fire) return true;
+            }
+            return false;
+        }
+
+        // Same 8-corner sample shape as PlayerInFire / PlayerInCactus
+        // but matching against lava SOURCE or FLOWING cells. Both count
+        // — Alpha 1.1.2 takes lava damage from any contact with the
+        // fluid network, not just the source cells the bucket can scoop.
+        private bool PlayerInLava()
+        {
+            if (_world == null || Player == null) return false;
+            float pad = 0.05f;
+            float x0 = Player.Position.X - Player.HalfWidth + pad;
+            float x1 = Player.Position.X + Player.HalfWidth - pad;
+            float y0 = Player.Position.Y + pad;
+            float y1 = Player.Position.Y + Player.Height - pad;
+            float z0 = Player.Position.Z - Player.HalfWidth + pad;
+            float z1 = Player.Position.Z + Player.HalfWidth - pad;
+            for (int yi = 0; yi < 2; yi++)
+            for (int xi = 0; xi < 2; xi++)
+            for (int zi = 0; zi < 2; zi++)
+            {
+                int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
+                int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
+                int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
+                var b = _world.GetBlock(wx, wy, wz);
+                if (b == BlockType.Lava || b == BlockType.FlowingLava) return true;
             }
             return false;
         }
@@ -4304,6 +4339,28 @@ void main()
             else
             {
                 _cactusDamageTimer = 0f;
+            }
+
+            // Lava contact damage. Same accumulator pattern as fire,
+            // but 4 HP per 0.5s — canonical Alpha 1.1.2_01 cadence.
+            // Walking through a 1-cell-wide stream is survivable
+            // (~16 HP left after a brief dip), but standing in a pool
+            // kills in ~2.5 s. The `cameraInLava` overlay elsewhere
+            // already handles the visual cue; this just makes the
+            // damage actually fire so the screen-tint isn't a
+            // toothless threat.
+            if (PlayerInLava())
+            {
+                _lavaDamageTimer += dt;
+                while (_lavaDamageTimer >= 0.5f)
+                {
+                    _lavaDamageTimer -= 0.5f;
+                    Player.TakeDamage(4);
+                }
+            }
+            else
+            {
+                _lavaDamageTimer = 0f;
             }
 
             // Drowning. WasHeadInWater is refreshed inside Player.Update
