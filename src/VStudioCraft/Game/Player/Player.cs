@@ -325,19 +325,31 @@ namespace VStudioCraft.Game
             }
 
             // Tier 5 #27 — Sneak edge-stop. While sneaking AND on the
-            // ground, reject any horizontal step that would put the
-            // AABB over empty space at foot level — i.e. you can walk
-            // along a 1-wide ledge without falling off. Probed per axis
-            // so a corner-step can still be partially clamped (X gets
-            // zeroed but Z is fine, etc.). Skipped while airborne (Alpha
-            // rule — sneak doesn't catch you mid-fall) and while in
-            // water (swim physics already gates fall through fluid).
+            // ground, reject any horizontal step that would put any
+            // part of the AABB over empty space at foot level — i.e.
+            // you can walk along a ledge and stop with your toes flush
+            // against the block boundary (the canonical "hang on the
+            // edge" feel). Per-axis so a diagonal step toward an outer
+            // corner can still be partially clamped (X zeroed, Z left
+            // alone, etc.). Skipped while airborne (Alpha rule —
+            // sneak doesn't catch you mid-fall) and while in water
+            // (swim physics already gates falls through fluid).
+            //
+            // Tier 10 follow-up — the original implementation used
+            // "any corner over solid" which let the player walk
+            // until their entire AABB had cleared the block before
+            // sneak engaged (so they'd visibly tip past the edge by
+            // ~HalfWidth before stopping). Switching to "all cells
+            // under AABB must be solid" makes sneak stop the player
+            // before any part of the AABB hangs over the void —
+            // matches the user's expectation of sneak keeping you
+            // fully on the block.
             if (IsSneaking && OnGround && !inWater)
             {
                 var probeX = new Vector3(Position.X + Velocity.X * dt, Position.Y, Position.Z);
-                if (!HasGroundUnderAabb(world, probeX)) Velocity.X = 0f;
+                if (!IsAabbFullyOverGround(world, probeX)) Velocity.X = 0f;
                 var probeZ = new Vector3(Position.X, Position.Y, Position.Z + Velocity.Z * dt);
-                if (!HasGroundUnderAabb(world, probeZ)) Velocity.Z = 0f;
+                if (!IsAabbFullyOverGround(world, probeZ)) Velocity.Z = 0f;
             }
 
             // Tier 9 #54 V14 — Decay the auto-step visual lerp. The
@@ -379,13 +391,11 @@ namespace VStudioCraft.Game
         }
 
         // Tier 5 #27 — True if the player AABB at `pos` (feet at pos.Y)
-        // has solid ground under at least one corner. Used by sneak
-        // edge-stop. "Any corner over solid" rather than "all corners"
-        // matches Alpha — the player can stand at the edge of a block
-        // with most of their AABB hanging over the void as long as
-        // some part is still over ground. Probes one block-thickness
-        // below the feet (Y - 0.05f) so the test reads the floor block
-        // even when the AABB is exactly flush with the top of it.
+        // has solid ground under at least one corner. Probes one block-
+        // thickness below the feet (Y - 0.05f) so the test reads the
+        // floor block even when the AABB is exactly flush with the top.
+        // Kept around for any future "any corner" use; the live sneak
+        // path uses the stricter IsAabbFullyOverGround below.
         private bool HasGroundUnderAabb(World world, Vector3 pos)
         {
             int y = (int)Math.Floor(pos.Y - 0.05f);
@@ -397,6 +407,27 @@ namespace VStudioCraft.Game
                 for (int z = z0; z <= z1; z++)
                     if (BlockData.IsSolid(world.GetBlock(x, y, z))) return true;
             return false;
+        }
+
+        // Tier 10 follow-up — strict version: every cell under the
+        // AABB at `pos` must be solid. Used by the sneak edge-stop so
+        // the player's projected footprint stays fully on the block —
+        // the AABB never hangs over the void. The maxX / maxZ probes
+        // include a 1e-5 epsilon so an AABB whose far edge sits
+        // exactly on a cell boundary doesn't count the next cell over
+        // (matches the same convention Collides() uses for its
+        // upper-bound voxel walk).
+        private bool IsAabbFullyOverGround(World world, Vector3 pos)
+        {
+            int y = (int)Math.Floor(pos.Y - 0.05f);
+            int x0 = (int)Math.Floor(pos.X - HalfWidth);
+            int x1 = (int)Math.Floor(pos.X + HalfWidth - 1e-5f);
+            int z0 = (int)Math.Floor(pos.Z - HalfWidth);
+            int z1 = (int)Math.Floor(pos.Z + HalfWidth - 1e-5f);
+            for (int x = x0; x <= x1; x++)
+                for (int z = z0; z <= z1; z++)
+                    if (!BlockData.IsSolid(world.GetBlock(x, y, z))) return false;
+            return true;
         }
 
         private void UpdateFallTracking(bool wasOnGround, World world)
