@@ -377,7 +377,10 @@ namespace VStudioCraft.Game
         // a soft no-op so the disc still inserts cleanly.
         public static void PlayMusicFile(string path, float gain = 1f)
         {
-            if (_muted) return;
+            // NOTE: deliberately NOT gated on _muted. MCI uses Windows'
+            // own audio mixer, not OpenAL, so a failed AL context (which
+            // sets _muted) doesn't affect file playback. This lets disc
+            // music work even on hosts where OpenAL Soft failed to load.
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
             // Stop OpenAL music if any (the two music paths share the
             // jukebox's "currently playing" semantics).
@@ -388,18 +391,27 @@ namespace VStudioCraft.Game
             StopMusicFile();
             try
             {
-                // MCI can't take certain characters in unquoted paths
-                // (spaces, parentheses) — wrap the path in double quotes.
-                string openCmd = "open \"" + path + "\" type mpegvideo alias " + McMusicAlias;
-                int rc = mciSendString(openCmd, null, 0, IntPtr.Zero);
+                // First attempt: let MCI auto-detect the file type from
+                // the extension. Works for the common cases (mp3, wav,
+                // wma) without naming a device. The double-quotes are
+                // required for paths that contain spaces or other
+                // characters MCI's parser would otherwise split on.
+                var resp = new System.Text.StringBuilder(256);
+                string openCmd = "open \"" + path + "\" alias " + McMusicAlias;
+                int rc = mciSendString(openCmd, resp, resp.Capacity, IntPtr.Zero);
                 if (rc != 0)
                 {
-                    // Fall back to letting MCI infer the type — works
-                    // for WAV / OGG without the explicit type alias.
-                    openCmd = "open \"" + path + "\" alias " + McMusicAlias;
-                    rc = mciSendString(openCmd, null, 0, IntPtr.Zero);
+                    // Fallback: name the device explicitly. Older
+                    // Windows installs sometimes need the "mpegvideo"
+                    // type to attach an MP3 decoder; newer ones don't.
+                    openCmd = "open \"" + path + "\" type mpegvideo alias " + McMusicAlias;
+                    rc = mciSendString(openCmd, resp, resp.Capacity, IntPtr.Zero);
                 }
-                if (rc != 0) return;
+                if (rc != 0)
+                {
+                    _lastMusicError = "MCI open failed (rc=" + rc + ") for " + path;
+                    return;
+                }
                 _mciMusicOpen = true;
                 _mciCurrentPath = path;
                 if (gain < 0f) gain = 0f;
@@ -409,9 +421,18 @@ namespace VStudioCraft.Game
                 if (volume > 1000) volume = 1000;
                 mciSendString("setaudio " + McMusicAlias + " volume to " + volume, null, 0, IntPtr.Zero);
                 mciSendString("play " + McMusicAlias, null, 0, IntPtr.Zero);
+                _lastMusicError = null;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _lastMusicError = "MCI exception: " + ex.Message;
+            }
         }
+
+        // Last MCI error string (or null on success). Exposed for
+        // debug overlays / log scraping when disc music doesn't play.
+        public static string LastMusicError => _lastMusicError;
+        private static string _lastMusicError;
 
         // Stop and close the MCI alias. Idempotent.
         public static void StopMusicFile()

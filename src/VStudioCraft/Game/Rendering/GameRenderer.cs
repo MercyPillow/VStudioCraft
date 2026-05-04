@@ -3885,6 +3885,18 @@ void main()
             // potentially clipping into a soul-sand patch.
             for (int dx = -1; dx <= 2; dx++)
                 _world.SetBlock(dx, y0 - 1, 1, BlockType.Netherrack);
+
+            // Tier 8 #51 V11 — Clear an arrival alcove on the +Z side
+            // of the portal. Without this, the new mountain-mass nether
+            // generator can leave netherrack inside the cells the
+            // player materialises into (Player.Position = (1.5, baseY,
+            // 1.5)), suffocating them on entry. Two-cell-tall (body +
+            // head) clear zone across the 4-wide approach. Small carve;
+            // doesn't visibly disturb the surroundings since the
+            // landing pad below is also solid netherrack.
+            for (int dx = -1; dx <= 2; dx++)
+            for (int dy = 0; dy < 2; dy++)
+                _world.SetBlock(dx, y0 + dy, 1, BlockType.Air);
         }
 
         public void SaveToFile(string path)

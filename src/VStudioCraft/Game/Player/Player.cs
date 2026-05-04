@@ -28,6 +28,15 @@ namespace VStudioCraft.Game
         // ~30% of walk; paired with the edge-stop rule in Update so the
         // player can't walk off a 1-block ledge while sneaking.
         public const float SneakSpeed = 1.295f;
+        // Tier 10 follow-up — Sneak probe footprint half-extent. The
+        // edge-stop walks every cell under a probe square of this
+        // half-width centred on the projected position; making it
+        // smaller than HalfWidth lets the visible AABB overhang the
+        // block edge by (HalfWidth - SneakProbeHalf) before sneak
+        // engages. A 0.10 probe lets the player creep ~0.2 blocks
+        // past the edge — enough that the toes visibly hang over but
+        // the body's centre of mass is still firmly on the block.
+        public const float SneakProbeHalf = 0.10f;
         public const float Gravity = 28f;        // m/s²
         public const float JumpSpeed = 8.4f;     // apex ≈ 1.26 blocks
         public const float MaxFallSpeed = 78f;
@@ -420,10 +429,10 @@ namespace VStudioCraft.Game
         private bool IsAabbFullyOverGround(World world, Vector3 pos)
         {
             int y = (int)Math.Floor(pos.Y - 0.05f);
-            int x0 = (int)Math.Floor(pos.X - HalfWidth);
-            int x1 = (int)Math.Floor(pos.X + HalfWidth - 1e-5f);
-            int z0 = (int)Math.Floor(pos.Z - HalfWidth);
-            int z1 = (int)Math.Floor(pos.Z + HalfWidth - 1e-5f);
+            int x0 = (int)Math.Floor(pos.X - SneakProbeHalf);
+            int x1 = (int)Math.Floor(pos.X + SneakProbeHalf - 1e-5f);
+            int z0 = (int)Math.Floor(pos.Z - SneakProbeHalf);
+            int z1 = (int)Math.Floor(pos.Z + SneakProbeHalf - 1e-5f);
             for (int x = x0; x <= x1; x++)
                 for (int z = z0; z <= z1; z++)
                     if (!BlockData.IsSolid(world.GetBlock(x, y, z))) return false;

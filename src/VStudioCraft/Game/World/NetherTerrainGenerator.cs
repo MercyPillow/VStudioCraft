@@ -2,44 +2,87 @@ using System;
 
 namespace VStudioCraft.Game
 {
-    // Tier 8 #51 V4 — Nether dimension chunk generator. Replaces
-    // TerrainGenerator + dungeon + cave passes for chunks that live
-    // in the Nether dimension. The shape is canonical Alpha 1.1.2_01:
+    // Tier 8 #51 V11 — Nether dimension chunk generator. The shape is
+    // intentionally NOT canonical Alpha 1.1.2 — Alpha's "flat plane
+    // with a roof" reads as a single huge slab of terrain you walk
+    // across. We re-shape it into a much taller enclosed cavern with
+    // 3D mountainous netherrack rising out of a flat lava sea, lots
+    // of bridges and tunnels between peaks, and a netherrack roof
+    // sealing the volume. The dimension still has a bedrock floor /
+    // bedrock cap and netherrack ceiling band — the "closed space"
+    // requirement — but the interior reads as a sprawling cavern
+    // landscape rather than a room.
     //
-    //   y = 0       : Bedrock floor
-    //   y = 1..63   : Netherrack mass with carved lava lakes around y=31
-    //   y = 31      : Surface lava lakes (small puddles inside the mass)
-    //   y = 64..119 : Hollow cavernous open space
-    //   y = 120..126: Netherrack ceiling with glowstone clusters punched in
-    //   y = 127     : Bedrock ceiling cap
+    //   y = 0          : Bedrock floor
+    //   y = 1..10      : Solid netherrack base mass (the floor under the lava)
+    //   y = 11..15     : Flat lava sea covering the entire chunk
+    //                    surface — anything above it that isn't
+    //                    netherrack is air, anything sticking up
+    //                    through it is a mountain foot.
+    //   y = 16..109    : Mountainous netherrack — generated from a
+    //                    3D density field so peaks rise from the
+    //                    lava with overhangs, ridges, and natural
+    //                    horizontal "shelves" that read as bridges.
+    //   y = 110..126   : Netherrack ceiling band (per-column varied
+    //                    depth so the roof has visible relief).
+    //   y = 127        : Bedrock cap.
     //
-    // Soul-sand patches are scattered along the netherrack surface
-    // (where the mass meets the hollow cavern) so a player walking
-    // the floor occasionally hits a slow-down patch. Glowstone is
-    // the primary illumination — clusters of 3..6 cells punched into
-    // the ceiling, giving the Nether its distinctive dim-amber lighting.
+    // 3D density formulation: a per-column mountain peak height comes
+    // from low-frequency 2D Perlin (octaves on world-x/world-z); a 3D
+    // perturbation comes from two orthogonal 2D Perlin samples in the
+    // (wx,y) and (y,wz) planes — averaging those two gives a cheap
+    // 3D-coherent noise without needing a real 3D-noise table. The
+    // peak height drives a vertical density gradient (positive below
+    // the peak → solid, negative above → air); the perturbation adds
+    // ±0.5 of fluctuation that punches tunnels through the mass and
+    // lets stray netherrack chunks float as bridges in the gradient
+    // band near the peak. Tuning notes:
+    //   * mountain noise frequency 0.013 → peaks ~38 cells apart
+    //   * perturbation frequency 0.045 → ~14-cell tunnel/blob scale
+    //   * peak Y range [30, 95]: tallest peaks reach within 15 cells
+    //     of the ceiling, shortest barely clear the lava sea
     //
     // Deterministic per-chunk RNG keyed on (seed, chunkX, chunkZ) so
-    // the same Nether chunk regenerates identically across sessions
-    // (matters even though V4 part 1 doesn't persist the Nether to
-    // disk — a player who teleports out and back in within the same
-    // session sees the same terrain rather than a fresh roll).
+    // the same Nether chunk regenerates identically across sessions.
     internal static class NetherTerrainGenerator
     {
-        public const int FloorY        = 0;
-        public const int NetherrackTop = 64;   // top of the solid netherrack mass
-        public const int LavaLakeY     = 31;
-        public const int CeilingBaseY  = 120;
-        public const int CeilingCapY   = 127;
+        public const int FloorY            = 0;
+        public const int NetherrackBaseTop = 10;   // top of solid floor mass
+        public const int LavaSurfaceY      = 15;   // top of flat lava sea
+        // Public alias: NetherrackTop is referenced by mob-spawn passes
+        // in World.cs (pigman ground spawn, ghast/blaze hover bands).
+        // Keeping it as the lava-sea surface preserves semantic — pigmen
+        // spawn where a mountain base meets the lava, mob hover bands
+        // sit in the cavern above.
+        public const int NetherrackTop     = LavaSurfaceY;
+        public const int CeilingBaseY      = 110;
+        public const int CeilingCapY       = 127;
+
+        // Mountain-density tuning constants (kept as named consts so
+        // a future visual iteration can tweak them in one place).
+        private const float MountainNoiseFreq      = 0.013f;
+        private const float PerturbNoiseFreq       = 0.045f;
+        private const int   MountainPeakBaseY      = 30;
+        private const int   MountainPeakRange      = 65;     // peakY ∈ [Base, Base+Range] = [30, 95]
+        private const float VerticalGradientScale  = 1f / 30f; // (peakY - y) * scale gives [-3, +3] across the gradient band
+        private const float VerticalWeight         = 0.7f;
+        private const float PerturbWeight          = 0.5f;
 
         public static void Generate(Chunk c, int seed)
         {
-            // Per-chunk hashed RNG — same shape as the overworld
-            // dungeon-gen / passive-spawn pattern.
+            // Per-chunk hashed RNG — used for the discrete features
+            // (glowstone clusters, soul sand, gravel) where stochastic
+            // count + position is fine. The deterministic 3D mountain
+            // mass uses Noise (seeded per call) for reproducibility.
             int hash = (int)((uint)seed * 0x9E3779B1u
                 + (uint)(c.ChunkX * 0x85EBCA77)
                 + (uint)(c.ChunkZ * 0xC2B2AE3D));
             var rng = new Random(hash);
+            // Noise instance is per-call — terrain gen runs once per
+            // chunk-load (not per frame), so a 1KB perm-table allocation
+            // is cheap and avoids a thread-static cache. Same seed for
+            // every chunk so noise is continuous across chunk seams.
+            var noise = new Noise(seed);
 
             // Bedrock floor + cap.
             for (int x = 0; x < Chunk.SizeX; x++)
@@ -49,20 +92,91 @@ namespace VStudioCraft.Game
                 c.Set(x, CeilingCapY, z, BlockType.Bedrock);
             }
 
-            // Tier 8 #51 V6 — Per-column varied ceiling height. Each
-            // (x, z) column rolls a 0..3 cell descent off the
-            // canonical CeilingBaseY, producing visible "valleys"
-            // and "peaks" in the netherrack ceiling so the cavern
-            // doesn't read as a flat-top prism. Hashed per-column
-            // so neighbouring chunks line up at their seam without
-            // a noise pass.
+            // Solid netherrack base mass (y = 1..NetherrackBaseTop).
+            // This is the "floor under the lava sea" — a continuous
+            // rock layer the player can dig down into. No carving
+            // happens here so a player digging straight down hits
+            // bedrock predictably.
+            for (int x = 0; x < Chunk.SizeX; x++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            for (int y = FloorY + 1; y <= NetherrackBaseTop; y++)
+                c.Set(x, y, z, BlockType.Netherrack);
+
+            // Flat lava sea (y = NetherrackBaseTop+1..LavaSurfaceY).
+            // Fills every column at the lava-sea altitudes. Mountain
+            // generation below overwrites these cells where mountains
+            // protrude above the lava, so the lava ends up reading as
+            // a connected sea with islands rising out of it.
+            for (int x = 0; x < Chunk.SizeX; x++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            for (int y = NetherrackBaseTop + 1; y <= LavaSurfaceY; y++)
+                c.Set(x, y, z, BlockType.Lava);
+
+            // Mountainous netherrack mass (y = LavaSurfaceY+1..CeilingBaseY-1).
+            // The 3D density field decides per-cell whether to place
+            // netherrack or leave air. Because the lava sea was filled
+            // first, ANY cell at or below LavaSurfaceY that we don't
+            // overwrite stays as lava; mountain bases that intersect
+            // the lava plane look like islands sticking out of it.
+            for (int x = 0; x < Chunk.SizeX; x++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                int wx = c.ChunkX * Chunk.SizeX + x;
+                int wz = c.ChunkZ * Chunk.SizeZ + z;
+                // Per-column mountain peak height — low-frequency 2D
+                // octave noise on world (x, z). Output [-1, 1] remapped
+                // linearly to [MountainPeakBaseY, MountainPeakBaseY + Range].
+                float mountainNoise = noise.Octaves(
+                    wx * MountainNoiseFreq,
+                    wz * MountainNoiseFreq,
+                    octaves: 4, persistence: 0.5f, lacunarity: 2f);
+                int peakY = MountainPeakBaseY
+                    + (int)((mountainNoise + 1f) * 0.5f * MountainPeakRange);
+
+                // Mountain bases extend down into the lava sea (so a
+                // peak that pierces the lava plane has solid roots
+                // visible from below). Carve from the lava floor up
+                // through the cavern to the ceiling, evaluating
+                // density per cell.
+                for (int y = NetherrackBaseTop + 1; y < CeilingBaseY; y++)
+                {
+                    // Vertical gradient: positive deep in the mountain,
+                    // 0 at the peak, negative above. The gradient is
+                    // strong enough that a mountain interior is solidly
+                    // netherrack but weak enough near the peak that
+                    // perturbation noise can perforate the surface
+                    // (creating tunnels and overhangs).
+                    float yRel = (peakY - y) * VerticalGradientScale;
+
+                    // 3D-coherent perturbation: average two orthogonal
+                    // 2D Perlin samples on (wx, y) and (y, wz) planes.
+                    // This is a cheap stand-in for true 3D noise —
+                    // produces shelves, blobs, and bridge-like
+                    // horizontal extents naturally because the (y, wz)
+                    // term varies slowly when wz is constant, giving
+                    // long horizontal coherence at fixed altitude.
+                    float pxy = noise.Octaves(
+                        wx * PerturbNoiseFreq, y * PerturbNoiseFreq,
+                        octaves: 3, persistence: 0.5f, lacunarity: 2f);
+                    float pyz = noise.Octaves(
+                        y * PerturbNoiseFreq, wz * PerturbNoiseFreq,
+                        octaves: 3, persistence: 0.5f, lacunarity: 2f);
+                    float perturb = (pxy + pyz) * 0.5f;
+
+                    float density = yRel * VerticalWeight + perturb * PerturbWeight;
+                    if (density > 0f)
+                        c.Set(x, y, z, BlockType.Netherrack);
+                }
+            }
+
+            // Per-column variable ceiling top — each (x, z) drops the
+            // ceiling 0..3 cells off the canonical CeilingBaseY for
+            // visible relief on the underside of the roof. Hashed per-
+            // column so neighbouring chunks line up at the seam.
             int[] ceilingTopForColumn = new int[Chunk.SizeX * Chunk.SizeZ];
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int z = 0; z < Chunk.SizeZ; z++)
             {
-                // Per-cell hash on the WORLD coords so chunk seams
-                // match. Same prime-multiply mixer the chunk-level
-                // hash uses.
                 int wx = c.ChunkX * Chunk.SizeX + x;
                 int wz = c.ChunkZ * Chunk.SizeZ + z;
                 uint h = (uint)seed * 0x9E3779B1u
@@ -73,14 +187,12 @@ namespace VStudioCraft.Game
                 ceilingTopForColumn[x * Chunk.SizeZ + z] = ceilingTop;
             }
 
-            // Netherrack mass: y=1..NetherrackTop, full fill.
-            for (int x = 0; x < Chunk.SizeX; x++)
-            for (int z = 0; z < Chunk.SizeZ; z++)
-            for (int y = FloorY + 1; y <= NetherrackTop; y++)
-                c.Set(x, y, z, BlockType.Netherrack);
-
-            // Ceiling band: per-column variable top — fill from each
-            // column's ceilingTop up to CeilingCapY-1.
+            // Ceiling band — fill from each column's ceilingTop up
+            // to CeilingCapY-1. Overwrites any stray air cells the
+            // mountain pass might have left in this band (mountain
+            // density at high y is mostly negative, so without this
+            // pass the cells above ceilingTop would all be air —
+            // this re-asserts the netherrack lid).
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int z = 0; z < Chunk.SizeZ; z++)
             {
@@ -89,81 +201,23 @@ namespace VStudioCraft.Game
                     c.Set(x, y, z, BlockType.Netherrack);
             }
 
-            // Tier 8 #51 V9 — Nether ravines. Each chunk inspects its
-            // own anchor + the 8 surrounding chunks' anchors; for any
-            // anchor that rolled a ravine (1-in-12), we walk that
-            // ravine's full path and carve the cells that land within
-            // THIS chunk's bounds. The neighbour-walk pattern is what
-            // makes ravines span chunk seams seamlessly — without it
-            // a ravine that starts in chunk (0,0) and curves into
-            // (1,0) would only carve in (0,0), leaving a sharp cliff
-            // at the chunk boundary. Cost is bounded: 9 anchors ×
-            // ~50 steps × ~500 cells/step ≈ 225k cell checks per
-            // chunk worst case, cheap inside the parallel gen pass.
-            //
-            // Order matters: ravines run AFTER the netherrack mass
-            // is placed (so we have rock to carve through) but BEFORE
-            // lava lakes (so a ravine that cuts through the y=31
-            // lava plane lets the lava settle into the ravine floor
-            // instead of generating floating lava blobs above
-            // carved-out air).
+            // Nether ravines. Carves capsule-shaped passages through
+            // the netherrack mass — the existing pass works fine with
+            // the new mountain layout since it just clears any non-
+            // bedrock cell within its swept volume. Tuned altitude
+            // band so ravines spawn in the mountain region rather than
+            // the (now-thin) base mass.
             CarveRavinesPass(c, seed);
 
-            // Tier 8 #51 V10 — Nether fortress structures. Stamps a
-            // 3×3-chunk fortress into the cavern (y=72..77, well above
-            // the netherrack mass surface at y=64) at deterministically-
-            // anchored 8×8-chunk grid points. Each anchor rolls 1-in-2
-            // — an 8×8 grid sized roughly to the player's wandering
-            // radius means a player walking out from the spawn portal
-            // finds a fortress within ~10 chunks on average.
-            //
-            // Each chunk inspects 9 candidate anchors (the 3×3 grid
-            // of chunk positions where an anchor could affect this
-            // chunk); for each anchor that rolled true, the chunk
-            // stamps the fortress's intersection with its own bounds.
-            // Same chunk-seam pattern as the ravine pass.
-            //
-            // Inserted AFTER the ravine pass so a ravine doesn't
-            // carve through fortress walls (the fortress is meant
-            // to be a discoverable intact structure, not pre-decayed).
-            // Inserted BEFORE the lava/glowstone passes so those
-            // passes don't accidentally spawn lava INSIDE the fortress
-            // floor; the brick floor reads the netherrack underneath
-            // it as already-set so subsequent surface passes skip it.
+            // Nether fortress structures. Sit just above the lava sea
+            // in the lower-mountain altitude band; their interior
+            // carve pass clears any mountain netherrack that would
+            // otherwise fill the rooms.
             StampFortressesPass(c, seed);
 
-            // Lava lakes at y=LavaLakeY. V6: bumped from 0..2 to
-            // 1..3 lakes per chunk and lake radius from 2..4 to
-            // 3..6 — wider visible lava seas matching canonical
-            // Alpha imagery. Lakes occasionally carve through the
-            // mass surface (cells visible from above) since the
-            // post-pass also cuts a few floor holes.
-            int lakeCount = 1 + rng.Next(3);
-            for (int i = 0; i < lakeCount; i++)
-            {
-                int cx = rng.Next(Chunk.SizeX);
-                int cz = rng.Next(Chunk.SizeZ);
-                int radius = 3 + rng.Next(4);
-                CarveLavaPuddle(c, cx, LavaLakeY, cz, radius);
-            }
-
-            // V6 — Surface lava lakes. Independent of the deep ones
-            // above. Each chunk rolls 0..1 surface lake centred at
-            // y=NetherrackTop with a smaller radius so the lake
-            // reads as a contained pool the player can fall into.
-            if (rng.Next(3) == 0)
-            {
-                int slx = rng.Next(Chunk.SizeX);
-                int slz = rng.Next(Chunk.SizeZ);
-                int slr = 2 + rng.Next(3);
-                CarveSurfaceLavaPool(c, slx, NetherrackTop, slz, slr);
-            }
-
-            // Glowstone clusters near the ceiling. V6: cluster size
-            // bumped from 3..6 to 4..9 cells, and we anchor each
-            // cluster at the COLUMN'S actual ceiling top (not the
-            // flat CeilingBaseY) so glowstone stalactites hang off
-            // the highest visible ceiling cells.
+            // Glowstone clusters anchored at the per-column ceiling
+            // top — same algorithm as before, just driven off the new
+            // ceilingTopForColumn array.
             int clusterCount = 2 + rng.Next(3);
             for (int i = 0; i < clusterCount; i++)
             {
@@ -174,131 +228,53 @@ namespace VStudioCraft.Game
                 CarveGlowstoneCluster(c, cx, anchorY, cz, size, rng);
             }
 
-            // Soul-sand patches on the netherrack mass surface.
-            // V6: occasionally cluster 4..9 cells together so a patch
-            // reads as a recognisable obstacle field rather than
-            // sparse single-cell speckles. Also bumped per-column
-            // chance from 1-in-12 to 1-in-9 so patches are denser.
+            // Surface features (soul sand + gravel patches) on the
+            // tops of mountain peaks. With the new 3D mountain mass
+            // there's no fixed "surface y" — each column has a
+            // different topmost-netherrack cell, so we scan top-down
+            // from the ceiling band to find the actual surface and
+            // sprinkle there.
+            PlaceSurfaceFeatures(c, rng);
+        }
+
+        // For each column, scan from below the ceiling band down to
+        // the lava sea looking for the first netherrack cell that has
+        // air directly above it — that's the column's "mountain top".
+        // Roll soul-sand and gravel patches there. Cells without a
+        // mountain top above the lava sea (columns where the cavern
+        // is empty) get nothing.
+        private static void PlaceSurfaceFeatures(Chunk c, Random rng)
+        {
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int z = 0; z < Chunk.SizeZ; z++)
             {
-                if (rng.Next(9) == 0)
-                    c.Set(x, NetherrackTop, z, BlockType.SoulSand);
-            }
-            // V6 — Soul-sand cluster pass. 0..2 clusters per chunk,
-            // 4..9 cells each, random walk like the glowstone pass.
-            int sandClusters = rng.Next(0, 3);
-            for (int i = 0; i < sandClusters; i++)
-            {
-                int cx = rng.Next(Chunk.SizeX);
-                int cz = rng.Next(Chunk.SizeZ);
-                int size = 4 + rng.Next(6);
-                CarveSoulSandPatch(c, cx, NetherrackTop, cz, size, rng);
-            }
-
-            // V6 — Gravel patches on the netherrack surface. Same
-            // canonical Alpha quirk: gravel deposits scattered
-            // through the netherrack. 0..1 patch per chunk, 3..7
-            // cells, surface-level only (y = NetherrackTop).
-            if (rng.Next(2) == 0)
-            {
-                int gx = rng.Next(Chunk.SizeX);
-                int gz = rng.Next(Chunk.SizeZ);
-                int size = 3 + rng.Next(5);
-                CarveGravelPatch(c, gx, NetherrackTop, gz, size, rng);
-            }
-        }
-
-        // V6 — Surface lava pool: same shape as the deep puddle but
-        // also clears the netherrack ABOVE so the lava is visible /
-        // walkable-into from the cavern. Carves 1 cell up from the
-        // surface to make it a true sunken pool.
-        private static void CarveSurfaceLavaPool(Chunk c, int cx, int cy, int cz, int radius)
-        {
-            for (int dx = -radius; dx <= radius; dx++)
-            for (int dz = -radius; dz <= radius; dz++)
-            {
-                int x = cx + dx, z = cz + dz;
-                if (x < 0 || x >= Chunk.SizeX || z < 0 || z >= Chunk.SizeZ) continue;
-                int sq = dx * dx + dz * dz;
-                if (sq > radius * radius) continue;
-                c.Set(x, cy, z, BlockType.Lava);
-                // Clear the cell above so the pool reads as open
-                // (otherwise the netherrack column above would
-                // hide the lava entirely).
-                if (cy + 1 < Chunk.SizeY)
-                    c.Set(x, cy + 1, z, BlockType.Air);
-            }
-        }
-
-        // V6 — Soul-sand cluster: random walk replacing surface
-        // netherrack with soul sand. Same shape as the glowstone
-        // walker but anchored at the surface y (not the ceiling)
-        // and biased toward staying flat (no down-bias).
-        private static void CarveSoulSandPatch(Chunk c, int cx, int cy, int cz, int size, Random rng)
-        {
-            int x = cx, z = cz;
-            for (int i = 0; i < size; i++)
-            {
-                if (x < 0 || x >= Chunk.SizeX || z < 0 || z >= Chunk.SizeZ) return;
-                c.Set(x, cy, z, BlockType.SoulSand);
-                int dir = rng.Next(4);
-                switch (dir)
+                int top = -1;
+                for (int y = CeilingBaseY - 1; y > LavaSurfaceY; y--)
                 {
-                    case 0: x++; break;
-                    case 1: x--; break;
-                    case 2: z++; break;
-                    case 3: z--; break;
+                    var here  = (BlockType)c.RawBlocks[Chunk.Index(x, y, z)];
+                    if (here != BlockType.Netherrack) continue;
+                    var above = (BlockType)c.RawBlocks[Chunk.Index(x, y + 1, z)];
+                    if (above != BlockType.Air) continue;
+                    top = y;
+                    break;
                 }
+                if (top < 0) continue;
+                // 1-in-12 chance soul sand, 1-in-18 chance gravel.
+                // Independent rolls so the same column can host both
+                // (rare but visually fine).
+                int roll = rng.Next(36);
+                if (roll < 3)
+                    c.Set(x, top, z, BlockType.SoulSand);
+                else if (roll < 5)
+                    c.Set(x, top, z, BlockType.Gravel);
             }
         }
 
-        // V6 — Gravel patch: same flat-walk shape as soul sand but
-        // replacing the surface with Gravel. Adds visual variety
-        // to the netherrack basin without needing a full ravine
-        // gen pass.
-        private static void CarveGravelPatch(Chunk c, int cx, int cy, int cz, int size, Random rng)
-        {
-            int x = cx, z = cz;
-            for (int i = 0; i < size; i++)
-            {
-                if (x < 0 || x >= Chunk.SizeX || z < 0 || z >= Chunk.SizeZ) return;
-                c.Set(x, cy, z, BlockType.Gravel);
-                int dir = rng.Next(4);
-                switch (dir)
-                {
-                    case 0: x++; break;
-                    case 1: x--; break;
-                    case 2: z++; break;
-                    case 3: z--; break;
-                }
-            }
-        }
-
-        // Carve a small lava puddle: replace netherrack within
-        // `radius` cells of (cx, cy, cz) with Lava. Uses a square
-        // metric (the visible result reads like a flat-bottomed
-        // pool with ragged edges due to the chunk-boundary clipping).
-        private static void CarveLavaPuddle(Chunk c, int cx, int cy, int cz, int radius)
-        {
-            for (int dx = -radius; dx <= radius; dx++)
-            for (int dz = -radius; dz <= radius; dz++)
-            {
-                int x = cx + dx, z = cz + dz;
-                if (x < 0 || x >= Chunk.SizeX || z < 0 || z >= Chunk.SizeZ) continue;
-                int sq = dx * dx + dz * dz;
-                if (sq > radius * radius) continue;
-                c.Set(x, cy, z, BlockType.Lava);
-            }
-        }
-
-        // V9 — Walk this chunk's anchor + its 8 horizontal neighbours.
+        // Walk this chunk's anchor + its 8 horizontal neighbours.
         // For each anchor that rolled a ravine, simulate the full
         // ravine path and carve cells that land within THIS chunk's
-        // bounds. Same RNG for the same anchor regardless of which
-        // chunk is doing the carving, so neighbouring chunks agree
-        // on the path geometry — the seam across chunk boundaries
-        // is continuous.
+        // bounds. Same seed-driven path for the same anchor across
+        // chunks, so the ravine geometry is continuous at chunk seams.
         private static void CarveRavinesPass(Chunk c, int seed)
         {
             for (int ndz = -1; ndz <= 1; ndz++)
@@ -312,12 +288,16 @@ namespace VStudioCraft.Game
                 var rng = new Random(hash);
                 if (rng.Next(12) != 0) continue; // 1-in-12 chunks anchor a ravine
 
-                // Random start point in the (nx, nz) chunk. Y bound
-                // to mid-mass so ravines never clip the bedrock floor
-                // or the ceiling band.
+                // Random start point in the (nx, nz) chunk, pitched
+                // into the mountain altitude band so ravines carve
+                // visible features through the cavern walls. Y range
+                // ([LavaSurfaceY+8, CeilingBaseY-12]) keeps starts
+                // safely inside the mountain mass.
                 float sx = nx * Chunk.SizeX + rng.Next(Chunk.SizeX);
                 float sz = nz * Chunk.SizeZ + rng.Next(Chunk.SizeZ);
-                float sy = 18f + rng.Next(28);   // y in 18..45
+                int   yMin = LavaSurfaceY + 8;
+                int   yMax = CeilingBaseY - 12;
+                float sy = yMin + rng.Next(yMax - yMin);
                 float yaw = (float)(rng.NextDouble() * Math.PI * 2.0);
 
                 int   steps        = 30 + rng.Next(31);              // 30..60 steps
@@ -336,19 +316,12 @@ namespace VStudioCraft.Game
                     CarveRavineSegment(c, curX, curY, curZ, radius, vertExtent);
 
                     float dx = (float)Math.Cos(yaw) * (float)Math.Cos(pitch);
-                    float dy = (float)Math.Sin(pitch) * 0.4f; // damped vertical drift
+                    float dy = (float)Math.Sin(pitch) * 0.4f;
                     float dz = (float)Math.Sin(yaw) * (float)Math.Cos(pitch);
                     curX += dx * StepLen;
                     curY += dy * StepLen;
                     curZ += dz * StepLen;
 
-                    // Early-out if the path drifted far past the
-                    // chunk we're carving into — saves the ellipsoid
-                    // sweep on cells that can never land in this
-                    // chunk's bounds. Rough bound: if the path is
-                    // more than 16 + radius blocks outside the
-                    // chunk, no further step's capsule can reach
-                    // back into the chunk.
                     int chunkX0 = c.ChunkX * Chunk.SizeX;
                     int chunkZ0 = c.ChunkZ * Chunk.SizeZ;
                     float distX = curX < chunkX0 ? chunkX0 - curX
@@ -358,18 +331,19 @@ namespace VStudioCraft.Game
                                 : curZ > chunkZ0 + Chunk.SizeZ - 1 ? curZ - (chunkZ0 + Chunk.SizeZ - 1)
                                 : 0;
                     if (distX > radius + 1f && distZ > radius + 1f) break;
-                    // Y bound: keep ravines inside the netherrack mass.
-                    if (curY < 6f || curY > NetherrackTop - 4f) break;
+                    // Y bound: keep ravines inside the cavern (above
+                    // the lava sea, below the ceiling band).
+                    if (curY < (float)(LavaSurfaceY + 2)
+                     || curY > (float)(CeilingBaseY - 4)) break;
                 }
             }
         }
 
-        // V9 — Carve one capsule (vertically-stretched ellipsoid)
-        // centred at world coords (cx, cy, cz). Iterates only the
-        // bounding box that intersects this chunk; cells outside the
-        // chunk are clipped, cells inside whose ellipsoid distance
-        // is ≤ 1 get cleared to Air. Bedrock is preserved (ravines
-        // can't punch through the dimensional floor).
+        // Carve one capsule (vertically-stretched ellipsoid) centred
+        // at world coords (cx, cy, cz). Iterates only the bounding box
+        // intersecting this chunk; cells whose ellipsoid distance ≤ 1
+        // get cleared to Air. Bedrock is preserved (ravines can't
+        // punch through the dimensional floor or cap).
         private static void CarveRavineSegment(Chunk c, float cx, float cy, float cz, float radius, float vertExtent)
         {
             int chunkX0 = c.ChunkX * Chunk.SizeX;
@@ -384,7 +358,7 @@ namespace VStudioCraft.Game
             int hiX = Math.Min(icx + rXZ, chunkX0 + Chunk.SizeX - 1);
             int loZ = Math.Max(icz - rXZ, chunkZ0);
             int hiZ = Math.Min(icz + rXZ, chunkZ0 + Chunk.SizeZ - 1);
-            int loY = Math.Max(icy - rY, FloorY + 1);
+            int loY = Math.Max(icy - rY, LavaSurfaceY + 1);
             int hiY = Math.Min(icy + rY, CeilingBaseY - 1);
             if (loX > hiX || loZ > hiZ || loY > hiY) return;
 
@@ -415,24 +389,23 @@ namespace VStudioCraft.Game
             }
         }
 
-        // V10 — Fortress anchor + stamp pass. For each of the 9
-        // candidate anchor chunk positions that could overlap this
-        // chunk's bounds, check if it lands on the 8×8 anchor grid
-        // AND rolled a fortress, and stamp the fortress's intersection
-        // with this chunk if so. Same neighbour-walk pattern the
-        // ravine pass uses — keeps multi-chunk structures continuous
-        // across chunk seams.
+        // Fortress anchor + stamp pass. For each of the 9 candidate
+        // anchor chunk positions that could overlap this chunk's
+        // bounds, check if it lands on the 8×8 anchor grid AND rolled
+        // a fortress, and stamp the fortress's intersection with this
+        // chunk if so. Same neighbour-walk pattern the ravine pass
+        // uses to keep multi-chunk structures continuous across seams.
         //
-        // FortressFloorY (=72) sits in the open cavern between the
-        // netherrack mass surface (y=NetherrackTop=64) and the
-        // ceiling band (y≈117..120), so the fortress reads as a
-        // freestanding structure floating in the cavern with the
-        // player approaching it from below or from a side.
-        public const int FortressFloorY    = NetherrackTop + 8;   // 72
-        public const int FortressWallTopY  = FortressFloorY + 4;  // 76 — walls 4 tall
-        public const int FortressCeilingY  = FortressFloorY + 5;  // 77 — single-thick brick ceiling
-        public const int FortressGridStep  = 8;                   // anchor every 8 chunks
-        public const int FortressFootprint = 3;                   // 3×3 chunks footprint
+        // Fortresses sit just above the lava sea in the lower-mountain
+        // altitude band — small enough to not touch the ceiling, low
+        // enough that the player can clearly see them while flying
+        // through the cavern, and the interior pass clears mountain
+        // netherrack so the rooms are usable.
+        public const int FortressFloorY    = LavaSurfaceY + 5;     // 20 — just above lava
+        public const int FortressWallTopY  = FortressFloorY + 4;   // 24 — walls 4 tall
+        public const int FortressCeilingY  = FortressFloorY + 5;   // 25 — single-thick brick ceiling
+        public const int FortressGridStep  = 8;                    // anchor every 8 chunks
+        public const int FortressFootprint = 3;                    // 3×3 chunks footprint
 
         private static void StampFortressesPass(Chunk c, int seed)
         {
@@ -441,9 +414,6 @@ namespace VStudioCraft.Game
             {
                 int ax = c.ChunkX - axOff;
                 int az = c.ChunkZ - azOff;
-                // Anchors live on the 8-chunk grid. Tested via bitmask
-                // since FortressGridStep is a power of two — slightly
-                // faster than mod and avoids the negative-mod sign issue.
                 if ((ax & (FortressGridStep - 1)) != 0) continue;
                 if ((az & (FortressGridStep - 1)) != 0) continue;
 
@@ -451,34 +421,12 @@ namespace VStudioCraft.Game
                     + (uint)(ax * 0xA1B7C5E3)
                     + (uint)(az * 0x5F8B2D71));
                 var rng = new Random(hash);
-                if (rng.Next(2) != 0) continue; // 1-in-2 anchors actually spawn
+                if (rng.Next(2) != 0) continue;
 
                 StampFortressIntoChunk(c, ax, az, rng);
             }
         }
 
-        // V10 — Stamp the fortress anchored at world chunk (ax, az)
-        // into this chunk's bounds. Walks the fortress's full world
-        // footprint, computes the chunk-local intersection, and
-        // sets cells.
-        //
-        // Layout (footprint = 48×48 horizontal, walls 4 tall + ceiling):
-        //   * Floor at y=72 — full 48×48 brick slab.
-        //   * Outer wall around the 48-perimeter, y=73..76 — brick.
-        //     Doors (5-wide gaps) cut through the wall on each of
-        //     the 4 sides at the cardinal centre, so a player can
-        //     enter from any direction.
-        //   * Interior y=73..76 — air (carves out any netherrack
-        //     that the existing terrain pass placed underneath, in
-        //     case a ravine or surface column happened to reach
-        //     this altitude — rare but possible at edge cases).
-        //   * Ceiling at y=77 — full 48×48 brick slab.
-        //   * MobSpawner block at the centre cell on y=73 — the
-        //     canonical "blaze spawner cage" anchor. The blaze-
-        //     spawner data attached to MobSpawner is implicit
-        //     today (the block is just an aesthetic marker until
-        //     functional spawners ship); when blaze spawners
-        //     become functional the placement carries through.
         private static void StampFortressIntoChunk(Chunk c, int anchorChunkX, int anchorChunkZ, Random rng)
         {
             int wx0 = anchorChunkX * Chunk.SizeX;
@@ -499,7 +447,7 @@ namespace VStudioCraft.Game
 
             int centreX = (wx0 + wx1) / 2;
             int centreZ = (wz0 + wz1) / 2;
-            const int doorHalfWidth = 2; // door 5 wide centred
+            const int doorHalfWidth = 2;
 
             for (int wx = loX; wx <= hiX; wx++)
             for (int wz = loZ; wz <= hiZ; wz++)
@@ -512,21 +460,13 @@ namespace VStudioCraft.Game
                 bool atSouthWall = wz == wz1;
                 bool onPerimeter = atWestWall || atEastWall || atNorthWall || atSouthWall;
 
-                // Door cutouts — 5-wide gap on each cardinal wall,
-                // centred on the fortress's middle axis. Lower 3 of
-                // the wall's 4 rows so the player ducks under the
-                // top brick lintel like a real doorway.
                 bool inDoorNS = (Math.Abs(wx - centreX) <= doorHalfWidth) && (atNorthWall || atSouthWall);
                 bool inDoorEW = (Math.Abs(wz - centreZ) <= doorHalfWidth) && (atWestWall  || atEastWall);
 
-                // Floor slab — full 48×48.
                 c.Set(lx, FortressFloorY, lz, BlockType.NetherBrick);
 
                 if (onPerimeter)
                 {
-                    // Walls — full height except where a door cuts
-                    // through; doors leave the top row (wallTop) intact
-                    // as a lintel.
                     for (int wy = FortressFloorY + 1; wy <= FortressWallTopY; wy++)
                     {
                         bool isLintel = wy == FortressWallTopY;
@@ -538,10 +478,6 @@ namespace VStudioCraft.Game
                 }
                 else
                 {
-                    // Interior — clear netherrack so the fortress is
-                    // a hollow interior. Bedrock is preserved
-                    // defensively, though at FortressFloorY+1 (=73)
-                    // there shouldn't be any.
                     for (int wy = FortressFloorY + 1; wy <= FortressWallTopY; wy++)
                     {
                         var t = (BlockType)c.RawBlocks[Chunk.Index(lx, wy, lz)];
@@ -550,31 +486,25 @@ namespace VStudioCraft.Game
                     }
                 }
 
-                // Ceiling slab — full 48×48 brick lid.
                 c.Set(lx, FortressCeilingY, lz, BlockType.NetherBrick);
             }
 
-            // Spawner cage centre. Places one MobSpawner block at
-            // (centre, FloorY+2) sitting on a 1-cell brick pedestal at
-            // (centre, FloorY+1). Confined to the chunk holding the
-            // centre cell so we don't stamp partial pedestals across
-            // chunk seams (the centre always falls inside exactly one
-            // chunk's bounds).
             if (centreX >= chunkX0 && centreX <= chunkX1
              && centreZ >= chunkZ0 && centreZ <= chunkZ1)
             {
                 int lcx = centreX - chunkX0;
                 int lcz = centreZ - chunkZ0;
-                c.Set(lcx, FortressFloorY + 1, lcz, BlockType.NetherBrick);     // pedestal
-                c.Set(lcx, FortressFloorY + 2, lcz, BlockType.MobSpawner); // cage
+                c.Set(lcx, FortressFloorY + 1, lcz, BlockType.NetherBrick);
+                c.Set(lcx, FortressFloorY + 2, lcz, BlockType.MobSpawner);
             }
         }
 
         // Punch a glowstone cluster into the ceiling — random walk
         // from (cx, cy, cz) for `size` steps, replacing each visited
-        // cell with Glowstone. The walk biases slightly downward so
-        // the cluster hangs visibly off the ceiling rather than just
-        // sitting flat.
+        // cell with Glowstone. Biases slightly downward so the
+        // cluster hangs visibly off the ceiling rather than sitting
+        // flat. Bound to the ceiling band so the walk can't escape
+        // into the open cavern.
         private static void CarveGlowstoneCluster(Chunk c, int cx, int cy, int cz, int size, Random rng)
         {
             int x = cx, y = cy, z = cz;
@@ -590,7 +520,7 @@ namespace VStudioCraft.Game
                     case 1: x--; break;
                     case 2: z++; break;
                     case 3: z--; break;
-                    case 4: y--; break; // down-bias — cluster hangs off the ceiling
+                    case 4: y--; break;
                 }
             }
         }
