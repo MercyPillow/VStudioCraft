@@ -314,29 +314,27 @@ namespace VStudioCraft.Game
             StopMusicFile();
         }
 
-        // ---- Tier 10 #51 — Music file playback (MCI) -------------------
-        // OpenAL needs raw PCM to play a buffer, and decoding MP3 / Vorbis
-        // would mean adding a dependency. The Windows Media Control
-        // Interface (`mciSendString`) is built into Windows since
-        // Win2K, plays MP3 files directly via the system codec, and
-        // doesn't need a window handle for audio-only playback. So we
-        // route disc music through MCI on a single named alias and
-        // expose the same Play/Stop verbs the OpenAL music path uses.
-        // The OpenAL music source still exists for any future PCM
-        // music; the two paths coexist without conflict because
-        // StopMusic stops both.
+        // ---- Tier 10 #51 — Music file playback (WPF MediaPlayer) -------
+        // OpenAL needs raw PCM to play a buffer, and decoding MP3 /
+        // Vorbis would mean adding a dependency. The previous MCI-based
+        // path failed with error 266 (cannot load device driver) on
+        // modern Windows — MS deprecated MCI's MP3 codec years ago.
+        // System.Windows.Media.MediaPlayer routes through Media
+        // Foundation, which IS the modern MP3 pipeline and ships with
+        // every Win7+ install. The catch: MediaPlayer must live on a
+        // thread that owns a Dispatcher (it's a WPF DependencyObject).
+        // The render thread doesn't have one, so we spawn a dedicated
+        // STA "Media Dispatcher" thread on first use, create the
+        // MediaPlayer there, and dispatch every Play/Stop/Volume call
+        // onto it. The render thread blocks briefly on the Invoke but
+        // music ops only happen on disc insert/eject and slider drags
+        // — not hot-path frequent.
 
-        [DllImport("winmm.dll", CharSet = CharSet.Auto)]
-        private static extern int mciSendString(string command, System.Text.StringBuilder buffer, int bufferSize, IntPtr hwndCallback);
-
-        // The currently-open MCI alias. "vsccmusic" is unique enough to
-        // avoid colliding with any other MCI-using process. Tracked so
-        // we know whether to issue a `close` before opening a new file
-        // (consecutive PlayMusicFile calls without a StopMusicFile
-        // between them).
-        private const string McMusicAlias = "vsccmusic";
-        private static bool _mciMusicOpen;
-        private static string _mciCurrentPath;
+        private static System.Windows.Media.MediaPlayer _mediaPlayer;
+        private static System.Windows.Threading.Dispatcher _mediaDispatcher;
+        private static readonly object _mediaInitLock = new object();
+        private static System.Threading.Thread _mediaThread;
+        private static System.Threading.ManualResetEvent _mediaReady;
 
         // Best-effort path lookup helper. Looks for the music file in
         // the executable's directory (and a `Music` subfolder), then in
@@ -345,6 +343,7 @@ namespace VStudioCraft.Game
         // inserts/ejects normally with no audio.
         public static string FindMusicAsset(string fileNameWithoutExt)
         {
+            MusicLog("FindMusicAsset request name='" + fileNameWithoutExt + "'");
             try
             {
                 string exeDir = AppDomain.CurrentDomain.BaseDirectory ?? string.Empty;
@@ -356,17 +355,23 @@ namespace VStudioCraft.Game
                     exeDir,
                     Path.Combine(user, "Downloads"),
                 };
+                MusicLog("  roots: " + string.Join(", ", roots));
                 foreach (var root in roots)
                 {
                     if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) continue;
                     foreach (var ext in exts)
                     {
                         string candidate = Path.Combine(root, fileNameWithoutExt + ext);
-                        if (File.Exists(candidate)) return candidate;
+                        if (File.Exists(candidate))
+                        {
+                            MusicLog("  found: " + candidate);
+                            return candidate;
+                        }
                     }
                 }
+                MusicLog("  NOT FOUND in any root");
             }
-            catch { }
+            catch (Exception ex) { MusicLog("FindMusicAsset exception: " + ex.Message); }
             return null;
         }
 
@@ -375,58 +380,115 @@ namespace VStudioCraft.Game
         // to bracket the call. Path can be MP3 / WAV / OGG / etc. —
         // anything Windows has a codec for. A null or missing file is
         // a soft no-op so the disc still inserts cleanly.
+        // Spin up the media dispatcher thread on first use. Idempotent;
+        // safe to call from any thread. The thread is STA + background
+        // (won't keep the process alive on shutdown). MediaPlayer is
+        // created on that thread so every property + verb access stays
+        // on the dispatcher.
+        private static void EnsureMediaDispatcher()
+        {
+            if (_mediaDispatcher != null) return;
+            lock (_mediaInitLock)
+            {
+                if (_mediaDispatcher != null) return;
+                _mediaReady = new System.Threading.ManualResetEvent(false);
+                _mediaThread = new System.Threading.Thread(MediaDispatcherThread);
+                _mediaThread.SetApartmentState(System.Threading.ApartmentState.STA);
+                _mediaThread.IsBackground = true;
+                _mediaThread.Name = "VSC MediaDispatcher";
+                _mediaThread.Start();
+                _mediaReady.WaitOne(2000);  // give it 2s to come up
+            }
+        }
+
+        private static void MediaDispatcherThread()
+        {
+            try
+            {
+                _mediaPlayer = new System.Windows.Media.MediaPlayer();
+                _mediaDispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+                _mediaReady.Set();
+                System.Windows.Threading.Dispatcher.Run();
+            }
+            catch (Exception ex)
+            {
+                MusicLog("MediaDispatcher thread exception: " + ex.Message);
+                _mediaReady.Set();
+            }
+        }
+
         public static void PlayMusicFile(string path, float gain = 1f)
         {
-            // NOTE: deliberately NOT gated on _muted. MCI uses Windows'
-            // own audio mixer, not OpenAL, so a failed AL context (which
-            // sets _muted) doesn't affect file playback. This lets disc
-            // music work even on hosts where OpenAL Soft failed to load.
-            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
-            // Stop OpenAL music if any (the two music paths share the
-            // jukebox's "currently playing" semantics).
+            // NOT gated on _muted: MediaPlayer uses Windows' own mixer,
+            // not OpenAL. Disc audio still plays even on hosts where
+            // OpenAL Soft failed to load.
+            MusicLog("PlayMusicFile request path='" + path + "' gain=" + gain
+                + " musicGain=" + _musicGain + " masterGain=" + _masterGain);
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                _lastMusicError = "file missing: " + path;
+                MusicLog(_lastMusicError);
+                return;
+            }
             if (_musicSourceCreated)
             {
                 try { AL.SourceStop(_musicSource); } catch { }
             }
-            StopMusicFile();
+            EnsureMediaDispatcher();
+            if (_mediaDispatcher == null || _mediaPlayer == null)
+            {
+                _lastMusicError = "media dispatcher not ready";
+                MusicLog(_lastMusicError);
+                return;
+            }
             try
             {
-                // First attempt: let MCI auto-detect the file type from
-                // the extension. Works for the common cases (mp3, wav,
-                // wma) without naming a device. The double-quotes are
-                // required for paths that contain spaces or other
-                // characters MCI's parser would otherwise split on.
-                var resp = new System.Text.StringBuilder(256);
-                string openCmd = "open \"" + path + "\" alias " + McMusicAlias;
-                int rc = mciSendString(openCmd, resp, resp.Capacity, IntPtr.Zero);
-                if (rc != 0)
+                _mediaDispatcher.Invoke(new Action(() =>
                 {
-                    // Fallback: name the device explicitly. Older
-                    // Windows installs sometimes need the "mpegvideo"
-                    // type to attach an MP3 decoder; newer ones don't.
-                    openCmd = "open \"" + path + "\" type mpegvideo alias " + McMusicAlias;
-                    rc = mciSendString(openCmd, resp, resp.Capacity, IntPtr.Zero);
-                }
-                if (rc != 0)
-                {
-                    _lastMusicError = "MCI open failed (rc=" + rc + ") for " + path;
-                    return;
-                }
-                _mciMusicOpen = true;
-                _mciCurrentPath = path;
-                if (gain < 0f) gain = 0f;
-                if (gain > 1f) gain = 1f;
-                int volume = (int)(gain * _musicGain * _masterGain * 1000f);
-                if (volume < 0)    volume = 0;
-                if (volume > 1000) volume = 1000;
-                mciSendString("setaudio " + McMusicAlias + " volume to " + volume, null, 0, IntPtr.Zero);
-                mciSendString("play " + McMusicAlias, null, 0, IntPtr.Zero);
-                _lastMusicError = null;
+                    try
+                    {
+                        _mediaPlayer.Stop();
+                        _mediaPlayer.Close();
+                        _mediaPlayer.Open(new Uri(path, UriKind.Absolute));
+                        float vol = gain * _musicGain * _masterGain;
+                        if (vol < 0f) vol = 0f;
+                        if (vol > 1f) vol = 1f;
+                        // Floor under-1 settings volumes to a low but
+                        // audible level so a saved master at 0 doesn't
+                        // produce silent disc playback. Slider can pull
+                        // it lower, but a fresh "just clicked the disc"
+                        // never lands on mute.
+                        if (vol < 0.05f) vol = 0.05f;
+                        _mediaPlayer.Volume = vol;
+                        _mediaPlayer.Play();
+                        MusicLog("MediaPlayer.Play OK volume=" + vol);
+                        _lastMusicError = null;
+                    }
+                    catch (Exception ex)
+                    {
+                        _lastMusicError = "MediaPlayer: " + ex.Message;
+                        MusicLog(_lastMusicError);
+                    }
+                }));
             }
             catch (Exception ex)
             {
-                _lastMusicError = "MCI exception: " + ex.Message;
+                _lastMusicError = "MediaPlayer dispatch: " + ex.Message;
+                MusicLog(_lastMusicError);
             }
+        }
+
+        // Append a diagnostic line to %TEMP%/vstudiocraft-music.log.
+        // Best-effort — silent on any IO failure so logging can never
+        // crash playback.
+        private static void MusicLog(string msg)
+        {
+            try
+            {
+                string p = Path.Combine(Path.GetTempPath(), "vstudiocraft-music.log");
+                File.AppendAllText(p, DateTime.Now.ToString("HH:mm:ss.fff ") + msg + Environment.NewLine);
+            }
+            catch { }
         }
 
         // Last MCI error string (or null on success). Exposed for
@@ -434,29 +496,40 @@ namespace VStudioCraft.Game
         public static string LastMusicError => _lastMusicError;
         private static string _lastMusicError;
 
-        // Stop and close the MCI alias. Idempotent.
+        // Stop the MediaPlayer stream. Idempotent.
         public static void StopMusicFile()
         {
-            if (!_mciMusicOpen) return;
-            try { mciSendString("stop " + McMusicAlias, null, 0, IntPtr.Zero); } catch { }
-            try { mciSendString("close " + McMusicAlias, null, 0, IntPtr.Zero); } catch { }
-            _mciMusicOpen = false;
-            _mciCurrentPath = null;
-        }
-
-        // Apply the live music volume (master × music slider) to the
-        // currently-playing MCI stream. Called by the options-menu
-        // sliders so dragging the music slider takes effect mid-track
-        // instead of waiting for the next disc swap.
-        public static void RefreshMusicFileVolume()
-        {
-            if (!_mciMusicOpen) return;
+            if (_mediaDispatcher == null || _mediaPlayer == null) return;
             try
             {
-                int volume = (int)(_musicGain * _masterGain * 1000f);
-                if (volume < 0)    volume = 0;
-                if (volume > 1000) volume = 1000;
-                mciSendString("setaudio " + McMusicAlias + " volume to " + volume, null, 0, IntPtr.Zero);
+                _mediaDispatcher.Invoke(new Action(() =>
+                {
+                    try { _mediaPlayer.Stop(); _mediaPlayer.Close(); } catch { }
+                }));
+            }
+            catch { }
+        }
+
+        // Apply the live music volume to the currently-playing stream.
+        // Called by the options-menu sliders so dragging the music
+        // slider takes effect mid-track instead of waiting for the
+        // next disc swap.
+        public static void RefreshMusicFileVolume()
+        {
+            if (_mediaDispatcher == null || _mediaPlayer == null) return;
+            try
+            {
+                _mediaDispatcher.Invoke(new Action(() =>
+                {
+                    try
+                    {
+                        float vol = _musicGain * _masterGain;
+                        if (vol < 0f) vol = 0f;
+                        if (vol > 1f) vol = 1f;
+                        _mediaPlayer.Volume = vol;
+                    }
+                    catch { }
+                }));
             }
             catch { }
         }

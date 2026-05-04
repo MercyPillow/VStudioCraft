@@ -321,7 +321,7 @@ namespace VStudioCraft.Game
                 int dz = (i / side) - InitialRadiusChunks;
                 int dx = (i % side) - InitialRadiusChunks;
                 var c = new Chunk(dx, dz);
-                NetherTerrainGenerator.Generate(c, seed);
+                NetherTerrainGenerator.Generate(c, seed, w._noise);
                 LightCalculator.RecomputeChunk(c);
                 var bucket = new List<HostileMob>();
                 ComputeNetherSpawnsForChunk(c, seed, bucket);
@@ -468,7 +468,7 @@ namespace VStudioCraft.Game
         public Chunk GenerateNetherChunk(int chunkX, int chunkZ)
         {
             var c = new Chunk(chunkX, chunkZ);
-            NetherTerrainGenerator.Generate(c, Seed);
+            NetherTerrainGenerator.Generate(c, Seed, _noise);
             LightCalculator.RecomputeChunk(c);
             _chunks[(chunkX, chunkZ)] = c;
             _dirty.Add((chunkX, chunkZ));

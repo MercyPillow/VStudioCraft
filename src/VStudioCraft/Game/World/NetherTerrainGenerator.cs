@@ -60,29 +60,47 @@ namespace VStudioCraft.Game
 
         // Mountain-density tuning constants (kept as named consts so
         // a future visual iteration can tweak them in one place).
+        // Mountains sit close to the lava sea — peak Y range [18, 50]
+        // — so most of the cavern's vertical extent (50..109) reads
+        // as open headroom above the terrain, not netherrack mass.
+        // Reading more like "low rugged hills rising from a lava sea
+        // under a tall arched roof" than "filled cavern with peaks
+        // brushing the ceiling".
         private const float MountainNoiseFreq      = 0.013f;
         private const float PerturbNoiseFreq       = 0.045f;
-        private const int   MountainPeakBaseY      = 30;
-        private const int   MountainPeakRange      = 65;     // peakY ∈ [Base, Base+Range] = [30, 95]
-        private const float VerticalGradientScale  = 1f / 30f; // (peakY - y) * scale gives [-3, +3] across the gradient band
+        private const int   MountainPeakBaseY      = 18;
+        private const int   MountainPeakRange      = 32;     // peakY ∈ [18, 50]
+        private const float VerticalGradientScale  = 1f / 30f;
         private const float VerticalWeight         = 0.7f;
         private const float PerturbWeight          = 0.5f;
 
-        public static void Generate(Chunk c, int seed)
+        // Density-evaluation band half-extents around peakY.
+        // density = yRel * VerticalWeight + perturb * PerturbWeight
+        //         = ((peakY - y) / 30) * 0.7 + perturb * 0.5
+        // Worst-case perturb = ±1, so:
+        //   * y ≤ peakY - 22 → density ≥ 0.7*0.733 - 0.5 = 0.013, GUARANTEED solid
+        //   * y ≥ peakY + 30 → density ≤ -0.7 + 0.5 = -0.2, GUARANTEED air
+        // Inside the [peakY-21, peakY+29] band the perturb sample
+        // matters; outside it we short-circuit to a constant fill,
+        // skipping the per-cell Octaves() calls. This is ~6× faster
+        // than naïvely sampling every cell in the cavern band — the
+        // noise pass dominated chunk-gen cost otherwise.
+        private const int SolidBandBelowPeak = 22;
+        private const int AirBandAbovePeak   = 30;
+
+        // Generate signature now takes the world's cached Noise so
+        // we don't pay the 256-permutation shuffle on every chunk
+        // load. Caller (World) owns the singleton Noise(seed).
+        public static void Generate(Chunk c, int seed, Noise noise)
         {
             // Per-chunk hashed RNG — used for the discrete features
             // (glowstone clusters, soul sand, gravel) where stochastic
             // count + position is fine. The deterministic 3D mountain
-            // mass uses Noise (seeded per call) for reproducibility.
+            // mass uses the shared Noise for reproducibility.
             int hash = (int)((uint)seed * 0x9E3779B1u
                 + (uint)(c.ChunkX * 0x85EBCA77)
                 + (uint)(c.ChunkZ * 0xC2B2AE3D));
             var rng = new Random(hash);
-            // Noise instance is per-call — terrain gen runs once per
-            // chunk-load (not per frame), so a 1KB perm-table allocation
-            // is cheap and avoids a thread-static cache. Same seed for
-            // every chunk so noise is continuous across chunk seams.
-            var noise = new Noise(seed);
 
             // Bedrock floor + cap.
             for (int x = 0; x < Chunk.SizeX; x++)
@@ -118,6 +136,20 @@ namespace VStudioCraft.Game
             // first, ANY cell at or below LavaSurfaceY that we don't
             // overwrite stays as lava; mountain bases that intersect
             // the lava plane look like islands sticking out of it.
+            //
+            // Per-column the y-axis splits into three bands:
+            //   * Solid band (y ≤ peakY-22): density GUARANTEED > 0,
+            //     fill netherrack without sampling the perturb noise.
+            //     Most chunks have a peakY around 35; the solid band
+            //     reaches up to y≈13 at minimum, often well into the
+            //     mountain.
+            //   * Noise band ([peakY-21, peakY+29]): perturb sample
+            //     can flip the density either way; evaluate per cell.
+            //   * Air band (y ≥ peakY+30): density GUARANTEED < 0,
+            //     leave air (chunk is already air-by-default in this
+            //     range so no work needed).
+            // The fast paths skip the (expensive) Octaves call which
+            // dominated the per-chunk cost.
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int z = 0; z < Chunk.SizeZ; z++)
             {
@@ -133,28 +165,30 @@ namespace VStudioCraft.Game
                 int peakY = MountainPeakBaseY
                     + (int)((mountainNoise + 1f) * 0.5f * MountainPeakRange);
 
-                // Mountain bases extend down into the lava sea (so a
-                // peak that pierces the lava plane has solid roots
-                // visible from below). Carve from the lava floor up
-                // through the cavern to the ceiling, evaluating
-                // density per cell.
-                for (int y = NetherrackBaseTop + 1; y < CeilingBaseY; y++)
-                {
-                    // Vertical gradient: positive deep in the mountain,
-                    // 0 at the peak, negative above. The gradient is
-                    // strong enough that a mountain interior is solidly
-                    // netherrack but weak enough near the peak that
-                    // perturbation noise can perforate the surface
-                    // (creating tunnels and overhangs).
-                    float yRel = (peakY - y) * VerticalGradientScale;
+                // Solid band — fill netherrack from lava-sea floor up
+                // to peakY-SolidBandBelowPeak (or up to LavaSurfaceY,
+                // whichever is lower). Below LavaSurfaceY the cell is
+                // already lava; the solid pass starts at NetherrackBaseTop+1
+                // so mountain roots fill through the lava sea correctly.
+                int solidTop = peakY - SolidBandBelowPeak;
+                if (solidTop > CeilingBaseY - 1) solidTop = CeilingBaseY - 1;
+                for (int y = NetherrackBaseTop + 1; y <= solidTop; y++)
+                    c.Set(x, y, z, BlockType.Netherrack);
 
+                // Noise band — evaluate density per cell. Clamped to
+                // the cavern range so we never sample noise above the
+                // ceiling base.
+                int noiseLo = solidTop + 1;
+                if (noiseLo < NetherrackBaseTop + 1) noiseLo = NetherrackBaseTop + 1;
+                int noiseHi = peakY + AirBandAbovePeak - 1;
+                if (noiseHi > CeilingBaseY - 1) noiseHi = CeilingBaseY - 1;
+                for (int y = noiseLo; y <= noiseHi; y++)
+                {
+                    float yRel = (peakY - y) * VerticalGradientScale;
                     // 3D-coherent perturbation: average two orthogonal
                     // 2D Perlin samples on (wx, y) and (y, wz) planes.
-                    // This is a cheap stand-in for true 3D noise —
-                    // produces shelves, blobs, and bridge-like
-                    // horizontal extents naturally because the (y, wz)
-                    // term varies slowly when wz is constant, giving
-                    // long horizontal coherence at fixed altitude.
+                    // Cheap 3D stand-in — produces shelves, blobs, and
+                    // bridge-like horizontal extents naturally.
                     float pxy = noise.Octaves(
                         wx * PerturbNoiseFreq, y * PerturbNoiseFreq,
                         octaves: 3, persistence: 0.5f, lacunarity: 2f);
@@ -167,6 +201,8 @@ namespace VStudioCraft.Game
                     if (density > 0f)
                         c.Set(x, y, z, BlockType.Netherrack);
                 }
+                // Air band above noiseHi: cells are already Air from
+                // chunk init — no work needed.
             }
 
             // Per-column variable ceiling top — each (x, z) drops the

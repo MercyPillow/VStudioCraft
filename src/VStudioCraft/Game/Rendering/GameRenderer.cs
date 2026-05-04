@@ -4836,33 +4836,17 @@ void main()
         {
             int r = ViewDistanceChunks;
             _scratchChunks.Clear();
-            // Tier 8 #51 V4 — Nether-dimension chunk streaming. The
-            // overworld path enqueues missing chunks onto the
-            // ChunkJobSystem worker pool, which calls TerrainGenerator
-            // with overworld noise. The Nether needs its own gen
-            // pass; for V4 part 1 we just synchronously fill missing
-            // Nether chunks on the render thread with NetherTerrainGenerator
-            // so wandering past the initial 5×5 ring still works.
-            // Cost is comparable to the overworld worker (each chunk
-            // gen is fast — no dungeons, no spawn pass), and the
-            // few-frame hitch on first walk into a fresh chunk is
-            // hidden by the brief portal-flash that brought the
-            // player here.
-            if (_world.Dimension == Dimension.Nether)
-            {
-                for (int dz = -r; dz <= r; dz++)
-                for (int dx = -r; dx <= r; dx++)
-                {
-                    int ds = dx * dx + dz * dz;
-                    if (ds > r * r) continue;
-                    int cx = pcx + dx, cz = pcz + dz;
-                    if (!_world.HasChunk(cx, cz))
-                    {
-                        _world.GenerateNetherChunk(cx, cz);
-                    }
-                }
-                return;
-            }
+            // Tier 8 #51 V11 — Nether and Overworld both stream
+            // through the ChunkJobSystem worker pool. The worker
+            // dispatches on _world.Dimension and runs the appropriate
+            // generator (NetherTerrainGenerator for Nether, the canonical
+            // TerrainGenerator + caves + dungeons + passive/hostile
+            // spawn passes for Overworld). The previous Nether path
+            // ran NetherTerrainGenerator synchronously on the render
+            // thread, which produced a visible spike each frame the
+            // player crossed into a fresh ring — bad enough with the
+            // old flat-plane generator and worse with the V11 mountain
+            // mass that does ~26k Perlin samples per chunk.
             for (int dz = -r; dz <= r; dz++)
             for (int dx = -r; dx <= r; dx++)
             {

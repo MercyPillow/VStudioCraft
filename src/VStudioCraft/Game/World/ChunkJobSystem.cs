@@ -132,7 +132,32 @@ namespace VStudioCraft.Game
                             // safe because the chunk is brand-new and not
                             // installed in `_chunks` yet — no other thread can
                             // see it.
+                            //
+                            // Dispatches on the world's dimension — the Nether
+                            // generator runs the 3D mountain mass + lava sea
+                            // pass; the overworld generator runs the
+                            // canonical noise + caves + ravines + ores +
+                            // flora + trees pass. The Nether path skips the
+                            // dungeon + passive-spawn passes (no overworld-
+                            // style dungeons or passive mobs in the Nether)
+                            // and only computes hostile spawns (pigman /
+                            // ghast / blaze).
                             var c = new Chunk(job.X, job.Z);
+                            if (_world.Dimension == Dimension.Nether)
+                            {
+                                NetherTerrainGenerator.Generate(c, _world.Seed, _world.Noise);
+                                LightCalculator.RecomputeChunk(c);
+                                var nHostiles = new List<HostileMob>();
+                                World.ComputeNetherSpawnsForChunk(c, _world.Seed, nHostiles);
+                                _genResults.Enqueue(new GenResult
+                                {
+                                    Chunk = c,
+                                    PassiveSpawns = null,
+                                    HostileSpawns = nHostiles.Count > 0 ? nHostiles : null,
+                                });
+                                continue;
+                            }
+
                             TerrainGenerator.Generate(c, _world.Noise);
                             // Stage 2: initial light pass — skylight column
                             // descent + emitter BFS. Same chunk-private read.
