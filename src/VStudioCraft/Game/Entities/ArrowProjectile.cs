@@ -60,6 +60,16 @@ namespace VStudioCraft.Game
         // chain-killing other hostiles.
         public bool FromMob;
 
+        // Flight direction captured at the moment of landing (block
+        // hit) so the renderer can keep drawing the embedded arrow in
+        // the direction it was travelling. Without this, landed arrows
+        // would have to fall back to a default vector (e.g. straight
+        // down) since `Velocity` is zeroed on impact, and a
+        // horizontally-fired arrow stuck in a wall would render as a
+        // crumpled vertical sprite instead of one sticking out of the
+        // wall the way the player expects.
+        public Vector3 LandedDirection;
+
         // Seconds since the arrow landed. Counts up while
         // HasLanded; arrow despawns once this exceeds
         // LandedDespawnSec. Reset is irrelevant — landed arrows

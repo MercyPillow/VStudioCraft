@@ -1089,6 +1089,22 @@ namespace VStudioCraft.Game
         private readonly Random _cropRng = new Random(0xCB07);
         public const float CropTickInterval = 5.0f;
 
+        // Tier 10 #52 — Runtime ice formation. At terrain-gen we
+        // freeze the surface water of every Snow-biome column once
+        // (FreezeWaterInSnowBiome); this tick handles the runtime
+        // case — when the player breaks the ice and exposes water,
+        // or when a body of water spans into an unfrozen column,
+        // the cell should re-freeze on its own at night. Same rate-
+        // limiter shape as the crop tick — sample a small number of
+        // chunks per call, walk a few random columns each, and only
+        // act on cells that pass the gate (snow biome, sky-light
+        // exposed to night sky, top water cell in the column).
+        private float _iceTimer;
+        private readonly Random _iceRng = new Random(0x1CE7);
+        public const float IceTickInterval     = 4.0f;
+        private const int  IceChunksPerTick    = 6;
+        private const int  IceColumnsPerChunk  = 8;
+
         // Tier 6 #34 — Fire propagation state. Same rate-limiter shape
         // as the crop tick — every ~1s we sample a small set of loaded
         // chunks, walk a few random cells in each, and for every Fire
@@ -1465,6 +1481,78 @@ namespace VStudioCraft.Game
                     chunk.RawMeta[idx] = (byte)((meta & 0xF0) | (stage + 1));
                     chunk.IsModified = true;
                     _dirty.Add(key);
+                }
+            }
+        }
+
+        // Tier 10 #52 — Runtime ice formation in cold biomes at
+        // night. Worldgen runs FreezeWaterInSnowBiome once at chunk
+        // create; this pass keeps the snow biome's surface frozen
+        // when the player breaks the ice (or fluid spreads into a
+        // previously-unfrozen cell). Walks a small random sample of
+        // loaded chunks per tick, gates each column on snow biome,
+        // and converts the topmost exposed water cell to Ice. Only
+        // runs at night (the canonical Alpha rule: ice forms in cold
+        // biomes when the sun isn't shining on the water).
+        //
+        // timeOfDay is the world clock 0..1 (0.25 = noon, 0.75 =
+        // midnight). The night band is roughly [0.55, 0.95] —
+        // covers full night plus the deep-dusk / pre-dawn margins
+        // where Alpha would also freeze water.
+        public void TickIceFormation(float dt, float timeOfDay)
+        {
+            _iceTimer -= dt;
+            if (_iceTimer > 0f) return;
+            _iceTimer = IceTickInterval;
+
+            // Day gate. Wrap timeOfDay into the night band.
+            if (timeOfDay < 0.55f || timeOfDay > 0.95f) return;
+
+            var keys = new List<(int x, int z)>(_chunks.Count);
+            foreach (var k in _chunks.Keys) keys.Add(k);
+            if (keys.Count == 0) return;
+
+            int chunksToSample = Math.Min(IceChunksPerTick, keys.Count);
+            for (int c = 0; c < chunksToSample; c++)
+            {
+                var key = keys[_iceRng.Next(keys.Count)];
+                if (!_chunks.TryGetValue(key, out var chunk)) continue;
+
+                for (int s = 0; s < IceColumnsPerChunk; s++)
+                {
+                    int lx = _iceRng.Next(Chunk.SizeX);
+                    int lz = _iceRng.Next(Chunk.SizeZ);
+                    int wx = key.x * Chunk.SizeX + lx;
+                    int wz = key.z * Chunk.SizeZ + lz;
+                    // Snow biome gate — same classifier the worldgen
+                    // pass uses, so the freeze rule stays consistent
+                    // between gen-time and runtime.
+                    if (BiomeMap.Classify(_noise, wx, wz) != Biome.Snow) continue;
+
+                    // Walk down from the top of the column to find the
+                    // topmost water cell. Stop early on a solid /
+                    // opaque cell — water buried under terrain would
+                    // never see the night sky.
+                    int topWaterY = -1;
+                    for (int ly = Chunk.SizeY - 1; ly >= 0; ly--)
+                    {
+                        int idx = Chunk.Index(lx, ly, lz);
+                        var t = (BlockType)chunk.RawBlocks[idx];
+                        if (t == BlockType.Water) { topWaterY = ly; break; }
+                        if (BlockData.IsOpaque(t)) break;
+                    }
+                    if (topWaterY < 0) continue;
+
+                    chunk.RawBlocks[Chunk.Index(lx, topWaterY, lz)] = (byte)BlockType.Ice;
+                    chunk.IsModified = true;
+                    _dirty.Add(key);
+                    // Mesh seam: a cell on the chunk boundary needs
+                    // the neighbour to re-mesh too so the new ice
+                    // face shows up on the boundary.
+                    if (lx == 0)               _dirty.Add((key.x - 1, key.z));
+                    if (lx == Chunk.SizeX - 1) _dirty.Add((key.x + 1, key.z));
+                    if (lz == 0)               _dirty.Add((key.x, key.z - 1));
+                    if (lz == Chunk.SizeZ - 1) _dirty.Add((key.x, key.z + 1));
                 }
             }
         }

@@ -8377,6 +8377,12 @@ void main()
                     var hitPos = a.Position + stepDir * blockT;
                     Vector3 normal = new Vector3(rh.Nx, rh.Ny, rh.Nz);
                     a.Position = hitPos + normal * ArrowProjectile.RenderHalfSize;
+                    // Preserve flight direction so the renderer can keep
+                    // the embedded arrow oriented along its travel path.
+                    // Without this, zeroing Velocity (below) loses the
+                    // direction info and the renderer falls back to a
+                    // default vertical orientation.
+                    a.LandedDirection = stepDir;
                     a.Velocity = Vector3.Zero;
                     a.HasLanded = true;
                     continue;
@@ -10006,6 +10012,10 @@ void main()
             // when the host modals open). World internally rate-limits
             // to one pass per CropTickInterval so per-frame is cheap.
             _world.TickRandomCrops(dt);
+            // Tier 10 #52 — Runtime ice formation. Same cadence as
+            // crops; world internally gates on TimeOfDay so it
+            // no-ops during the day with negligible cost.
+            _world.TickIceFormation(dt, _timeOfDay);
             // Tier 6 #34 — Fire spread / die tick. Same cadence as
             // crops; rate-limited inside World.TickFire to keep the
             // per-frame cost negligible.
@@ -12984,15 +12994,23 @@ void main()
 
                 // Pick the orientation direction. In-flight arrows use
                 // the velocity vector; landed arrows have Velocity=0
-                // after the block-hit snap, so we default to a downward
-                // orientation, reading as "the arrow stuck nose-down
-                // into the surface" — close enough to canonical Alpha
-                // for stuck arrows that the player rarely re-examines.
+                // after the block-hit snap, so we fall back to the
+                // captured LandedDirection — that's the unit step
+                // direction at the moment of impact, so a horizontally
+                // fired arrow stuck in a wall keeps reading as
+                // horizontal instead of collapsing to a vertical
+                // cross-sprite (which previously rendered as an
+                // X-shape on the ground for any arrow that landed on
+                // the floor).
                 Vector3 dir = a.Velocity;
                 float velLenSq = dir.LengthSquared;
                 if (velLenSq < 1e-6f)
                 {
-                    dir = new Vector3(0f, -1f, 0f);
+                    dir = a.LandedDirection;
+                    if (dir.LengthSquared < 1e-6f)
+                        dir = new Vector3(0f, -1f, 0f);
+                    else
+                        dir.Normalize();
                 }
                 else
                 {
@@ -13044,42 +13062,15 @@ void main()
                     0f,       0f,       0f,       1f);
                 var trans = Matrix4.CreateTranslation(a.Position);
 
-                // Cross-sprite. Both quads share the FLIGHT-AXIS edge:
-                // the arrow's head vertex (UV 1,0 — the upper-right
-                // texture pixel where the arrowhead is painted) sits
-                // on the flight axis after preRot+orient, so rotating
-                // the quad around that axis leaves the head exactly
-                // where it was — both tips coincide on the flight
-                // line, both arrows point straight forward.
-                //
-                // Quad 1 has zero rotation around the flight axis.
-                // Quad 2 has a 90° rotation around the flight axis,
-                // putting its plane perpendicular to quad 1. From any
-                // viewing angle the player sees at least one quad
-                // face-on (the other goes edge-on). Same shape the
-                // chunk mesher's EmitCrossSprite produces for
-                // flowers, just oriented along velocity instead of
-                // vertical.
+                // Single textured quad oriented along the flight axis.
+                // The painted arrow texture's diagonal head ends up
+                // pointing along `dir` after preRot (45° around mesh
+                // +Z aligns the texture's diagonal with mesh +Y) and
+                // orient (mesh +Y → dir). This is the "one arrow
+                // facing forward" the user fixed by hand — no second
+                // perpendicular quad, no roll/pitch sibling.
                 var model1 = localCentre * sizeScale * preRot * orient * trans;
                 _crackShader.SetMatrix4("uMVP", model1 * vp);
-                _paintingQuadMesh.Draw();
-
-                // Pitch the second quad's plane 90° around its mesh
-                // local +Y axis (the arrow's spine after preRot, before
-                // orient). This swaps the quad's perpendicular axis
-                // from mesh +X to mesh +Z. After orient the spine
-                // still maps to the flight direction (Y axis is the
-                // rotation axis, unchanged), but the quad's
-                // perpendicular plane has flipped from "side-side"
-                // (horizontal axis perpendicular to flight) to
-                // "top-bottom" (vertical axis perpendicular to flight)
-                // — i.e. for a horizontally-flying arrow quad 1 stays
-                // upright (vertical plane) and quad 2 lies flat
-                // (horizontal plane). Plain Y-axis rotation, no
-                // axis-angle math.
-                var pitch = Matrix4.CreateRotationY(MathHelper.PiOver2);
-                var model2 = localCentre * sizeScale * preRot * pitch * orient * trans;
-                _crackShader.SetMatrix4("uMVP", model2 * vp);
                 _paintingQuadMesh.Draw();
             }
 
@@ -19368,6 +19359,21 @@ void main()
                       * Matrix4.CreateScale(w, h, 1f)
                       * Matrix4.CreateTranslation(x + w / 2f, y + h / 2f, 0f);
             _spriteShader.SetMatrix4("uMVP", model * ortho);
+            _unitQuadMesh.Draw();
+        }
+
+        // Same rotated-quad path but routes through an arbitrary
+        // shader so callers using the array-sprite shader (clock
+        // icon) can rotate an atlas-layer sample. Caller binds the
+        // texture array + sets layer/uv uniforms before calling.
+        private void DrawSpriteQuadRotatedFor(Shader sh, int x, int y, int w, int h,
+            float angleRadians, Matrix4 ortho)
+        {
+            var model = Matrix4.CreateTranslation(-0.5f, -0.5f, 0f)
+                      * Matrix4.CreateRotationZ(angleRadians)
+                      * Matrix4.CreateScale(w, h, 1f)
+                      * Matrix4.CreateTranslation(x + w / 2f, y + h / 2f, 0f);
+            sh.SetMatrix4("uMVP", model * ortho);
             _unitQuadMesh.Draw();
         }
 

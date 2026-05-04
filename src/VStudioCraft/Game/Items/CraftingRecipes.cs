@@ -719,22 +719,21 @@ namespace VStudioCraft.Game
                 list.Add(new ShapedRecipe(ArmorBoots(a.mat),      new ItemStack(a.boot,  1)));
             }
 
-            // Tier 4 #22 — Compass recipe is DEFERRED to Tier 8 #42 (the
-            // tier that ships Redstone Dust). Alpha's pattern is four
-            // iron ingots arranged in a + with a single redstone dust
-            // in the middle:
+            // Tier 4 #22 — Compass. Alpha pattern is four iron ingots
+            // in a + with a single redstone dust at the centre:
             //   . I .
             //   I R I
             //   . I .
-            // Output: 1 compass. Redstone Dust doesn't exist as an
-            // ItemType yet — adding the recipe here would either
-            // require a placeholder ingredient (which the player can't
-            // obtain, so the recipe would never trigger) or wiring a
-            // half-baked redstone item ahead of its tier. Per the
-            // roadmap the item ships as a creative-catalog-only entry
-            // until redstone arrives; the recipe slot is reserved here
-            // by comment so the Tier 8 author can drop it in alongside
-            // the new ingredient without re-discovering the pattern.
+            // Wired live now that RedstoneDust exists as an ItemType
+            // (Tier 8 #42). Output: 1 Compass.
+            list.Add(new ShapedRecipe(
+                new BlockType[3, 3]
+                {
+                    { BlockType.Air,       BlockType.IronIngot,   BlockType.Air      },
+                    { BlockType.IronIngot, BlockType.RedstoneDust, BlockType.IronIngot },
+                    { BlockType.Air,       BlockType.IronIngot,   BlockType.Air      },
+                },
+                new ItemStack(BlockType.Compass, 1)));
 
             return list;
         }

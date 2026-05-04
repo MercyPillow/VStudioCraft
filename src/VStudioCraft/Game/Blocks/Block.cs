@@ -291,6 +291,9 @@ namespace VStudioCraft.Game
         FishingRod    = 114, // Alpha 346
         Compass       = 112, // Alpha 345
         Saddle        = 113, // Alpha 329 (mob-mount; dungeon-loot only)
+        // Tier 10 #51 — Clock. Pure item; the icon rotates with
+        // TimeOfDay (sun-up at noon, moon-up at midnight).
+        Clock         = 180, // Alpha 347
 
         // === Buckets ===
         // Empty bucket scoops Water/Lava sources or milks a Cow on
@@ -471,6 +474,8 @@ namespace VStudioCraft.Game
         // Tier 4 #22 — Compass. Recipe-deferred until Tier 8 #42
         // ships redstone dust; until then the item is creative-only.
         public const BlockType Compass       = BlockType.Compass;
+        // Tier 10 #51 — Clock. 4 Gold + 1 Redstone in a + pattern.
+        public const BlockType Clock         = BlockType.Clock;
         // Tier 4 #21 — Saddle. Alpha 1.1.2_01 has NO craft for saddles
         // — only dungeon-chest loot. Dungeons land in Tier 6 #32, so
         // until then the saddle ships as a creative-catalog-only entry
@@ -616,6 +621,8 @@ namespace VStudioCraft.Game
                 case BlockType.Slimeball:      return 341;
                 // Tier 4 #22 — Compass. Alpha numeric id 345.
                 case BlockType.Compass:        return 345;
+                // Tier 10 #51 — Clock. Alpha numeric id 347.
+                case BlockType.Clock:          return 347;
                 // Tier 4 #21 — Saddle. Alpha numeric id 329.
                 case BlockType.Saddle:         return 329;
                 // Tier 4 #23 — Fishing Rod. Alpha numeric id 346.
@@ -744,6 +751,7 @@ namespace VStudioCraft.Game
                 case BlockType.BucketMilk:     return "Milk Bucket";
                 case BlockType.Slimeball:      return "Slimeball";
                 case BlockType.Compass:        return "Compass";
+                case BlockType.Clock:          return "Clock";
                 case BlockType.Saddle:         return "Saddle";
                 case BlockType.FishingRod:     return "Fishing Rod";
                 case BlockType.Painting:       return "Painting";
@@ -1171,7 +1179,9 @@ namespace VStudioCraft.Game
             || t == BlockType.Boat
             // Tier 9 #54 V2 — Minecart. Item-only (cart-in-world is an
             // entity); RMB on a rail spawns it.
-            || t == BlockType.Minecart;
+            || t == BlockType.Minecart
+            // Tier 10 #51 — Clock. Pure item; rotates with TimeOfDay.
+            || t == BlockType.Clock;
 
         // "Targetable by raycast" — true for any block the player should be
         // able to LMB-break or RMB-place-against. Air and fluid families are
@@ -2676,6 +2686,10 @@ namespace VStudioCraft.Game
                 // top of this base sprite, NOT baked into the atlas
                 // tile (would require per-frame atlas mutation).
                 case BlockType.Compass:             return BlockTextures.TileCompass;
+                // Tier 10 #51 — Clock dial. Procedural sun + moon
+                // disc; the renderer rotates the whole sprite by an
+                // angle indexed by TimeOfDay.
+                case BlockType.Clock:               return BlockTextures.TileClock;
                 // Tier 4 #21 — Saddle icon. Procedural — small brown
                 // leather saddle silhouette. No verified alpha_tools.png
                 // coord; the sentinel entry in AlphaTileCoords keeps the
