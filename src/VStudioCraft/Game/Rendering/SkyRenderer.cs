@@ -23,18 +23,34 @@ namespace VStudioCraft.Game
         // LunarPhase = _lunarDay & 7.
         private const int MoonPhaseFrames = 8;
 
-        // Height of the cloud plane, matching Alpha exactly.
+        // Height of the cloud layer (bottom face). The volumetric cube
+        // mesh sits between CloudY and CloudY + CloudCubeHeight, so the
+        // visible top of the cloud reaches a few blocks above the
+        // canonical Alpha plane height.
         private const float CloudY = 108f;
-        // How far out from the camera the cloud plane extends. Should be a
-        // bit larger than the fog end so the plane fills the whole visible
-        // ring of sky; fog then fades its edges.
-        private const float CloudHalfExtent = 160f;
+        // How far out from the camera the cloud cubes extend. A bit
+        // larger than the fog end so the layer fills the whole visible
+        // ring of sky; fog fades the edges.
+        private const float CloudHalfExtent = 192f;
         // World units covered by one cloud-texture repeat. 64 blocks ≈ four
-        // chunks — keeps clouds fairly large without looking samey.
+        // chunks — keeps cloud blobs fairly large without looking samey.
         private const float CloudTileWorld = 64f;
         // Horizontal drift in blocks/sec. Alpha clouds move at ~0.05 blocks
         // per tick = 1 bl/s; we double it so test worlds show motion quickly.
         private const float CloudWindX = 2.0f;
+        // Tier 10 follow-up — Volumetric cube-cloud dimensions.
+        // Each "cloudy" cell becomes a CloudCubeWidth × CloudCubeHeight
+        // × CloudCubeWidth cuboid emitted as 6 face quads. Width = 12
+        // matches the Alpha "chunky cloud" look (clouds roughly the
+        // size of a small house); height = 4 keeps the layer thin so
+        // the player can fly through it without the world disappearing
+        // behind 16-block-thick fog.
+        private const float CloudCubeWidth  = 12f;
+        private const float CloudCubeHeight = 4f;
+        // Per-cube alpha — solid white with this opacity. Light enough
+        // that distant blocks still read through cloud cover, dense
+        // enough that the cubes themselves still read as material.
+        private const float CloudCubeAlpha  = 0.3f;
 
         // Number of stars scattered on the celestial sphere. Alpha's night
         // sky is densely peppered; 500 at 3-px size feels about right.
@@ -140,42 +156,44 @@ void main()
 }
 ";
 
+        // Tier 10 follow-up — Volumetric cube clouds. Vertex carries
+        // a per-face shade factor packed into aShade so top faces
+        // read brighter than sides / bottom (cheap directional cue
+        // without lighting). Output: linear depth for fog blending.
         private const string CloudVS = @"#version 330 core
 layout(location = 0) in vec3 aPos;
+layout(location = 1) in float aShade;
 uniform mat4 uProjection;
 uniform mat4 uView;
-uniform vec2 uUvOffset;
-uniform float uUvScale;
-out vec2 vUV;
+out float vShade;
 out float vViewDist;
 void main()
 {
     vec4 viewP = uView * vec4(aPos, 1.0);
     gl_Position = uProjection * viewP;
-    // UV follows absolute world XZ, not the moving camera-centred mesh, so
-    // clouds drift past the player rather than sticking to them.
-    vUV = aPos.xz * uUvScale + uUvOffset;
+    vShade = aShade;
     vViewDist = length(viewP.xyz);
 }
 ";
 
+        // Solid-white cube face tinted by uTint × per-face shade,
+        // alpha clamped to uAlpha (volumetric look at 0.3) and faded
+        // into the sky fog at the layer's edges.
         private const string CloudFS = @"#version 330 core
-in vec2 vUV;
+in float vShade;
 in float vViewDist;
 out vec4 FragColor;
-uniform sampler2D uClouds;
 uniform vec3 uTint;
+uniform float uAlpha;
 uniform vec3 uFogColor;
 uniform float uFogStart;
 uniform float uFogEnd;
 void main()
 {
-    vec4 c = texture(uClouds, vUV);
-    if (c.a < 0.02) discard;
-    vec3 rgb = c.rgb * uTint;
+    vec3 rgb = uTint * vShade;
     float fog = clamp((vViewDist - uFogStart) / max(uFogEnd - uFogStart, 0.0001), 0.0, 1.0);
     rgb = mix(rgb, uFogColor, fog);
-    FragColor = vec4(rgb, c.a);
+    FragColor = vec4(rgb, uAlpha);
 }
 ";
 
@@ -234,9 +252,15 @@ void main()
         // per star, drawn with GL_POINTS.
         private int _starVao;
         private int _starVbo;
-        // Cloud plane: a recentered quad around origin, translated to the
-        // camera at draw time so we never run out of coverage at the edges.
-        private OverlayMesh _cloudMesh;
+        // Tier 10 follow-up — Volumetric cube-cloud mesh. Custom
+        // VAO/VBO because the vertex format is pos.xyz + shade.x
+        // (4 floats per vertex), which OverlayMesh's hardcoded
+        // 3-float layout doesn't accommodate. Built once at Initialize
+        // by sampling cloud noise on a coarse grid; translated to the
+        // camera each frame so the layer always has coverage.
+        private int _cloudCubeVao;
+        private int _cloudCubeVbo;
+        private int _cloudCubeVertCount;
 
         // Cloud wind accumulator (world units of drift).
         private float _cloudOffsetX;
@@ -253,7 +277,7 @@ void main()
             _quad = BuildCentredQuad();
             _fullscreenQuad = BuildFullscreenQuad();
             BuildStars();
-            _cloudMesh = BuildCloudPlane();
+            BuildCloudCubes();
         }
 
         // 6 vertices spanning NDC [-1,+1]² for the horizon gradient
@@ -303,34 +327,153 @@ void main()
             return m;
         }
 
-        // Cloud plane at local y=0. It will be translated in world space so
-        // y=CloudY when drawn; centred on the camera in XZ so we always have
-        // coverage. Size = 2*CloudHalfExtent per side. 32×32 grid = 1024
-        // quads → smooth fog gradient across the plane.
-        private static OverlayMesh BuildCloudPlane()
+        // Tier 10 follow-up — Volumetric cube cloud mesh. Sample the
+        // same value-noise field SkyTextures.CreateCloudTexture uses
+        // (re-implemented here to avoid threading a sample API across
+        // module boundaries) on a coarse grid, then for each "cloudy"
+        // cell emit a 12×4×12 cuboid as 6 face quads with face-cull
+        // against neighbour cells (no internal seams between two
+        // adjacent cubes — keeps the mesh small).
+        //
+        // Each vertex carries (pos.xyz, shade) — shade is a per-face
+        // multiplier that the cloud shader applies on top of uTint so
+        // the top face reads brightest, sides medium, bottom darkest.
+        // Same trick the world mesher uses for axis-aligned faces.
+        private void BuildCloudCubes()
         {
-            const int Grid = 32;
-            float step = (CloudHalfExtent * 2f) / Grid;
-            float[] v = new float[Grid * Grid * 6 * 3];
-            int o = 0;
-            for (int iz = 0; iz < Grid; iz++)
-            for (int ix = 0; ix < Grid; ix++)
+            // Grid: cells of CloudCubeWidth, covering ±CloudHalfExtent
+            // around origin. The mesh is translated to the camera at
+            // draw time, so this is the "stamp" that follows the
+            // player; drift translates it further so the same stamp
+            // appears to scroll past.
+            int radius = (int)System.Math.Ceiling(CloudHalfExtent / CloudCubeWidth);
+            int side = radius * 2 + 1;
+            // Pre-sample which cells are cloudy. Same value-noise
+            // composition as the texture's "soft threshold" rule —
+            // n > 0.5 = cloudy. Two octaves at 16 and 32 cells per
+            // tile of the 256-block noise period.
+            var rng = new System.Random(unchecked((int)0xC10D5A11));
+            const int gridCoarse = 16;
+            const int gridFine   = 32;
+            float[,] nCoarse = ValueNoise(rng, gridCoarse);
+            float[,] nFine   = ValueNoise(rng, gridFine);
+
+            bool[,] cloudy = new bool[side, side];
+            for (int iz = 0; iz < side; iz++)
+            for (int ix = 0; ix < side; ix++)
             {
-                float x0 = -CloudHalfExtent + ix * step;
-                float x1 = x0 + step;
-                float z0 = -CloudHalfExtent + iz * step;
-                float z1 = z0 + step;
-                // Two triangles, wound so normal points up (cull-backed).
-                v[o++] = x0; v[o++] = 0; v[o++] = z0;
-                v[o++] = x1; v[o++] = 0; v[o++] = z0;
-                v[o++] = x1; v[o++] = 0; v[o++] = z1;
-                v[o++] = x0; v[o++] = 0; v[o++] = z0;
-                v[o++] = x1; v[o++] = 0; v[o++] = z1;
-                v[o++] = x0; v[o++] = 0; v[o++] = z1;
+                int cx = ix - radius;
+                int cz = iz - radius;
+                // Convert cell to a UV in [0,1] of the noise tile,
+                // wrapping by the noise period (256 blocks). Cell
+                // centre is at world (cx*W, cz*W); divide by 256.
+                float worldX = cx * CloudCubeWidth;
+                float worldZ = cz * CloudCubeWidth;
+                float u = worldX / 256f;
+                float v = worldZ / 256f;
+                u -= (float)System.Math.Floor(u);
+                v -= (float)System.Math.Floor(v);
+                float n = 0.65f * SampleTiledNoise(nCoarse, gridCoarse, u, v)
+                        + 0.35f * SampleTiledNoise(nFine,   gridFine,   u, v);
+                cloudy[ix, iz] = n > 0.5f;
             }
-            var m = new OverlayMesh { Primitive = PrimitiveType.Triangles };
-            m.Upload(v);
-            return m;
+
+            // Emit faces. Each face = 6 verts (2 tris) × 4 floats.
+            var verts = new System.Collections.Generic.List<float>(side * side * 6 * 6 * 4);
+            const float ShTop    = 1.00f;
+            const float ShSide   = 0.85f;
+            const float ShBottom = 0.65f;
+            for (int iz = 0; iz < side; iz++)
+            for (int ix = 0; ix < side; ix++)
+            {
+                if (!cloudy[ix, iz]) continue;
+                int cx = ix - radius;
+                int cz = iz - radius;
+                float x0 = cx * CloudCubeWidth;
+                float x1 = x0 + CloudCubeWidth;
+                float z0 = cz * CloudCubeWidth;
+                float z1 = z0 + CloudCubeWidth;
+                float y0 = 0f;
+                float y1 = CloudCubeHeight;
+
+                // Top (+Y) — always emitted (no cloud above).
+                EmitQuad(verts, x0, y1, z0,  x1, y1, z0,  x1, y1, z1,  x0, y1, z1, ShTop);
+                // Bottom (-Y) — always emitted, wound the other way.
+                EmitQuad(verts, x0, y0, z1,  x1, y0, z1,  x1, y0, z0,  x0, y0, z0, ShBottom);
+                // -X face — emit if neighbour to the -X is empty.
+                if (ix == 0 || !cloudy[ix - 1, iz])
+                    EmitQuad(verts, x0, y0, z1,  x0, y0, z0,  x0, y1, z0,  x0, y1, z1, ShSide);
+                // +X face
+                if (ix == side - 1 || !cloudy[ix + 1, iz])
+                    EmitQuad(verts, x1, y0, z0,  x1, y0, z1,  x1, y1, z1,  x1, y1, z0, ShSide);
+                // -Z face
+                if (iz == 0 || !cloudy[ix, iz - 1])
+                    EmitQuad(verts, x0, y0, z0,  x1, y0, z0,  x1, y1, z0,  x0, y1, z0, ShSide);
+                // +Z face
+                if (iz == side - 1 || !cloudy[ix, iz + 1])
+                    EmitQuad(verts, x1, y0, z1,  x0, y0, z1,  x0, y1, z1,  x1, y1, z1, ShSide);
+            }
+
+            float[] arr = verts.ToArray();
+            _cloudCubeVertCount = arr.Length / 4;
+            if (_cloudCubeVao == 0) _cloudCubeVao = GL.GenVertexArray();
+            if (_cloudCubeVbo == 0) _cloudCubeVbo = GL.GenBuffer();
+            GL.BindVertexArray(_cloudCubeVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _cloudCubeVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, arr.Length * sizeof(float), arr, BufferUsageHint.StaticDraw);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 4 * sizeof(float), 0);
+            GL.EnableVertexAttribArray(1);
+            GL.VertexAttribPointer(1, 1, VertexAttribPointerType.Float, false, 4 * sizeof(float), 3 * sizeof(float));
+            GL.BindVertexArray(0);
+        }
+
+        // Append two triangles for a quad given 4 corner positions in
+        // CCW order (looking from outside). Each vertex = pos.xyz + shade.
+        private static void EmitQuad(System.Collections.Generic.List<float> v,
+            float x0, float y0, float z0,
+            float x1, float y1, float z1,
+            float x2, float y2, float z2,
+            float x3, float y3, float z3,
+            float shade)
+        {
+            v.Add(x0); v.Add(y0); v.Add(z0); v.Add(shade);
+            v.Add(x1); v.Add(y1); v.Add(z1); v.Add(shade);
+            v.Add(x2); v.Add(y2); v.Add(z2); v.Add(shade);
+            v.Add(x0); v.Add(y0); v.Add(z0); v.Add(shade);
+            v.Add(x2); v.Add(y2); v.Add(z2); v.Add(shade);
+            v.Add(x3); v.Add(y3); v.Add(z3); v.Add(shade);
+        }
+
+        // Same value-noise + tiled-bilinear sampler the SkyTextures
+        // class uses; replicated here so the cloud mesh's coverage
+        // pattern matches the texture's silhouette without exposing a
+        // sampling API across modules.
+        private static float[,] ValueNoise(System.Random rng, int size)
+        {
+            var grid = new float[size + 1, size + 1];
+            for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+                grid[x, y] = (float)rng.NextDouble();
+            for (int y = 0; y <= size; y++) grid[size, y] = grid[0, y % size];
+            for (int x = 0; x <= size; x++) grid[x, size] = grid[x % size, 0];
+            return grid;
+        }
+        private static float SampleTiledNoise(float[,] grid, int size, float u, float v)
+        {
+            float x = u * size;
+            float y = v * size;
+            int x0 = (int)System.Math.Floor(x) % size; if (x0 < 0) x0 += size;
+            int y0 = (int)System.Math.Floor(y) % size; if (y0 < 0) y0 += size;
+            int x1 = (x0 + 1) % size;
+            int y1 = (y0 + 1) % size;
+            float fx = x - (float)System.Math.Floor(x);
+            float fy = y - (float)System.Math.Floor(y);
+            fx = fx * fx * (3f - 2f * fx);
+            fy = fy * fy * (3f - 2f * fy);
+            float a = grid[x0, y0] * (1f - fx) + grid[x1, y0] * fx;
+            float b = grid[x0, y1] * (1f - fx) + grid[x1, y1] * fx;
+            return a * (1f - fy) + b * fy;
         }
 
         private void BuildStars()
@@ -467,54 +610,70 @@ void main()
             GL.Disable(EnableCap.Blend);
         }
 
-        // Render the cloud plane. Call this AFTER the opaque + transparent
-        // world passes so clouds occlude everything they sit in front of
-        // without writing to the depth buffer (same rule as water).
+        // Render the volumetric cube clouds. Call this AFTER the
+        // opaque + transparent world passes so clouds occlude
+        // everything they sit in front of without writing to the
+        // depth buffer (same rule as water — the world has the right
+        // depth, clouds blend on top).
         public void RenderClouds(Matrix4 projection, Matrix4 view, Vector3 camPos,
             Vector3 skyColor, float fogStart, float fogEnd, float sunY)
         {
-            // Skip entirely when the camera is already above CloudY + a bit:
-            // the plane is one-sided (culled) and would show no back face.
-            // (We could flip culling, but Alpha clouds are functionally one-
-            // sided too — you see them from below, not above.)
-            if (camPos.Y > CloudY + 4f) return;
+            if (_cloudCubeVertCount == 0) return;
 
             GL.Enable(EnableCap.Blend);
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-            GL.DepthMask(false);   // clouds don't occlude depth; water etc. already drew
+            GL.DepthMask(false);
             GL.Enable(EnableCap.DepthTest);
-            // Leave face cull on — the cloud mesh is wound so its top-face
-            // normal points +Y and the player views from below.
+            // Cubes are double-sided in spirit — when the player flies
+            // up into the layer they need to see the inside walls of
+            // the cloud cuboids. Disable culling so both faces of each
+            // quad render; with 0.3 alpha the mild overdraw is
+            // invisible.
+            GL.Disable(EnableCap.CullFace);
 
-            // Tint clouds toward dusk/night colour based on sun altitude so
-            // they glow orange at sunset and turn grey at night.
+            // Tint clouds toward dusk/night colour based on sun altitude.
             float t = Math.Max(0f, Math.Min(1f, sunY * 2f + 0.5f));
             var dayTint = new Vector3(1f, 1f, 1f);
             var nightTint = new Vector3(0.35f, 0.38f, 0.45f);
             Vector3 tint = nightTint + (dayTint - nightTint) * t;
 
-            // Centre the cloud plane on the camera's XZ so it always covers
-            // the visible area, and raise it to CloudY.
-            var model = Matrix4.CreateTranslation((float)Math.Floor(camPos.X), CloudY, (float)Math.Floor(camPos.Z));
+            // Translate the cube mesh:
+            //   - X: camera.X + drift offset (so the layer scrolls
+            //     past with the wind while the camera stays centred
+            //     in the visible patch).
+            //   - Y: CloudY (mesh's local y0 is 0 → cube bottom).
+            //   - Z: camera.Z (no Z wind).
+            //
+            // Note: NOT snapped to floor(camera.X / Z). The earlier
+            // texture-plane path had to snap for stable UV sampling;
+            // the cube mesh samples no texture, so floating camera
+            // position is fine. Snapping caused a visible 1-block
+            // jump every time the player crossed an integer
+            // boundary — clouds appeared to stutter on every step.
+            // Drift wraps modulo the noise tile so the translation
+            // magnitude stays bounded; wrap-around is invisible
+            // because the noise pattern repeats every 256 blocks.
+            float driftX = _cloudOffsetX;
+            driftX -= (float)Math.Floor(driftX / 256f) * 256f;
+            var model = Matrix4.CreateTranslation(
+                camPos.X + driftX,
+                CloudY,
+                camPos.Z);
 
             _cloudShader.Use();
             _cloudShader.SetMatrix4("uProjection", projection);
-            _cloudShader.SetMatrix4("uView", model * view); // model merged into view so aPos is still absolute world pre-translate
-            _cloudShader.SetVector2("uUvOffset",
-                new Vector2(_cloudOffsetX / CloudTileWorld + (float)Math.Floor(camPos.X) / CloudTileWorld,
-                             (float)Math.Floor(camPos.Z) / CloudTileWorld));
-            _cloudShader.SetFloat("uUvScale", 1f / CloudTileWorld);
+            _cloudShader.SetMatrix4("uView", model * view);
             _cloudShader.SetVector3("uTint", tint);
+            _cloudShader.SetFloat("uAlpha", CloudCubeAlpha);
             _cloudShader.SetVector3("uFogColor", skyColor);
             _cloudShader.SetFloat("uFogStart", fogStart);
             _cloudShader.SetFloat("uFogEnd", fogEnd);
-            _cloudShader.SetInt("uClouds", 0);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.BindTexture(TextureTarget.Texture2D, _cloudTex);
 
-            _cloudMesh.Draw();
+            GL.BindVertexArray(_cloudCubeVao);
+            GL.DrawArrays(PrimitiveType.Triangles, 0, _cloudCubeVertCount);
+            GL.BindVertexArray(0);
 
-            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.Enable(EnableCap.CullFace);
             GL.DepthMask(true);
             GL.Disable(EnableCap.Blend);
         }
@@ -567,12 +726,15 @@ void main()
             _horizonShader?.Dispose();
             _quad?.Dispose();
             _fullscreenQuad?.Dispose();
-            _cloudMesh?.Dispose();
             if (_sunTex != 0)   { GL.DeleteTexture(_sunTex);   _sunTex = 0; }
             if (_moonTex != 0)  { GL.DeleteTexture(_moonTex);  _moonTex = 0; }
             if (_cloudTex != 0) { GL.DeleteTexture(_cloudTex); _cloudTex = 0; }
             if (_starVbo != 0)  { GL.DeleteBuffer(_starVbo);   _starVbo = 0; }
             if (_starVao != 0)  { GL.DeleteVertexArray(_starVao); _starVao = 0; }
+            // Tier 10 follow-up — Volumetric cube cloud cleanup.
+            if (_cloudCubeVbo != 0) { GL.DeleteBuffer(_cloudCubeVbo); _cloudCubeVbo = 0; }
+            if (_cloudCubeVao != 0) { GL.DeleteVertexArray(_cloudCubeVao); _cloudCubeVao = 0; }
+            _cloudCubeVertCount = 0;
         }
     }
 }
