@@ -28,16 +28,20 @@ namespace VStudioCraft.Game
 
     internal static class BiomeMap
     {
-        // Feature-scale: biome boundaries vary on ~256-block patches.
-        // 1/256 is the spatial frequency we feed Perlin so adjacent
-        // chunks (16 blocks each) read very similar values, with
-        // long-distance variation for the actual biome transitions.
-        private const float BiomeScale = 1f / 256f;
+        // Tier 8 #51 V13 — Frequencies tightened to Beta 1.7.3 canonical
+        // (WorldChunkManager173 uses 0.025 for temperature, 0.05 for
+        // rainfall — lattice cells every 40 / 20 blocks). The previous
+        // 1/256 scaling produced biomes ~hundreds of blocks across
+        // ("biome feel too big" per user feedback); these match Beta's
+        // small, often sub-chunk-sized biome patches.
+        private const float TempFreq = 0.025f;   // Beta WorldChunkManager173.e
+        private const float RainFreq = 0.05f;    // Beta WorldChunkManager173.f
 
-        // Octave count for the temperature / rainfall channels. 2
-        // octaves give a soft transition zone with a touch of noise
-        // detail at the borders so biome edges aren't perfect circles.
-        private const int BiomeOctaves = 2;
+        // Octave count — Beta uses 4 octaves for temp and rainfall.
+        // More octaves than 2 means the noise has visible small-scale
+        // detail, producing the jagged biome edges Alpha is known for
+        // rather than smooth blobs.
+        private const int BiomeOctaves = 4;
 
         // Decorrelation offsets — sampled far apart on the same Perlin
         // field so the two channels look independent without needing a
@@ -47,8 +51,8 @@ namespace VStudioCraft.Game
 
         public static Biome Classify(Noise noise, int wx, int wz)
         {
-            float temp = noise.Octaves((wx + TempOffset) * BiomeScale, (wz + TempOffset) * BiomeScale, BiomeOctaves);
-            float rain = noise.Octaves((wx + RainOffset) * BiomeScale, (wz + RainOffset) * BiomeScale, BiomeOctaves);
+            float temp = noise.Octaves((wx + TempOffset) * TempFreq, (wz + TempOffset) * TempFreq, BiomeOctaves);
+            float rain = noise.Octaves((wx + RainOffset) * RainFreq, (wz + RainOffset) * RainFreq, BiomeOctaves);
 
             // Thresholds tuned so Plains is the most common biome
             // (default-ish climate), with Snow + Desert as the

@@ -145,7 +145,7 @@ namespace VStudioCraft.Game
                             var c = new Chunk(job.X, job.Z);
                             if (_world.Dimension == Dimension.Nether)
                             {
-                                NetherTerrainGenerator.Generate(c, _world.Seed, _world.Noise);
+                                NetherTerrainGenerator.Generate(c, _world.Seed, _world.AlphaSampler);
                                 LightCalculator.RecomputeChunk(c);
                                 var nHostiles = new List<HostileMob>();
                                 World.ComputeNetherSpawnsForChunk(c, _world.Seed, nHostiles);
@@ -158,7 +158,7 @@ namespace VStudioCraft.Game
                                 continue;
                             }
 
-                            TerrainGenerator.Generate(c, _world.Noise);
+                            TerrainGenerator.Generate(c, _world.Noise, _world.AlphaSampler);
                             // Stage 2: initial light pass — skylight column
                             // descent + emitter BFS. Same chunk-private read.
                             LightCalculator.RecomputeChunk(c);

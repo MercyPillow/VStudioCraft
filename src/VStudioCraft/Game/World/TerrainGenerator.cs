@@ -28,9 +28,18 @@ namespace VStudioCraft.Game
         // leaves into this chunk. Keep in lockstep with PlaceOakTree's 5x5 slab.
         private const int TreeBorder = 2;
 
-        public static void Generate(Chunk chunk, Noise noise)
+        public static void Generate(Chunk chunk, Noise noise, AlphaTerrainNoiseSampler sampler)
         {
-            GenerateColumns(chunk, noise);
+            // Tier 8 #51 V12 — Replaced the 2D-heightmap GenerateColumns
+            // pass with a Beta 1.7.3-canonical 3D density field. Voids
+            // below sea level fill with water during the density walk
+            // (so GenerateWater no longer needs to run separately for
+            // the bulk ocean — it stays only for cleanup of any
+            // cell-level anomalies). Surface block selection is a
+            // separate top-down scan that converts density-driven stone
+            // tops to biome-appropriate Grass/Sand/etc.
+            GenerateColumnsByDensity(chunk, sampler);
+            ApplyBiomeSurface(chunk, noise, sampler);
             GenerateBedrock(chunk, noise);
             // Caves run BEFORE the water and ore passes. Before water so caves
             // that nick the sea floor can be left as dry air without the water
@@ -83,64 +92,145 @@ namespace VStudioCraft.Game
 
         // ---------- Pass 1: heightmap columns (stone / dirt / grass / sand). ----------
 
-        private static void GenerateColumns(Chunk chunk, Noise noise)
+        // Tier 8 #51 V12 — Density-driven column generation. Replaces
+        // the 2D heightmap pass with a per-cell density evaluation
+        // sourced from the shared AlphaTerrainNoiseSampler. Voids below
+        // sea level fill with Water during the same walk so the bulk
+        // ocean is in place by the time the surface-block pass runs.
+        // No biome dispatch here — every solid cell is Stone for now;
+        // ApplyBiomeSurface (the next pass) replaces the topmost band
+        // per column with biome-appropriate Grass/Dirt/Sand/etc.
+        //
+        // Beta-canonical: density > 0 → solid (Stone); density ≤ 0 AND
+        // y < SeaLevel → Water; else Air. The 5×5×17 grid sample +
+        // trilinear interp used by the sampler produces overhangs,
+        // floating islands, and cliffs that are impossible to express
+        // with a one-Y-per-column heightmap.
+        private static void GenerateColumnsByDensity(Chunk chunk, AlphaTerrainNoiseSampler sampler)
         {
+            var density = new double[Chunk.SizeX * Chunk.SizeZ * Chunk.SizeY];
+            sampler.GenerateChunkDensity(density, chunk.ChunkX, chunk.ChunkZ,
+                AlphaTerrainNoiseSampler.Mode.Overworld);
+
+            for (int x = 0; x < Chunk.SizeX; x++)
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                int densityBase = (x * Chunk.SizeZ + z) * Chunk.SizeY;
+                for (int y = 0; y < Chunk.SizeY; y++)
+                {
+                    double d = density[densityBase + y];
+                    if (d > 0.0)
+                    {
+                        chunk.Set(x, y, z, BlockType.Stone);
+                    }
+                    else if (y < SeaLevel)
+                    {
+                        chunk.Set(x, y, z, BlockType.Water);
+                    }
+                    // else: air (chunk default)
+                }
+            }
+        }
+
+        // Tier 8 #51 V12 — Per-column biome surface pass. Walks each
+        // (x, z) column top-down looking for the first stone cell that
+        // has air-or-water above it ("the top of the terrain"); replaces
+        // it and the cells below it with biome-appropriate surface and
+        // subsurface blocks. Cover depth is driven by the 4-octave
+        // height noise (Beta rule: heightNoise/3 + 3 + rng*0.25 →
+        // ~3..7 cells of dirt below the grass top).
+        //
+        // Underwater columns (top stone is below sea level) get Dirt or
+        // Gravel as the top instead of Grass/Sand, driven by the
+        // sandGravelNoise.
+        private static void ApplyBiomeSurface(Chunk chunk, Noise noise, AlphaTerrainNoiseSampler sampler)
+        {
+            var sandNoise = new double[Chunk.SizeX * Chunk.SizeZ];
+            var gravelNoise = new double[Chunk.SizeX * Chunk.SizeZ];
+            var heightNoise = new double[Chunk.SizeX * Chunk.SizeZ];
+            sampler.SampleSurfaceNoise(sandNoise, gravelNoise, chunk.ChunkX, chunk.ChunkZ);
+            sampler.SampleHeightNoise(heightNoise, chunk.ChunkX, chunk.ChunkZ);
+            var rng = ChunkRng(noise.Seed, chunk.ChunkX, chunk.ChunkZ, 0xB10E);
+
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int z = 0; z < Chunk.SizeZ; z++)
             {
                 int wx = chunk.ChunkX * Chunk.SizeX + x;
                 int wz = chunk.ChunkZ * Chunk.SizeZ + z;
-                int height = SurfaceHeight(noise, wx, wz);
-                bool sandy = height <= BeachHeight;
-                // Tier 6 #37 — Biome-aware surface block. Coastal /
-                // sub-sea-level columns always read as beach sand
-                // (sandy=true) regardless of biome — the beach
-                // override wins so a desert next to ocean still has
-                // a clean shoreline. Inland (height > BeachHeight)
-                // the biome dispatch picks the surface variant:
-                //   Plains / Forest → Grass on Dirt
-                //   Desert          → Sand on Sand (4 deep)
-                //   Snow            → SnowBlock cap on Dirt (visual
-                //                     reskin of grass; saplings won't
-                //                     grow on snow but the player can
-                //                     dig through to the dirt below)
-                Biome biome = BiomeMap.Classify(noise, wx, wz);
-                for (int y = 0; y < height; y++)
+
+                // Find the topmost stone cell.
+                int top = -1;
+                for (int y = Chunk.SizeY - 1; y > 0; y--)
                 {
-                    BlockType t;
-                    if (sandy)
-                    {
-                        if (y >= height - 4) t = BlockType.Sand;
-                        else t = BlockType.Stone;
-                    }
-                    else if (biome == Biome.Desert)
-                    {
-                        if (y >= height - 4) t = BlockType.Sand;
-                        else t = BlockType.Stone;
-                    }
-                    else if (biome == Biome.Snow)
-                    {
-                        // Phase 4 — Snow biome surface keeps grass
-                        // underneath; the snow itself is a 1/8 LAYER
-                        // placed at height (one above the grass top)
-                        // by the post-column pass below. The grass
-                        // cell itself is left intact so digging
-                        // through the snow exposes a normal grass
-                        // surface, and so the chunk mesher's snowy-
-                        // grass-side dispatch (Grass + SnowBlock
-                        // above → TileSnowyGrassSide) reads correctly.
-                        if (y == height - 1)      t = BlockType.Grass;
-                        else if (y >= height - 4) t = BlockType.Dirt;
-                        else                      t = BlockType.Stone;
-                    }
-                    else
-                    {
-                        // Plains / Forest default — grass over dirt.
-                        if (y == height - 1)      t = BlockType.Grass;
-                        else if (y >= height - 4) t = BlockType.Dirt;
-                        else                      t = BlockType.Stone;
-                    }
-                    chunk.Set(x, y, z, t);
+                    var here  = (BlockType)chunk.RawBlocks[Chunk.Index(x, y, z)];
+                    if (here != BlockType.Stone) continue;
+                    var above = (BlockType)chunk.RawBlocks[Chunk.Index(x, y + 1, z)];
+                    if (above == BlockType.Stone) continue;
+                    top = y;
+                    break;
+                }
+                if (top < 0) continue; // all-air column (very rare)
+
+                int idx = x * Chunk.SizeZ + z;
+                // Cover depth — Beta canonical formula. Result ~3..7
+                // cells. heightNoise output is roughly [-1, 1] from
+                // Octaves, so /3 + 3 lands in [2.67, 3.33] then add
+                // rng*0.25 for jitter. Floor to int.
+                int cover = (int)(heightNoise[idx] / 3.0 + 3.0 + rng.NextDouble() * 0.25);
+                if (cover < 1) cover = 1;
+                if (cover > 7) cover = 7;
+
+                bool underwater = top < SeaLevel;
+                bool sand   = sandNoise[idx]   + rng.NextDouble() * 0.2 > 0.0;
+                bool gravel = gravelNoise[idx] + rng.NextDouble() * 0.2 > 0.0;
+                Biome biome = BiomeMap.Classify(noise, wx, wz);
+
+                BlockType topBlock, fillBlock;
+                if (underwater)
+                {
+                    // Lake / sea floor. Gravel and sand patches via
+                    // surface noise; otherwise dirt.
+                    if (gravel) { topBlock = BlockType.Gravel; fillBlock = BlockType.Stone; }
+                    else if (sand)   { topBlock = BlockType.Sand;   fillBlock = BlockType.Sand; }
+                    else             { topBlock = BlockType.Dirt;   fillBlock = BlockType.Dirt; }
+                }
+                else if (top <= SeaLevel + 1)
+                {
+                    // Beach band — within 1 cell of the water surface.
+                    // Always sand regardless of biome (matches Alpha
+                    // shoreline behaviour).
+                    topBlock = BlockType.Sand;
+                    fillBlock = BlockType.Sand;
+                }
+                else if (biome == Biome.Desert)
+                {
+                    topBlock = BlockType.Sand;
+                    fillBlock = BlockType.Sand;
+                }
+                else if (biome == Biome.Snow)
+                {
+                    // Snow biome: keep grass underneath; the visible
+                    // 1/8 snow layer lands on top via ScatterSnowLayer.
+                    // Mesher's snowy-grass-side dispatch (Grass +
+                    // SnowBlock above → TileSnowyGrassSide) needs the
+                    // grass cell to read correctly.
+                    topBlock = BlockType.Grass;
+                    fillBlock = BlockType.Dirt;
+                }
+                else
+                {
+                    // Plains / Forest default.
+                    topBlock = BlockType.Grass;
+                    fillBlock = BlockType.Dirt;
+                }
+
+                chunk.Set(x, top, z, topBlock);
+                int low = Math.Max(top - cover, 1);
+                for (int y = top - 1; y >= low; y--)
+                {
+                    var t = (BlockType)chunk.RawBlocks[Chunk.Index(x, y, z)];
+                    if (t == BlockType.Stone)
+                        chunk.Set(x, y, z, fillBlock);
                 }
             }
         }
@@ -174,6 +264,49 @@ namespace VStudioCraft.Game
             if (height < 1) height = 1;
             if (height >= Chunk.SizeY) height = Chunk.SizeY - 1;
             return height;
+        }
+
+        // Tier 8 #51 V13 — Find the actual surface Y in this chunk by
+        // scanning down from the build-limit for the topmost solid
+        // cell with air (or water) above. Replaces the old 2D-noise
+        // SurfaceHeight approximation for passes that run AFTER the
+        // density-based GenerateColumnsByDensity — under the new
+        // generator the noise approximation can be wildly different
+        // from the actual chunk surface, causing trees to float in
+        // air, snow to bury inside stone, and flora to drift.
+        //
+        // Returns -1 if (wx, wz) is outside this chunk's bounds (the
+        // caller's responsibility — typically skip placement). Cross-
+        // chunk canopy bleed is not supported with this helper; each
+        // chunk plants only its own trees, so canopies right at chunk
+        // borders are clipped at the seam (acceptable trade vs the
+        // floating-tree bug).
+        //
+        // Returns -1 if the column has no solid cell at all (open air
+        // column — rare with the density gen but possible).
+        //
+        // Returned Y = (top-solid-Y + 1), matching the old
+        // SurfaceHeight contract: cell directly above the surface
+        // block where placement (trees, flora, snow) goes.
+        public static int FindChunkSurfaceY(Chunk chunk, int wx, int wz)
+        {
+            int chunkX0 = chunk.ChunkX * Chunk.SizeX;
+            int chunkZ0 = chunk.ChunkZ * Chunk.SizeZ;
+            if (wx < chunkX0 || wx >= chunkX0 + Chunk.SizeX) return -1;
+            if (wz < chunkZ0 || wz >= chunkZ0 + Chunk.SizeZ) return -1;
+            int lx = wx - chunkX0;
+            int lz = wz - chunkZ0;
+            for (int y = Chunk.SizeY - 2; y > 0; y--)
+            {
+                var t = (BlockType)chunk.RawBlocks[Chunk.Index(lx, y, lz)];
+                if (t == BlockType.Air) continue;
+                if (t == BlockType.Water) continue;
+                if (t == BlockType.Lava) continue;
+                // Found first solid cell from the top. Surface
+                // placement Y is one above.
+                return y + 1;
+            }
+            return -1;
         }
 
         // ---------- Pass 2: bedrock floor (y=0 always, then ragged up to y=3). ----------
@@ -717,9 +850,24 @@ namespace VStudioCraft.Game
                 }
                 if (colRng.Next(density) != 0) continue;
 
-                int surface = SurfaceHeight(noise, wx, wz);
+                // Tier 8 #51 V13 — Use the actual chunk surface, not
+                // the noise approximation. SurfaceHeight is wrong
+                // under the density generator. FindChunkSurfaceY
+                // returns -1 for out-of-chunk columns (canopy-bleed
+                // border) which we skip — each chunk plants its own
+                // trees, no cross-chunk bleed.
+                int surface = FindChunkSurfaceY(chunk, wx, wz);
+                if (surface < 0) continue;
                 if (surface <= BeachHeight) continue;      // no trees on beach
-                int groundY = surface - 1;                  // top grass block
+                int groundY = surface - 1;                  // top surface block
+
+                // Verify the surface is actually grass — trees won't
+                // grow on sand, snow blocks, or stone (a cliff face
+                // exposed by density gen).
+                int groundIdx = Chunk.Index(wx - chunk.ChunkX * Chunk.SizeX,
+                                            groundY,
+                                            wz - chunk.ChunkZ * Chunk.SizeZ);
+                if (chunk.RawBlocks[groundIdx] != (byte)BlockType.Grass) continue;
 
                 int trunkHeight = 4 + colRng.Next(3);       // 4, 5, or 6
                 int topY = groundY + trunkHeight;
@@ -817,7 +965,10 @@ namespace VStudioCraft.Game
                 // grass field reads as "decorated" without becoming a meadow.
                 if (rng.Next(16) != 0) continue;
 
-                int surface = SurfaceHeight(noise, wx, wz);
+                // V13 — chunk-aware surface scan, replaces broken
+                // SurfaceHeight noise approximation.
+                int surface = FindChunkSurfaceY(chunk, wx, wz);
+                if (surface < 0) continue;
                 if (surface <= BeachHeight) continue;          // skip beach/ocean
                 int placeY = surface;                            // one above ground
                 if (placeY >= Chunk.SizeY) continue;
@@ -896,7 +1047,14 @@ namespace VStudioCraft.Game
                 int wx = chunk.ChunkX * Chunk.SizeX + x;
                 int wz = chunk.ChunkZ * Chunk.SizeZ + z;
                 if (BiomeMap.Classify(noise, wx, wz) != Biome.Snow) continue;
-                int surface = SurfaceHeight(noise, wx, wz);
+                // V13 — chunk-aware surface scan, replaces broken
+                // SurfaceHeight noise approximation. Critical for
+                // snow visibility — when SurfaceHeight returned a
+                // wrong Y, snow either floated in the air above the
+                // actual surface or got buried inside stone, making
+                // snow biomes look identical to plains.
+                int surface = FindChunkSurfaceY(chunk, wx, wz);
+                if (surface < 0) continue;
                 if (surface <= BeachHeight) continue;
                 int placeY = surface;                   // one above ground
                 if (placeY >= Chunk.SizeY) continue;
@@ -945,7 +1103,10 @@ namespace VStudioCraft.Game
         private static void PlaceDesertFlora(
             Chunk chunk, int lx, int lz, int wx, int wz, Noise noise, Random rng)
         {
-            int surface = SurfaceHeight(noise, wx, wz);
+            // V13 — chunk-aware surface scan, replaces broken
+            // SurfaceHeight noise approximation.
+            int surface = FindChunkSurfaceY(chunk, wx, wz);
+            if (surface < 0) return;
             if (surface <= BeachHeight) return;                    // beach skip (sand at sea level — leave bare)
             int placeY = surface;
             if (placeY >= Chunk.SizeY) return;

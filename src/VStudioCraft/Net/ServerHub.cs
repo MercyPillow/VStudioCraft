@@ -142,7 +142,7 @@ namespace VStudioCraft.Net
                 int cz = spawnCz + dz;
                 if (_world.HasChunk(cx, cz)) continue;
                 var chunk = new Chunk(cx, cz);
-                TerrainGenerator.Generate(chunk, _world.Noise);
+                TerrainGenerator.Generate(chunk, _world.Noise, _world.AlphaSampler);
                 LightCalculator.RecomputeChunk(chunk);
                 _world.InstallGeneratedChunk(chunk);
                 generated++;
@@ -3025,7 +3025,7 @@ namespace VStudioCraft.Net
                 try
                 {
                     chunk = new Chunk(cx, cz);
-                    TerrainGenerator.Generate(chunk, _world.Noise);
+                    TerrainGenerator.Generate(chunk, _world.Noise, _world.AlphaSampler);
                     LightCalculator.RecomputeChunk(chunk);
                     _world.InstallGeneratedChunk(chunk);
                 }

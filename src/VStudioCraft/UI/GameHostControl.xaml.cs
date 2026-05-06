@@ -20,6 +20,15 @@ namespace VStudioCraft.UI
         private GLControl _gl;
         private GameRenderer _renderer;
         private readonly InputState _input = new InputState();
+
+        // Tier 10 follow-up — Creative-mode flight toggle. A second
+        // press of the Jump key within FlyToggleWindowMs of the first
+        // (and ONLY in creative mode, with the player not mounted in
+        // a vehicle) toggles Player.IsFlying. Stored as Environment.TickCount
+        // (ms since OS boot) — wraps every ~50 days but the diff
+        // arithmetic is unsigned-safe within any single play session.
+        private int _lastJumpTapTickMs = -10000;
+        private const int FlyToggleWindowMs = 300;
         private readonly Stopwatch _clock = new Stopwatch();
 
         // Render thread owns the GL context end-to-end so frame rate is decoupled
@@ -1167,7 +1176,44 @@ namespace VStudioCraft.UI
 
         private void GlOnKeyDown(object sender, KeyEventArgs e)
         {
+            // Edge-detect a fresh Jump press BEFORE _input.KeyDown
+            // adds it to the down-set. WinForms KeyDown fires
+            // repeatedly on key auto-repeat, but the input set already
+            // contains the key from the first press, so checking
+            // IsDown here distinguishes the first press from repeats.
+            bool jumpWasAlreadyDown = e.KeyCode == VStudioCraft.Game.KeyBindings.Jump
+                                      && _input.IsDown(VStudioCraft.Game.KeyBindings.Jump);
             _input.KeyDown(e.KeyCode);
+
+            // Tier 10 follow-up — Double-tap Jump in creative mode
+            // toggles flying. Two fresh Jump presses within
+            // FlyToggleWindowMs flip Player.IsFlying; toggling resets
+            // Velocity.Y so engaging mid-fall doesn't punch the
+            // player up at gravity-accumulated speed, and disengaging
+            // mid-air drops them cleanly into the gravity branch on
+            // the next frame.
+            if (_renderer != null
+                && e.KeyCode == VStudioCraft.Game.KeyBindings.Jump
+                && !jumpWasAlreadyDown
+                && _renderer.GameMode == VStudioCraft.Game.GameMode.Creative
+                && _renderer.Player != null
+                && _renderer.Player.MountedBoat == null
+                && _renderer.Player.MountedMinecart == null
+                && _renderer.Player.Riding == null)
+            {
+                int now = Environment.TickCount;
+                int dt  = now - _lastJumpTapTickMs;
+                if (dt > 0 && dt < FlyToggleWindowMs)
+                {
+                    _renderer.Player.IsFlying = !_renderer.Player.IsFlying;
+                    _renderer.Player.Velocity.Y = 0f;
+                    _lastJumpTapTickMs = -10000; // require two NEW taps for the next toggle
+                }
+                else
+                {
+                    _lastJumpTapTickMs = now;
+                }
+            }
 
             // Tier 9 #54 V8 — Sneak-to-dismount. KeyDown fires once
             // per Shift press (vs IsDown which is true for the entire
@@ -1444,6 +1490,15 @@ namespace VStudioCraft.UI
                         _renderer.GameMode = _renderer.GameMode == GameMode.Creative
                             ? GameMode.Survival
                             : GameMode.Creative;
+                        // Tier 10 follow-up — Leaving creative cancels
+                        // any active flight so the player drops into
+                        // normal gravity instead of hovering in
+                        // survival.
+                        if (_renderer.Player != null
+                            && _renderer.GameMode != GameMode.Creative)
+                        {
+                            _renderer.Player.IsFlying = false;
+                        }
                         Dispatcher.BeginInvoke(new Action(UpdateStatus));
                     }
                     break;

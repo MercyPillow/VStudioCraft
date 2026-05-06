@@ -3877,9 +3877,9 @@ void main()
             // nothing's found (column is open-cavern down to the lava
             // sea), groundY snaps to the lava-sea surface so the
             // portal stands just above the lava.
-            int groundY = NetherTerrainGenerator.LavaSurfaceY;
-            for (int sy = NetherTerrainGenerator.CeilingBaseY - 1;
-                     sy > NetherTerrainGenerator.LavaSurfaceY; sy--)
+            int groundY = NetherTerrainGenerator.LavaSeaLevel;
+            for (int sy = NetherTerrainGenerator.CeilingFadeStart - 1;
+                     sy > NetherTerrainGenerator.LavaSeaLevel; sy--)
             {
                 if (_world.GetBlock(0, sy, 0) != BlockType.Netherrack) continue;
                 if (_world.GetBlock(0, sy + 1, 0) != BlockType.Air) continue;
@@ -11970,17 +11970,18 @@ void main()
             // fogEnd so the chunk-streaming boundary is fully hidden.
             float fogMaxAlpha = 1.0f;
 
-            // Tier 8 #51 V4 — Nether fog override. Tighter range
-            // (visibility ~2 chunks) + dim red-orange tint match
-            // the canonical Alpha Nether atmosphere. Sits ahead of
-            // the underwater override so a Nether-water cell still
-            // gets the underwater fog (impossible currently — water
-            // doesn't generate in the nether — but defensive).
+            // Tier 8 #51 V4 — Nether fog override. Visibility extended
+            // from the previous "tight 2 chunks" range (fogStart=6,
+            // fogEnd=36) to ~4 chunks (fogStart=12, fogEnd=72) so the
+            // player can actually see the cavern's pillars, lava
+            // lakes, and ceiling structure rather than groping through
+            // a thick haze. Same dim red-orange tint preserves the
+            // hellish atmosphere — just less claustrophobic.
             if (_world != null && _world.Dimension == Dimension.Nether)
             {
                 fogColor = new Vector3(0.30f, 0.06f, 0.02f);
-                fogStart = 6f;
-                fogEnd   = 36f;
+                fogStart = 12f;
+                fogEnd   = 72f;
                 fogMaxAlpha = 0.95f;
             }
 

@@ -180,6 +180,17 @@ namespace VStudioCraft.Game
         // the cross-thread write tear-free — single bool assignment.
         public bool IsSneaking;
 
+        // Tier 10 follow-up — Creative-mode flight. Toggled by a
+        // double-tap of Space in creative; toggled off automatically
+        // when leaving creative or on respawn. While set, Update
+        // takes a separate branch: gravity is suppressed, Space goes
+        // straight up at FlyVerticalSpeed, Sneak goes straight down,
+        // horizontal motion gets a multiplier so flying actually
+        // covers ground faster than walking.
+        public bool IsFlying;
+        public const float FlyVerticalSpeed   = 14f;   // m/s straight up/down
+        public const float FlyHorizontalScale = 2.5f;  // multiplier on host-supplied wish-velocity
+
         // Highest Y reached while airborne — the "peak" from which fall distance
         // is measured. Reset to current Y while on the ground so small hops
         // don't accumulate.
@@ -291,6 +302,12 @@ namespace VStudioCraft.Game
             // the canonical "hop to outpace soul sand" trick.
             if (OnGround && IsStandingOnSoulSand(world))
                 horizScale *= SoulSandMoveScale;
+            // Tier 10 follow-up — Creative flight horizontal boost.
+            // Skips the soul-sand slowdown gate (you're not touching
+            // the ground while flying) and stacks on top of any other
+            // multiplier so flying through water still feels faster
+            // than walking on land.
+            if (IsFlying && !inWater) horizScale *= FlyHorizontalScale;
             Velocity.X = wishHorizVel.X * horizScale;
             Velocity.Z = wishHorizVel.Z * horizScale;
 
@@ -321,6 +338,18 @@ namespace VStudioCraft.Game
                 if (wantJump)         Velocity.Y =  LadderClimbSpeed;
                 else if (IsSneaking)  Velocity.Y = -LadderClimbSpeed;
                 else                  Velocity.Y = -LadderSlideSpeed;
+            }
+            else if (IsFlying)
+            {
+                // Tier 10 follow-up — Creative flight. Direct velocity
+                // assignment (no gravity, no air drag) so the player
+                // hovers when neither key is pressed. Space goes up,
+                // Sneak goes down; landing on the ground does NOT
+                // toggle flying off — the player keeps hovering until
+                // they double-tap Space again or leave creative.
+                if (wantJump)        Velocity.Y =  FlyVerticalSpeed;
+                else if (IsSneaking) Velocity.Y = -FlyVerticalSpeed;
+                else                 Velocity.Y =  0f;
             }
             else
             {

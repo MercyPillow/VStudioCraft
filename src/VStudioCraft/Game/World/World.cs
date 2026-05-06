@@ -131,9 +131,16 @@ namespace VStudioCraft.Game
         public List<Painting> Paintings => _paintings;
 
         private readonly Noise _noise;
+        // Tier 8 #51 V12 — Alpha-canonical (Beta 1.7.3) terrain density
+        // sampler. Used by both TerrainGenerator (Overworld) and
+        // NetherTerrainGenerator. Per-world singleton so the 8 internal
+        // Noise instances are constructed once; chunk-gen workers share
+        // the sampler concurrently (immutable after construction).
+        private readonly AlphaTerrainNoiseSampler _alphaSampler;
 
         public int Seed { get; }
         public Noise Noise => _noise;
+        public AlphaTerrainNoiseSampler AlphaSampler => _alphaSampler;
 
         // Tier 10 #51 — Explored-map bitmap. The Map item reveals
         // a fixed-size square centred on the world origin (0, 0):
@@ -305,6 +312,7 @@ namespace VStudioCraft.Game
         {
             Seed = seed;
             _noise = new Noise(seed);
+            _alphaSampler = new AlphaTerrainNoiseSampler(seed);
         }
 
         // Construct a World with no chunks. Used by the multiplayer client
@@ -351,7 +359,7 @@ namespace VStudioCraft.Game
                 int dz = (i / side) - InitialRadiusChunks;
                 int dx = (i % side) - InitialRadiusChunks;
                 var c = new Chunk(dx, dz);
-                NetherTerrainGenerator.Generate(c, seed, w._noise);
+                NetherTerrainGenerator.Generate(c, seed, w._alphaSampler);
                 LightCalculator.RecomputeChunk(c);
                 var bucket = new List<HostileMob>();
                 ComputeNetherSpawnsForChunk(c, seed, bucket);
@@ -420,7 +428,7 @@ namespace VStudioCraft.Game
 
                 // Pick a hover altitude inside the open cavern band.
                 int bandLo = NetherTerrainGenerator.NetherrackTop + 12;
-                int bandHi = NetherTerrainGenerator.CeilingBaseY - 8;
+                int bandHi = NetherTerrainGenerator.CeilingFadeStart - 4;
                 if (bandHi <= bandLo) continue;
                 int hoverY = bandLo + (int)((uint)(hash >> 8) % (uint)(bandHi - bandLo));
 
@@ -461,7 +469,7 @@ namespace VStudioCraft.Game
                 if ((uint)hash % 1500u != 0) continue;
 
                 int bandLo = NetherTerrainGenerator.NetherrackTop + 6;
-                int bandHi = NetherTerrainGenerator.CeilingBaseY - 4;
+                int bandHi = NetherTerrainGenerator.CeilingFadeStart - 2;
                 if (bandHi <= bandLo) continue;
                 int hoverY = bandLo + (int)((uint)(hash >> 8) % (uint)(bandHi - bandLo));
 
@@ -498,7 +506,7 @@ namespace VStudioCraft.Game
         public Chunk GenerateNetherChunk(int chunkX, int chunkZ)
         {
             var c = new Chunk(chunkX, chunkZ);
-            NetherTerrainGenerator.Generate(c, Seed, _noise);
+            NetherTerrainGenerator.Generate(c, Seed, _alphaSampler);
             LightCalculator.RecomputeChunk(c);
             _chunks[(chunkX, chunkZ)] = c;
             _dirty.Add((chunkX, chunkZ));
@@ -553,7 +561,7 @@ namespace VStudioCraft.Game
                 int dz = (i / side) - InitialRadiusChunks;
                 int dx = (i % side) - InitialRadiusChunks;
                 var c = new Chunk(dx, dz);
-                TerrainGenerator.Generate(c, w._noise);
+                TerrainGenerator.Generate(c, w._noise, w._alphaSampler);
                 // Tier 6 #32 — Dungeons run after terrain (so caves
                 // exist and we can be selective about which chunks
                 // get them) but before LightCalculator (so the
@@ -2039,7 +2047,7 @@ namespace VStudioCraft.Game
             else
             {
                 c = new Chunk(cx, cz);
-                TerrainGenerator.Generate(c, _noise);
+                TerrainGenerator.Generate(c, _noise, _alphaSampler);
                 // Tier 6 #32 — Dungeon gen between terrain + light.
                 // Both this synchronous path and the async streaming
                 // path now mutate `_chestEntities` (a ConcurrentDictionary
