@@ -45,6 +45,22 @@ namespace VStudioCraft.Editor
                 _control?.OpenTitleScreen();
                 _control?.ReleaseMouseLookExternal();
             };
+            // QuitRequested fires when the user clicks Quit on the
+            // title screen. Standalone wires this to Window.Close()
+            // (terminates the .exe). Inside the VS shell we DO NOT
+            // want to close the owning window — that's the VS main
+            // window, which would shut Visual Studio itself. Instead
+            // close just this editor frame (the document tab), which
+            // also disposes the pane and shuts the embedded game
+            // host down via Dispose. FRAMECLOSE_SaveIfDirty triggers
+            // a save prompt on unsaved changes, matching the rest of
+            // VS's "close-tab" semantics.
+            _control.QuitRequested += () =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var frame = GetService(typeof(SVsWindowFrame)) as IVsWindowFrame;
+                frame?.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_SaveIfDirty);
+            };
             _control.OpenTitleScreen();
 
             Content = _control;

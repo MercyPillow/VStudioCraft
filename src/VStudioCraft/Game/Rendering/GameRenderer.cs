@@ -3811,12 +3811,16 @@ void main()
                 else
                 {
                     // First-time entry: build a starter portal +
-                    // landing platform at (0, NetherrackTop+1, 0)
-                    // and drop the player onto it. Subsequent
-                    // teleports return to wherever the player left.
-                    BuildNetherStarterPortal();
+                    // landing platform on the netherrack ground near
+                    // (0, ?, 0) and drop the player onto it. The
+                    // portal builder scans down from the cavern roof
+                    // to find the column's topmost solid cell so the
+                    // portal sits ON the ground rather than embedded
+                    // inside a mountain. Subsequent teleports return
+                    // to wherever the player left.
+                    int starterBaseY = BuildNetherStarterPortal();
                     Player.Position = new OpenTK.Vector3(
-                        1.5f, NetherTerrainGenerator.NetherrackTop + 1, 1.5f);
+                        1.5f, starterBaseY, 1.5f);
                     Player.Velocity = OpenTK.Vector3.Zero;
                     _netherPlayerPos = Player.Position;
                     _netherYaw = Camera.Yaw;
@@ -3841,13 +3845,42 @@ void main()
 
         // Tier 8 #51 V4 — Build a starter portal in the freshly-
         // generated Nether so a first-time visitor lands next to a
-        // working return portal. Frame is at (0, NetherrackTop+1..+5,
-        // 0..-1) — small 4×5 obsidian rectangle on the X-axis with
-        // its lit interior already filled in. Walking into it
-        // round-trips back to the overworld.
-        private void BuildNetherStarterPortal()
+        // working return portal. Frame is a small 4×5 obsidian
+        // rectangle on the X-axis with its lit interior already
+        // filled in. Walking into it round-trips back to the overworld.
+        //
+        // Tier 8 #51 V11 — Portal Y is no longer a fixed constant
+        // (NetherrackTop+1=16) — with the new mountain-mass nether
+        // generator that altitude can land halfway up a mountain or
+        // partly buried in netherrack. Instead we scan the portal's
+        // centre column from the ceiling band downward to find the
+        // topmost netherrack cell with air above it ("ground level"),
+        // then sit the portal sill on that cell. Falls back to the
+        // lava-sea surface when the column has no mountain (the
+        // landing-pad pass below stamps a netherrack pad under the
+        // portal so it doesn't float over open lava).
+        //
+        // Returns the portal's interior-bottom Y, which the caller
+        // uses for Player.Position so the player materialises on
+        // the landing pad next to the portal at the right altitude.
+        private int BuildNetherStarterPortal()
         {
-            int baseY = NetherTerrainGenerator.NetherrackTop + 1;
+            // Scan the portal's centre column (x=0, z=0). Search top-
+            // down from just below the ceiling band down to the lava
+            // surface. First netherrack-with-air-above wins. If
+            // nothing's found (column is open-cavern down to the lava
+            // sea), groundY snaps to the lava-sea surface so the
+            // portal stands just above the lava.
+            int groundY = NetherTerrainGenerator.LavaSurfaceY;
+            for (int sy = NetherTerrainGenerator.CeilingBaseY - 1;
+                     sy > NetherTerrainGenerator.LavaSurfaceY; sy--)
+            {
+                if (_world.GetBlock(0, sy, 0) != BlockType.Netherrack) continue;
+                if (_world.GetBlock(0, sy + 1, 0) != BlockType.Air) continue;
+                groundY = sy;
+                break;
+            }
+            int baseY = groundY + 1;
             // Frame on the X-axis (interior 2 wide along X, plane at
             // z=0). Lower-left interior corner = (0, baseY, 0).
             int x0 = 0, y0 = baseY, z0 = 0;
@@ -3897,6 +3930,43 @@ void main()
             for (int dx = -1; dx <= 2; dx++)
             for (int dy = 0; dy < 2; dy++)
                 _world.SetBlock(dx, y0 + dy, 1, BlockType.Air);
+
+            // Tier 8 #51 V11 — Clear any netherrack the mountain mass
+            // left in the portal-frame plane (z=0). When the portal
+            // sits on a mountain the surface is rarely flat — the
+            // frame would otherwise punch through the nearby slope,
+            // leaving overhanging rock visually overlapping the
+            // obsidian. Clearing the 4-wide × 5-tall plane around the
+            // frame restores the silhouette without affecting the
+            // underlying terrain (the obsidian frame is then
+            // re-stamped over the air by the loops above — but those
+            // ran first; we re-stamp now to be order-independent).
+            for (int dx = -1; dx <= 2; dx++)
+            for (int dy = -1; dy <= 3; dy++)
+            {
+                var here = _world.GetBlock(dx, y0 + dy, 0);
+                if (here == BlockType.Netherrack)
+                    _world.SetBlock(dx, y0 + dy, 0, BlockType.Air);
+            }
+            // Re-stamp the obsidian frame and portal interior so the
+            // netherrack-clear pass above didn't strip any frame
+            // cells (it tests for Netherrack, so obsidian/portal cells
+            // are skipped — but defensively re-stamp).
+            for (int dy = -1; dy <= 3; dy++)
+            {
+                _world.SetBlock(-1, y0 + dy, z0, BlockType.Obsidian);
+                _world.SetBlock( 2, y0 + dy, z0, BlockType.Obsidian);
+            }
+            for (int dx = 0; dx < 2; dx++)
+            {
+                _world.SetBlock(x0 + dx, y0 - 1, z0, BlockType.Obsidian);
+                _world.SetBlock(x0 + dx, y0 + 3, z0, BlockType.Obsidian);
+            }
+            for (int dx = 0; dx < 2; dx++)
+            for (int dy = 0; dy < 3; dy++)
+                _world.SetBlock(x0 + dx, y0 + dy, z0, BlockType.NetherPortal);
+
+            return baseY;
         }
 
         public void SaveToFile(string path)
