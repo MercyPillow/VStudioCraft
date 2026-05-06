@@ -28,26 +28,35 @@ namespace VStudioCraft.Game
 
     internal static class BiomeMap
     {
-        // Tier 8 #51 V13 — Frequencies tightened to Beta 1.7.3 canonical
-        // (WorldChunkManager173 uses 0.025 for temperature, 0.05 for
-        // rainfall — lattice cells every 40 / 20 blocks). The previous
-        // 1/256 scaling produced biomes ~hundreds of blocks across
-        // ("biome feel too big" per user feedback); these match Beta's
-        // small, often sub-chunk-sized biome patches.
-        private const float TempFreq = 0.025f;   // Beta WorldChunkManager173.e
-        private const float RainFreq = 0.05f;    // Beta WorldChunkManager173.f
+        // Frequencies — Beta canonical for rainfall (0.05 / 20-block
+        // lattice). Temperature lowered to 0.012 (~80-block lattice)
+        // so snow biomes are LARGER than plains/forest patches when
+        // they appear — matches the user request for "rarer + larger
+        // snow biomes". Same field shared with AlphaTerrainNoiseSampler
+        // so the cold-bias mountain pass aligns: a column that
+        // classifies as Snow here also gets the surface-Y upward bias
+        // there, making snow biomes reliably mountainous.
+        public const float TempFreq = 0.012f;
+        public const float RainFreq = 0.05f;
 
         // Octave count — Beta uses 4 octaves for temp and rainfall.
-        // More octaves than 2 means the noise has visible small-scale
-        // detail, producing the jagged biome edges Alpha is known for
-        // rather than smooth blobs.
-        private const int BiomeOctaves = 4;
+        public const int BiomeOctaves = 4;
 
         // Decorrelation offsets — sampled far apart on the same Perlin
         // field so the two channels look independent without needing a
-        // second seeded permutation table.
-        private const int TempOffset = 10_000;
-        private const int RainOffset = -10_000;
+        // second seeded permutation table. Public so AlphaSampler can
+        // sample the SAME temperature field for its mountain bias.
+        public const int TempOffset = 10_000;
+        public const int RainOffset = -10_000;
+
+        // Snow threshold — temperature below this value classifies as
+        // Snow biome. Lowered from -0.35 to -0.55 so snow is RARER:
+        // with σ ≈ 0.4 for 4-octave Perlin the previous threshold gave
+        // ~20% snow coverage; the new threshold gives ~8%. Combined
+        // with the lower temp frequency (bigger lattice cells), the
+        // result is large infrequent snow regions instead of small
+        // common ones.
+        public const float SnowThreshold = -0.55f;
 
         public static Biome Classify(Noise noise, int wx, int wz)
         {
@@ -58,7 +67,7 @@ namespace VStudioCraft.Game
             // (default-ish climate), with Snow + Desert as the
             // extremes and Forest as the wet-mild zone. Octaves()
             // returns approx [-1, +1].
-            if (temp < -0.35f)                    return Biome.Snow;
+            if (temp < SnowThreshold)             return Biome.Snow;
             if (temp >  0.35f && rain < -0.10f)   return Biome.Desert;
             if (rain >  0.20f)                    return Biome.Forest;
             return Biome.Plains;

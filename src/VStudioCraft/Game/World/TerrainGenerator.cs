@@ -38,7 +38,7 @@ namespace VStudioCraft.Game
             // cell-level anomalies). Surface block selection is a
             // separate top-down scan that converts density-driven stone
             // tops to biome-appropriate Grass/Sand/etc.
-            GenerateColumnsByDensity(chunk, sampler);
+            GenerateColumnsByDensity(chunk, sampler, noise);
             ApplyBiomeSurface(chunk, noise, sampler);
             GenerateBedrock(chunk, noise);
             // Caves run BEFORE the water and ore passes. Before water so caves
@@ -106,11 +106,14 @@ namespace VStudioCraft.Game
         // trilinear interp used by the sampler produces overhangs,
         // floating islands, and cliffs that are impossible to express
         // with a one-Y-per-column heightmap.
-        private static void GenerateColumnsByDensity(Chunk chunk, AlphaTerrainNoiseSampler sampler)
+        private static void GenerateColumnsByDensity(Chunk chunk, AlphaTerrainNoiseSampler sampler, Noise worldNoise)
         {
             var density = new double[Chunk.SizeX * Chunk.SizeZ * Chunk.SizeY];
+            // Pass world noise so the sampler can read the same biome
+            // temperature field BiomeMap uses — for the cold-bias
+            // mountain pass that makes snow biomes reliably tall.
             sampler.GenerateChunkDensity(density, chunk.ChunkX, chunk.ChunkZ,
-                AlphaTerrainNoiseSampler.Mode.Overworld);
+                AlphaTerrainNoiseSampler.Mode.Overworld, worldNoise);
 
             for (int x = 0; x < Chunk.SizeX; x++)
             for (int z = 0; z < Chunk.SizeZ; z++)

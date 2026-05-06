@@ -41,6 +41,17 @@ namespace VStudioCraft.Game
         // Reused for height noise (cover-depth scan in overworld surface pass).
         private readonly Noise _heightNoise; // 4 octaves
 
+        // Per-call slot for the world's main noise instance (passed
+        // into GenerateChunkDensity for biome temperature sampling
+        // inside SampleGrid). Cleared at end of each call. Not thread-
+        // safe IF the same sampler instance is reused concurrently —
+        // current call sites all single-thread the call from
+        // ChunkJobSystem worker threads, where each worker's
+        // GenerateChunkDensity call completes before any concurrent
+        // call begins. If we ever parallelise this further we should
+        // pass worldNoise through SampleGrid's signature instead.
+        [System.ThreadStatic] private static Noise _activeWorldNoise;
+
         // Frequency constants — tuned for our 2D/3D Perlin which has
         // unit-spaced lattice cells, NOT Beta's NoiseGeneratorPerlin
         // which has its own scale convention. The Beta literal scale
@@ -104,11 +115,15 @@ namespace VStudioCraft.Game
         // is indexed (x*256 + z*128 + y) so iterating y is the inner
         // loop — matches caller patterns that walk top-down.
         //
-        // Beta 1.7.3 note: the Beta source uses (i*zLen + k)*yLen + j
-        // ordering — same shape just with different axis ordering. We
-        // use x-major because the existing Chunk.RawBlocks layout is
-        // x-major.
-        public void GenerateChunkDensity(double[] density, int chunkX, int chunkZ, Mode mode)
+        // The optional `worldNoise` parameter is the world's main
+        // Noise instance (= the same one BiomeMap.Classify samples).
+        // When non-null and mode == Overworld, it's used to sample the
+        // biome temperature field at each grid (x, z) and bias the
+        // natural surface Y upward for cold regions — making snow
+        // biomes reliably mountainous (the cold side of every region
+        // ends up with taller terrain). Pass null to skip this
+        // coupling (Nether, server-side standalone gen, etc.).
+        public void GenerateChunkDensity(double[] density, int chunkX, int chunkZ, Mode mode, Noise worldNoise = null)
         {
             // Grid sample positions: 5×5 horizontal at (0,4,8,12,16),
             // 17 vertical at (0,8,16,...,128). Sample noise once at
@@ -117,7 +132,13 @@ namespace VStudioCraft.Game
             const int GridY = 17;
             const int GridZ = 5;
             var grid = new double[GridX * GridZ * GridY];
-            SampleGrid(grid, chunkX, chunkZ, mode);
+
+            // Pass the worldNoise into SampleGrid via a per-call field
+            // so the signature stays simple. Cleared at the end so the
+            // field doesn't leak into subsequent calls.
+            _activeWorldNoise = worldNoise;
+            try { SampleGrid(grid, chunkX, chunkZ, mode); }
+            finally { _activeWorldNoise = null; }
 
             // Trilinear interpolation: for each grid cell (4 wide × 8
             // tall × 4 deep), compute the 4×8×4 = 128 per-block density
@@ -266,6 +287,39 @@ namespace VStudioCraft.Game
                     // ocean basins still occur where depth swings
                     // strongly negative.
                     surfaceGY = 9.5f + depth * 4f + hills * 3f + texture * 1.5f;
+
+                    // Cold-bias: if a Noise instance is provided, sample
+                    // the same biome-temperature field that BiomeMap
+                    // uses (so terrain bias and biome classification
+                    // align). Cold regions get a strong upward bias to
+                    // surfaceGY, making snow biomes reliably MOUNTAINOUS.
+                    // The bias is gated at a slightly less strict
+                    // threshold than the snow-biome threshold itself
+                    // (-0.4 vs -0.55) so the foothills around a snow
+                    // biome are also raised — gives a gradual climb
+                    // into the snow region rather than a step.
+                    if (_activeWorldNoise != null)
+                    {
+                        float temp = _activeWorldNoise.Octaves(
+                            (wx + BiomeMap.TempOffset) * BiomeMap.TempFreq,
+                            (wz + BiomeMap.TempOffset) * BiomeMap.TempFreq,
+                            BiomeMap.BiomeOctaves);
+                        if (temp < -0.4f)
+                        {
+                            // Linear ramp from threshold (no bias) to
+                            // -1.0 (max bias = +6 grid steps = +48
+                            // world blocks). At the snow-biome
+                            // threshold (-0.55), bias is +2.5 grid
+                            // (+20 blocks); deep-cold (-0.9) gives
+                            // +5 grid (+40 blocks). Stacks on top of
+                            // the depth+hills+texture sum, so a
+                            // mountain region inside snow biome can
+                            // easily reach the world ceiling.
+                            float coldBias = (-0.4f - temp) * 10f;
+                            if (coldBias > 6f) coldBias = 6f;
+                            surfaceGY += coldBias;
+                        }
+                    }
 
                     // scaleAmp ∈ [3, 13]. Smaller = sharper surface
                     // transition (cliffs); larger = gentler hills.
