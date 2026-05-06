@@ -135,6 +135,36 @@ namespace VStudioCraft.Game
         public int Seed { get; }
         public Noise Noise => _noise;
 
+        // Tier 10 #51 — Explored-map bitmap. The Map item reveals
+        // a fixed-size square centred on the world origin (0, 0):
+        // every cell whose top surface the player has walked over
+        // is "explored" and gets painted into a per-cell colour
+        // buffer the renderer uploads as a texture.
+        //
+        // 128×128 cells covers a 128-block square — a comfortable
+        // surface area for a single map and a 16 KB RGBA buffer
+        // that's free to keep in memory. Map origin is the world
+        // spawn (centred at MapHalf so cell (MapHalf,MapHalf) maps
+        // to world (0, 0)) — every Map ItemStack reads from the
+        // same world-owned bitmap, matching the simplifications in
+        // the original feature spec.
+        public const int  MapSize     = 128;
+        public const int  MapHalf     = MapSize / 2;
+        // Bytes per cell in the colour buffer (RGBA = 4).
+        private const int MapBytesPerCell = 4;
+        // True for every cell (mx, mz) the player has walked over.
+        private readonly bool[] _mapExplored = new bool[MapSize * MapSize];
+        // RGBA per cell — alpha=0 for unexplored, 255 for explored.
+        // Updated lazily by MarkMapCellExplored when an unexplored
+        // cell is touched, then handed to the renderer via
+        // MapColorBuffer + MapTextureDirty.
+        private readonly byte[] _mapColors = new byte[MapSize * MapSize * MapBytesPerCell];
+        // Set when _mapColors mutates so the renderer knows to
+        // re-upload the texture; renderer clears after upload.
+        public bool MapTextureDirty;
+        public byte[] MapColorBuffer => _mapColors;
+        public bool[] MapExploredBuffer => _mapExplored;
+
         // Phase 3 — server-side change journal. Every successful SetBlock
         // (with `record:true` — the default) appends a record here; the
         // ServerHub drains the list at the end of each tick and emits one
@@ -1554,6 +1584,139 @@ namespace VStudioCraft.Game
                     if (lz == 0)               _dirty.Add((key.x, key.z - 1));
                     if (lz == Chunk.SizeZ - 1) _dirty.Add((key.x, key.z + 1));
                 }
+            }
+        }
+
+        // Tier 10 #51 — Map exploration tick. Marks every cell within
+        // a small radius around the player as explored and paints its
+        // colour into the per-cell colour buffer. Called from the
+        // renderer each frame while the player has a Map item in their
+        // inventory; the cost is bounded by ExploreRadius (3 cells →
+        // 49 cell touches max) and the dictionary lookup for the
+        // surface block.
+        public const int MapExploreRadius = 3;
+        public void TickMapExploration(OpenTK.Vector3 playerPos)
+        {
+            int wx = (int)Math.Floor(playerPos.X);
+            int wz = (int)Math.Floor(playerPos.Z);
+            for (int dz = -MapExploreRadius; dz <= MapExploreRadius; dz++)
+            for (int dx = -MapExploreRadius; dx <= MapExploreRadius; dx++)
+            {
+                int cx = wx + dx;
+                int cz = wz + dz;
+                MarkMapCellExplored(cx, cz);
+            }
+        }
+
+        // Mark a single world cell as explored on the map. Bounds-
+        // checks the cell against the map's centred footprint (cells
+        // outside the [-MapHalf, +MapHalf-1] range in either axis are
+        // ignored) and walks the column to find the topmost non-air
+        // surface block. Cell colour is derived from that block; the
+        // dirty flag tells the renderer to re-upload the texture.
+        public void MarkMapCellExplored(int worldX, int worldZ)
+        {
+            int mx = worldX + MapHalf;
+            int mz = worldZ + MapHalf;
+            if (mx < 0 || mx >= MapSize || mz < 0 || mz >= MapSize) return;
+            int idx = mz * MapSize + mx;
+            if (_mapExplored[idx]) return; // already painted
+            _mapExplored[idx] = true;
+            // Find the topmost solid / fluid surface block. Walk down
+            // from the top of the world; first non-air cell is the
+            // visible surface. Cap the walk at sea level - 8 so caves
+            // under deep terrain don't slow us.
+            int surfaceY = -1;
+            BlockType surfaceType = BlockType.Air;
+            int top = Chunk.SizeY - 1;
+            for (int y = top; y >= Math.Max(0, TerrainGenerator.SeaLevel - 8); y--)
+            {
+                var t = GetBlock(worldX, y, worldZ);
+                if (t == BlockType.Air) continue;
+                surfaceType = t;
+                surfaceY = y;
+                break;
+            }
+            // Pick a colour from the surface block (or from a small
+            // family-based palette for missing blocks). Fall back to
+            // grey if the block lookup found nothing — the cell is
+            // still marked explored so we don't loop on it forever.
+            var (r, g, b) = MapColorFor(surfaceType);
+            int p = idx * MapBytesPerCell;
+            _mapColors[p + 0] = r;
+            _mapColors[p + 1] = g;
+            _mapColors[p + 2] = b;
+            _mapColors[p + 3] = 255;
+            // Tiny shading nudge based on the surface height so the
+            // map reads with vague terrain relief — peaks slightly
+            // brighter, valleys slightly darker. Skip on flat-fluid
+            // surfaces (water/lava) where the height variation is
+            // mostly noise.
+            if (surfaceY >= 0 && surfaceType != BlockType.Water && surfaceType != BlockType.FlowingWater
+                && surfaceType != BlockType.Lava  && surfaceType != BlockType.FlowingLava)
+            {
+                int shade = (surfaceY - TerrainGenerator.SeaLevel);
+                if (shade > 16) shade = 16;
+                if (shade < -16) shade = -16;
+                int delta = shade / 2; // up to +/-8
+                _mapColors[p + 0] = (byte)Math.Max(0, Math.Min(255, _mapColors[p + 0] + delta));
+                _mapColors[p + 1] = (byte)Math.Max(0, Math.Min(255, _mapColors[p + 1] + delta));
+                _mapColors[p + 2] = (byte)Math.Max(0, Math.Min(255, _mapColors[p + 2] + delta));
+            }
+            MapTextureDirty = true;
+        }
+
+        // Surface-block → map colour lookup. Mirrors the canonical
+        // Alpha map palette feel — green grass, tan sand, blue water,
+        // grey stone, brown trees — without trying to reproduce every
+        // tile pixel-perfect. Anything not in the table falls back to
+        // a neutral grey tint so a freshly-added block still draws on
+        // the map (just without the canon hue) instead of leaving a
+        // hole.
+        private static (byte r, byte g, byte b) MapColorFor(BlockType t)
+        {
+            switch (t)
+            {
+                case BlockType.Grass:                  return (113, 175, 60);
+                case BlockType.Dirt:                   return (140, 100, 65);
+                case BlockType.Sand:                   return (220, 210, 135);
+                case BlockType.Stone:                  return (135, 135, 135);
+                case BlockType.Cobblestone:            return (120, 120, 120);
+                case BlockType.MossyCobblestone:       return (95,  130, 95);
+                case BlockType.Bedrock:                return (50,  50,  50);
+                case BlockType.Gravel:                 return (165, 160, 155);
+                case BlockType.Clay:                   return (165, 175, 195);
+                case BlockType.Water:
+                case BlockType.FlowingWater:           return (50,  90,  200);
+                case BlockType.Lava:
+                case BlockType.FlowingLava:            return (220, 110, 30);
+                case BlockType.WoodLog:                return (90,  65,  30);
+                case BlockType.Planks:                 return (180, 145, 90);
+                case BlockType.Leaves:                 return (75,  140, 35);
+                case BlockType.SnowBlock:              return (245, 250, 255);
+                case BlockType.Ice:                    return (175, 200, 240);
+                case BlockType.Cactus:                 return (75,  120, 50);
+                case BlockType.Pumpkin:                return (220, 130, 30);
+                case BlockType.JackOLantern:           return (235, 175, 60);
+                case BlockType.Netherrack:             return (130, 50,  45);
+                case BlockType.SoulSand:               return (90,  70,  55);
+                case BlockType.Glowstone:              return (235, 215, 100);
+                case BlockType.NetherBrick:            return (60,  30,  35);
+                case BlockType.Bricks:                 return (165, 90,  70);
+                case BlockType.Obsidian:               return (40,  30,  60);
+                case BlockType.CoalOre:                return (95,  95,  95);
+                case BlockType.IronOre:                return (160, 140, 110);
+                case BlockType.GoldOre:                return (200, 175, 70);
+                case BlockType.DiamondOre:             return (135, 220, 215);
+                case BlockType.RedstoneOre:            return (170, 70,  70);
+                case BlockType.GoldBlock:              return (235, 215, 80);
+                case BlockType.IronBlock:              return (220, 220, 230);
+                case BlockType.DiamondBlock:           return (130, 240, 230);
+                case BlockType.Wool:                   return (235, 235, 235);
+                case BlockType.Glass:                  return (200, 230, 240);
+                case BlockType.Sponge:                 return (220, 220, 130);
+                case BlockType.Bookshelf:              return (140, 100, 60);
+                default:                               return (160, 160, 160);
             }
         }
 

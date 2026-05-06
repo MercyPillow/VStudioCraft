@@ -309,7 +309,15 @@ namespace VStudioCraft.Game
         // line up at the seam between the two cells.
         public const int FirstTailDoubleChestLayer = FirstTailRailCurveLayer + TailRailCurveLayerCount; // 187
         public const int TailDoubleChestLayerCount = 2;
-        public const int LayerCount = FirstTailDoubleChestLayer + TailDoubleChestLayerCount;            // 189
+        // Tier 10 #51 — Clock dial. Procedural-only.
+        public const int FirstTailClockLayer = FirstTailDoubleChestLayer + TailDoubleChestLayerCount;   // 189
+        public const int TailClockLayerCount = 1;
+        // Tier 10 #51 — Map item icon. Procedural-only; the
+        // explored-cell overlay is a separate runtime texture, not
+        // an atlas layer.
+        public const int FirstTailMapLayer = FirstTailClockLayer + TailClockLayerCount;                 // 190
+        public const int TailMapLayerCount = 1;
+        public const int LayerCount = FirstTailMapLayer + TailMapLayerCount;                            // 191
         // Porkchop tile indices.
         public const int TileRawPorkchop    = 76;
         public const int TileCookedPorkchop = 77;
@@ -573,6 +581,8 @@ namespace VStudioCraft.Game
         public const int TileRailCurve           = 186;
         public const int TileChestFrontLeft      = 187;
         public const int TileChestFrontRight     = 188;
+        public const int TileClock               = 189;
+        public const int TileMap                 = 190;
 
         public const int TileGrassTop = 0;
         public const int TileGrassSide = 1;
@@ -766,6 +776,8 @@ namespace VStudioCraft.Game
             UploadLayer(layerPixels, TileChestFront, GenerateChestFront);
             UploadLayer(layerPixels, TileChestFrontLeft,  GenerateChestFrontLeft);
             UploadLayer(layerPixels, TileChestFrontRight, GenerateChestFrontRight);
+            UploadLayer(layerPixels, TileClock,           GenerateClockItem);
+            UploadLayer(layerPixels, TileMap,             GenerateMapItem);
 
             // Tier 4 #14 — Farming tail-block layers (FarmlandTop +
             // 8 wheat growth stages). Always procedural in the no-PNG
@@ -2666,6 +2678,83 @@ namespace VStudioCraft.Game
             SetPixel(pixels, 8, 4, nMark.r, nMark.g, nMark.b);
         }
 
+        // Tier 10 #51 — Clock dial face. Brass-tinted bezel ring
+        // (distinguishes it from the compass's grey at a glance),
+        // cream upper half representing daylight sky with a 2×2
+        // gold sun pip, deep-blue lower half representing night sky
+        // with a 2×2 pale moon pip. The renderer rotates the whole
+        // sprite by an angle indexed off TimeOfDay at draw time —
+        // sun-up at noon, moon-up at midnight, intermediate quarter
+        // turns through dawn / dusk.
+        private static void GenerateClockItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) bezel = (140, 110, 50);
+            (byte r, byte g, byte b) face  = (235, 230, 220);
+            (byte r, byte g, byte b) inner = (250, 245, 235);
+            (byte r, byte g, byte b) sun   = (235, 200, 60);
+            (byte r, byte g, byte b) moon  = (200, 200, 230);
+            (byte r, byte g, byte b) sky   = (60, 100, 180);
+            for (int y = 3; y <= 12; y++)
+            for (int x = 3; x <= 12; x++)
+            {
+                bool corner = (x == 3 || x == 12) && (y == 3 || y == 12);
+                if (corner) continue;
+                bool edge = (x == 3 || x == 12 || y == 3 || y == 12);
+                if (edge) SetPixel(pixels, x, y, bezel.r, bezel.g, bezel.b);
+                else
+                {
+                    if (y <= 7) SetPixel(pixels, x, y, face.r, face.g, face.b);
+                    else        SetPixel(pixels, x, y, sky.r,  sky.g,  sky.b);
+                }
+            }
+            for (int x = 6; x <= 9; x++)
+                SetPixel(pixels, x, 6, inner.r, inner.g, inner.b);
+            SetPixel(pixels, 7, 5, sun.r, sun.g, sun.b);
+            SetPixel(pixels, 8, 5, sun.r, sun.g, sun.b);
+            SetPixel(pixels, 7, 6, sun.r, sun.g, sun.b);
+            SetPixel(pixels, 8, 6, sun.r, sun.g, sun.b);
+            SetPixel(pixels, 7, 10, moon.r, moon.g, moon.b);
+            SetPixel(pixels, 8, 10, moon.r, moon.g, moon.b);
+            SetPixel(pixels, 7, 11, moon.r, moon.g, moon.b);
+            SetPixel(pixels, 8, 11, moon.r, moon.g, moon.b);
+        }
+
+        // Tier 10 #51 — Map item icon. 14×14 cream-paper inset with a
+        // tan / brown border so it reads as a folded parchment in the
+        // hotbar. The actual explored-cell overlay is a dynamic
+        // texture rendered separately at HUD time when the map is
+        // held; this static icon is what shows in the hotbar /
+        // inventory grid.
+        private static void GenerateMapItem(byte[] pixels)
+        {
+            (byte r, byte g, byte b) parchment = (235, 220, 175);
+            (byte r, byte g, byte b) border    = (140, 100, 50);
+            (byte r, byte g, byte b) borderHi  = (175, 130, 75);
+            (byte r, byte g, byte b) crease    = (210, 195, 150);
+            // 14×14 paper inset (1 px margin all round)
+            for (int y = 1; y <= 14; y++)
+            for (int x = 1; x <= 14; x++)
+            {
+                bool edge = (x == 1 || x == 14 || y == 1 || y == 14);
+                if (edge) SetPixel(pixels, x, y, border.r, border.g, border.b);
+                else      SetPixel(pixels, x, y, parchment.r, parchment.g, parchment.b);
+            }
+            // Border highlight on the top + left edge — fakes a soft
+            // 1-px chamfer so the icon reads as a folded sheet.
+            for (int x = 2; x <= 13; x++)
+                SetPixel(pixels, x, 2, borderHi.r, borderHi.g, borderHi.b);
+            for (int y = 2; y <= 13; y++)
+                SetPixel(pixels, 2, y, borderHi.r, borderHi.g, borderHi.b);
+            // Two horizontal crease lines hinting at fold marks —
+            // pure cosmetic so a blank map doesn't read as a totally
+            // empty cream rectangle.
+            for (int x = 4; x <= 11; x++)
+            {
+                SetPixel(pixels, x,  6, crease.r, crease.g, crease.b);
+                SetPixel(pixels, x, 10, crease.r, crease.g, crease.b);
+            }
+        }
+
         // Tier 4 #18 — Slimeball sprite. Centred 6×6 rounded square
         // (corners trimmed) on transparent so the silhouette reads as
         // a soft sphere. Saturated lime body, bright highlight on the
@@ -3970,6 +4059,11 @@ namespace VStudioCraft.Game
             // Mesher picks per-half based on partner direction.
             /* TileChestFrontLeft      */ (9, 2),
             /* TileChestFrontRight     */ (10, 2),
+            // Tier 10 #51 — Clock + Map are always procedural; the
+            // sentinel coords keep the alpha-textures slicer from
+            // overwriting them.
+            /* TileClock               */ (-1, -1),
+            /* TileMap                 */ (-1, -1),
         };
 
         // True for layers whose source PNG is alpha_tools.png; false for
@@ -4279,6 +4373,12 @@ namespace VStudioCraft.Game
             // by the biomeTailLayers slicer below.
             UploadLayer(layerPixels, TileChestFrontLeft,  GenerateChestFrontLeft);
             UploadLayer(layerPixels, TileChestFrontRight, GenerateChestFrontRight);
+
+            // Tier 10 #51 — Clock + Map. Always procedural; the
+            // sentinel coords in AlphaTileCoords keep the slicer
+            // off them so these stay even in the alpha-textures atlas.
+            UploadLayer(layerPixels, TileClock, GenerateClockItem);
+            UploadLayer(layerPixels, TileMap,   GenerateMapItem);
 
             // Tier 6 #37 Phase 4 — Overlay canonical Alpha terrain.png
             // coords for the biome blocks. Procedural pixels above are

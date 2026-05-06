@@ -735,6 +735,28 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Compass, 1)));
 
+            // Tier 10 #51 — Clock. Same plus pattern as the compass
+            // but with gold ingots in place of iron.
+            list.Add(new ShapedRecipe(
+                new BlockType[3, 3]
+                {
+                    { BlockType.Air,       BlockType.GoldIngot,   BlockType.Air      },
+                    { BlockType.GoldIngot, BlockType.RedstoneDust, BlockType.GoldIngot },
+                    { BlockType.Air,       BlockType.GoldIngot,   BlockType.Air      },
+                },
+                new ItemStack(BlockType.Clock, 1)));
+
+            // Tier 10 #51 — Map. 8 paper around 1 compass = 1 map.
+            // Canonical Alpha 1.1.2 recipe.
+            list.Add(new ShapedRecipe(
+                new BlockType[3, 3]
+                {
+                    { BlockType.Paper, BlockType.Paper,   BlockType.Paper },
+                    { BlockType.Paper, BlockType.Compass, BlockType.Paper },
+                    { BlockType.Paper, BlockType.Paper,   BlockType.Paper },
+                },
+                new ItemStack(BlockType.Map, 1)));
+
             return list;
         }
 

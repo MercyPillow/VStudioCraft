@@ -508,11 +508,9 @@ item has a "missing" or "partial" tag and a one-line note pointing at the
 file where it lives (or where the gap was acknowledged in a comment).
 Ordered by impact-per-effort: high-impact / low-effort at the top.
 
-51. **Map item** — *missing.* Not in `BlockType` enum. Empty-Map crafting + per-cell explored buffer + map-rendering on the held item. The most expensive item on the list — fills a 128×128 texture from a per-player explored set, persisted with the world. Effort: ~600 LoC + a save-format version bump.
-
 ---
 
 ### Tier 11 — Optional Features
-52. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
-53. **Animated water / lava textures** — moved to be last, original attempts edited the texture, instead of animating it. -> Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
-54. **Surface lava lakes** — Originally attempted under Tier 6 #33 alongside underground pools + cliff springs but removed: the flatness gate (sparse 8-point perimeter probe + windowed Y scan) plus stone-border ring still cost a ~300-FPS dip during chunk-stream-in because the cost lands on the chunk-job thread right when the renderer is also uploading meshes. Underground pools were kept because their pre-checks are O(1) cell reads. Revisiting needs either: (a) a precomputed per-chunk heightmap that this pass can sample without scanning Y at all, or (b) deferring lake placement to a separate post-gen pass that runs off the hot path. Visual payoff is small (occasional surface lava blob); only worth tackling once one of those infrastructure pieces lands for another reason.
+51. **Smooth lighting / vertex AO** — Per-corner light sample at mesh time for ambient occlusion in cave/overhang corners.
+52. **Animated water / lava textures** — moved to be last, original attempts edited the texture, instead of animating it. -> Frame-cycle a procedurally generated atlas-array layer so the surface shimmers / churns instead of staring back like wallpaper.
+53. **Surface lava lakes** — Originally attempted under Tier 6 #33 alongside underground pools + cliff springs but removed: the flatness gate (sparse 8-point perimeter probe + windowed Y scan) plus stone-border ring still cost a ~300-FPS dip during chunk-stream-in because the cost lands on the chunk-job thread right when the renderer is also uploading meshes. Underground pools were kept because their pre-checks are O(1) cell reads. Revisiting needs either: (a) a precomputed per-chunk heightmap that this pass can sample without scanning Y at all, or (b) deferring lake placement to a separate post-gen pass that runs off the hot path. Visual payoff is small (occasional surface lava blob); only worth tackling once one of those infrastructure pieces lands for another reason.

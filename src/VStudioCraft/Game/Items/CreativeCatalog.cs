@@ -147,6 +147,8 @@ namespace VStudioCraft.Game
             BlockType.FlintAndSteel,
             BlockType.FishingRod,
             BlockType.Compass,
+            BlockType.Clock,
+            BlockType.Map,
             BlockType.Saddle,
 
             // === Buckets ===

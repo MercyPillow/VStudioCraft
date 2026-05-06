@@ -551,6 +551,12 @@ void main()
         // rotated on top of the dial-face icon while a Compass stack
         // is in the hotbar. Generated once at startup.
         private int _compassNeedleTexture;
+        // Tier 10 #51 — Map texture. 128×128 RGBA texture rebuilt
+        // lazily from World.MapColorBuffer whenever the world's
+        // MapTextureDirty flag is set. Lives for the lifetime of the
+        // renderer; the texture handle is recycled on world swap via
+        // ReleaseMapTexture.
+        private int _mapTexture;
         private int _crackTexture;
 
         // Block-break progress (survival only). Tracks the cell currently being
@@ -9787,6 +9793,23 @@ void main()
             Input.Inventory.TryAdd(new ItemStack(newType, 1));
         }
 
+        // Tier 10 #51 — True if the player's inventory (hotbar OR
+        // main grid) carries any Map item. Used to gate the per-frame
+        // map-exploration tick so a player without a map pays no cost.
+        // Walks the 45-slot inventory at most once per frame so the
+        // O(n) scan is cheap; could be cached on inventory mutation
+        // if it ever shows up in profiles.
+        private bool PlayerHasMap()
+        {
+            if (Input == null) return false;
+            var slots = Input.Inventory.Slots;
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (!slots[i].IsEmpty && slots[i].Type == BlockType.Map) return true;
+            }
+            return false;
+        }
+
         // Click-attack on the closest mob along the camera ray within
         // ReachDistance. Returns true if a mob was struck (caller should
         // then skip the block break). The damage value follows Alpha
@@ -10099,6 +10122,13 @@ void main()
             // crops; world internally gates on TimeOfDay so it
             // no-ops during the day with negligible cost.
             _world.TickIceFormation(dt, _timeOfDay);
+            // Tier 10 #51 — Map exploration. Cheap per-frame call:
+            // walks ~49 cells around the player and marks each one
+            // explored on the world's shared map bitmap. Gated on
+            // the player actually carrying a Map (hotbar or main
+            // inventory) so a player without a map doesn't pay the
+            // cost.
+            if (Input != null && PlayerHasMap()) _world.TickMapExploration(Player.Position);
             // Tier 6 #34 — Fire spread / die tick. Same cadence as
             // crops; rate-limited inside World.TickFire to keep the
             // per-frame cost negligible.
@@ -15516,6 +15546,21 @@ void main()
             // the iso-3D cube path. Side tile is the canonical "what
             // does this look like in inventory" view for non-cube
             // blocks; tools/items have dedicated tiles.
+            // Tier 10 #51 — Held Map renders a bigger map overlay
+            // (the explored-cell texture itself) at the held-item
+            // rect, instead of the flat icon. The icon still draws in
+            // hotbar / inventory slots; only the held render is
+            // replaced. Sized up so the map is actually readable in
+            // hand — 1.5× the standard held-item rect.
+            if (stack.Type == BlockType.Map)
+            {
+                int mapPx = (int)(iconPx * 1.5f);
+                int mx = x0 - (mapPx - iconPx) / 2;
+                int my = y0 - (mapPx - iconPx) / 2;
+                RenderMapOverlay(mx, my, mapPx, ortho);
+                return;
+            }
+
             DrawItemIcon(stack.Type, x0, y0, iconPx, iconPx, ortho);
 
             // Tier 10 #51 — Compass needle on the first-person held
@@ -15526,6 +15571,88 @@ void main()
             {
                 DrawCompassDirectionMark(x0, y0, iconPx, iconPx, ortho);
             }
+        }
+
+        // Tier 10 #51 — Render the live map texture as a square
+        // overlay. Lazy-creates the GL texture on first call, then
+        // re-uploads from World.MapColorBuffer whenever the world's
+        // MapTextureDirty flag is set. Painted with a tan border
+        // using the same flat-quad path the rest of the HUD uses,
+        // and the player's current position is marked with a small
+        // red pip so they can read their position on the map at a
+        // glance.
+        private void RenderMapOverlay(int x, int y, int size, Matrix4 ortho)
+        {
+            if (_world == null) return;
+            EnsureMapTexture();
+            if (_world.MapTextureDirty) UploadMapTexture();
+
+            // Tan border / parchment frame: quad slightly bigger than
+            // the texture so the world data sits inside a paper edge.
+            int border = System.Math.Max(2, size / 32);
+            DrawSolidQuad(x - border, y - border, size + border * 2, size + border * 2,
+                new Vector3(0.55f, 0.42f, 0.20f), 1f, ortho);
+
+            // Map body — sample the dynamic texture as a flat sprite.
+            _spriteShader.Use();
+            _spriteShader.SetInt("uSprite", 0);
+            _spriteShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
+            // Map RGBA buffer is laid out top-row-first the same way
+            // the texture array is uploaded; the HUD ortho flips Y so
+            // a (0..1) UV scale renders top-up correctly. Default
+            // offset/scale here.
+            _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
+            _spriteShader.SetVector2("uUvScale",  new Vector2(1f, 1f));
+            GL.BindTexture(TextureTarget.Texture2D, _mapTexture);
+            DrawSpriteQuadFor(_spriteShader, x, y, size, size, ortho);
+
+            // Player-position pip. Maps the player's world (X, Z) to
+            // map (mx, mz) cells; if inside the map's footprint, draw
+            // a tiny red square at the corresponding pixel. Skips the
+            // pip when off-map so a player who walks past the map's
+            // edge sees no spurious dot.
+            int wx = (int)System.Math.Floor(Player.Position.X);
+            int wz = (int)System.Math.Floor(Player.Position.Z);
+            int mxC = wx + World.MapHalf;
+            int mzC = wz + World.MapHalf;
+            if (mxC >= 0 && mxC < World.MapSize && mzC >= 0 && mzC < World.MapSize)
+            {
+                float cellPx = (float)size / World.MapSize;
+                int pipPx = System.Math.Max(2, (int)(cellPx * 2));
+                int px = x + (int)(mxC * cellPx) - pipPx / 2;
+                int py = y + (int)(mzC * cellPx) - pipPx / 2;
+                DrawSolidQuad(px, py, pipPx, pipPx,
+                    new Vector3(0.95f, 0.20f, 0.15f), 1f, ortho);
+            }
+        }
+
+        // Lazy-create the map's GL texture handle. Allocated empty
+        // (the first UploadMapTexture writes the live colour buffer).
+        private void EnsureMapTexture()
+        {
+            if (_mapTexture != 0) return;
+            _mapTexture = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, _mapTexture);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba,
+                World.MapSize, World.MapSize, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // Push the world's MapColorBuffer into the map texture and
+        // clear the dirty flag.
+        private void UploadMapTexture()
+        {
+            GL.BindTexture(TextureTarget.Texture2D, _mapTexture);
+            GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0,
+                World.MapSize, World.MapSize,
+                PixelFormat.Rgba, PixelType.UnsignedByte, _world.MapColorBuffer);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            _world.MapTextureDirty = false;
         }
 
         // Procedural player-arm sprite for the first-person HUD. Two
@@ -19527,6 +19654,11 @@ void main()
             {
                 GL.DeleteTexture(_compassNeedleTexture);
                 _compassNeedleTexture = 0;
+            }
+            if (_mapTexture != 0)
+            {
+                GL.DeleteTexture(_mapTexture);
+                _mapTexture = 0;
             }
             if (_crackTexture != 0)
             {
