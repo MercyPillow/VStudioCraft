@@ -83,6 +83,101 @@ namespace VStudioCraft.Game
         // server-side broadcast cache.
         public int LastBroadcastHealth = int.MinValue;
 
+        // Tier 10 follow-up — Flowing-fluid push velocity. Every
+        // frame an entity overlapping a flowing water/lava cell gets
+        // its horizontal velocity bumped by this much in the flow
+        // direction. Per-frame velocity (NOT acceleration) because
+        // both Player.Update and most mob updates reset Velocity.X/Z
+        // each frame from input — an accel would just decay to
+        // accel*dt before the next reset (~0.13 m/s instead of the
+        // intended drift). 2.0 m/s is roughly half walk speed: a
+        // player or mob standing still drifts gently downstream
+        // while still being able to swim against the current.
+        protected const float FluidPushVelocity = 2.0f;
+        protected const float LavaPushScale     = 0.5f;
+        // Subclass opt-out for entities with their own fluid logic
+        // (boats float on the surface, minecarts are rail-locked).
+        // Default: false — mobs / dropped items / projectiles all
+        // get pushed.
+        protected virtual bool SkipFluidPush => false;
+
+        // Compute the per-frame fluid-flow push acceleration for
+        // this entity's AABB. Walks the AABB cells, finds flowing
+        // water / lava cells, derives a flow direction from each
+        // cell's metadata reach vs its four horizontal neighbours,
+        // and accumulates a horizontal vector. Higher-reach cells
+        // push toward lower-reach neighbours (downhill in fluid
+        // level) and toward air. Returns a vector normalised to
+        // FluidPushAccel m/s² (× LavaPushScale for lava-only cells).
+        protected Vector3 ComputeFluidPush(World world)
+        {
+            float minX = Position.X - HalfWidth, maxX = Position.X + HalfWidth;
+            float minZ = Position.Z - HalfWidth, maxZ = Position.Z + HalfWidth;
+            int bx0 = (int)Math.Floor(minX);
+            int bx1 = (int)Math.Floor(maxX - 1e-5f);
+            int by0 = (int)Math.Floor(Position.Y);
+            int by1 = (int)Math.Floor(Position.Y + Height - 1e-5f);
+            int bz0 = (int)Math.Floor(minZ);
+            int bz1 = (int)Math.Floor(maxZ - 1e-5f);
+
+            float pushX = 0f, pushZ = 0f;
+            bool sawLava = false, sawWater = false;
+
+            for (int y = by0; y <= by1; y++)
+            for (int x = bx0; x <= bx1; x++)
+            for (int z = bz0; z <= bz1; z++)
+            {
+                var b = world.GetBlock(x, y, z);
+                bool isFlowingWater = b == BlockType.FlowingWater;
+                bool isFlowingLava  = b == BlockType.FlowingLava;
+                if (!isFlowingWater && !isFlowingLava) continue;
+                if (isFlowingWater) sawWater = true; else sawLava = true;
+                int myReach = world.GetMeta(x, y, z) & 0x0F;
+                AccumulatePushFromNeighbour(world, b, myReach, x, y, z, -1,  0, ref pushX, ref pushZ);
+                AccumulatePushFromNeighbour(world, b, myReach, x, y, z, +1,  0, ref pushX, ref pushZ);
+                AccumulatePushFromNeighbour(world, b, myReach, x, y, z,  0, -1, ref pushX, ref pushZ);
+                AccumulatePushFromNeighbour(world, b, myReach, x, y, z,  0, +1, ref pushX, ref pushZ);
+            }
+
+            if (pushX == 0f && pushZ == 0f) return Vector3.Zero;
+            float len = (float)Math.Sqrt(pushX * pushX + pushZ * pushZ);
+            float scaleA = FluidPushVelocity / len;
+            if (sawLava && !sawWater) scaleA *= LavaPushScale;
+            return new Vector3(pushX * scaleA, 0f, pushZ * scaleA);
+        }
+
+        // Helper for ComputeFluidPush. Contributes a vector toward
+        // the (dx, dz) neighbour when its effective reach is lower
+        // than the source cell's reach. Same-family flowing →
+        // meta low-4-bits, same-family source → 7, air → -1, anything
+        // else → no contribution (a wall blocks flow).
+        protected static void AccumulatePushFromNeighbour(World world,
+            BlockType selfFamily, int myReach, int x, int y, int z,
+            int dx, int dz, ref float pushX, ref float pushZ)
+        {
+            int nx = x + dx, nz = z + dz;
+            var nb = world.GetBlock(nx, y, nz);
+            int nReach;
+            if (selfFamily == BlockType.FlowingWater)
+            {
+                if (nb == BlockType.FlowingWater) nReach = world.GetMeta(nx, y, nz) & 0x0F;
+                else if (nb == BlockType.Water)   nReach = 7;
+                else if (nb == BlockType.Air)     nReach = -1;
+                else return;
+            }
+            else
+            {
+                if (nb == BlockType.FlowingLava) nReach = world.GetMeta(nx, y, nz) & 0x0F;
+                else if (nb == BlockType.Lava)   nReach = 7;
+                else if (nb == BlockType.Air)    nReach = -1;
+                else return;
+            }
+            int diff = myReach - nReach;
+            if (diff <= 0) return;
+            pushX += dx * diff;
+            pushZ += dz * diff;
+        }
+
         // Cap on per-sub-step displacement so a fast-moving entity can't
         // skip through a 1-block wall in a single tick. 0.05 is small
         // enough that wall gaps are imperceptible and big enough that
@@ -105,6 +200,21 @@ namespace VStudioCraft.Game
             {
                 StepLerpY -= StepLerpDecayRate * dt;
                 if (StepLerpY < 0f) StepLerpY = 0f;
+            }
+
+            // Tier 10 follow-up — Flowing-fluid push. Adds a per-
+            // frame velocity bump in the flow direction whenever the
+            // entity AABB overlaps a flowing water/lava cell. NOT
+            // multiplied by dt because both Player and most mob
+            // updates reset Velocity.X/Z each frame, so a dt-scaled
+            // acceleration would just be reset before it could build
+            // up — the bump has to land directly on this frame's
+            // velocity to take effect.
+            if (!SkipFluidPush)
+            {
+                var fluidPush = ComputeFluidPush(world);
+                Velocity.X += fluidPush.X;
+                Velocity.Z += fluidPush.Z;
             }
 
             var step = Velocity * dt;

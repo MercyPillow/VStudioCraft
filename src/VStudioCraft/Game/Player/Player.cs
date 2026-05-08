@@ -50,6 +50,8 @@ namespace VStudioCraft.Game
         public const float WaterMaxRise = 4.5f;     // upward terminal while holding Space
         public const float SwimUpAccel = 22f;       // m/s² applied while Space held
         public const float WaterMoveScale = 0.5f;   // horizontal velocity multiplier
+        // Flowing-fluid push tunables now live on Entity (shared
+        // across every IntegrateMotion-using subclass).
 
         // Tier 8 #51 — Soul Sand horizontal slowdown. While the
         // player is standing ON a Soul Sand cell, their horizontal
@@ -310,6 +312,23 @@ namespace VStudioCraft.Game
             if (IsFlying && !inWater) horizScale *= FlyHorizontalScale;
             Velocity.X = wishHorizVel.X * horizScale;
             Velocity.Z = wishHorizVel.Z * horizScale;
+
+            // Tier 10 follow-up — Flowing-fluid push. Adds a per-
+            // frame velocity bump in the flow direction whenever the
+            // AABB overlaps a flowing water / lava cell. NOT *dt:
+            // Velocity.X/Z above were just RESET from input, and a
+            // dt-scaled value would shrink to ~accel*dt² and never
+            // accumulate visibly. The helper already returns a
+            // velocity in m/s; we add it directly. Skipped while
+            // flying (the override is the whole point of fly mode).
+            // Push is added to the input-driven velocity so a player
+            // can still swim against the current.
+            if (!IsFlying)
+            {
+                var fluidPush = ComputeFluidPush(world);
+                Velocity.X += fluidPush.X;
+                Velocity.Z += fluidPush.Z;
+            }
 
             // Vertical: water uses a smaller gravity and clamps both signs
             // (drag), so you sink slowly and can't free-fall through a deep
@@ -586,6 +605,12 @@ namespace VStudioCraft.Game
         // flowing — both count for buoyancy and breathing). Water reach was
         // bumped to 7 so flowing cells are common; treating them identically
         // to source water keeps swim physics sane in any flooded area.
+        // ComputeFluidPush + AccumulatePushFromNeighbour now live on
+        // the Entity base class so every IntegrateMotion-using
+        // subclass (mobs, boats, minecarts) gets the push too. Player
+        // bypasses IntegrateMotion (it calls MoveAxis directly), so
+        // its Update method calls the inherited helper explicitly.
+
         private bool ScanInWater(World world, float fromY, float toY)
         {
             float minX = Position.X - HalfWidth, maxX = Position.X + HalfWidth;

@@ -449,7 +449,7 @@ void main()
         // 6 indices per glyph. Capacity grows on demand the first time
         // a frame exceeds it, then stays at the high-water mark.
         private float[] _signTextVerts = new float[1024];
-        private uint[]  _signTextIdx   = new uint[1536];
+        private uint[] _signTextIdx = new uint[1536];
         private int _signTextVertFloats;
         private int _signTextIndexCount;
         private Shader _spriteArrayShader; // sampler2DArray variant for block-atlas icons
@@ -960,15 +960,15 @@ void main()
         private struct ChatLine
         {
             public string Text;
-            public int    SpawnedTickMs; // Environment.TickCount snapshot for fade
+            public int SpawnedTickMs; // Environment.TickCount snapshot for fade
         }
         private readonly System.Collections.Generic.List<ChatLine> _chatHistory =
             new System.Collections.Generic.List<ChatLine>();
-        private const int  ChatMaxHistory     = 50;
+        private const int ChatMaxHistory = 50;
         // Lines older than this fade out when chat is closed; while
         // chat is open every line stays fully visible (matches MC).
-        private const int  ChatLineLifetimeMs = 10000;
-        private const int  ChatLineFadeMs     = 2000;
+        private const int ChatLineLifetimeMs = 10000;
+        private const int ChatLineFadeMs = 2000;
 
         // Tier 10 follow-up — /back snapshot. Captured by /tp,
         // /spawn, /home and any other teleporting command so the
@@ -1014,9 +1014,9 @@ void main()
         // the loading wash.
         private volatile bool _isLoadingWorld;
         public bool IsLoadingWorld => _isLoadingWorld;
-        private string _loadingTitle    = "LOADING WORLD";
+        private string _loadingTitle = "LOADING WORLD";
         private string _loadingSubtitle = string.Empty;
-        private float  _loadingProgress = -1f;  // <0 = indeterminate; 0..1 = bar fraction
+        private float _loadingProgress = -1f;  // <0 = indeterminate; 0..1 = bar fraction
         private System.Action _pendingLoadWork;
         private bool _loadScreenDrawnOnce;
 
@@ -1067,8 +1067,8 @@ void main()
         public TitleScreenState TitleState => _titleState;
         public bool IsTitleScreenOpen => _titleState != TitleScreenState.None;
 
-        public void OpenTitleScreen()    { _titleState = TitleScreenState.TitleRoot; }
-        public void CloseTitleScreen()   { _titleState = TitleScreenState.None; }
+        public void OpenTitleScreen() { _titleState = TitleScreenState.TitleRoot; }
+        public void CloseTitleScreen() { _titleState = TitleScreenState.None; }
         public void NavigateTitle(TitleScreenState next) { _titleState = next; }
 
         // Tier 6 #47 — Quit-to-title hook. Pause menu's Quit fires
@@ -1368,14 +1368,14 @@ void main()
             float z0 = Player.Position.Z - Player.HalfWidth + pad;
             float z1 = Player.Position.Z + Player.HalfWidth - pad;
             for (int yi = 0; yi < 2; yi++)
-            for (int xi = 0; xi < 2; xi++)
-            for (int zi = 0; zi < 2; zi++)
-            {
-                int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
-                int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
-                int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
-                if (_world.GetBlock(wx, wy, wz) == BlockType.Fire) return true;
-            }
+                for (int xi = 0; xi < 2; xi++)
+                    for (int zi = 0; zi < 2; zi++)
+                    {
+                        int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
+                        int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
+                        int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
+                        if (_world.GetBlock(wx, wy, wz) == BlockType.Fire) return true;
+                    }
             return false;
         }
 
@@ -1394,15 +1394,15 @@ void main()
             float z0 = Player.Position.Z - Player.HalfWidth + pad;
             float z1 = Player.Position.Z + Player.HalfWidth - pad;
             for (int yi = 0; yi < 2; yi++)
-            for (int xi = 0; xi < 2; xi++)
-            for (int zi = 0; zi < 2; zi++)
-            {
-                int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
-                int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
-                int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
-                var b = _world.GetBlock(wx, wy, wz);
-                if (b == BlockType.Lava || b == BlockType.FlowingLava) return true;
-            }
+                for (int xi = 0; xi < 2; xi++)
+                    for (int zi = 0; zi < 2; zi++)
+                    {
+                        int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
+                        int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
+                        int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
+                        var b = _world.GetBlock(wx, wy, wz);
+                        if (b == BlockType.Lava || b == BlockType.FlowingLava) return true;
+                    }
             return false;
         }
 
@@ -1422,14 +1422,14 @@ void main()
             float z0 = Player.Position.Z - Player.HalfWidth + pad;
             float z1 = Player.Position.Z + Player.HalfWidth - pad;
             for (int yi = 0; yi < 2; yi++)
-            for (int xi = 0; xi < 2; xi++)
-            for (int zi = 0; zi < 2; zi++)
-            {
-                int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
-                int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
-                int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
-                if (_world.GetBlock(wx, wy, wz) == BlockType.Cactus) return true;
-            }
+                for (int xi = 0; xi < 2; xi++)
+                    for (int zi = 0; zi < 2; zi++)
+                    {
+                        int wx = (int)Math.Floor(xi == 0 ? x0 : x1);
+                        int wy = (int)Math.Floor(yi == 0 ? y0 : y1);
+                        int wz = (int)Math.Floor(zi == 0 ? z0 : z1);
+                        if (_world.GetBlock(wx, wy, wz) == BlockType.Cactus) return true;
+                    }
             return false;
         }
 
@@ -1464,8 +1464,8 @@ void main()
         // is on and Hunger >= 70% of max (14/20). Heals 1 HP per tick; the
         // interval (4 s) is conservative — Alpha didn't have this loop, so
         // we picked a cadence that feels healing-but-not-trivializing.
-        private const int   HungerRegenThreshold  = 14;       // 70% of MaxHunger
-        private const float HungerRegenInterval   = 4f;       // seconds per +1 HP
+        private const int HungerRegenThreshold = 14;       // 70% of MaxHunger
+        private const float HungerRegenInterval = 4f;       // seconds per +1 HP
         private float _hungerRegenTimer;
 
         // Fluid tick cadence. Alpha ticked water at 5 game-ticks (~0.25s) and
@@ -1496,7 +1496,7 @@ void main()
         // passives + hostiles so they stay in lockstep, and capped so a
         // long pause / hitch doesn't trigger a spiral-of-death catch-up.
         private const float MobTickInterval = 0.05f;
-        private const int   MobTickMaxCatchup = 4;
+        private const int MobTickMaxCatchup = 4;
         private float _mobTickAccumulator;
         // Steps consumed this frame, set by TickPassives and read by
         // TickHostiles. Caller pairs the two methods, so TickHostiles
@@ -1577,7 +1577,7 @@ void main()
             _overlayShader = new Shader(OverlayVertexSrc, OverlayFragmentSrc);
             _spriteShader = new Shader(SpriteVertexSrc, SpriteFragmentSrc);
             _spriteArrayShader = new Shader(SpriteVertexSrc, SpriteArrayFragmentSrc);
-            _backgroundShader  = new Shader(SpriteVertexSrc, BackgroundArrayFragmentSrc);
+            _backgroundShader = new Shader(SpriteVertexSrc, BackgroundArrayFragmentSrc);
             _crackShader = new Shader(CrackVertexSrc, CrackFragmentSrc);
             _multiFaceCubeShader = new Shader(MultiFaceCubeVertexSrc, MultiFaceCubeFragmentSrc);
             _skinShader = new Shader(SkinVertexSrc, SkinFragmentSrc);
@@ -2841,371 +2841,371 @@ void main()
                     break;
 
                 case VStudioCraft.Net.PacketIds.EntitySpawn:
-                {
-                    var s = pkt.EntitySpawn;
-                    if (s.EntityType == VStudioCraft.Net.EntityType.Player)
                     {
-                        _remotePlayers[s.EntityId] = new RemotePlayer(
-                            s.EntityId, s.DisplayName,
-                            new Vector3((float)s.X, (float)s.Y, (float)s.Z),
-                            s.Yaw, s.Pitch, _netClock);
-                    }
-                    else if (s.EntityType >= VStudioCraft.Net.EntityType.Pig
-                          && s.EntityType <= VStudioCraft.Net.EntityType.Chicken)
-                    {
-                        var mob = SpawnReplicatedPassive(
-                            s.EntityType, s.EntityId,
-                            new Vector3((float)s.X, (float)s.Y, (float)s.Z),
-                            s.Yaw);
-                        if (mob != null && _world != null)
+                        var s = pkt.EntitySpawn;
+                        if (s.EntityType == VStudioCraft.Net.EntityType.Player)
                         {
-                            _world.Passives.Add(mob);
-                            _replicatedPassivesById[s.EntityId] = mob;
-                            _entityInterpById[s.EntityId] = new EntityInterpState(
-                                mob.Position, mob.Yaw, _netClock);
+                            _remotePlayers[s.EntityId] = new RemotePlayer(
+                                s.EntityId, s.DisplayName,
+                                new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                                s.Yaw, s.Pitch, _netClock);
                         }
-                    }
-                    else if (s.EntityType >= VStudioCraft.Net.EntityType.Zombie
-                          && s.EntityType <= VStudioCraft.Net.EntityType.Creeper)
-                    {
-                        var mob = SpawnReplicatedHostile(
-                            s.EntityType, s.EntityId,
-                            new Vector3((float)s.X, (float)s.Y, (float)s.Z),
-                            s.Yaw);
-                        if (mob != null && _world != null)
+                        else if (s.EntityType >= VStudioCraft.Net.EntityType.Pig
+                              && s.EntityType <= VStudioCraft.Net.EntityType.Chicken)
                         {
-                            _world.Hostiles.Add(mob);
-                            _replicatedHostilesById[s.EntityId] = mob;
-                            _entityInterpById[s.EntityId] = new EntityInterpState(
-                                mob.Position, mob.Yaw, _netClock);
+                            var mob = SpawnReplicatedPassive(
+                                s.EntityType, s.EntityId,
+                                new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                                s.Yaw);
+                            if (mob != null && _world != null)
+                            {
+                                _world.Passives.Add(mob);
+                                _replicatedPassivesById[s.EntityId] = mob;
+                                _entityInterpById[s.EntityId] = new EntityInterpState(
+                                    mob.Position, mob.Yaw, _netClock);
+                            }
                         }
+                        else if (s.EntityType >= VStudioCraft.Net.EntityType.Zombie
+                              && s.EntityType <= VStudioCraft.Net.EntityType.Creeper)
+                        {
+                            var mob = SpawnReplicatedHostile(
+                                s.EntityType, s.EntityId,
+                                new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                                s.Yaw);
+                            if (mob != null && _world != null)
+                            {
+                                _world.Hostiles.Add(mob);
+                                _replicatedHostilesById[s.EntityId] = mob;
+                                _entityInterpById[s.EntityId] = new EntityInterpState(
+                                    mob.Position, mob.Yaw, _netClock);
+                            }
+                        }
+                        // Other types (drops, projectiles) — fall through; not
+                        // wired client-side until Phase 5c.
+                        break;
                     }
-                    // Other types (drops, projectiles) — fall through; not
-                    // wired client-side until Phase 5c.
-                    break;
-                }
                 case VStudioCraft.Net.PacketIds.EntityRelMove:
-                {
-                    var m = pkt.EntityRelMove;
-                    var delta = new Vector3(m.Dx, m.Dy, m.Dz);
-                    if (_remotePlayers.TryGetValue(m.EntityId, out var rp))
-                        rp.ApplyRelMove(delta, _netClock);
-                    else if (_entityInterpById.TryGetValue(m.EntityId, out var st))
-                        // Phase 5f — covers mobs (yaw-bearing) AND drops /
-                        // arrows / thrown / bobbers (position-only). The
-                        // per-frame writeback further down keys on which
-                        // replica dict actually owns the eid.
-                        st.ApplyRelMove(delta, _netClock);
-                    break;
-                }
+                    {
+                        var m = pkt.EntityRelMove;
+                        var delta = new Vector3(m.Dx, m.Dy, m.Dz);
+                        if (_remotePlayers.TryGetValue(m.EntityId, out var rp))
+                            rp.ApplyRelMove(delta, _netClock);
+                        else if (_entityInterpById.TryGetValue(m.EntityId, out var st))
+                            // Phase 5f — covers mobs (yaw-bearing) AND drops /
+                            // arrows / thrown / bobbers (position-only). The
+                            // per-frame writeback further down keys on which
+                            // replica dict actually owns the eid.
+                            st.ApplyRelMove(delta, _netClock);
+                        break;
+                    }
                 case VStudioCraft.Net.PacketIds.EntityLook:
-                {
-                    var l = pkt.EntityLook;
-                    float yawRad = l.Yaw * (float)Math.PI / 180f;
-                    if (_remotePlayers.TryGetValue(l.EntityId, out var rp))
-                        rp.ApplyLook(l.Yaw, l.Pitch, _netClock);
-                    else if (_entityInterpById.TryGetValue(l.EntityId, out var st))
-                        st.ApplyLook(yawRad, _netClock);
-                    break;
-                }
+                    {
+                        var l = pkt.EntityLook;
+                        float yawRad = l.Yaw * (float)Math.PI / 180f;
+                        if (_remotePlayers.TryGetValue(l.EntityId, out var rp))
+                            rp.ApplyLook(l.Yaw, l.Pitch, _netClock);
+                        else if (_entityInterpById.TryGetValue(l.EntityId, out var st))
+                            st.ApplyLook(yawRad, _netClock);
+                        break;
+                    }
                 case VStudioCraft.Net.PacketIds.EntityRelMoveLook:
-                {
-                    var ml = pkt.EntityRelMoveLook;
-                    float yawRad = ml.Yaw * (float)Math.PI / 180f;
-                    if (_remotePlayers.TryGetValue(ml.EntityId, out var rp))
-                        rp.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), ml.Yaw, ml.Pitch, _netClock);
-                    else if (_entityInterpById.TryGetValue(ml.EntityId, out var st))
-                        st.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), yawRad, _netClock);
-                    break;
-                }
+                    {
+                        var ml = pkt.EntityRelMoveLook;
+                        float yawRad = ml.Yaw * (float)Math.PI / 180f;
+                        if (_remotePlayers.TryGetValue(ml.EntityId, out var rp))
+                            rp.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), ml.Yaw, ml.Pitch, _netClock);
+                        else if (_entityInterpById.TryGetValue(ml.EntityId, out var st))
+                            st.ApplyRelMoveLook(new Vector3(ml.Dx, ml.Dy, ml.Dz), yawRad, _netClock);
+                        break;
+                    }
                 case VStudioCraft.Net.PacketIds.EntityTeleport:
-                {
-                    var t = pkt.EntityTeleport;
-                    var newPos = new Vector3((float)t.X, (float)t.Y, (float)t.Z);
-                    float yawRad = t.Yaw * (float)Math.PI / 180f;
-                    if (_remotePlayers.TryGetValue(t.EntityId, out var rp))
-                        rp.ApplyTeleport(newPos, t.Yaw, t.Pitch, _netClock);
-                    else if (_entityInterpById.TryGetValue(t.EntityId, out var st))
-                        st.ApplyTeleport(newPos, yawRad, _netClock);
-                    break;
-                }
+                    {
+                        var t = pkt.EntityTeleport;
+                        var newPos = new Vector3((float)t.X, (float)t.Y, (float)t.Z);
+                        float yawRad = t.Yaw * (float)Math.PI / 180f;
+                        if (_remotePlayers.TryGetValue(t.EntityId, out var rp))
+                            rp.ApplyTeleport(newPos, t.Yaw, t.Pitch, _netClock);
+                        else if (_entityInterpById.TryGetValue(t.EntityId, out var st))
+                            st.ApplyTeleport(newPos, yawRad, _netClock);
+                        break;
+                    }
                 case VStudioCraft.Net.PacketIds.EntityDespawn:
-                {
-                    int eid = pkt.EntityDespawn.EntityId;
-                    if (_remotePlayers.Remove(eid)) break;
-                    if (_replicatedPassivesById.TryGetValue(eid, out var pmob))
                     {
-                        _world?.Passives.Remove(pmob);
-                        _replicatedPassivesById.Remove(eid);
-                        _entityInterpById.Remove(eid);
+                        int eid = pkt.EntityDespawn.EntityId;
+                        if (_remotePlayers.Remove(eid)) break;
+                        if (_replicatedPassivesById.TryGetValue(eid, out var pmob))
+                        {
+                            _world?.Passives.Remove(pmob);
+                            _replicatedPassivesById.Remove(eid);
+                            _entityInterpById.Remove(eid);
+                            break;
+                        }
+                        if (_replicatedHostilesById.TryGetValue(eid, out var hmob))
+                        {
+                            _world?.Hostiles.Remove(hmob);
+                            _replicatedHostilesById.Remove(eid);
+                            _entityInterpById.Remove(eid);
+                            break;
+                        }
+                        if (_replicatedDropsById.TryGetValue(eid, out var d))
+                        {
+                            _drops.Remove(d);
+                            _replicatedDropsById.Remove(eid);
+                            _entityInterpById.Remove(eid);
+                            break;
+                        }
+                        if (_replicatedArrowsById.TryGetValue(eid, out var arrow))
+                        {
+                            _arrows.Remove(arrow);
+                            _replicatedArrowsById.Remove(eid);
+                            _entityInterpById.Remove(eid);
+                            break;
+                        }
+                        if (_replicatedThrownById.TryGetValue(eid, out var thrown))
+                        {
+                            _thrown.Remove(thrown);
+                            _replicatedThrownById.Remove(eid);
+                            _entityInterpById.Remove(eid);
+                            break;
+                        }
+                        if (_replicatedBobbersById.TryGetValue(eid, out var bobber))
+                        {
+                            _bobbers.Remove(bobber);
+                            _replicatedBobbersById.Remove(eid);
+                            _entityInterpById.Remove(eid);
+                        }
                         break;
                     }
-                    if (_replicatedHostilesById.TryGetValue(eid, out var hmob))
-                    {
-                        _world?.Hostiles.Remove(hmob);
-                        _replicatedHostilesById.Remove(eid);
-                        _entityInterpById.Remove(eid);
-                        break;
-                    }
-                    if (_replicatedDropsById.TryGetValue(eid, out var d))
-                    {
-                        _drops.Remove(d);
-                        _replicatedDropsById.Remove(eid);
-                        _entityInterpById.Remove(eid);
-                        break;
-                    }
-                    if (_replicatedArrowsById.TryGetValue(eid, out var arrow))
-                    {
-                        _arrows.Remove(arrow);
-                        _replicatedArrowsById.Remove(eid);
-                        _entityInterpById.Remove(eid);
-                        break;
-                    }
-                    if (_replicatedThrownById.TryGetValue(eid, out var thrown))
-                    {
-                        _thrown.Remove(thrown);
-                        _replicatedThrownById.Remove(eid);
-                        _entityInterpById.Remove(eid);
-                        break;
-                    }
-                    if (_replicatedBobbersById.TryGetValue(eid, out var bobber))
-                    {
-                        _bobbers.Remove(bobber);
-                        _replicatedBobbersById.Remove(eid);
-                        _entityInterpById.Remove(eid);
-                    }
-                    break;
-                }
                 case VStudioCraft.Net.PacketIds.ItemSpawn:
-                {
-                    var s = pkt.ItemSpawn;
-                    var stack = new ItemStack((BlockType)s.ItemType, s.ItemCount);
-                    var d = new DroppedItem
                     {
-                        NetworkId = s.EntityId,
-                        Position = new Vector3((float)s.X, (float)s.Y, (float)s.Z),
-                        Velocity = new Vector3(s.Vx, s.Vy, s.Vz),
-                        Stack = stack,
-                        // Spawn cooldown matches the host's value so a
-                        // remote-side render of the drop arc matches the
-                        // host's. Friend never picks up — pickup runs on
-                        // the host's local TickDrops in net mode.
-                        PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
-                    };
-                    _drops.Add(d);
-                    _replicatedDropsById[s.EntityId] = d;
-                    // Phase 5f — seed an interp state so subsequent
-                    // EntityRelMove packets feed the lerp instead of
-                    // snap-updating Position. Drops fall ~0.5 s under
-                    // gravity; without interp the visible motion at
-                    // 1500 fps stutters at every server tick boundary.
-                    _entityInterpById[s.EntityId] = new EntityInterpState(
-                        d.Position, /*yaw*/ 0f, _netClock);
-                    break;
-                }
+                        var s = pkt.ItemSpawn;
+                        var stack = new ItemStack((BlockType)s.ItemType, s.ItemCount);
+                        var d = new DroppedItem
+                        {
+                            NetworkId = s.EntityId,
+                            Position = new Vector3((float)s.X, (float)s.Y, (float)s.Z),
+                            Velocity = new Vector3(s.Vx, s.Vy, s.Vz),
+                            Stack = stack,
+                            // Spawn cooldown matches the host's value so a
+                            // remote-side render of the drop arc matches the
+                            // host's. Friend never picks up — pickup runs on
+                            // the host's local TickDrops in net mode.
+                            PickupCooldownSec = DroppedItem.SpawnPickupCooldown,
+                        };
+                        _drops.Add(d);
+                        _replicatedDropsById[s.EntityId] = d;
+                        // Phase 5f — seed an interp state so subsequent
+                        // EntityRelMove packets feed the lerp instead of
+                        // snap-updating Position. Drops fall ~0.5 s under
+                        // gravity; without interp the visible motion at
+                        // 1500 fps stutters at every server tick boundary.
+                        _entityInterpById[s.EntityId] = new EntityInterpState(
+                            d.Position, /*yaw*/ 0f, _netClock);
+                        break;
+                    }
                 case VStudioCraft.Net.PacketIds.OpenWindow:
-                {
-                    var ow = pkt.OpenWindow;
-                    _currentNetWindowId = ow.WindowId;
-                    _currentNetWindowKind = ow.Kind;
-                    _currentNetWindowCell = (ow.X, ow.Y, ow.Z);
-                    // Open the appropriate UI panel. The TileEntityData
-                    // packet that follows immediately populates the slot
-                    // contents; for now we just put the panel on screen.
-                    if (ow.Kind == VStudioCraft.Net.WindowKind.Chest)
                     {
-                        // Need a local chest entity for the existing
-                        // RenderChest to read. Server's snapshot
-                        // arrives in the next TileEntityData; create
-                        // an empty entity here and fill it then.
-                        if (_world != null)
+                        var ow = pkt.OpenWindow;
+                        _currentNetWindowId = ow.WindowId;
+                        _currentNetWindowKind = ow.Kind;
+                        _currentNetWindowCell = (ow.X, ow.Y, ow.Z);
+                        // Open the appropriate UI panel. The TileEntityData
+                        // packet that follows immediately populates the slot
+                        // contents; for now we just put the panel on screen.
+                        if (ow.Kind == VStudioCraft.Net.WindowKind.Chest)
                         {
-                            _world.GetOrCreateChestEntity(ow.X, ow.Y, ow.Z);
+                            // Need a local chest entity for the existing
+                            // RenderChest to read. Server's snapshot
+                            // arrives in the next TileEntityData; create
+                            // an empty entity here and fill it then.
+                            if (_world != null)
+                            {
+                                _world.GetOrCreateChestEntity(ow.X, ow.Y, ow.Z);
+                            }
+                            _isChestOpen = true;
+                            _chestPos = (ow.X, ow.Y, ow.Z);
                         }
-                        _isChestOpen = true;
-                        _chestPos = (ow.X, ow.Y, ow.Z);
-                    }
-                    else if (ow.Kind == VStudioCraft.Net.WindowKind.Furnace)
-                    {
-                        if (_world != null)
+                        else if (ow.Kind == VStudioCraft.Net.WindowKind.Furnace)
                         {
-                            _world.GetOrCreateFurnaceEntity(ow.X, ow.Y, ow.Z);
+                            if (_world != null)
+                            {
+                                _world.GetOrCreateFurnaceEntity(ow.X, ow.Y, ow.Z);
+                            }
+                            _isFurnaceOpen = true;
+                            _furnacePos = (ow.X, ow.Y, ow.Z);
                         }
-                        _isFurnaceOpen = true;
-                        _furnacePos = (ow.X, ow.Y, ow.Z);
+                        else if (ow.Kind == VStudioCraft.Net.WindowKind.CraftingTable)
+                        {
+                            _isCraftingOpen = true;
+                        }
+                        break;
                     }
-                    else if (ow.Kind == VStudioCraft.Net.WindowKind.CraftingTable)
-                    {
-                        _isCraftingOpen = true;
-                    }
-                    break;
-                }
                 case VStudioCraft.Net.PacketIds.CloseWindow:
-                {
-                    var cw = pkt.CloseWindow;
-                    if (cw.WindowId == _currentNetWindowId || _currentNetWindowId == 0)
                     {
-                        _currentNetWindowId = 0;
-                        _isChestOpen = false;
-                        _isFurnaceOpen = false;
-                        _isCraftingOpen = false;
+                        var cw = pkt.CloseWindow;
+                        if (cw.WindowId == _currentNetWindowId || _currentNetWindowId == 0)
+                        {
+                            _currentNetWindowId = 0;
+                            _isChestOpen = false;
+                            _isFurnaceOpen = false;
+                            _isCraftingOpen = false;
+                        }
+                        break;
                     }
-                    break;
-                }
                 case VStudioCraft.Net.PacketIds.TileEntityData:
-                {
-                    var td = pkt.TileEntityData;
-                    if (td.WindowId != _currentNetWindowId) break;
-                    if (td.Kind == VStudioCraft.Net.WindowKind.Chest && _world != null)
                     {
-                        var ce = _world.GetOrCreateChestEntity(
-                            _currentNetWindowCell.x, _currentNetWindowCell.y, _currentNetWindowCell.z);
-                        int n = System.Math.Min((int)td.SlotCount, ChestTileEntity.SlotCount);
-                        for (int i = 0; i < n; i++) ce.Slots[i] = td.Slots[i];
-                    }
-                    else if (td.Kind == VStudioCraft.Net.WindowKind.Furnace && _world != null)
-                    {
-                        var fe = _world.GetOrCreateFurnaceEntity(
-                            _currentNetWindowCell.x, _currentNetWindowCell.y, _currentNetWindowCell.z);
-                        if (td.SlotCount >= 1) fe.Input = td.Slots[0];
-                        if (td.SlotCount >= 2) fe.Fuel = td.Slots[1];
-                        if (td.SlotCount >= 3) fe.Output = td.Slots[2];
-                        fe.BurnTimeTicks = td.FurnaceBurnTime;
-                        fe.MaxBurnTimeTicks = td.FurnaceMaxBurnTime;
-                        fe.CookProgressTicks = td.FurnaceCookProgress;
-                    }
-                    else if (td.Kind == VStudioCraft.Net.WindowKind.CraftingTable)
-                    {
-                        // Server's crafting window has 9 input slots
-                        // followed by the output slot at index 9.
-                        // Map straight into _craftingGrid + _craftingOutput
-                        // so the existing RenderCrafting path draws them.
-                        if (td.SlotCount >= 9)
+                        var td = pkt.TileEntityData;
+                        if (td.WindowId != _currentNetWindowId) break;
+                        if (td.Kind == VStudioCraft.Net.WindowKind.Chest && _world != null)
                         {
-                            for (int i = 0; i < 9 && i < _craftingGrid.Length; i++)
-                                _craftingGrid[i] = td.Slots[i];
+                            var ce = _world.GetOrCreateChestEntity(
+                                _currentNetWindowCell.x, _currentNetWindowCell.y, _currentNetWindowCell.z);
+                            int n = System.Math.Min((int)td.SlotCount, ChestTileEntity.SlotCount);
+                            for (int i = 0; i < n; i++) ce.Slots[i] = td.Slots[i];
                         }
-                        if (td.SlotCount >= 10)
+                        else if (td.Kind == VStudioCraft.Net.WindowKind.Furnace && _world != null)
                         {
-                            _craftingOutput = td.Slots[9];
+                            var fe = _world.GetOrCreateFurnaceEntity(
+                                _currentNetWindowCell.x, _currentNetWindowCell.y, _currentNetWindowCell.z);
+                            if (td.SlotCount >= 1) fe.Input = td.Slots[0];
+                            if (td.SlotCount >= 2) fe.Fuel = td.Slots[1];
+                            if (td.SlotCount >= 3) fe.Output = td.Slots[2];
+                            fe.BurnTimeTicks = td.FurnaceBurnTime;
+                            fe.MaxBurnTimeTicks = td.FurnaceMaxBurnTime;
+                            fe.CookProgressTicks = td.FurnaceCookProgress;
                         }
+                        else if (td.Kind == VStudioCraft.Net.WindowKind.CraftingTable)
+                        {
+                            // Server's crafting window has 9 input slots
+                            // followed by the output slot at index 9.
+                            // Map straight into _craftingGrid + _craftingOutput
+                            // so the existing RenderCrafting path draws them.
+                            if (td.SlotCount >= 9)
+                            {
+                                for (int i = 0; i < 9 && i < _craftingGrid.Length; i++)
+                                    _craftingGrid[i] = td.Slots[i];
+                            }
+                            if (td.SlotCount >= 10)
+                            {
+                                _craftingOutput = td.Slots[9];
+                            }
+                        }
+                        break;
                     }
-                    break;
-                }
                 case VStudioCraft.Net.PacketIds.InventoryUpdate:
-                {
-                    var iu = pkt.InventoryUpdate;
-                    var inv = Input?.Inventory;
-                    if (inv == null) break;
-                    var stack = iu.ItemCount == 0
-                        ? ItemStack.Empty
-                        : new ItemStack((BlockType)iu.ItemType, iu.ItemCount);
-                    // Phase 6b-extended — slot=0xFF is the cursor
-                    // sentinel. Anything else is a regular slot
-                    // (range-checked).
-                    if (iu.Slot == 0xFF)
                     {
-                        inv.Cursor = stack;
+                        var iu = pkt.InventoryUpdate;
+                        var inv = Input?.Inventory;
+                        if (inv == null) break;
+                        var stack = iu.ItemCount == 0
+                            ? ItemStack.Empty
+                            : new ItemStack((BlockType)iu.ItemType, iu.ItemCount);
+                        // Phase 6b-extended — slot=0xFF is the cursor
+                        // sentinel. Anything else is a regular slot
+                        // (range-checked).
+                        if (iu.Slot == 0xFF)
+                        {
+                            inv.Cursor = stack;
+                        }
+                        else if (iu.Slot < Inventory.TotalSlots)
+                        {
+                            inv.Slots[iu.Slot] = stack;
+                        }
+                        break;
                     }
-                    else if (iu.Slot < Inventory.TotalSlots)
-                    {
-                        inv.Slots[iu.Slot] = stack;
-                    }
-                    break;
-                }
                 case VStudioCraft.Net.PacketIds.EntityHealth:
-                {
-                    var h = pkt.EntityHealth;
-                    // Apply to whichever replica owns this id. Setting
-                    // HurtTimer triggers the hurt-flash lerp the
-                    // existing render path already handles. Health is
-                    // also written so the friend's view of "is this
-                    // mob still alive" stays in sync — though the
-                    // server's authoritative EntityDespawn covers the
-                    // actual death cleanup.
-                    if (_replicatedPassivesById.TryGetValue(h.EntityId, out var pmob))
                     {
-                        if (h.Health < pmob.Health) pmob.HurtTimer = PassiveMob.HurtFlashSeconds;
-                        pmob.Health = h.Health;
+                        var h = pkt.EntityHealth;
+                        // Apply to whichever replica owns this id. Setting
+                        // HurtTimer triggers the hurt-flash lerp the
+                        // existing render path already handles. Health is
+                        // also written so the friend's view of "is this
+                        // mob still alive" stays in sync — though the
+                        // server's authoritative EntityDespawn covers the
+                        // actual death cleanup.
+                        if (_replicatedPassivesById.TryGetValue(h.EntityId, out var pmob))
+                        {
+                            if (h.Health < pmob.Health) pmob.HurtTimer = PassiveMob.HurtFlashSeconds;
+                            pmob.Health = h.Health;
+                        }
+                        else if (_replicatedHostilesById.TryGetValue(h.EntityId, out var hmob))
+                        {
+                            if (h.Health < hmob.Health) hmob.HurtTimer = HostileMob.HurtFlashSeconds;
+                            hmob.Health = h.Health;
+                        }
+                        // Player/host health intentionally unhandled here;
+                        // Phase 5e+ adds server-authoritative player health.
+                        break;
                     }
-                    else if (_replicatedHostilesById.TryGetValue(h.EntityId, out var hmob))
-                    {
-                        if (h.Health < hmob.Health) hmob.HurtTimer = HostileMob.HurtFlashSeconds;
-                        hmob.Health = h.Health;
-                    }
-                    // Player/host health intentionally unhandled here;
-                    // Phase 5e+ adds server-authoritative player health.
-                    break;
-                }
                 case VStudioCraft.Net.PacketIds.ProjectileSpawn:
-                {
-                    var p = pkt.ProjectileSpawn;
-                    var pos = new Vector3((float)p.X, (float)p.Y, (float)p.Z);
-                    var vel = new Vector3(p.Vx, p.Vy, p.Vz);
-                    if (p.ProjectileType == VStudioCraft.Net.EntityType.Arrow)
                     {
-                        var arrow = new ArrowProjectile
+                        var p = pkt.ProjectileSpawn;
+                        var pos = new Vector3((float)p.X, (float)p.Y, (float)p.Z);
+                        var vel = new Vector3(p.Vx, p.Vy, p.Vz);
+                        if (p.ProjectileType == VStudioCraft.Net.EntityType.Arrow)
                         {
-                            NetworkId = p.EntityId,
-                            Position = pos,
-                            Velocity = vel,
-                            Origin = pos,
-                            // Damage isn't replicated — friend never
-                            // applies it (server is authoritative for
-                            // damage; Phase 5e wires EntityHealth).
-                            // Default to 0 so the friend's TickArrows
-                            // (gated off in net mode anyway) wouldn't
-                            // do harm if it did run.
-                            Damage = 0,
-                        };
-                        _arrows.Add(arrow);
-                        _replicatedArrowsById[p.EntityId] = arrow;
-                        _entityInterpById[p.EntityId] = new EntityInterpState(pos, /*yaw*/ 0f, _netClock);
-                    }
-                    else if (p.ProjectileType == VStudioCraft.Net.EntityType.Snowball
-                          || p.ProjectileType == VStudioCraft.Net.EntityType.Egg)
-                    {
-                        var t = new ThrownProjectile
+                            var arrow = new ArrowProjectile
+                            {
+                                NetworkId = p.EntityId,
+                                Position = pos,
+                                Velocity = vel,
+                                Origin = pos,
+                                // Damage isn't replicated — friend never
+                                // applies it (server is authoritative for
+                                // damage; Phase 5e wires EntityHealth).
+                                // Default to 0 so the friend's TickArrows
+                                // (gated off in net mode anyway) wouldn't
+                                // do harm if it did run.
+                                Damage = 0,
+                            };
+                            _arrows.Add(arrow);
+                            _replicatedArrowsById[p.EntityId] = arrow;
+                            _entityInterpById[p.EntityId] = new EntityInterpState(pos, /*yaw*/ 0f, _netClock);
+                        }
+                        else if (p.ProjectileType == VStudioCraft.Net.EntityType.Snowball
+                              || p.ProjectileType == VStudioCraft.Net.EntityType.Egg)
                         {
-                            NetworkId = p.EntityId,
-                            Position = pos,
-                            Velocity = vel,
-                            Origin = pos,
-                            ProjectileKind = p.ProjectileType == VStudioCraft.Net.EntityType.Egg
-                                ? ThrownProjectile.Kind.Egg
-                                : ThrownProjectile.Kind.Snowball,
-                        };
-                        _thrown.Add(t);
-                        _replicatedThrownById[p.EntityId] = t;
-                        _entityInterpById[p.EntityId] = new EntityInterpState(pos, /*yaw*/ 0f, _netClock);
-                    }
-                    else if (p.ProjectileType == VStudioCraft.Net.EntityType.Bobber)
-                    {
-                        var b = new Bobber
+                            var t = new ThrownProjectile
+                            {
+                                NetworkId = p.EntityId,
+                                Position = pos,
+                                Velocity = vel,
+                                Origin = pos,
+                                ProjectileKind = p.ProjectileType == VStudioCraft.Net.EntityType.Egg
+                                    ? ThrownProjectile.Kind.Egg
+                                    : ThrownProjectile.Kind.Snowball,
+                            };
+                            _thrown.Add(t);
+                            _replicatedThrownById[p.EntityId] = t;
+                            _entityInterpById[p.EntityId] = new EntityInterpState(pos, /*yaw*/ 0f, _netClock);
+                        }
+                        else if (p.ProjectileType == VStudioCraft.Net.EntityType.Bobber)
                         {
-                            NetworkId = p.EntityId,
-                            Position = pos,
-                        };
-                        _bobbers.Add(b);
-                        _replicatedBobbersById[p.EntityId] = b;
-                        _entityInterpById[p.EntityId] = new EntityInterpState(pos, /*yaw*/ 0f, _netClock);
+                            var b = new Bobber
+                            {
+                                NetworkId = p.EntityId,
+                                Position = pos,
+                            };
+                            _bobbers.Add(b);
+                            _replicatedBobbersById[p.EntityId] = b;
+                            _entityInterpById[p.EntityId] = new EntityInterpState(pos, /*yaw*/ 0f, _netClock);
+                        }
+                        // Other types fall through silently (forward-compat).
+                        break;
                     }
-                    // Other types fall through silently (forward-compat).
-                    break;
-                }
 
                 case VStudioCraft.Net.PacketIds.Disconnect:
-                {
-                    // Server-initiated hangup. Tear our side down so the
-                    // next DrainNetwork sees IsNetClient false and stops
-                    // touching the dead session. KI-4 — fire SessionLost
-                    // so the UI can show why we got booted (kicked,
-                    // server stopping, protocol mismatch, etc.).
-                    var reason = pkt.Disconnect.Reason ?? "server disconnected";
-                    DisconnectFromServer($"server: {reason}");
-                    try { SessionLost?.Invoke(reason); } catch { /* swallow */ }
-                    break;
-                }
+                    {
+                        // Server-initiated hangup. Tear our side down so the
+                        // next DrainNetwork sees IsNetClient false and stops
+                        // touching the dead session. KI-4 — fire SessionLost
+                        // so the UI can show why we got booted (kicked,
+                        // server stopping, protocol mismatch, etc.).
+                        var reason = pkt.Disconnect.Reason ?? "server disconnected";
+                        DisconnectFromServer($"server: {reason}");
+                        try { SessionLost?.Invoke(reason); } catch { /* swallow */ }
+                        break;
+                    }
 
                 // Phases 3+ add: BlockChange, MultiBlockChange, ChunkUnload,
                 // EntitySpawn, EntityRelMove, EntityLook, EntityRelMoveLook,
@@ -3290,9 +3290,9 @@ void main()
             PassiveMob mob;
             switch (type)
             {
-                case VStudioCraft.Net.EntityType.Pig:     mob = new Pig(pos, entityId);     break;
-                case VStudioCraft.Net.EntityType.Cow:     mob = new Cow(pos, entityId);     break;
-                case VStudioCraft.Net.EntityType.Sheep:   mob = new Sheep(pos, entityId);   break;
+                case VStudioCraft.Net.EntityType.Pig: mob = new Pig(pos, entityId); break;
+                case VStudioCraft.Net.EntityType.Cow: mob = new Cow(pos, entityId); break;
+                case VStudioCraft.Net.EntityType.Sheep: mob = new Sheep(pos, entityId); break;
                 case VStudioCraft.Net.EntityType.Chicken: mob = new Chicken(pos, entityId); break;
                 default: return null;
             }
@@ -3310,10 +3310,10 @@ void main()
             HostileMob mob;
             switch (type)
             {
-                case VStudioCraft.Net.EntityType.Zombie:   mob = new Zombie(pos, entityId);   break;
+                case VStudioCraft.Net.EntityType.Zombie: mob = new Zombie(pos, entityId); break;
                 case VStudioCraft.Net.EntityType.Skeleton: mob = new Skeleton(pos, entityId); break;
-                case VStudioCraft.Net.EntityType.Spider:   mob = new Spider(pos, entityId);   break;
-                case VStudioCraft.Net.EntityType.Creeper:  mob = new Creeper(pos, entityId);  break;
+                case VStudioCraft.Net.EntityType.Spider: mob = new Spider(pos, entityId); break;
+                case VStudioCraft.Net.EntityType.Creeper: mob = new Creeper(pos, entityId); break;
                 default: return null;
             }
             mob.NetworkId = entityId;
@@ -3327,11 +3327,11 @@ void main()
         private static byte FaceFromNormal(int nx, int ny, int nz)
         {
             if (ny == -1) return 0; // bottom face exposed
-            if (ny ==  1) return 1; // top
+            if (ny == 1) return 1; // top
             if (nz == -1) return 2;
-            if (nz ==  1) return 3;
+            if (nz == 1) return 3;
             if (nx == -1) return 4;
-            if (nx ==  1) return 5;
+            if (nx == 1) return 5;
             // Degenerate (origin inside the block, normal=0,0,0) — safest
             // fallback is +Y, matching the "click into floor → place on
             // top" convention. The server will reject if it's wrong.
@@ -3507,11 +3507,11 @@ void main()
             // so the post-load camera lands at their nether coords.
             var ds = loadResult.dimState;
             _overworldPlayerPos = ds.OverworldPos;
-            _overworldYaw       = ds.OverworldYaw;
-            _overworldPitch     = ds.OverworldPitch;
-            _netherPlayerPos    = ds.NetherPos;
-            _netherYaw          = ds.NetherYaw;
-            _netherPitch        = ds.NetherPitch;
+            _overworldYaw = ds.OverworldYaw;
+            _overworldPitch = ds.OverworldPitch;
+            _netherPlayerPos = ds.NetherPos;
+            _netherYaw = ds.NetherYaw;
+            _netherPitch = ds.NetherPitch;
             // header.CameraPos is now the saved player feet position (format v2).
             Player.Position = header.CameraPos;
             Player.Velocity = Vector3.Zero;
@@ -3806,12 +3806,12 @@ void main()
             // The bobber itself is preserved in _dormantBobbers and
             // re-attaches if the player returns (Bobber.cs does the
             // bookkeeping by entry, not by Player back-ref).
-            var swapDrops     = _drops;     _drops     = _dormantDrops;     _dormantDrops     = swapDrops;
-            var swapArrows    = _arrows;    _arrows    = _dormantArrows;    _dormantArrows    = swapArrows;
-            var swapThrown    = _thrown;    _thrown    = _dormantThrown;    _dormantThrown    = swapThrown;
+            var swapDrops = _drops; _drops = _dormantDrops; _dormantDrops = swapDrops;
+            var swapArrows = _arrows; _arrows = _dormantArrows; _dormantArrows = swapArrows;
+            var swapThrown = _thrown; _thrown = _dormantThrown; _dormantThrown = swapThrown;
             var swapFireballs = _fireballs; _fireballs = _dormantFireballs; _dormantFireballs = swapFireballs;
-            var swapBobbers   = _bobbers;   _bobbers   = _dormantBobbers;   _dormantBobbers   = swapBobbers;
-            var swapBoats     = _boats;     _boats     = _dormantBoats;     _dormantBoats     = swapBoats;
+            var swapBobbers = _bobbers; _bobbers = _dormantBobbers; _dormantBobbers = swapBobbers;
+            var swapBoats = _boats; _boats = _dormantBoats; _dormantBoats = swapBoats;
             var swapMinecarts = _minecarts; _minecarts = _dormantMinecarts; _dormantMinecarts = swapMinecarts;
             if (Player != null)
             {
@@ -3953,8 +3953,8 @@ void main()
             // Side columns x=-1 and x=2, full 5 tall.
             for (int dy = -1; dy <= 3; dy++)
             {
-                _world.SetBlock(-1,    y0 + dy, z0, BlockType.Obsidian);
-                _world.SetBlock( 2,    y0 + dy, z0, BlockType.Obsidian);
+                _world.SetBlock(-1, y0 + dy, z0, BlockType.Obsidian);
+                _world.SetBlock(2, y0 + dy, z0, BlockType.Obsidian);
             }
             // Top + bottom rows along x=0..1.
             for (int dx = 0; dx < 2; dx++)
@@ -3965,19 +3965,19 @@ void main()
             // Interior 2×3 fill with NetherPortal blocks (X-axis
             // frame → meta low-bit = 1).
             for (int dx = 0; dx < 2; dx++)
-            for (int dy = 0; dy < 3; dy++)
-            {
-                int wx = x0 + dx, wy = y0 + dy, wz = z0;
-                _world.SetBlock(wx, wy, wz, BlockType.NetherPortal);
-                int cx = wx >> 4, cz = wz >> 4;
-                var ch = _world.GetChunk(cx, cz);
-                if (ch != null)
+                for (int dy = 0; dy < 3; dy++)
                 {
-                    int lx = wx - (cx << 4);
-                    int lz = wz - (cz << 4);
-                    ch.SetMeta(lx, wy, lz, 0x01);
+                    int wx = x0 + dx, wy = y0 + dy, wz = z0;
+                    _world.SetBlock(wx, wy, wz, BlockType.NetherPortal);
+                    int cx = wx >> 4, cz = wz >> 4;
+                    var ch = _world.GetChunk(cx, cz);
+                    if (ch != null)
+                    {
+                        int lx = wx - (cx << 4);
+                        int lz = wz - (cz << 4);
+                        ch.SetMeta(lx, wy, lz, 0x01);
+                    }
                 }
-            }
             // Put a netherrack landing pad on the +Z side so the
             // player materialises on solid ground rather than
             // potentially clipping into a soul-sand patch.
@@ -3993,8 +3993,8 @@ void main()
             // doesn't visibly disturb the surroundings since the
             // landing pad below is also solid netherrack.
             for (int dx = -1; dx <= 2; dx++)
-            for (int dy = 0; dy < 2; dy++)
-                _world.SetBlock(dx, y0 + dy, 1, BlockType.Air);
+                for (int dy = 0; dy < 2; dy++)
+                    _world.SetBlock(dx, y0 + dy, 1, BlockType.Air);
 
             // Tier 8 #51 V11 — Clear any netherrack the mountain mass
             // left in the portal-frame plane (z=0). When the portal
@@ -4007,12 +4007,12 @@ void main()
             // re-stamped over the air by the loops above — but those
             // ran first; we re-stamp now to be order-independent).
             for (int dx = -1; dx <= 2; dx++)
-            for (int dy = -1; dy <= 3; dy++)
-            {
-                var here = _world.GetBlock(dx, y0 + dy, 0);
-                if (here == BlockType.Netherrack)
-                    _world.SetBlock(dx, y0 + dy, 0, BlockType.Air);
-            }
+                for (int dy = -1; dy <= 3; dy++)
+                {
+                    var here = _world.GetBlock(dx, y0 + dy, 0);
+                    if (here == BlockType.Netherrack)
+                        _world.SetBlock(dx, y0 + dy, 0, BlockType.Air);
+                }
             // Re-stamp the obsidian frame and portal interior so the
             // netherrack-clear pass above didn't strip any frame
             // cells (it tests for Netherrack, so obsidian/portal cells
@@ -4020,7 +4020,7 @@ void main()
             for (int dy = -1; dy <= 3; dy++)
             {
                 _world.SetBlock(-1, y0 + dy, z0, BlockType.Obsidian);
-                _world.SetBlock( 2, y0 + dy, z0, BlockType.Obsidian);
+                _world.SetBlock(2, y0 + dy, z0, BlockType.Obsidian);
             }
             for (int dx = 0; dx < 2; dx++)
             {
@@ -4028,8 +4028,8 @@ void main()
                 _world.SetBlock(x0 + dx, y0 + 3, z0, BlockType.Obsidian);
             }
             for (int dx = 0; dx < 2; dx++)
-            for (int dy = 0; dy < 3; dy++)
-                _world.SetBlock(x0 + dx, y0 + dy, z0, BlockType.NetherPortal);
+                for (int dy = 0; dy < 3; dy++)
+                    _world.SetBlock(x0 + dx, y0 + dy, z0, BlockType.NetherPortal);
 
             return baseY;
         }
@@ -4069,8 +4069,8 @@ void main()
                     // not the current nether coords.
                     if (_overworldPlayerPos != Vector3.Zero)
                     {
-                        savePos   = _overworldPlayerPos;
-                        saveYaw   = _overworldYaw;
+                        savePos = _overworldPlayerPos;
+                        saveYaw = _overworldYaw;
                         savePitch = _overworldPitch;
                     }
                 }
@@ -4111,7 +4111,7 @@ void main()
             // v16 trailing block round-trips netherrack + glowstone +
             // tile-entity content across save/load.
             World netherWorld =
-                  _world.Dimension == Dimension.Nether                                  ? _world
+                  _world.Dimension == Dimension.Nether ? _world
                 : (_dormantWorld != null && _dormantWorld.Dimension == Dimension.Nether) ? _dormantWorld
                 : null;
 
@@ -4124,24 +4124,24 @@ void main()
             // coords, not the moment-of-portal-entry stale ones.
             var dimState = new WorldSaveFormat.DimensionState
             {
-                OverworldPos   = _overworldPlayerPos,
-                OverworldYaw   = _overworldYaw,
+                OverworldPos = _overworldPlayerPos,
+                OverworldYaw = _overworldYaw,
                 OverworldPitch = _overworldPitch,
-                NetherPos      = _netherPlayerPos,
-                NetherYaw      = _netherYaw,
-                NetherPitch    = _netherPitch,
+                NetherPos = _netherPlayerPos,
+                NetherYaw = _netherYaw,
+                NetherPitch = _netherPitch,
                 CurrentDimension = _world.Dimension,
             };
             if (_world.Dimension == Dimension.Overworld)
             {
-                dimState.OverworldPos   = Player.Position;
-                dimState.OverworldYaw   = Camera.Yaw;
+                dimState.OverworldPos = Player.Position;
+                dimState.OverworldYaw = Camera.Yaw;
                 dimState.OverworldPitch = Camera.Pitch;
             }
             else
             {
-                dimState.NetherPos   = Player.Position;
-                dimState.NetherYaw   = Camera.Yaw;
+                dimState.NetherPos = Player.Position;
+                dimState.NetherYaw = Camera.Yaw;
                 dimState.NetherPitch = Camera.Pitch;
             }
             // Tier 9 #54 V3 — Snapshot boats + minecarts per dimension.
@@ -4151,10 +4151,10 @@ void main()
             // and "nether" buckets so post-load is symmetric — we
             // route by which dim is currently active.
             var vehicles = WorldSaveFormat.VehicleSet.Empty;
-            var activeBoats     = _boats;
+            var activeBoats = _boats;
             var activeMinecarts = _minecarts;
-            var dormBoats       = _dormantBoats;
-            var dormMinecarts   = _dormantMinecarts;
+            var dormBoats = _dormantBoats;
+            var dormMinecarts = _dormantMinecarts;
             List<WorldSaveFormat.VehicleSnap> ovBucket, neBucket;
             if (_world.Dimension == Dimension.Overworld)
             {
@@ -4278,7 +4278,7 @@ void main()
                 // Creative always reads as full health so switching into
                 // survival mid-session doesn't drop you to 0 HP from a stale read.
                 if (Player.Health != Player.MaxHealth) Player.Health = Player.MaxHealth;
-                if (Player.Air    != Player.MaxAir)    Player.Air    = Player.MaxAir;
+                if (Player.Air != Player.MaxAir) Player.Air = Player.MaxAir;
                 _voidTimer = 0f;
                 _airDecayTimer = 0f;
                 _drownDamageTimer = 0f;
@@ -4616,7 +4616,7 @@ void main()
         {
             if (amount <= 0) return;
             if (HungerEnabled) Player.Eat(amount);
-            else               Player.Heal(amount);
+            else Player.Heal(amount);
         }
 
         // Teleport to the remembered spawn and restore full HP. In a future
@@ -4983,16 +4983,16 @@ void main()
             // old flat-plane generator and worse with the V11 mountain
             // mass that does ~26k Perlin samples per chunk.
             for (int dz = -r; dz <= r; dz++)
-            for (int dx = -r; dx <= r; dx++)
-            {
-                int ds = dx * dx + dz * dz;
-                if (ds > r * r) continue;
-                int cx = pcx + dx, cz = pcz + dz;
-                if (!_world.HasChunk(cx, cz))
+                for (int dx = -r; dx <= r; dx++)
                 {
-                    _scratchChunks.Add((cx, cz, ds));
+                    int ds = dx * dx + dz * dz;
+                    if (ds > r * r) continue;
+                    int cx = pcx + dx, cz = pcz + dz;
+                    if (!_world.HasChunk(cx, cz))
+                    {
+                        _scratchChunks.Add((cx, cz, ds));
+                    }
                 }
-            }
 
             if (_scratchChunks.Count == 0) return;
             _scratchChunks.Sort(CompareAsc);
@@ -5153,7 +5153,7 @@ void main()
                 // broken.
                 _world.RemoveChestEntity(hit.X, hit.Y, hit.Z);
                 if (_isChestOpen
-                    && (( _chestPos.x == hit.X && _chestPos.y == hit.Y && _chestPos.z == hit.Z)
+                    && ((_chestPos.x == hit.X && _chestPos.y == hit.Y && _chestPos.z == hit.Z)
                       || (_isDoubleChest && _chestPos2.x == hit.X && _chestPos2.y == hit.Y && _chestPos2.z == hit.Z)))
                 {
                     _isChestOpen = false;
@@ -5363,7 +5363,7 @@ void main()
                     // single 27-slot screen).
                     spilledChest = _world.RemoveChestEntity(bx, by, bz);
                     if (_isChestOpen
-                        && (( _chestPos.x == bx && _chestPos.y == by && _chestPos.z == bz)
+                        && ((_chestPos.x == bx && _chestPos.y == by && _chestPos.z == bz)
                           || (_isDoubleChest && _chestPos2.x == bx && _chestPos2.y == by && _chestPos2.z == bz)))
                     {
                         _isChestOpen = false;
@@ -6114,8 +6114,8 @@ void main()
                             bool waterOk = stackingOnCane;
                             if (!waterOk)
                             {
-                                BlockType nN = _world.GetBlock(hit.X,     hit.Y, hit.Z - 1);
-                                BlockType nS = _world.GetBlock(hit.X,     hit.Y, hit.Z + 1);
+                                BlockType nN = _world.GetBlock(hit.X, hit.Y, hit.Z - 1);
+                                BlockType nS = _world.GetBlock(hit.X, hit.Y, hit.Z + 1);
                                 BlockType nE = _world.GetBlock(hit.X + 1, hit.Y, hit.Z);
                                 BlockType nW = _world.GetBlock(hit.X - 1, hit.Y, hit.Z);
                                 // FluidGroup returns 1 for water (source +
@@ -6161,10 +6161,10 @@ void main()
                     {
                         int ax = hit.X, ay = hit.Y + 1, az = hit.Z;
                         BlockType bottomBlock = BlockData.DoorBottomBlockForItem(held);
-                        BlockType topBlock    = BlockData.DoorTopFor(bottomBlock);
+                        BlockType topBlock = BlockData.DoorTopFor(bottomBlock);
                         if (BlockData.IsSolid(target)
-                            && _world.GetBlock(ax,     ay,     az) == BlockType.Air
-                            && _world.GetBlock(ax,     ay + 1, az) == BlockType.Air)
+                            && _world.GetBlock(ax, ay, az) == BlockType.Air
+                            && _world.GetBlock(ax, ay + 1, az) == BlockType.Air)
                         {
                             BlockFacing facing = FacingTowardPlayer(Camera.Forward);
                             // Pack meta with closed/left-hinge default.
@@ -6179,7 +6179,7 @@ void main()
                             // in case we revisit hinge auto-selection.
                             byte meta = BlockData.DoorPackMeta(facing, open: false, hingeRight: false);
 
-                            if (_world.SetBlock(ax, ay,     az, bottomBlock)
+                            if (_world.SetBlock(ax, ay, az, bottomBlock)
                              && _world.SetBlock(ax, ay + 1, az, topBlock))
                             {
                                 // Stamp the same metadata on BOTH halves
@@ -6192,7 +6192,7 @@ void main()
                                 {
                                     int lx = ax - (cx << 4);
                                     int lz = az - (cz << 4);
-                                    chunk.SetMeta(lx, ay,     lz, meta);
+                                    chunk.SetMeta(lx, ay, lz, meta);
                                     chunk.SetMeta(lx, ay + 1, lz, meta);
                                 }
                                 if (GameMode == GameMode.Survival)
@@ -6579,15 +6579,15 @@ void main()
                             // matches, lower Z wins.
                             if (other.x < cx || (other.x == cx && other.z < cz))
                             {
-                                _chestPos  = other;
+                                _chestPos = other;
                                 _chestPos2 = (cx, cy, cz);
                             }
                             else
                             {
-                                _chestPos  = (cx, cy, cz);
+                                _chestPos = (cx, cy, cz);
                                 _chestPos2 = other;
                             }
-                            _world.GetOrCreateChestEntity(_chestPos.x,  _chestPos.y,  _chestPos.z);
+                            _world.GetOrCreateChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
                             _world.GetOrCreateChestEntity(_chestPos2.x, _chestPos2.y, _chestPos2.z);
                         }
                         else
@@ -6596,7 +6596,7 @@ void main()
                             _world.GetOrCreateChestEntity(cx, cy, cz);
                         }
                         _isDoubleChest = paired;
-                        _isChestOpen   = true;
+                        _isChestOpen = true;
                     }
                     return true;
                 case BlockType.Dispenser:
@@ -6613,172 +6613,172 @@ void main()
                     _isDispenserOpen = true;
                     return true;
                 case BlockType.Jukebox:
-                {
-                    // Tier 4 #25 — Jukebox interaction. Three cases on
-                    // RMB, in priority order:
-                    //   1. Empty jukebox + held disc → INSERT. Stamps the
-                    //      held disc type onto the JukeboxTileEntity (get-
-                    //      or-create) and starts streaming the matching
-                    //      music buffer on the dedicated music source.
-                    //      Decrements the held stack in survival.
-                    //   2. Loaded jukebox (any held item or empty hand) →
-                    //      EJECT. Drops the inserted disc as a DroppedItem
-                    //      at the jukebox's top face, clears the entity,
-                    //      stops the music. We drop as a DroppedItem
-                    //      rather than just deleting the disc so the
-                    //      player can pick it back up — Alpha behaviour
-                    //      preserves discs on eject; permanently
-                    //      destroying one would feel punishing for what
-                    //      is effectively a "stop the music" toggle.
-                    //   3. Empty jukebox + non-disc held → no-op. Falls
-                    //      through to a return-true so the placement
-                    //      code doesn't try to plant the held block.
-                    //
-                    // Real disc audio is asset-deferred (see _disc13Buffer
-                    // / _discCatBuffer comment). PlayMusic(0) is a soft
-                    // no-op for the missing-buffer case, so the data flow
-                    // (insert / eject / persist) is fully exercised even
-                    // without sound. The dedicated music source in
-                    // AudioEngine is intentionally separate from the SFX
-                    // pool so footstep / break one-shots don't evict the
-                    // currently-playing track.
-                    var heldStack = Input != null
-                        ? Input.Inventory.GetHotbar(Input.HotbarIndex)
-                        : ItemStack.Empty;
-                    BlockType held = heldStack.IsEmpty ? BlockType.Air : heldStack.Type;
-                    var je = _world.TryGetJukeboxEntity(hit.X, hit.Y, hit.Z);
-                    bool loaded = je != null && !je.IsEmpty;
-                    if (!loaded && (held == BlockType.Disc13 || held == BlockType.DiscCat))
                     {
-                        // Insert. Allocate the entity if this is a fresh
-                        // jukebox the player hasn't touched yet, then
-                        // stamp the disc type. Decrement the hotbar in
-                        // survival (creative keeps the disc — same rule
-                        // as every other consumable in creative mode).
-                        je = _world.GetOrCreateJukeboxEntity(hit.X, hit.Y, hit.Z);
-                        je.Disc = held;
-                        if (GameMode == GameMode.Survival && Input != null)
-                            Input.Inventory.DecrementHotbar(Input.HotbarIndex);
-                        // Tier 10 #51 — Music disc audio playback.
-                        // Resolve the disc's audio asset path via the
-                        // user-side locator (exe / Music / Downloads
-                        // folder) and route through MCI. If the file
-                        // isn't present the call is a soft no-op
-                        // (silent insert), and the legacy OpenAL
-                        // buffer path stays as a fallback for any
-                        // future PCM-uploaded disc audio.
-                        string musicPath = AudioEngine.FindMusicAsset(
-                            held == BlockType.Disc13 ? "13" : "Cat");
-                        if (musicPath != null)
+                        // Tier 4 #25 — Jukebox interaction. Three cases on
+                        // RMB, in priority order:
+                        //   1. Empty jukebox + held disc → INSERT. Stamps the
+                        //      held disc type onto the JukeboxTileEntity (get-
+                        //      or-create) and starts streaming the matching
+                        //      music buffer on the dedicated music source.
+                        //      Decrements the held stack in survival.
+                        //   2. Loaded jukebox (any held item or empty hand) →
+                        //      EJECT. Drops the inserted disc as a DroppedItem
+                        //      at the jukebox's top face, clears the entity,
+                        //      stops the music. We drop as a DroppedItem
+                        //      rather than just deleting the disc so the
+                        //      player can pick it back up — Alpha behaviour
+                        //      preserves discs on eject; permanently
+                        //      destroying one would feel punishing for what
+                        //      is effectively a "stop the music" toggle.
+                        //   3. Empty jukebox + non-disc held → no-op. Falls
+                        //      through to a return-true so the placement
+                        //      code doesn't try to plant the held block.
+                        //
+                        // Real disc audio is asset-deferred (see _disc13Buffer
+                        // / _discCatBuffer comment). PlayMusic(0) is a soft
+                        // no-op for the missing-buffer case, so the data flow
+                        // (insert / eject / persist) is fully exercised even
+                        // without sound. The dedicated music source in
+                        // AudioEngine is intentionally separate from the SFX
+                        // pool so footstep / break one-shots don't evict the
+                        // currently-playing track.
+                        var heldStack = Input != null
+                            ? Input.Inventory.GetHotbar(Input.HotbarIndex)
+                            : ItemStack.Empty;
+                        BlockType held = heldStack.IsEmpty ? BlockType.Air : heldStack.Type;
+                        var je = _world.TryGetJukeboxEntity(hit.X, hit.Y, hit.Z);
+                        bool loaded = je != null && !je.IsEmpty;
+                        if (!loaded && (held == BlockType.Disc13 || held == BlockType.DiscCat))
                         {
-                            AudioEngine.PlayMusicFile(musicPath);
+                            // Insert. Allocate the entity if this is a fresh
+                            // jukebox the player hasn't touched yet, then
+                            // stamp the disc type. Decrement the hotbar in
+                            // survival (creative keeps the disc — same rule
+                            // as every other consumable in creative mode).
+                            je = _world.GetOrCreateJukeboxEntity(hit.X, hit.Y, hit.Z);
+                            je.Disc = held;
+                            if (GameMode == GameMode.Survival && Input != null)
+                                Input.Inventory.DecrementHotbar(Input.HotbarIndex);
+                            // Tier 10 #51 — Music disc audio playback.
+                            // Resolve the disc's audio asset path via the
+                            // user-side locator (exe / Music / Downloads
+                            // folder) and route through MCI. If the file
+                            // isn't present the call is a soft no-op
+                            // (silent insert), and the legacy OpenAL
+                            // buffer path stays as a fallback for any
+                            // future PCM-uploaded disc audio.
+                            string musicPath = AudioEngine.FindMusicAsset(
+                                held == BlockType.Disc13 ? "13" : "Cat");
+                            if (musicPath != null)
+                            {
+                                AudioEngine.PlayMusicFile(musicPath);
+                            }
+                            else
+                            {
+                                int buf = (held == BlockType.Disc13) ? _disc13Buffer : _discCatBuffer;
+                                AudioEngine.PlayMusic(buf);
+                            }
+                            SfxBank.PlayPlace(BlockType.Wool); // close-fit thunk
+                            return true;
                         }
-                        else
+                        if (loaded)
                         {
-                            int buf = (held == BlockType.Disc13) ? _disc13Buffer : _discCatBuffer;
-                            AudioEngine.PlayMusic(buf);
+                            // Eject. Drop the loaded disc at the jukebox's
+                            // top face (one cell up — same spawn convention
+                            // as block-break drops, kicked upward so the
+                            // disc hops out instead of resting inside the
+                            // cell). Stop music, clear the entity. Removing
+                            // the entry rather than just blanking Disc keeps
+                            // the save table tight (an empty jukebox doesn't
+                            // need to persist).
+                            BlockType ejected = je.Disc;
+                            _world.RemoveJukeboxEntity(hit.X, hit.Y, hit.Z);
+                            AudioEngine.StopMusic();
+                            SpawnEjectedDisc(hit.X, hit.Y, hit.Z, ejected);
+                            SfxBank.PlayBreak(BlockType.Wool); // close-fit click
+                            return true;
                         }
-                        SfxBank.PlayPlace(BlockType.Wool); // close-fit thunk
+                        // Empty jukebox + non-disc held: swallow the click so
+                        // we don't fall through to the placement path. The
+                        // player wouldn't expect their pickaxe / cobblestone
+                        // / whatever to mount onto the jukebox face just
+                        // because the jukebox happened to be slotless.
                         return true;
                     }
-                    if (loaded)
-                    {
-                        // Eject. Drop the loaded disc at the jukebox's
-                        // top face (one cell up — same spawn convention
-                        // as block-break drops, kicked upward so the
-                        // disc hops out instead of resting inside the
-                        // cell). Stop music, clear the entity. Removing
-                        // the entry rather than just blanking Disc keeps
-                        // the save table tight (an empty jukebox doesn't
-                        // need to persist).
-                        BlockType ejected = je.Disc;
-                        _world.RemoveJukeboxEntity(hit.X, hit.Y, hit.Z);
-                        AudioEngine.StopMusic();
-                        SpawnEjectedDisc(hit.X, hit.Y, hit.Z, ejected);
-                        SfxBank.PlayBreak(BlockType.Wool); // close-fit click
-                        return true;
-                    }
-                    // Empty jukebox + non-disc held: swallow the click so
-                    // we don't fall through to the placement path. The
-                    // player wouldn't expect their pickaxe / cobblestone
-                    // / whatever to mount onto the jukebox face just
-                    // because the jukebox happened to be slotless.
-                    return true;
-                }
                 case BlockType.Lever:
-                {
-                    // Tier 8 #42 — Lever RMB toggles bit 0 of metadata
-                    // (the on/off state). The power-propagation pass
-                    // reads this bit each tick and seeds 15-level
-                    // signal into adjacent wires when the lever is
-                    // ON. Visual stays the same regardless of state
-                    // for now (proper handle-tilt rendering is a
-                    // polish follow-up).
-                    int lcx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
-                    int lcz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
-                    var lch = _world.GetChunk(lcx, lcz);
-                    if (lch != null)
                     {
-                        int lx = hit.X - lcx * Chunk.SizeX;
-                        int lz = hit.Z - lcz * Chunk.SizeZ;
-                        byte meta = lch.GetMeta(lx, hit.Y, lz);
-                        meta = (byte)(meta ^ 0x01);
-                        lch.SetMeta(lx, hit.Y, lz, meta);
+                        // Tier 8 #42 — Lever RMB toggles bit 0 of metadata
+                        // (the on/off state). The power-propagation pass
+                        // reads this bit each tick and seeds 15-level
+                        // signal into adjacent wires when the lever is
+                        // ON. Visual stays the same regardless of state
+                        // for now (proper handle-tilt rendering is a
+                        // polish follow-up).
+                        int lcx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
+                        int lcz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
+                        var lch = _world.GetChunk(lcx, lcz);
+                        if (lch != null)
+                        {
+                            int lx = hit.X - lcx * Chunk.SizeX;
+                            int lz = hit.Z - lcz * Chunk.SizeZ;
+                            byte meta = lch.GetMeta(lx, hit.Y, lz);
+                            meta = (byte)(meta ^ 0x01);
+                            lch.SetMeta(lx, hit.Y, lz, meta);
+                        }
+                        SfxBank.PlayClick();
+                        return true;
                     }
-                    SfxBank.PlayClick();
-                    return true;
-                }
                 case BlockType.StoneButton:
-                {
-                    // Tier 8 #42 — Button RMB sets the pressed bit.
-                    // The render-side per-frame tick will release the
-                    // button after ButtonHoldFrames have elapsed
-                    // (handled by World.TickRedstoneButtons below).
-                    int bcx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
-                    int bcz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
-                    var bch = _world.GetChunk(bcx, bcz);
-                    if (bch != null)
                     {
-                        int lx = hit.X - bcx * Chunk.SizeX;
-                        int lz = hit.Z - bcz * Chunk.SizeZ;
-                        // Bit 0 = pressed flag, bits 4..7 = release-
-                        // countdown ticks (max 15 covers the canonical
-                        // 10-tick stone-button hold window plus
-                        // headroom).
-                        byte meta = bch.GetMeta(lx, hit.Y, lz);
-                        meta = (byte)((meta & 0xF0) | 0x01);
-                        // Stamp 10-tick countdown into the high
-                        // nibble so a tick driver can decrement and
-                        // release.
-                        meta = (byte)((meta & 0x0F) | (10 << 4));
-                        bch.SetMeta(lx, hit.Y, lz, meta);
+                        // Tier 8 #42 — Button RMB sets the pressed bit.
+                        // The render-side per-frame tick will release the
+                        // button after ButtonHoldFrames have elapsed
+                        // (handled by World.TickRedstoneButtons below).
+                        int bcx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
+                        int bcz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
+                        var bch = _world.GetChunk(bcx, bcz);
+                        if (bch != null)
+                        {
+                            int lx = hit.X - bcx * Chunk.SizeX;
+                            int lz = hit.Z - bcz * Chunk.SizeZ;
+                            // Bit 0 = pressed flag, bits 4..7 = release-
+                            // countdown ticks (max 15 covers the canonical
+                            // 10-tick stone-button hold window plus
+                            // headroom).
+                            byte meta = bch.GetMeta(lx, hit.Y, lz);
+                            meta = (byte)((meta & 0xF0) | 0x01);
+                            // Stamp 10-tick countdown into the high
+                            // nibble so a tick driver can decrement and
+                            // release.
+                            meta = (byte)((meta & 0x0F) | (10 << 4));
+                            bch.SetMeta(lx, hit.Y, lz, meta);
+                        }
+                        SfxBank.PlayClick();
+                        return true;
                     }
-                    SfxBank.PlayClick();
-                    return true;
-                }
                 case BlockType.NoteBlock:
-                {
-                    // Tier 8 #48 — Note Block RMB. Increments the
-                    // pitch metadata 0..24 (Alpha's 25-note range:
-                    // F#3 → F#5) and plays a placeholder click. Real
-                    // procedural pitched audio is a follow-up; the
-                    // pitch storage + interaction loop is correct
-                    // already, so plugging a synth in later is just
-                    // a one-call swap inside this branch.
-                    int ncx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
-                    int ncz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
-                    var ch = _world.GetChunk(ncx, ncz);
-                    if (ch != null)
                     {
-                        int lx = hit.X - ncx * Chunk.SizeX;
-                        int lz = hit.Z - ncz * Chunk.SizeZ;
-                        byte meta = ch.GetMeta(lx, hit.Y, lz);
-                        int pitch = ((meta & 0x1F) + 1) % 25;
-                        ch.SetMeta(lx, hit.Y, lz, (byte)((meta & 0xE0) | pitch));
+                        // Tier 8 #48 — Note Block RMB. Increments the
+                        // pitch metadata 0..24 (Alpha's 25-note range:
+                        // F#3 → F#5) and plays a placeholder click. Real
+                        // procedural pitched audio is a follow-up; the
+                        // pitch storage + interaction loop is correct
+                        // already, so plugging a synth in later is just
+                        // a one-call swap inside this branch.
+                        int ncx = (int)Math.Floor(hit.X / (float)Chunk.SizeX);
+                        int ncz = (int)Math.Floor(hit.Z / (float)Chunk.SizeZ);
+                        var ch = _world.GetChunk(ncx, ncz);
+                        if (ch != null)
+                        {
+                            int lx = hit.X - ncx * Chunk.SizeX;
+                            int lz = hit.Z - ncz * Chunk.SizeZ;
+                            byte meta = ch.GetMeta(lx, hit.Y, lz);
+                            int pitch = ((meta & 0x1F) + 1) % 25;
+                            ch.SetMeta(lx, hit.Y, lz, (byte)((meta & 0xE0) | pitch));
+                        }
+                        SfxBank.PlayClick();
+                        return true;
                     }
-                    SfxBank.PlayClick();
-                    return true;
-                }
                 case BlockType.WoodDoorBlockBottom:
                 case BlockType.WoodDoorBlockTop:
                     // Tier 4 #16 — Wooden door RMB toggles open/closed
@@ -6882,7 +6882,7 @@ void main()
             var existing = _world.GetBlock(px, py, pz);
             if (existing != BlockType.Air
                 && existing != BlockType.Water && existing != BlockType.FlowingWater
-                && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
+                && existing != BlockType.Lava && existing != BlockType.FlowingLava) return false;
             // Cross-sprite blocks need a solid surface to attach to.
             // Torches branch on the hit-face normal: clicking the top of a
             // block places a floor torch; clicking a side face places a
@@ -6916,10 +6916,10 @@ void main()
                     // already known solid because IsRaycastTarget +
                     // hit.Nx/Nz ≠ 0 implies a cube face was hit.
                     BlockFacing facing;
-                    if (hit.Nx == 1)       facing = BlockFacing.East;
+                    if (hit.Nx == 1) facing = BlockFacing.East;
                     else if (hit.Nx == -1) facing = BlockFacing.West;
-                    else if (hit.Nz == 1)  facing = BlockFacing.South;
-                    else                   facing = BlockFacing.North;
+                    else if (hit.Nz == 1) facing = BlockFacing.South;
+                    else facing = BlockFacing.North;
                     if (!BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))) return false;
                     placedType = BlockData.WallTorchFor(facing);
                 }
@@ -7089,7 +7089,7 @@ void main()
             var existing = _world.GetBlock(px, py, pz);
             if (existing != BlockType.Air
                 && existing != BlockType.Water && existing != BlockType.FlowingWater
-                && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
+                && existing != BlockType.Lava && existing != BlockType.FlowingLava) return false;
 
             BlockType signType;
             BlockFacing facing;
@@ -7109,10 +7109,10 @@ void main()
                 // that direction.
                 if (!BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))) return false;
                 signType = BlockType.WallSign;
-                if (hit.Nx == 1)       facing = BlockFacing.East;
+                if (hit.Nx == 1) facing = BlockFacing.East;
                 else if (hit.Nx == -1) facing = BlockFacing.West;
-                else if (hit.Nz == 1)  facing = BlockFacing.South;
-                else                   facing = BlockFacing.North;
+                else if (hit.Nz == 1) facing = BlockFacing.South;
+                else facing = BlockFacing.North;
             }
 
             if (!_world.SetBlock(px, py, pz, signType)) return false;
@@ -7177,16 +7177,16 @@ void main()
             var existing = _world.GetBlock(px, py, pz);
             if (existing != BlockType.Air
                 && existing != BlockType.Water && existing != BlockType.FlowingWater
-                && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
+                && existing != BlockType.Lava && existing != BlockType.FlowingLava) return false;
 
             // Wall must be solid (the ladder needs something to hang from).
             if (!BlockData.IsSolid(_world.GetBlock(hit.X, hit.Y, hit.Z))) return false;
 
             BlockFacing facing;
-            if (hit.Nx == 1)       facing = BlockFacing.East;
+            if (hit.Nx == 1) facing = BlockFacing.East;
             else if (hit.Nx == -1) facing = BlockFacing.West;
-            else if (hit.Nz == 1)  facing = BlockFacing.South;
-            else                   facing = BlockFacing.North;
+            else if (hit.Nz == 1) facing = BlockFacing.South;
+            else facing = BlockFacing.North;
 
             if (!_world.SetBlock(px, py, pz, BlockType.Ladder)) return false;
 
@@ -7222,7 +7222,7 @@ void main()
             var existing = _world.GetBlock(px, py, pz);
             if (existing != BlockType.Air
                 && existing != BlockType.Water && existing != BlockType.FlowingWater
-                && existing != BlockType.Lava  && existing != BlockType.FlowingLava) return false;
+                && existing != BlockType.Lava && existing != BlockType.FlowingLava) return false;
 
             if (!_world.SetBlock(px, py, pz, stairType)) return false;
 
@@ -7246,8 +7246,8 @@ void main()
                 {
                     case BlockFacing.North: facing = BlockFacing.South; break;
                     case BlockFacing.South: facing = BlockFacing.North; break;
-                    case BlockFacing.East:  facing = BlockFacing.West;  break;
-                    default:                facing = BlockFacing.East;  break;
+                    case BlockFacing.East: facing = BlockFacing.West; break;
+                    default: facing = BlockFacing.East; break;
                 }
                 byte meta = (byte)((byte)facing & 0x03);
                 chunk.SetMeta(lx, py, lz, meta);
@@ -7289,14 +7289,14 @@ void main()
             {
                 bool xAxis = axisIdx == 0;
                 for (int hOff = 0; hOff < 2; hOff++)
-                for (int vOff = 0; vOff < 3; vOff++)
-                {
-                    // (x0, y0, z0) = lower-left interior corner candidate.
-                    int x0 = wx, y0 = wy - vOff, z0 = wz;
-                    if (xAxis) x0 -= hOff; else z0 -= hOff;
-                    if (TryFillPortalIfFrameValid(x0, y0, z0, xAxis))
-                        return true;
-                }
+                    for (int vOff = 0; vOff < 3; vOff++)
+                    {
+                        // (x0, y0, z0) = lower-left interior corner candidate.
+                        int x0 = wx, y0 = wy - vOff, z0 = wz;
+                        if (xAxis) x0 -= hOff; else z0 -= hOff;
+                        if (TryFillPortalIfFrameValid(x0, y0, z0, xAxis))
+                            return true;
+                    }
             }
             return false;
         }
@@ -7311,15 +7311,15 @@ void main()
             // For xAxis=true: interior at (x0..x0+1, y0..y0+2, z0).
             // For xAxis=false: interior at (x0, y0..y0+2, z0..z0+1).
             for (int dh = 0; dh < 2; dh++)
-            for (int dv = 0; dv < 3; dv++)
-            {
-                int ix = xAxis ? x0 + dh : x0;
-                int iy = y0 + dv;
-                int iz = xAxis ? z0 : z0 + dh;
-                var t = _world.GetBlock(ix, iy, iz);
-                if (t != BlockType.Air
-                    && t != BlockType.Water && t != BlockType.FlowingWater) return false;
-            }
+                for (int dv = 0; dv < 3; dv++)
+                {
+                    int ix = xAxis ? x0 + dh : x0;
+                    int iy = y0 + dv;
+                    int iz = xAxis ? z0 : z0 + dh;
+                    var t = _world.GetBlock(ix, iy, iz);
+                    if (t != BlockType.Air
+                        && t != BlockType.Water && t != BlockType.FlowingWater) return false;
+                }
 
             // Frame cells around the interior — check each is obsidian.
             // Bottom row (y0-1) and top row (y0+3) span the 2 interior
@@ -7337,11 +7337,11 @@ void main()
             }
             for (int dv = 0; dv < 3; dv++)
             {
-                int leftX  = xAxis ? x0 - 1 : x0;
-                int leftZ  = xAxis ? z0     : z0 - 1;
+                int leftX = xAxis ? x0 - 1 : x0;
+                int leftZ = xAxis ? z0 : z0 - 1;
                 int rightX = xAxis ? x0 + 2 : x0;
-                int rightZ = xAxis ? z0     : z0 + 2;
-                if (_world.GetBlock(leftX,  y0 + dv, leftZ)  != BlockType.Obsidian) return false;
+                int rightZ = xAxis ? z0 : z0 + 2;
+                if (_world.GetBlock(leftX, y0 + dv, leftZ) != BlockType.Obsidian) return false;
                 if (_world.GetBlock(rightX, y0 + dv, rightZ) != BlockType.Obsidian) return false;
             }
 
@@ -7349,22 +7349,22 @@ void main()
             // and stamp the axis bit. Meta low-bit: 1=X-axis, 0=Z-axis.
             byte meta = (byte)(xAxis ? 0x01 : 0x00);
             for (int dh = 0; dh < 2; dh++)
-            for (int dv = 0; dv < 3; dv++)
-            {
-                int ix = xAxis ? x0 + dh : x0;
-                int iy = y0 + dv;
-                int iz = xAxis ? z0 : z0 + dh;
-                _world.SetBlock(ix, iy, iz, BlockType.NetherPortal);
-                int cx = ix >> 4, cz = iz >> 4;
-                var ch = _world.GetChunk(cx, cz);
-                if (ch != null)
+                for (int dv = 0; dv < 3; dv++)
                 {
-                    int lx = ix - (cx << 4);
-                    int lz = iz - (cz << 4);
-                    ch.SetMeta(lx, iy, lz, meta);
-                    _world.RecordMetaChange(ix, iy, iz);
+                    int ix = xAxis ? x0 + dh : x0;
+                    int iy = y0 + dv;
+                    int iz = xAxis ? z0 : z0 + dh;
+                    _world.SetBlock(ix, iy, iz, BlockType.NetherPortal);
+                    int cx = ix >> 4, cz = iz >> 4;
+                    var ch = _world.GetChunk(cx, cz);
+                    if (ch != null)
+                    {
+                        int lx = ix - (cx << 4);
+                        int lz = iz - (cz << 4);
+                        ch.SetMeta(lx, iy, lz, meta);
+                        _world.RecordMetaChange(ix, iy, iz);
+                    }
                 }
-            }
             return true;
         }
 
@@ -7657,15 +7657,15 @@ void main()
                         int seed = System.Environment.TickCount;
                         switch (kind)
                         {
-                            case "pig":      _world.Passives.Add(new Pig(spawnAt, seed));      AddChatLine("Pig spawned.");      break;
-                            case "cow":      _world.Passives.Add(new Cow(spawnAt, seed));      AddChatLine("Cow spawned.");      break;
-                            case "sheep":    _world.Passives.Add(new Sheep(spawnAt, seed));    AddChatLine("Sheep spawned.");    break;
-                            case "chicken":  _world.Passives.Add(new Chicken(spawnAt, seed));  AddChatLine("Chicken spawned.");  break;
-                            case "zombie":   _world.Hostiles.Add(new Zombie(spawnAt, seed));   AddChatLine("Zombie spawned.");   break;
+                            case "pig": _world.Passives.Add(new Pig(spawnAt, seed)); AddChatLine("Pig spawned."); break;
+                            case "cow": _world.Passives.Add(new Cow(spawnAt, seed)); AddChatLine("Cow spawned."); break;
+                            case "sheep": _world.Passives.Add(new Sheep(spawnAt, seed)); AddChatLine("Sheep spawned."); break;
+                            case "chicken": _world.Passives.Add(new Chicken(spawnAt, seed)); AddChatLine("Chicken spawned."); break;
+                            case "zombie": _world.Hostiles.Add(new Zombie(spawnAt, seed)); AddChatLine("Zombie spawned."); break;
                             case "skeleton": _world.Hostiles.Add(new Skeleton(spawnAt, seed)); AddChatLine("Skeleton spawned."); break;
-                            case "spider":   _world.Hostiles.Add(new Spider(spawnAt, seed));   AddChatLine("Spider spawned.");   break;
-                            case "creeper":  _world.Hostiles.Add(new Creeper(spawnAt, seed));  AddChatLine("Creeper spawned.");  break;
-                            default:         AddChatLine("Unknown mob '" + parts[1] + "'.");   break;
+                            case "spider": _world.Hostiles.Add(new Spider(spawnAt, seed)); AddChatLine("Spider spawned."); break;
+                            case "creeper": _world.Hostiles.Add(new Creeper(spawnAt, seed)); AddChatLine("Creeper spawned."); break;
+                            default: AddChatLine("Unknown mob '" + parts[1] + "'."); break;
                         }
                     }
                     break;
@@ -7703,7 +7703,7 @@ void main()
                     if (count > 64) count = 64;
                     var leftover = Input.Inventory.TryAdd(new ItemStack(bt, (byte)count));
                     if (leftover.IsEmpty) AddChatLine("Gave " + count + " " + bt + ".");
-                    else                  AddChatLine("Inventory full — added partial.");
+                    else AddChatLine("Inventory full — added partial.");
                     break;
                 default:
                     AddChatLine("Unknown command '/" + verb + "'. Try /help.");
@@ -7839,7 +7839,7 @@ void main()
                 // to the largest available rectangle is a TODO; the
                 // size fields stay in the data model so the polish
                 // path doesn't need a save-format bump.
-                Width  = 1,
+                Width = 1,
                 Height = 1,
                 Variant = variant,
             });
@@ -8075,63 +8075,63 @@ void main()
             int cz = (int)System.Math.Floor(Camera.Position.Z);
             const int R = 6;
             for (int dx = -R; dx <= R && emitted < MaxPerTick; dx++)
-            for (int dy = -R; dy <= R && emitted < MaxPerTick; dy++)
-            for (int dz = -R; dz <= R && emitted < MaxPerTick; dz++)
-            {
-                int x = cx + dx, y = cy + dy, z = cz + dz;
-                var t = _world.GetBlock(x, y, z);
-                if (t == BlockType.Lava || t == BlockType.FlowingLava)
-                {
-                    // Only the top of a lava cell looks alive — skip cells
-                    // with another lava block above (interior of a lake).
-                    var above = _world.GetBlock(x, y + 1, z);
-                    if (above == BlockType.Lava || above == BlockType.FlowingLava) continue;
-                    // ~5% per cell per tick → a single lava cell emits
-                    // ~one bubble every two seconds; a 5x5 lava pool
-                    // emits ~one per tick.
-                    if (_dropRng.NextDouble() < 0.05)
+                for (int dy = -R; dy <= R && emitted < MaxPerTick; dy++)
+                    for (int dz = -R; dz <= R && emitted < MaxPerTick; dz++)
                     {
-                        _particles.SpawnLavaBubble(x, y, z);
-                        emitted++;
-                    }
-                }
-                else if (BlockData.IsTorch(t))
-                {
-                    // Smoke wisp emitted from the flame tip. Floor
-                    // torches have their tip at (x+0.5, y+0.85, z+0.5);
-                    // wall torches lean toward their facing, so we offset
-                    // the smoke spawn in that direction to match.
-                    float fx = x + 0.5f, fy = y + 0.85f, fz = z + 0.5f;
-                    if (BlockData.IsWallTorch(t))
-                    {
-                        var f = BlockData.WallTorchFacing(t);
-                        switch (f)
+                        int x = cx + dx, y = cy + dy, z = cz + dz;
+                        var t = _world.GetBlock(x, y, z);
+                        if (t == BlockType.Lava || t == BlockType.FlowingLava)
                         {
-                            case BlockFacing.East:  fx += 0.4f; break;
-                            case BlockFacing.West:  fx -= 0.4f; break;
-                            case BlockFacing.South: fz += 0.4f; break;
-                            case BlockFacing.North: fz -= 0.4f; break;
+                            // Only the top of a lava cell looks alive — skip cells
+                            // with another lava block above (interior of a lake).
+                            var above = _world.GetBlock(x, y + 1, z);
+                            if (above == BlockType.Lava || above == BlockType.FlowingLava) continue;
+                            // ~5% per cell per tick → a single lava cell emits
+                            // ~one bubble every two seconds; a 5x5 lava pool
+                            // emits ~one per tick.
+                            if (_dropRng.NextDouble() < 0.05)
+                            {
+                                _particles.SpawnLavaBubble(x, y, z);
+                                emitted++;
+                            }
+                        }
+                        else if (BlockData.IsTorch(t))
+                        {
+                            // Smoke wisp emitted from the flame tip. Floor
+                            // torches have their tip at (x+0.5, y+0.85, z+0.5);
+                            // wall torches lean toward their facing, so we offset
+                            // the smoke spawn in that direction to match.
+                            float fx = x + 0.5f, fy = y + 0.85f, fz = z + 0.5f;
+                            if (BlockData.IsWallTorch(t))
+                            {
+                                var f = BlockData.WallTorchFacing(t);
+                                switch (f)
+                                {
+                                    case BlockFacing.East: fx += 0.4f; break;
+                                    case BlockFacing.West: fx -= 0.4f; break;
+                                    case BlockFacing.South: fz += 0.4f; break;
+                                    case BlockFacing.North: fz -= 0.4f; break;
+                                }
+                            }
+                            // ~3% per cell per tick — a single torch puffs ~one
+                            // smoke every ~3 seconds, gentle enough to not draw
+                            // attention away from the flame itself.
+                            if (_dropRng.NextDouble() < 0.03)
+                            {
+                                _particles.SpawnTorchSmoke(fx, fy, fz);
+                                emitted++;
+                            }
                         }
                     }
-                    // ~3% per cell per tick — a single torch puffs ~one
-                    // smoke every ~3 seconds, gentle enough to not draw
-                    // attention away from the flame itself.
-                    if (_dropRng.NextDouble() < 0.03)
-                    {
-                        _particles.SpawnTorchSmoke(fx, fy, fz);
-                        emitted++;
-                    }
-                }
-            }
         }
 
         private void ScanTorchFallAround(int wx, int wy, int wz)
         {
-            TryFallTorchAt(wx,     wy + 1, wz);     // floor torch above
-            TryFallTorchAt(wx + 1, wy,     wz);     // TorchEast (wall on -X)
-            TryFallTorchAt(wx - 1, wy,     wz);     // TorchWest (wall on +X)
-            TryFallTorchAt(wx,     wy,     wz + 1); // TorchSouth (wall on -Z)
-            TryFallTorchAt(wx,     wy,     wz - 1); // TorchNorth (wall on +Z)
+            TryFallTorchAt(wx, wy + 1, wz);     // floor torch above
+            TryFallTorchAt(wx + 1, wy, wz);     // TorchEast (wall on -X)
+            TryFallTorchAt(wx - 1, wy, wz);     // TorchWest (wall on +X)
+            TryFallTorchAt(wx, wy, wz + 1); // TorchSouth (wall on -Z)
+            TryFallTorchAt(wx, wy, wz - 1); // TorchNorth (wall on +Z)
         }
 
         private void TryFallTorchAt(int x, int y, int z)
@@ -8154,10 +8154,10 @@ void main()
                 int sx = x, sy = y, sz = z;
                 switch (f)
                 {
-                    case BlockFacing.East:  sx -= 1; break;
-                    case BlockFacing.West:  sx += 1; break;
+                    case BlockFacing.East: sx -= 1; break;
+                    case BlockFacing.West: sx += 1; break;
                     case BlockFacing.South: sz -= 1; break;
-                    default:                sz += 1; break; // North
+                    default: sz += 1; break; // North
                 }
                 supported = BlockData.IsSolid(_world.GetBlock(sx, sy, sz));
             }
@@ -8237,7 +8237,7 @@ void main()
             // Skip items we can't yet pick up cleanly: fluid sources just
             // disappear (matches Alpha — broken water doesn't drop).
             if (type == BlockType.Water || type == BlockType.FlowingWater
-                || type == BlockType.Lava  || type == BlockType.FlowingLava) return;
+                || type == BlockType.Lava || type == BlockType.FlowingLava) return;
 
             // Tier / kind gate: stone broken with bare hands or a wooden
             // shovel breaks but yields nothing. Ores require a pickaxe
@@ -8630,11 +8630,11 @@ void main()
 
             var arrow = new ArrowProjectile
             {
-                Position    = origin + dir * 0.5f,
-                Velocity    = dir * speed,
-                Origin      = origin,
-                Damage      = dmg,
-                HasLanded   = false,
+                Position = origin + dir * 0.5f,
+                Velocity = dir * speed,
+                Origin = origin,
+                Damage = dmg,
+                HasLanded = false,
                 LandedTimer = 0f,
             };
             _arrows.Add(arrow);
@@ -8897,11 +8897,11 @@ void main()
 
             var p = new ThrownProjectile
             {
-                Position       = origin + dir * 0.5f,
-                Velocity       = dir * ThrownProjectile.MuzzleSpeed,
-                Origin         = origin,
+                Position = origin + dir * 0.5f,
+                Velocity = dir * ThrownProjectile.MuzzleSpeed,
+                Origin = origin,
                 ProjectileKind = kind,
-                Rng            = rng,
+                Rng = rng,
             };
             _thrown.Add(p);
         }
@@ -9245,7 +9245,7 @@ void main()
                     {
                         Position = muzzle + aimDir * (g.HalfWidth + 0.5f),
                         Velocity = aimDir * FireballProjectile.MuzzleSpeed,
-                        Origin   = muzzle,
+                        Origin = muzzle,
                         TimeAliveSeconds = 0f,
                     });
                     g.NotifyFired();
@@ -9286,7 +9286,7 @@ void main()
                         {
                             Position = muzzle + spreadDir * (b.HalfWidth + 0.4f),
                             Velocity = spreadDir * FireballProjectile.MuzzleSpeed,
-                            Origin   = muzzle,
+                            Origin = muzzle,
                             TimeAliveSeconds = 0f,
                         });
                     }
@@ -9339,12 +9339,12 @@ void main()
                     if (dmg < 1) dmg = 1;
                     _arrows.Add(new ArrowProjectile
                     {
-                        Position    = muzzle + aimDir * 0.5f,
-                        Velocity    = aimDir * speed,
-                        Origin      = muzzle,
-                        Damage      = dmg,
-                        FromMob     = true,
-                        HasLanded   = false,
+                        Position = muzzle + aimDir * 0.5f,
+                        Velocity = aimDir * speed,
+                        Origin = muzzle,
+                        Damage = dmg,
+                        FromMob = true,
+                        HasLanded = false,
                         LandedTimer = 0f,
                     });
                     sk.NotifyFired();
@@ -9423,9 +9423,9 @@ void main()
             {
                 var boat = _boats[i];
                 bool isHostsBoat = Player != null && Player.MountedBoat == boat;
-                Player rider     = isHostsBoat ? Player : null;
-                bool forward     = isHostsBoat && Input != null && Input.IsDown(KeyBindings.MoveForward);
-                float yaw        = isHostsBoat ? Camera.Yaw : boat.Yaw;
+                Player rider = isHostsBoat ? Player : null;
+                bool forward = isHostsBoat && Input != null && Input.IsDown(KeyBindings.MoveForward);
+                float yaw = isHostsBoat ? Camera.Yaw : boat.Yaw;
                 boat.Tick(dt, _world, rider, forward, yaw);
 
                 // While the host is mounted, the player position
@@ -9494,9 +9494,9 @@ void main()
             {
                 var cart = _minecarts[i];
                 bool isHostsCart = Player != null && Player.MountedMinecart == cart;
-                Player rider     = isHostsCart ? Player : null;
-                bool forward     = isHostsCart && Input != null && Input.IsDown(KeyBindings.MoveForward);
-                float yaw        = isHostsCart ? Camera.Yaw : cart.Yaw;
+                Player rider = isHostsCart ? Player : null;
+                bool forward = isHostsCart && Input != null && Input.IsDown(KeyBindings.MoveForward);
+                float yaw = isHostsCart ? Camera.Yaw : cart.Yaw;
                 cart.Tick(dt, _world, rider, forward, yaw);
 
                 if (isHostsCart)
@@ -9810,11 +9810,11 @@ void main()
 
             var bobber = new Bobber
             {
-                Position    = endpoint,
-                CatchTimer  = catchSec,
-                Caught      = false,
-                AgeSec      = 0f,
-                Owner       = Player,
+                Position = endpoint,
+                CatchTimer = catchSec,
+                Caught = false,
+                AgeSec = 0f,
+                Owner = Player,
             };
             _bobbers.Add(bobber);
             Player.ActiveBobber = bobber;
@@ -10280,7 +10280,7 @@ void main()
             {
                 Vector3 mobMin, mobMax;
                 if (bestPassive != null) bestPassive.GetAabb(out mobMin, out mobMax);
-                else                     bestHostile.GetAabb(out mobMin, out mobMax);
+                else bestHostile.GetAabb(out mobMin, out mobMax);
                 var c = (mobMin + mobMax) * 0.5f;
                 _particles.SpawnCritBurst(c.X, c.Y, c.Z);
             }
@@ -10298,9 +10298,9 @@ void main()
             for (int axis = 0; axis < 3; axis++)
             {
                 float o = axis == 0 ? origin.X : (axis == 1 ? origin.Y : origin.Z);
-                float d = axis == 0 ? dir.X    : (axis == 1 ? dir.Y    : dir.Z);
-                float lo = axis == 0 ? min.X   : (axis == 1 ? min.Y   : min.Z);
-                float hi = axis == 0 ? max.X   : (axis == 1 ? max.Y   : max.Z);
+                float d = axis == 0 ? dir.X : (axis == 1 ? dir.Y : dir.Z);
+                float lo = axis == 0 ? min.X : (axis == 1 ? min.Y : min.Z);
+                float hi = axis == 0 ? max.X : (axis == 1 ? max.Y : max.Z);
                 if (System.Math.Abs(d) < 1e-8f)
                 {
                     if (o < lo || o > hi) { t = 0f; return false; }
@@ -10335,17 +10335,17 @@ void main()
             if (stack.IsEmpty) return 1;
             if (!BlockData.IsTool(stack.Type)) return 1;
             var kind = ToolData.GetKind(stack.Type);
-            var mat  = ToolData.GetMaterial(stack.Type);
+            var mat = ToolData.GetMaterial(stack.Type);
 
             int swordTable;
             switch (mat)
             {
-                case ToolMaterial.Wood:    swordTable = 5; break;
-                case ToolMaterial.Stone:   swordTable = 6; break;
-                case ToolMaterial.Iron:    swordTable = 7; break;
-                case ToolMaterial.Gold:    swordTable = 5; break;
+                case ToolMaterial.Wood: swordTable = 5; break;
+                case ToolMaterial.Stone: swordTable = 6; break;
+                case ToolMaterial.Iron: swordTable = 7; break;
+                case ToolMaterial.Gold: swordTable = 5; break;
                 case ToolMaterial.Diamond: swordTable = 8; break;
-                default:                   swordTable = 1; break;
+                default: swordTable = 1; break;
             }
             // Each rung below sword drops 2 damage (sword 5/6/7/5/8 →
             // axe 3/4/5/3/6 → pickaxe 2/3/4/2/5 → shovel 1/2/3/1/4 →
@@ -10353,11 +10353,11 @@ void main()
             int rung;
             switch (kind)
             {
-                case ToolKind.Sword:   rung = 0; break;
-                case ToolKind.Axe:     rung = 2; break;
+                case ToolKind.Sword: rung = 0; break;
+                case ToolKind.Axe: rung = 2; break;
                 case ToolKind.Pickaxe: rung = 3; break;
-                case ToolKind.Shovel:  rung = 4; break;
-                default:               rung = 999; break;
+                case ToolKind.Shovel: rung = 4; break;
+                default: rung = 999; break;
             }
             int dmg = swordTable - rung;
             return System.Math.Max(1, dmg);
@@ -10700,9 +10700,9 @@ void main()
                 int hotSlot = InventoryScreen.HitTestHotbar(screenW, screenH, mx, my, /*creative*/true);
                 if (hotSlot >= 0)
                 {
-                    if (shift)            inv.HandleShiftClickSlot(hotSlot);
+                    if (shift) inv.HandleShiftClickSlot(hotSlot);
                     else if (button == 2) inv.HandleRightClickSlot(hotSlot);
-                    else                  inv.HandleLeftClickSlot(hotSlot);
+                    else inv.HandleLeftClickSlot(hotSlot);
                     return;
                 }
 
@@ -10718,9 +10718,9 @@ void main()
                 int armorSlot = InventoryScreen.HitTestArmor(screenW, screenH, mx, my, /*creative*/true);
                 if (armorSlot >= 0)
                 {
-                    if (shift)            inv.HandleShiftClickSlot(armorSlot);
+                    if (shift) inv.HandleShiftClickSlot(armorSlot);
                     else if (button == 2) inv.HandleRightClickSlot(armorSlot);
-                    else                  inv.HandleLeftClickSlot(armorSlot);
+                    else inv.HandleLeftClickSlot(armorSlot);
                     return;
                 }
 
@@ -10853,9 +10853,9 @@ void main()
                 //       Inventory.HandleRightClickSlot for the table).
                 // Shift+click bypasses both and quick-moves to the
                 // opposite range (hotbar ↔ main grid).
-                if (shift)            inv.HandleShiftClickSlot(slot);
+                if (shift) inv.HandleShiftClickSlot(slot);
                 else if (button == 2) inv.HandleRightClickSlot(slot);
-                else                  inv.HandleLeftClickSlot(slot);
+                else inv.HandleLeftClickSlot(slot);
                 return;
             }
             // Outside the panel: drop the cursor stack into the world.
@@ -10996,7 +10996,7 @@ void main()
             var inv = Input.Inventory;
             if (inv.Cursor.IsEmpty) return;
             int rows = ChestRows;
-            var ce  = _world.TryGetChestEntity(_chestPos.x,  _chestPos.y,  _chestPos.z);
+            var ce = _world.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
             var ce2 = _isDoubleChest
                 ? _world.TryGetChestEntity(_chestPos2.x, _chestPos2.y, _chestPos2.z)
                 : null;
@@ -11393,7 +11393,7 @@ void main()
                     fe.Input = inv.TryAdd(fe.Input);
                 }
                 else if (button == 2) HandleRightClickSlotRef(ref fe.Input, inv);
-                else                  HandleLeftClickSlotRef(ref fe.Input, inv);
+                else HandleLeftClickSlotRef(ref fe.Input, inv);
                 return;
             }
             if (slot == FurnaceScreen.FuelSlot)
@@ -11403,7 +11403,7 @@ void main()
                     fe.Fuel = inv.TryAdd(fe.Fuel);
                 }
                 else if (button == 2) HandleRightClickSlotRef(ref fe.Fuel, inv);
-                else                  HandleLeftClickSlotRef(ref fe.Fuel, inv);
+                else HandleLeftClickSlotRef(ref fe.Fuel, inv);
                 return;
             }
 
@@ -11599,7 +11599,7 @@ void main()
                 return;
             }
 
-            var ce  = _world.TryGetChestEntity(_chestPos.x,  _chestPos.y,  _chestPos.z);
+            var ce = _world.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
             var ce2 = _isDoubleChest
                 ? _world.TryGetChestEntity(_chestPos2.x, _chestPos2.y, _chestPos2.z)
                 : null;
@@ -11624,19 +11624,19 @@ void main()
                 if (chestIdx < ChestTileEntity.SlotCount)
                 {
                     targetEntity = ce;
-                    targetIdx    = chestIdx;
+                    targetIdx = chestIdx;
                 }
                 else
                 {
                     targetEntity = ce2;
-                    targetIdx    = chestIdx - ChestTileEntity.SlotCount;
+                    targetIdx = chestIdx - ChestTileEntity.SlotCount;
                 }
                 if (shift)
                 {
                     targetEntity.Slots[targetIdx] = inv.TryAdd(targetEntity.Slots[targetIdx]);
                 }
                 else if (button == 2) HandleRightClickSlotRef(ref targetEntity.Slots[targetIdx], inv);
-                else                  HandleLeftClickSlotRef(ref targetEntity.Slots[targetIdx], inv);
+                else HandleLeftClickSlotRef(ref targetEntity.Slots[targetIdx], inv);
                 return;
             }
 
@@ -11738,7 +11738,7 @@ void main()
                     de.Slots[dispIdx] = inv.TryAdd(de.Slots[dispIdx]);
                 }
                 else if (button == 2) HandleRightClickSlotRef(ref de.Slots[dispIdx], inv);
-                else                  HandleLeftClickSlotRef(ref de.Slots[dispIdx], inv);
+                else HandleLeftClickSlotRef(ref de.Slots[dispIdx], inv);
                 return;
             }
 
@@ -12132,12 +12132,12 @@ void main()
         private Vector3 ComputeSkyColor(Vector3 sun)
         {
             float h = sun.Y;
-            var day   = new Vector3(0.52f, 0.80f, 0.92f);
-            var dusk  = new Vector3(0.95f, 0.45f, 0.25f);
+            var day = new Vector3(0.52f, 0.80f, 0.92f);
+            var dusk = new Vector3(0.95f, 0.45f, 0.25f);
             var night = new Vector3(0.02f, 0.04f, 0.10f);
 
             if (h >= 0.2f) return day;
-            if (h >= 0f)   return Lerp(dusk, day, h / 0.2f);
+            if (h >= 0f) return Lerp(dusk, day, h / 0.2f);
             if (h >= -0.2f) return Lerp(night, dusk, (h + 0.2f) / 0.2f);
             return night;
         }
@@ -12161,21 +12161,21 @@ void main()
             switch (b)
             {
                 case Biome.Desert: return new Vector3(1.05f, 1.00f, 0.85f); // warmer / yellow-shifted
-                case Biome.Snow:   return new Vector3(0.92f, 0.97f, 1.05f); // cooler / blue-white
+                case Biome.Snow: return new Vector3(0.92f, 0.97f, 1.05f); // cooler / blue-white
                 case Biome.Forest: return new Vector3(0.95f, 1.02f, 0.95f); // faint green tinge
-                default:           return new Vector3(1.00f, 1.00f, 1.00f); // plains unchanged
+                default: return new Vector3(1.00f, 1.00f, 1.00f); // plains unchanged
             }
         }
 
         private Vector3 ComputeZenithColor(Vector3 sun)
         {
             float h = sun.Y;
-            var day   = new Vector3(0.30f, 0.55f, 0.90f);   // deep sky blue
-            var dusk  = new Vector3(0.18f, 0.10f, 0.32f);   // dark plum
+            var day = new Vector3(0.30f, 0.55f, 0.90f);   // deep sky blue
+            var dusk = new Vector3(0.18f, 0.10f, 0.32f);   // dark plum
             var night = new Vector3(0.005f, 0.01f, 0.04f);  // near-black
 
             if (h >= 0.2f) return day;
-            if (h >= 0f)   return Lerp(dusk, day, h / 0.2f);
+            if (h >= 0f) return Lerp(dusk, day, h / 0.2f);
             if (h >= -0.2f) return Lerp(night, dusk, (h + 0.2f) / 0.2f);
             return night;
         }
@@ -12244,7 +12244,7 @@ void main()
                 int pcz = (int)Math.Floor(Player.Position.Z);
                 playerBiome = BiomeMap.Classify(_world.Noise, pcx, pcz);
                 Vector3 tint = BiomeSkyTint(playerBiome);
-                sky    = new Vector3(sky.X    * tint.X, sky.Y    * tint.Y, sky.Z    * tint.Z);
+                sky = new Vector3(sky.X * tint.X, sky.Y * tint.Y, sky.Z * tint.Z);
                 zenith = new Vector3(zenith.X * tint.X, zenith.Y * tint.Y, zenith.Z * tint.Z);
             }
 
@@ -12256,9 +12256,9 @@ void main()
             float lightningBoost = _weather?.LightningBoost ?? 1f;
             if (lightningBoost > 1.001f)
             {
-                sky    = new Vector3(Math.Min(1f, sky.X    * lightningBoost),
-                                     Math.Min(1f, sky.Y    * lightningBoost),
-                                     Math.Min(1f, sky.Z    * lightningBoost));
+                sky = new Vector3(Math.Min(1f, sky.X * lightningBoost),
+                                     Math.Min(1f, sky.Y * lightningBoost),
+                                     Math.Min(1f, sky.Z * lightningBoost));
                 zenith = new Vector3(Math.Min(1f, zenith.X * lightningBoost),
                                      Math.Min(1f, zenith.Y * lightningBoost),
                                      Math.Min(1f, zenith.Z * lightningBoost));
@@ -12281,7 +12281,7 @@ void main()
             // the unlit corners aren't pitch black.
             if (_world != null && _world.Dimension == Dimension.Nether)
             {
-                sky    = new Vector3(0.20f, 0.05f, 0.03f);
+                sky = new Vector3(0.20f, 0.05f, 0.03f);
                 zenith = new Vector3(0.10f, 0.02f, 0.01f);
                 skyLightLevel = 0f;
                 ambient = 0.18f;
@@ -12365,7 +12365,7 @@ void main()
             {
                 fogColor = new Vector3(0.30f, 0.06f, 0.02f);
                 fogStart = 12f;
-                fogEnd   = 72f;
+                fogEnd = 72f;
                 fogMaxAlpha = 0.95f;
             }
 
@@ -12379,7 +12379,7 @@ void main()
                 {
                     fogColor = new Vector3(0.55f, 0.18f, 0.03f);  // dim red-orange
                     fogStart = 0.5f;
-                    fogEnd   = 3.0f;
+                    fogEnd = 3.0f;
                 }
                 else
                 {
@@ -12392,7 +12392,7 @@ void main()
                     // hard edge — it gradually murks out — and this
                     // gives the player a multi-chunk gradient instead
                     // of a tight hard cutoff.
-                    fogEnd   = 51.0f;
+                    fogEnd = 51.0f;
                     // Cap the fog mix at 80 % so distant chunks retain
                     // 20 % of their real colour at the far edge of the
                     // gradient — reads as "deeply tinted" rather than
@@ -12660,9 +12660,9 @@ void main()
                 // pause backdrop first so dismissing options reveals it
                 // without a one-frame flicker. Tier 9 #53 V3 adds the
                 // Controls sub-screen as a peer of Options under Pause.
-                if (_isControlsOpen)     RenderControlsMenu(width, height);
+                if (_isControlsOpen) RenderControlsMenu(width, height);
                 else if (_isOptionsOpen) RenderOptionsMenu(width, height);
-                else                     RenderPauseMenu(width, height);
+                else RenderPauseMenu(width, height);
             }
 
             // F2 screenshot — last thing in the frame so the captured
@@ -13264,10 +13264,10 @@ void main()
                         // Without it glyphs render mirrored (flipped
                         // left-right).
                         EmitSignGlyphQuad(
-                            blX, yB, blZ,  u1, v1,   // bottom-left  (player's right-bottom)
-                            brX, yB, brZ,  u0, v1,   // bottom-right (player's left-bottom)
-                            brX, yT, brZ,  u0, v0,   // top-right    (player's left-top)
-                            blX, yT, blZ,  u1, v0);  // top-left     (player's right-top)
+                            blX, yB, blZ, u1, v1,   // bottom-left  (player's right-bottom)
+                            brX, yB, brZ, u0, v1,   // bottom-right (player's left-bottom)
+                            brX, yT, brZ, u0, v0,   // top-right    (player's left-top)
+                            blX, yT, blZ, u1, v0);  // top-left     (player's right-top)
                     }
                 }
             }
@@ -13405,7 +13405,7 @@ void main()
             // (_breakCubeMesh) spans [0,1]^3 (with tiny inflation), so we
             // first translate by -0.5 to centre on origin, then scale.
             var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
-            var sizeScale   = Matrix4.CreateScale(0.25f);
+            var sizeScale = Matrix4.CreateScale(0.25f);
 
             BlockType lastType = BlockType.Air;
             for (int i = 0; i < _drops.Count; i++)
@@ -13419,9 +13419,9 @@ void main()
 
                 // Cute Alpha-style spin around vertical + tiny vertical bob.
                 float spin = d.AgeSec * 1.5f;
-                float bob  = (float)System.Math.Sin(d.AgeSec * 2.0) * 0.05f;
+                float bob = (float)System.Math.Sin(d.AgeSec * 2.0) * 0.05f;
 
-                var rotY  = Matrix4.CreateRotationY(spin);
+                var rotY = Matrix4.CreateRotationY(spin);
                 var trans = Matrix4.CreateTranslation(d.Position.X,
                                                       d.Position.Y + bob,
                                                       d.Position.Z);
@@ -13490,8 +13490,8 @@ void main()
             // head, and the orient matrix below maps mesh +Y to the
             // flight direction so the head ends up forward.
             var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, 0f);
-            var sizeScale   = Matrix4.CreateScale(arrowSize);
-            var preRot      = Matrix4.CreateRotationZ(MathHelper.PiOver4);
+            var sizeScale = Matrix4.CreateScale(arrowSize);
+            var preRot = Matrix4.CreateRotationZ(MathHelper.PiOver4);
 
             for (int i = 0; i < _arrows.Count; i++)
             {
@@ -13561,10 +13561,10 @@ void main()
                 // Row-vector orient: row 0 is mesh +X mapping, row 1
                 // is mesh +Y mapping, row 2 is mesh +Z mapping.
                 Matrix4 orient = new Matrix4(
-                    vUp.X,    vUp.Y,    vUp.Z,    0f,
-                    dir.X,    dir.Y,    dir.Z,    0f,
+                    vUp.X, vUp.Y, vUp.Z, 0f,
+                    dir.X, dir.Y, dir.Z, 0f,
                     wRight.X, wRight.Y, wRight.Z, 0f,
-                    0f,       0f,       0f,       1f);
+                    0f, 0f, 0f, 1f);
                 var trans = Matrix4.CreateTranslation(a.Position);
 
                 // Single textured quad oriented along the flight axis.
@@ -13625,7 +13625,7 @@ void main()
             // matrix build is cheap (only as many entries as live
             // projectiles, capped by physics/range).
             var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
-            var sizeScale   = Matrix4.CreateScale(ThrownProjectile.RenderHalfSize * 2f);
+            var sizeScale = Matrix4.CreateScale(ThrownProjectile.RenderHalfSize * 2f);
 
             for (int i = 0; i < _thrown.Count; i++)
             {
@@ -13655,7 +13655,7 @@ void main()
 
             var vp = _frameVp;
             var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
-            var sizeScale   = Matrix4.CreateScale(FireballProjectile.RenderHalfSize * 2f);
+            var sizeScale = Matrix4.CreateScale(FireballProjectile.RenderHalfSize * 2f);
 
             for (int i = 0; i < _fireballs.Count; i++)
             {
@@ -13683,7 +13683,7 @@ void main()
 
             var vp = _frameVp;
             var deckColor = new Vector3(0.55f, 0.38f, 0.20f);  // wood-plank brown
-            var rimColor  = new Vector3(0.40f, 0.26f, 0.12f);  // darker brown for the side rails
+            var rimColor = new Vector3(0.40f, 0.26f, 0.12f);  // darker brown for the side rails
 
             for (int i = 0; i < _boats.Count; i++)
             {
@@ -13728,8 +13728,8 @@ void main()
             _overlayShader.SetFloat("uAlpha", 1f);
 
             var vp = _frameVp;
-            var bodyColor  = new Vector3(0.40f, 0.42f, 0.48f); // dark iron
-            var rimColor   = new Vector3(0.22f, 0.22f, 0.26f); // darker rim
+            var bodyColor = new Vector3(0.40f, 0.42f, 0.48f); // dark iron
+            var rimColor = new Vector3(0.22f, 0.22f, 0.26f); // darker rim
             var wheelColor = new Vector3(0.15f, 0.15f, 0.18f);
 
             for (int i = 0; i < _minecarts.Count; i++)
@@ -13803,7 +13803,7 @@ void main()
             var vp = _frameVp;
 
             var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
-            var sizeScale   = Matrix4.CreateScale(Bobber.RenderHalfSize * 2f);
+            var sizeScale = Matrix4.CreateScale(Bobber.RenderHalfSize * 2f);
 
             for (int i = 0; i < _bobbers.Count; i++)
             {
@@ -13847,7 +13847,7 @@ void main()
             var vp = _frameVp;
 
             var localCentre = Matrix4.CreateTranslation(0f, 0f, 0f);
-            var sizeScale   = Matrix4.CreateScale(FallingBlockEntity.RenderScale);
+            var sizeScale = Matrix4.CreateScale(FallingBlockEntity.RenderScale);
 
             for (int i = 0; i < falling.Count; i++)
             {
@@ -13913,38 +13913,38 @@ void main()
             int cy = (int)System.Math.Floor(center.Y);
             int cz = (int)System.Math.Floor(center.Z);
             for (int dy = -r; dy <= r; dy++)
-            for (int dx = -r; dx <= r; dx++)
-            for (int dz = -r; dz <= r; dz++)
-            {
-                float dist2 = dx * dx + dy * dy + dz * dz;
-                if (dist2 > r2) continue;
-                int wx = cx + dx, wy = cy + dy, wz = cz + dz;
-                var t = _world.GetBlock(wx, wy, wz);
-                if (t == BlockType.Air) continue;
-                if (BlockData.IsBlastResistant(t)) continue;
-                // Skip fluids — clearing a water source mid-blast
-                // creates a draining cascade that overwhelms the
-                // fluid tick. Alpha behaves the same; lava + water
-                // are blast-immune in practice.
-                if (t == BlockType.Water || t == BlockType.FlowingWater
-                 || t == BlockType.Lava  || t == BlockType.FlowingLava) continue;
-                // Chained TNT — re-prime instead of vaporising.
-                if (t == BlockType.Tnt)
-                {
-                    _world.SetBlock(wx, wy, wz, BlockType.Air);
-                    var chained = new PrimedTntEntity(
-                        new Vector3(wx + 0.5f, wy + 0.5f, wz + 0.5f));
-                    chained.FuseSeconds = 0.5f + (float)_dropRng.NextDouble() * 1.5f;
-                    _world.AddPrimedTnt(chained);
-                    continue;
-                }
-                // Probabilistic drop (1-in-4 — Alpha 25 % rule).
-                if (_dropRng.Next(4) == 0)
-                {
-                    SpawnBreakDrop(wx, wy, wz, t, BlockType.Air);
-                }
-                _world.SetBlock(wx, wy, wz, BlockType.Air);
-            }
+                for (int dx = -r; dx <= r; dx++)
+                    for (int dz = -r; dz <= r; dz++)
+                    {
+                        float dist2 = dx * dx + dy * dy + dz * dz;
+                        if (dist2 > r2) continue;
+                        int wx = cx + dx, wy = cy + dy, wz = cz + dz;
+                        var t = _world.GetBlock(wx, wy, wz);
+                        if (t == BlockType.Air) continue;
+                        if (BlockData.IsBlastResistant(t)) continue;
+                        // Skip fluids — clearing a water source mid-blast
+                        // creates a draining cascade that overwhelms the
+                        // fluid tick. Alpha behaves the same; lava + water
+                        // are blast-immune in practice.
+                        if (t == BlockType.Water || t == BlockType.FlowingWater
+                         || t == BlockType.Lava || t == BlockType.FlowingLava) continue;
+                        // Chained TNT — re-prime instead of vaporising.
+                        if (t == BlockType.Tnt)
+                        {
+                            _world.SetBlock(wx, wy, wz, BlockType.Air);
+                            var chained = new PrimedTntEntity(
+                                new Vector3(wx + 0.5f, wy + 0.5f, wz + 0.5f));
+                            chained.FuseSeconds = 0.5f + (float)_dropRng.NextDouble() * 1.5f;
+                            _world.AddPrimedTnt(chained);
+                            continue;
+                        }
+                        // Probabilistic drop (1-in-4 — Alpha 25 % rule).
+                        if (_dropRng.Next(4) == 0)
+                        {
+                            SpawnBreakDrop(wx, wy, wz, t, BlockType.Air);
+                        }
+                        _world.SetBlock(wx, wy, wz, BlockType.Air);
+                    }
             // Player damage — falloff from centre. 8 HP at point-
             // blank, 0 HP at radius edge. Skipped if the player is
             // outside the radius.
@@ -14018,9 +14018,9 @@ void main()
                     }
                     else
                     {
-                        var basePink   = new Vector3(0.96f, 0.55f, 0.65f);
-                        var baseSnout  = new Vector3(0.78f, 0.42f, 0.50f);
-                        var bodyColor  = Vector3.Lerp(basePink,  hurtRed, hurt);
+                        var basePink = new Vector3(0.96f, 0.55f, 0.65f);
+                        var baseSnout = new Vector3(0.78f, 0.42f, 0.50f);
+                        var bodyColor = Vector3.Lerp(basePink, hurtRed, hurt);
                         var snoutColor = Vector3.Lerp(baseSnout, hurtRed, hurt);
                         DrawPig(rigToWorld, vp, bodyColor, snoutColor);
                     }
@@ -14051,9 +14051,9 @@ void main()
                     }
                     else
                     {
-                        var hide  = Vector3.Lerp(new Vector3(0.32f, 0.20f, 0.12f), hurtRed, hurt);
+                        var hide = Vector3.Lerp(new Vector3(0.32f, 0.20f, 0.12f), hurtRed, hurt);
                         var udder = Vector3.Lerp(new Vector3(0.85f, 0.62f, 0.55f), hurtRed, hurt);
-                        var horn  = new Vector3(0.85f, 0.82f, 0.74f);
+                        var horn = new Vector3(0.85f, 0.82f, 0.74f);
                         DrawCow(rigToWorld, vp, hide, udder, horn);
                     }
                 }
@@ -14079,8 +14079,8 @@ void main()
                     else
                     {
                         var feathers = Vector3.Lerp(new Vector3(0.95f, 0.95f, 0.92f), hurtRed, hurt);
-                        var beak     = Vector3.Lerp(new Vector3(0.95f, 0.75f, 0.20f), hurtRed, hurt);
-                        var comb     = new Vector3(0.85f, 0.20f, 0.20f);
+                        var beak = Vector3.Lerp(new Vector3(0.95f, 0.75f, 0.20f), hurtRed, hurt);
+                        var comb = new Vector3(0.85f, 0.20f, 0.20f);
                         DrawChicken(rigToWorld, vp, feathers, beak, comb);
                     }
                 }
@@ -14093,17 +14093,17 @@ void main()
         private void DrawPig(Matrix4 rigToWorld, Matrix4 vp,
             Vector3 bodyColor, Vector3 snoutColor)
         {
-            var bodySize  = new Vector3(0.6f, 0.45f, 0.9f);
-            var bodyOff   = new Vector3(0f, 0.40f, 0f);
-            var headSize  = new Vector3(0.50f, 0.50f, 0.50f);
-            var headOff   = new Vector3(0f, 0.50f, 0.55f);
+            var bodySize = new Vector3(0.6f, 0.45f, 0.9f);
+            var bodyOff = new Vector3(0f, 0.40f, 0f);
+            var headSize = new Vector3(0.50f, 0.50f, 0.50f);
+            var headOff = new Vector3(0f, 0.50f, 0.55f);
             var snoutSize = new Vector3(0.30f, 0.25f, 0.18f);
-            var snoutOff  = new Vector3(0f, 0.45f, 0.85f);
-            var legSize   = new Vector3(0.20f, 0.40f, 0.20f);
+            var snoutOff = new Vector3(0f, 0.45f, 0.85f);
+            var legSize = new Vector3(0.20f, 0.40f, 0.20f);
             float legZ = 0.30f, legX = 0.20f, legYTop = 0.40f;
 
-            DrawPigCuboid(bodyOff,  bodySize,  rigToWorld, vp, bodyColor);
-            DrawPigCuboid(headOff,  headSize,  rigToWorld, vp, bodyColor);
+            DrawPigCuboid(bodyOff, bodySize, rigToWorld, vp, bodyColor);
+            DrawPigCuboid(headOff, headSize, rigToWorld, vp, bodyColor);
             DrawPigCuboid(snoutOff, snoutSize, rigToWorld, vp, snoutColor);
             DrawPigCuboid(new Vector3(+legX, legYTop * 0.5f, +legZ), legSize, rigToWorld, vp, bodyColor);
             DrawPigCuboid(new Vector3(-legX, legYTop * 0.5f, +legZ), legSize, rigToWorld, vp, bodyColor);
@@ -14244,9 +14244,9 @@ void main()
             // Saves 3 Matrix4.Create calls + 2 multiplies per cuboid (called
             // 5–9× per visible mob, hundreds of times per frame).
             var localToRig = new Matrix4(
-                size.X, 0f,     0f,     0f,
-                0f,     size.Y, 0f,     0f,
-                0f,     0f,     size.Z, 0f,
+                size.X, 0f, 0f, 0f,
+                0f, size.Y, 0f, 0f,
+                0f, 0f, size.Z, 0f,
                 offset.X - 0.5f * size.X,
                 offset.Y - 0.5f * size.Y,
                 offset.Z - 0.5f * size.Z,
@@ -14286,15 +14286,15 @@ void main()
         {
             // Same localCentre*sizeScale*localPlace fold as DrawPigCuboid.
             var localToRig = new Matrix4(
-                size.X, 0f,     0f,     0f,
-                0f,     size.Y, 0f,     0f,
-                0f,     0f,     size.Z, 0f,
+                size.X, 0f, 0f, 0f,
+                0f, size.Y, 0f, 0f,
+                0f, 0f, size.Z, 0f,
                 offset.X - 0.5f * size.X,
                 offset.Y - 0.5f * size.Y,
                 offset.Z - 0.5f * size.Z,
                 1f);
-            var toPivot   = Matrix4.CreateTranslation(-pivot);
-            var rotate    = Matrix4.CreateRotationX(swingAngleX);
+            var toPivot = Matrix4.CreateTranslation(-pivot);
+            var rotate = Matrix4.CreateRotationX(swingAngleX);
             var fromPivot = Matrix4.CreateTranslation(pivot);
             var model = localToRig * toPivot * rotate * fromPivot * rigToWorld;
             var mvp = model * vp;
@@ -14441,9 +14441,9 @@ void main()
             //   body    Y 0.75 .. 1.50
             //   arms    Y 0.75 .. 1.50  (shoulder pivot Y = 1.50)
             //   head    Y 1.50 .. 2.00  (neck pivot Y = 1.50)
-            const float HipY      = 0.75f;
+            const float HipY = 0.75f;
             const float ShoulderY = 1.50f;
-            const float NeckY     = 1.50f;
+            const float NeckY = 1.50f;
 
             // Right leg. Inner edge of the leg sits at body centerline
             // (X=0); outer edge at body half-width (0.25). So leg
@@ -14507,9 +14507,9 @@ void main()
             // around the (rig-local) pivot. Row-vector convention so
             // "rotate about pivot" composes as T(-pivot) * R * T(pivot)
             // in the chain.
-            var place     = Matrix4.CreateTranslation(footPos);
-            var toPivot   = Matrix4.CreateTranslation(-pivot);
-            var rotate    = Matrix4.CreateRotationX(angleX);
+            var place = Matrix4.CreateTranslation(footPos);
+            var toPivot = Matrix4.CreateTranslation(-pivot);
+            var rotate = Matrix4.CreateRotationX(angleX);
             var fromPivot = Matrix4.CreateTranslation(pivot);
             var model = place * toPivot * rotate * fromPivot * rigToWorld;
             _skinShader.SetMatrix4("uMVP", model * vp);
@@ -14542,12 +14542,12 @@ void main()
             float legSwing = (float)Math.Sin(walkPhase) * WalkAmplitude * walkFrac;
             float armSwing = -legSwing;
 
-            var skin    = Vector3.Lerp(new Vector3(0.96f, 0.80f, 0.60f), hurtRed, hurt);
-            var hair    = Vector3.Lerp(new Vector3(0.30f, 0.18f, 0.10f), hurtRed, hurt);
-            var shirt   = Vector3.Lerp(new Vector3(0.10f, 0.65f, 0.85f), hurtRed, hurt);
-            var pants   = Vector3.Lerp(new Vector3(0.25f, 0.30f, 0.65f), hurtRed, hurt);
-            var boots   = Vector3.Lerp(new Vector3(0.20f, 0.20f, 0.25f), hurtRed, hurt);
-            var eyeCol  = new Vector3(0.05f, 0.05f, 0.10f);
+            var skin = Vector3.Lerp(new Vector3(0.96f, 0.80f, 0.60f), hurtRed, hurt);
+            var hair = Vector3.Lerp(new Vector3(0.30f, 0.18f, 0.10f), hurtRed, hurt);
+            var shirt = Vector3.Lerp(new Vector3(0.10f, 0.65f, 0.85f), hurtRed, hurt);
+            var pants = Vector3.Lerp(new Vector3(0.25f, 0.30f, 0.65f), hurtRed, hurt);
+            var boots = Vector3.Lerp(new Vector3(0.20f, 0.20f, 0.25f), hurtRed, hurt);
+            var eyeCol = new Vector3(0.05f, 0.05f, 0.10f);
             var mouthCol = new Vector3(0.55f, 0.25f, 0.20f);
 
             var legSize = new Vector3(0.20f, 0.75f, 0.20f);
@@ -14564,7 +14564,7 @@ void main()
 
             var armSize = new Vector3(0.20f, 0.60f, 0.20f);
             DrawPivotedCuboid(new Vector3(+0.35f, 1.05f, 0f), armSize, +armSwing + swingArc, rigToWorld, vp, shirt);
-            DrawPivotedCuboid(new Vector3(-0.35f, 1.05f, 0f), armSize, -armSwing,            rigToWorld, vp, shirt);
+            DrawPivotedCuboid(new Vector3(-0.35f, 1.05f, 0f), armSize, -armSwing, rigToWorld, vp, shirt);
 
             float headPitch = -cameraPitch * 0.8f;
             var headSize = new Vector3(0.45f, 0.45f, 0.45f);
@@ -14586,17 +14586,17 @@ void main()
             Matrix4 rigToWorld, Matrix4 vp, Vector3 color)
         {
             var localCentre = Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f);
-            var sizeScale   = Matrix4.CreateScale(size);
-            var localPlace  = Matrix4.CreateTranslation(offset);
+            var sizeScale = Matrix4.CreateScale(size);
+            var localPlace = Matrix4.CreateTranslation(offset);
             // The head's pitch pivot is the neck — a fixed point in rig-
             // local space at (0, 1.35, 0), the top of the torso (rig is
             // 1.80m total: legs 0..0.75, torso 0.75..1.35, head 1.35..1.80).
             // Using a shared pivot for ALL face cuboids means eyes / mouth /
             // hair rotate together with the head, instead of each rotating
             // around its own centre and decoupling from the face.
-            var pivot     = new Vector3(0f, 1.35f, 0f);
-            var toPivot   = Matrix4.CreateTranslation(-pivot);
-            var rotate    = Matrix4.CreateRotationX(pitchAngleX);
+            var pivot = new Vector3(0f, 1.35f, 0f);
+            var toPivot = Matrix4.CreateTranslation(-pivot);
+            var rotate = Matrix4.CreateRotationX(pitchAngleX);
             var fromPivot = Matrix4.CreateTranslation(pivot);
             var model = localCentre * sizeScale * localPlace * toPivot * rotate * fromPivot * rigToWorld;
             var mvp = model * vp;
@@ -14668,9 +14668,9 @@ void main()
                     }
                     else
                     {
-                        var skin   = Vector3.Lerp(new Vector3(0.30f, 0.55f, 0.32f), hurtRed, hurt);
-                        var shirt  = Vector3.Lerp(new Vector3(0.20f, 0.35f, 0.50f), hurtRed, hurt);
-                        var pants  = Vector3.Lerp(new Vector3(0.18f, 0.20f, 0.32f), hurtRed, hurt);
+                        var skin = Vector3.Lerp(new Vector3(0.30f, 0.55f, 0.32f), hurtRed, hurt);
+                        var shirt = Vector3.Lerp(new Vector3(0.20f, 0.35f, 0.50f), hurtRed, hurt);
+                        var pants = Vector3.Lerp(new Vector3(0.18f, 0.20f, 0.32f), hurtRed, hurt);
                         DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
                     }
                 }
@@ -14686,9 +14686,9 @@ void main()
                         // (canonical pigman colour) + zombie-green
                         // tattered tunic. Used only if the textured
                         // skin asset failed to decode.
-                        var skin   = Vector3.Lerp(new Vector3(0.85f, 0.55f, 0.55f), hurtRed, hurt);
-                        var shirt  = Vector3.Lerp(new Vector3(0.40f, 0.50f, 0.30f), hurtRed, hurt);
-                        var pants  = Vector3.Lerp(new Vector3(0.40f, 0.30f, 0.22f), hurtRed, hurt);
+                        var skin = Vector3.Lerp(new Vector3(0.85f, 0.55f, 0.55f), hurtRed, hurt);
+                        var shirt = Vector3.Lerp(new Vector3(0.40f, 0.50f, 0.30f), hurtRed, hurt);
+                        var pants = Vector3.Lerp(new Vector3(0.40f, 0.30f, 0.22f), hurtRed, hurt);
                         DrawHumanoid(rigToWorld, vp, skin, shirt, pants);
                     }
                 }
@@ -14734,7 +14734,7 @@ void main()
                         if (fuseT > 1f) fuseT = 1f;
                     }
                     var creeperGreen = new Vector3(0.30f, 0.65f, 0.25f);
-                    var flashWhite   = new Vector3(1.00f, 1.00f, 0.90f);
+                    var flashWhite = new Vector3(1.00f, 1.00f, 0.90f);
                     var color = Vector3.Lerp(creeperGreen, flashWhite, fuseT);
                     color = Vector3.Lerp(color, hurtRed, hurt);
                     if (_creeperSkinTexture != 0 && _creeperHeadMesh != null)
@@ -14761,7 +14761,7 @@ void main()
                     else
                     {
                         var blazeCore = Vector3.Lerp(new Vector3(1.00f, 0.65f, 0.10f), hurtRed, hurt);
-                        var blazeRod  = new Vector3(0.10f, 0.08f, 0.05f);
+                        var blazeRod = new Vector3(0.10f, 0.08f, 0.05f);
                         DrawBlaze(rigToWorld, vp, blazeCore, blazeRod, blaze);
                     }
                 }
@@ -14782,7 +14782,7 @@ void main()
                     {
                         var ghastWhite = Vector3.Lerp(new Vector3(0.92f, 0.92f, 0.95f), hurtRed, hurt);
                         var ghastShade = Vector3.Lerp(new Vector3(0.78f, 0.78f, 0.82f), hurtRed, hurt);
-                        var ghastEyes  = new Vector3(0.10f, 0.05f, 0.05f);
+                        var ghastEyes = new Vector3(0.10f, 0.05f, 0.05f);
                         DrawGhast(rigToWorld, vp, ghastWhite, ghastShade, ghastEyes, mob);
                     }
                 }
@@ -14799,7 +14799,7 @@ void main()
                     // looks like a solid green block, indistinguishable
                     // from a placed Wool).
                     var slimeGreen = Vector3.Lerp(new Vector3(0.30f, 0.70f, 0.40f), hurtRed, hurt);
-                    var slimeEyes  = new Vector3(0.05f, 0.10f, 0.05f);
+                    var slimeEyes = new Vector3(0.05f, 0.10f, 0.05f);
                     _overlayShader.SetFloat("uAlpha", 0.7f);
                     DrawSlime(rigToWorld, vp, slimeGreen, slimeEyes, slime);
                     _overlayShader.SetFloat("uAlpha", 1f);
@@ -14867,24 +14867,24 @@ void main()
             // so the tentacles read as hanging from the body, not
             // sticking out past it. Length varies a little so the
             // silhouette doesn't read as a perfect grid.
-            float tentW   = w * 0.10f;
+            float tentW = w * 0.10f;
             float tentLen = h * 0.30f;
-            float tentY   = h * 0.65f - bodyH * 0.5f - tentLen * 0.5f;
+            float tentY = h * 0.65f - bodyH * 0.5f - tentLen * 0.5f;
             float spacing = bodyW * 0.30f;
             for (int gx = -1; gx <= 1; gx++)
-            for (int gz = -1; gz <= 1; gz++)
-            {
-                // Vary length per cell — outer tentacles slightly
-                // shorter than the inner ones, so the silhouette
-                // tapers like a jellyfish bell.
-                float len = (gx == 0 && gz == 0) ? tentLen * 1.2f
-                           : (gx * gz != 0)       ? tentLen * 0.85f
-                           :                        tentLen;
-                var tSize = new Vector3(tentW, len, tentW);
-                DrawPigCuboid(
-                    new Vector3(gx * spacing, tentY - (len - tentLen) * 0.5f, gz * spacing),
-                    tSize, rigToWorld, vp, shade);
-            }
+                for (int gz = -1; gz <= 1; gz++)
+                {
+                    // Vary length per cell — outer tentacles slightly
+                    // shorter than the inner ones, so the silhouette
+                    // tapers like a jellyfish bell.
+                    float len = (gx == 0 && gz == 0) ? tentLen * 1.2f
+                               : (gx * gz != 0) ? tentLen * 0.85f
+                               : tentLen;
+                    var tSize = new Vector3(tentW, len, tentW);
+                    DrawPigCuboid(
+                        new Vector3(gx * spacing, tentY - (len - tentLen) * 0.5f, gz * spacing),
+                        tSize, rigToWorld, vp, shade);
+                }
 
             // Eyes — two small dark cubes on the body's front face.
             // The +Z direction in body-local space is the facing
@@ -14922,11 +14922,11 @@ void main()
             // Three rings of 4 rods each, stacked vertically. Each
             // ring rotates at a different rate (top fastest, bottom
             // slowest) to give a layered-orbiter look.
-            float[] ringYs   = { h * 0.30f, h * 0.55f, h * 0.80f };
-            float[] ringRots = { 0.7f,      1.0f,      -0.85f };
+            float[] ringYs = { h * 0.30f, h * 0.55f, h * 0.80f };
+            float[] ringRots = { 0.7f, 1.0f, -0.85f };
             float ringR = blaze.HalfWidth + 0.05f;
             float rodLen = h * 0.35f;
-            float rodW   = w * 0.10f;
+            float rodW = w * 0.10f;
 
             for (int r = 0; r < 3; r++)
             {
@@ -14992,7 +14992,7 @@ void main()
         {
             // Main abdomen: 0.85 wide × 0.45 tall × 0.70 deep, sits on
             // legs roughly at body-mid height.
-            var abdSize  = new Vector3(0.85f, 0.45f, 0.70f);
+            var abdSize = new Vector3(0.85f, 0.45f, 0.70f);
             DrawPigCuboid(new Vector3(0f, 0.45f, -0.10f), abdSize, rigToWorld, vp, body);
 
             // Head/cephalothorax: smaller cube sticking forward.
@@ -15007,8 +15007,8 @@ void main()
             // Eight stubby legs — one cuboid per leg, splayed at four
             // corners with a forward and back cluster.
             var legSize = new Vector3(0.10f, 0.30f, 0.10f);
-            float legY  = 0.15f;
-            float legX  = 0.55f;
+            float legY = 0.15f;
+            float legX = 0.55f;
             for (int side = -1; side <= 1; side += 2)
             {
                 DrawPigCuboid(new Vector3(side * legX, legY, +0.45f), legSize, rigToWorld, vp, body);
@@ -15063,9 +15063,9 @@ void main()
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2D, skinTexture);
 
-            const float HipY      = 0.75f;
+            const float HipY = 0.75f;
             const float ShoulderY = 1.50f;
-            const float NeckY     = 1.50f;
+            const float NeckY = 1.50f;
 
             // Right + left leg. Inner edge of each leg flush with body
             // centerline (X=0); leg half-width 0.125 places leg
@@ -15163,7 +15163,7 @@ void main()
 
             // Joint heights for the creeper — legs 6 px tall = 0.375 m,
             // body 12 px = 0.75 m, head 8 px = 0.5 m.
-            const float HipY  = 6f / 16f;        // 0.375 — top of legs / bottom of body
+            const float HipY = 6f / 16f;        // 0.375 — top of legs / bottom of body
             const float NeckY = HipY + 12f / 16f; // 1.125 — top of body / bottom of head
 
             // Four legs at the four corners of the body footprint. Body
@@ -15222,7 +15222,7 @@ void main()
             // Body sits at rear, head in front. Y=0 is feet.
             // Legs sit at the body's underside (~Y=0.20 to Y=0.35).
             const float BodyY = 0.20f;     // bottom of abdomen (head also at this height)
-            const float LegY  = 0.20f;     // bottom of leg cuboids
+            const float LegY = 0.20f;     // bottom of leg cuboids
             // Body: centre at (0, 0.20+0.28, -0.10) — pushed a bit
             // backward so the head sits at the cell centre. The mesh's
             // local origin is bottom-centre, so footPos = bottom-mid.
@@ -15306,8 +15306,8 @@ void main()
             // ring rotates at its own rate driven by blaze.RodPhase.
             // Same constants as the procedural DrawBlaze for visual
             // continuity.
-            float[] ringYs   = { h * 0.30f - 0.25f, h * 0.55f - 0.25f, h * 0.80f - 0.25f };
-            float[] ringRots = { 0.7f,              1.0f,              -0.85f };
+            float[] ringYs = { h * 0.30f - 0.25f, h * 0.55f - 0.25f, h * 0.80f - 0.25f };
+            float[] ringRots = { 0.7f, 1.0f, -0.85f };
             float ringR = blaze.HalfWidth + 0.05f;
 
             for (int r = 0; r < 3; r++)
@@ -15375,14 +15375,14 @@ void main()
             // the AABB top and the model overshoots downward to give
             // the canonical jellyfish silhouette).
             float spacing = 6f / 16f; // 6 px between tentacle centres
-            float tentLen  = 12f / 16f;
+            float tentLen = 12f / 16f;
             for (int gx = -1; gx <= 1; gx++)
-            for (int gz = -1; gz <= 1; gz++)
-            {
-                DrawSkinCuboid(_ghastTentacleMesh,
-                    new Vector3(gx * spacing, bodyBottomLocal - tentLen, gz * spacing),
-                    Vector3.Zero, 0f, scaledRig, vp);
-            }
+                for (int gz = -1; gz <= 1; gz++)
+                {
+                    DrawSkinCuboid(_ghastTentacleMesh,
+                        new Vector3(gx * spacing, bodyBottomLocal - tentLen, gz * spacing),
+                        Vector3.Zero, 0f, scaledRig, vp);
+                }
 
             GL.BindTexture(TextureTarget.Texture2D, 0);
         }
@@ -15415,7 +15415,7 @@ void main()
         {
             BeginSkinPass(_pigSkinTexture, hurt);
 
-            const float LegY  = 6f / 16f;   // top of leg / bottom of body
+            const float LegY = 6f / 16f;   // top of leg / bottom of body
             const float BodyHalfZ = 8f / 16f; // body length 16/2 = 8 px each side
             const float BodyHalfX = 5f / 16f; // body width 10/2 = 5 px each side
 
@@ -15459,7 +15459,7 @@ void main()
         {
             BeginSkinPass(_cowSkinTexture, hurt);
 
-            const float LegY  = 12f / 16f;
+            const float LegY = 12f / 16f;
             const float BodyHalfZ = 9f / 16f;  // 18/2
             const float BodyHalfX = 6f / 16f;  // 12/2
 
@@ -15500,7 +15500,7 @@ void main()
         {
             BeginSkinPass(_sheepSkinTexture, hurt);
 
-            const float LegY  = 12f / 16f;
+            const float LegY = 12f / 16f;
             const float BodyHalfZ = 8f / 16f;
             const float BodyHalfX = 4f / 16f;
 
@@ -15655,9 +15655,9 @@ void main()
                 // calls + 1 multiply per particle versus the chain above.
                 float s = p.Size * 2f;
                 var localScale = new Matrix4(
-                    s,  0f, 0f, 0f,
-                    0f, s,  0f, 0f,
-                    0f, 0f, s,  0f,
+                    s, 0f, 0f, 0f,
+                    0f, s, 0f, 0f,
+                    0f, 0f, s, 0f,
                     -0.5f * s, -0.5f * s, -0.5f * s, 1f);
 
                 float angle = p.Age * p.SpinRate;
@@ -15717,7 +15717,7 @@ void main()
             for (int i = 0; i < 6; i++)
             {
                 sh.SetVector2(_uFaceUvOffsetNames[i], new Vector2(0f, 0f));
-                sh.SetVector2(_uFaceUvScaleNames[i],  new Vector2(1f, 1f));
+                sh.SetVector2(_uFaceUvScaleNames[i], new Vector2(1f, 1f));
             }
         }
 
@@ -15738,22 +15738,22 @@ void main()
             float dy = y1 - y0;
             // -X
             sh.SetVector2(_uFaceUvOffsetNames[0], new Vector2(0f, 0f));
-            sh.SetVector2(_uFaceUvScaleNames[0],  new Vector2(1f, dy));
+            sh.SetVector2(_uFaceUvScaleNames[0], new Vector2(1f, dy));
             // +X
             sh.SetVector2(_uFaceUvOffsetNames[1], new Vector2(0f, 0f));
-            sh.SetVector2(_uFaceUvScaleNames[1],  new Vector2(1f, dy));
+            sh.SetVector2(_uFaceUvScaleNames[1], new Vector2(1f, dy));
             // -Y (bottom)
             sh.SetVector2(_uFaceUvOffsetNames[2], new Vector2(0f, 0f));
-            sh.SetVector2(_uFaceUvScaleNames[2],  new Vector2(1f, 1f));
+            sh.SetVector2(_uFaceUvScaleNames[2], new Vector2(1f, 1f));
             // +Y (top)
             sh.SetVector2(_uFaceUvOffsetNames[3], new Vector2(0f, 0f));
-            sh.SetVector2(_uFaceUvScaleNames[3],  new Vector2(1f, 1f));
+            sh.SetVector2(_uFaceUvScaleNames[3], new Vector2(1f, 1f));
             // -Z
             sh.SetVector2(_uFaceUvOffsetNames[4], new Vector2(0f, 0f));
-            sh.SetVector2(_uFaceUvScaleNames[4],  new Vector2(1f, dy));
+            sh.SetVector2(_uFaceUvScaleNames[4], new Vector2(1f, dy));
             // +Z
             sh.SetVector2(_uFaceUvOffsetNames[5], new Vector2(0f, 0f));
-            sh.SetVector2(_uFaceUvScaleNames[5],  new Vector2(1f, dy));
+            sh.SetVector2(_uFaceUvScaleNames[5], new Vector2(1f, dy));
             // x0..x1 / z0..z1 are unused at the moment — chunk mesher's
             // EmitSubCubeBox samples U=0..1 regardless of horizontal
             // extent, so icons match that for visual consistency.
@@ -15862,9 +15862,9 @@ void main()
             }
             else
             {
-                int marginRight  = UiScale.S(20, width, height);
+                int marginRight = UiScale.S(20, width, height);
                 int marginBottom = UiScale.S(72, width, height);
-                handCenterX = width  - marginRight  - iconPx * 0.5f;
+                handCenterX = width - marginRight - iconPx * 0.5f;
                 handCenterY = height - marginBottom - iconPx * 0.5f;
             }
 
@@ -15994,7 +15994,7 @@ void main()
             // a (0..1) UV scale renders top-up correctly. Default
             // offset/scale here.
             _spriteShader.SetVector2("uUvOffset", new Vector2(0f, 0f));
-            _spriteShader.SetVector2("uUvScale",  new Vector2(1f, 1f));
+            _spriteShader.SetVector2("uUvScale", new Vector2(1f, 1f));
             GL.BindTexture(TextureTarget.Texture2D, _mapTexture);
             DrawSpriteQuadFor(_spriteShader, x, y, size, size, ortho);
 
@@ -16075,7 +16075,7 @@ void main()
             // left at ~45°. Margins picked so the cuff just clears the
             // hotbar and the hand reaches roughly to the held-item
             // gizmo's centre.
-            int wristX = width  - UiScale.S(40, width, height);
+            int wristX = width - UiScale.S(40, width, height);
             int wristY = height - UiScale.S(56, width, height);
 
             // Resting arm angle. Math convention: the arm's local +Y axis
@@ -16098,10 +16098,10 @@ void main()
             // the upper 62% reaching toward the hand. Visual order:
             // sleeve in back, skin on top so the cuff edge reads.
             int sleeveLen = (int)(armL * 0.38f);
-            int skinLen   = armL - sleeveLen;
+            int skinLen = armL - sleeveLen;
 
             var sleeveColor = new Vector3(0.36f, 0.55f, 0.74f); // Steve cyan
-            var skinColor   = new Vector3(0.96f, 0.77f, 0.61f); // peach
+            var skinColor = new Vector3(0.96f, 0.77f, 0.61f); // peach
             // Outline behind both layers so the arm reads against bright
             // skies / sand without bleeding into them. Slightly inset
             // dark border via a backdrop quad scaled +2 px each side.
@@ -16222,9 +16222,9 @@ void main()
             // step 3 the rotation maps (0, -0.3, 0) → (0, -0.3·cosθ,
             // -0.3·sinθ); step 4 translates by the shoulder anchor.
             float pointForward = (float)Math.PI / 2f;
-            float restTiltUp   = MathHelper.DegreesToRadians(40f);
-            float chopAngle    = -swingPhase * 0.35f;
-            float armPitch     = pointForward + restTiltUp + chopAngle;
+            float restTiltUp = MathHelper.DegreesToRadians(40f);
+            float chopAngle = -swingPhase * 0.35f;
+            float armPitch = pointForward + restTiltUp + chopAngle;
             const float ArmScale = 0.4f;
 
             // Mesh-local hand → after moveShoulderToOrigin + scale.
@@ -16325,9 +16325,9 @@ void main()
             // anchor translation) and the forward reach is 0.94·0.75
             // ≈ 0.70 m, reading as "holding the arm forward and
             // angled noticeably up toward the look direction."
-            float restTiltUp   = MathHelper.DegreesToRadians(40f);
-            float chopAngle    = -swingPhase * 0.35f; // ~32° down-chop at peak
-            float armPitch     = pointForward + restTiltUp + chopAngle;
+            float restTiltUp = MathHelper.DegreesToRadians(40f);
+            float chopAngle = -swingPhase * 0.35f; // ~32° down-chop at peak
+            float armPitch = pointForward + restTiltUp + chopAngle;
             // Uniform 80% scale on the whole arm cuboid — shrinks the
             // visible forearm by 20% in every dimension so it doesn't
             // dominate the centre of the screen at this anchor depth.
@@ -16356,11 +16356,11 @@ void main()
             var shoulder = new Vector3(0.25f, -0.35f, -0.15f);
 
             var moveShoulderToOrigin = Matrix4.CreateTranslation(0f, -0.75f, 0f);
-            var scale                = Matrix4.CreateScale(ArmScale);
-            var pitch                = Matrix4.CreateRotationX(armPitch);
-            var place                = Matrix4.CreateTranslation(shoulder);
-            var armToView            = moveShoulderToOrigin * scale * pitch * place;
-            var mvp                  = armToView * _frameProj;
+            var scale = Matrix4.CreateScale(ArmScale);
+            var pitch = Matrix4.CreateRotationX(armPitch);
+            var place = Matrix4.CreateTranslation(shoulder);
+            var armToView = moveShoulderToOrigin * scale * pitch * place;
+            var mvp = armToView * _frameProj;
 
             // Hurt flash: same red lerp as the third-person rig. The
             // skin shader's uTint mixes texture rgb toward uTint.rgb by
@@ -16428,7 +16428,7 @@ void main()
             // a wide gap on the sides.
             const float ProjectedW = 1.42f;
             const float ProjectedH = 1.58f;
-            const float SlotPad    = 0.92f;
+            const float SlotPad = 0.92f;
             float fitPx = System.Math.Min(
                 slotW * SlotPad / ProjectedW,
                 slotH * SlotPad / ProjectedH);
@@ -16637,7 +16637,7 @@ void main()
 
             const float ProjectedW = 1.42f;
             const float ProjectedH = 1.58f;
-            const float SlotPad    = 0.92f;
+            const float SlotPad = 0.92f;
             float fitPx = System.Math.Min(
                 slotW * SlotPad / ProjectedW,
                 slotH * SlotPad / ProjectedH);
@@ -16857,9 +16857,9 @@ void main()
             // independently and so the slot pitch drifted out of sync
             // with the bar's actual width at non-integer scales.
             int BarPx = HotbarLayout.BarPx(width, height);
-            int BarH  = HotbarLayout.BarH(width, height);
-            int barX  = HotbarLayout.BarX(width, height);
-            int barY  = HotbarLayout.BarTopY(width, height);
+            int BarH = HotbarLayout.BarH(width, height);
+            int barX = HotbarLayout.BarX(width, height);
+            int barY = HotbarLayout.BarTopY(width, height);
 
             var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
 
@@ -17210,7 +17210,7 @@ void main()
             // resolutions — same convention every other modal uses.
             int boxW = UiScale.S(240, width, height);
             int boxH = UiScale.S(28, width, height);
-            int gap  = UiScale.S(4, width, height);
+            int gap = UiScale.S(4, width, height);
             int totalH = boxH * 4 + gap * 3;
             int boxX = (width - boxW) / 2;
             int firstBoxY = (height - totalH) / 2;
@@ -17443,12 +17443,12 @@ void main()
             _spriteArrayShader.SetInt("uAtlas", 0);
             _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
             _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
-            _spriteArrayShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
+            _spriteArrayShader.SetVector2("uUvScale", new Vector2(1f, -1f));
             _spriteArrayShader.SetFloat("uLayer", BlockTextures.TileDirt);
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2DArray, _atlasTexture);
 
-            int cols = (width  + tilePx - 1) / tilePx;
+            int cols = (width + tilePx - 1) / tilePx;
             int rows = (height + tilePx - 1) / tilePx;
             for (int r = 0; r < rows; r++)
             {
@@ -17502,7 +17502,7 @@ void main()
             if (_pendingLoadWork == null && _world != null)
             {
                 if (IsWorldReadyForDisplay()) CloseLoadingScreen();
-                else                          UpdateLoadingProgressFromMesh();
+                else UpdateLoadingProgressFromMesh();
             }
         }
 
@@ -17576,7 +17576,7 @@ void main()
                 _backgroundShader.SetInt("uAtlas", 0);
                 _backgroundShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
                 _backgroundShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
-                _backgroundShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
+                _backgroundShader.SetVector2("uUvScale", new Vector2(1f, -1f));
                 int useTex;
                 float useLayer;
                 if (_titleBackground.Loaded)
@@ -17597,13 +17597,13 @@ void main()
 
             switch (_titleState)
             {
-                case TitleScreenState.TitleRoot:          RenderTitleRoot(width, height); break;
-                case TitleScreenState.WorldSelect:        RenderWorldSelect(width, height); break;
-                case TitleScreenState.WorldCreate:        RenderWorldCreate(width, height); break;
+                case TitleScreenState.TitleRoot: RenderTitleRoot(width, height); break;
+                case TitleScreenState.WorldSelect: RenderWorldSelect(width, height); break;
+                case TitleScreenState.WorldCreate: RenderWorldCreate(width, height); break;
                 case TitleScreenState.MultiplayerConnect: RenderMultiplayerConnect(width, height); break;
             }
 
-            if (_isControlsOpen)     RenderControlsMenu(width, height);
+            if (_isControlsOpen) RenderControlsMenu(width, height);
             else if (_isOptionsOpen) RenderOptionsMenu(width, height);
         }
 
@@ -18122,12 +18122,12 @@ void main()
             GL.Disable(EnableCap.DepthTest);
             GL.Disable(EnableCap.CullFace);
 
-            int scale  = System.Math.Max(2, UiScale.S(2, width, height));
+            int scale = System.Math.Max(2, UiScale.S(2, width, height));
             int glyphW = HotbarTextures.GlyphCellW * scale;
             int glyphH = HotbarTextures.GlyphCellH * scale;
-            int line   = glyphH + scale * 2;
-            int padX   = scale * 6;
-            int padY   = scale * 4;
+            int line = glyphH + scale * 2;
+            int padX = scale * 6;
+            int padY = scale * 4;
             // Border thickness — 2 px exactly, scale-independent.
             const int Border = 2;
             // Tier 10 follow-up — fixed history height. The tray
@@ -18142,7 +18142,7 @@ void main()
             if (trayW < minTrayW) trayW = minTrayW;
 
             // Tray bottom: just above the hotbar with a small gap.
-            int hotbarTop  = HotbarLayout.BarTopY(width, height);
+            int hotbarTop = HotbarLayout.BarTopY(width, height);
             int trayBottom = hotbarTop - scale * 4;
 
             // Tier 10 follow-up — wrap each history line to fit the
@@ -18170,7 +18170,7 @@ void main()
             // Visible window ends at (wrappedCount - scroll); start
             // is HistoryRows lines above that. Empty rows render
             // blank (the tray height is fixed regardless).
-            int visibleEnd   = wrappedCount - _chatScrollLines;
+            int visibleEnd = wrappedCount - _chatScrollLines;
             int visibleStart = visibleEnd - HistoryRows;
 
             int promptRows = _isChatOpen ? 1 : 0;
@@ -18178,10 +18178,10 @@ void main()
             int trayTop = trayBottom - trayH;
             if (trayTop < 0) { trayTop = 0; trayH = trayBottom; }
 
-            float fillAlpha   = 0.55f * trayAlpha;
+            float fillAlpha = 0.55f * trayAlpha;
             // Border = 10 percentage points less opacity than fill.
             float borderAlpha = 0.45f * trayAlpha;
-            var fillRgb   = new Vector3(0f, 0f, 0f);
+            var fillRgb = new Vector3(0f, 0f, 0f);
             var borderRgb = new Vector3(0.85f, 0.85f, 0.95f);
 
             DrawSolidQuad(padX, trayTop, trayW, trayH,
@@ -18473,7 +18473,7 @@ void main()
             bool isSurvival = GameMode == GameMode.Survival;
             bool useReal = Settings.UseRealTextures;
             float masterVol = AudioEngine.MasterGain;
-            float musicVol  = AudioEngine.MusicGain;
+            float musicVol = AudioEngine.MusicGain;
             var rows = OptionsMenu.BuildRows(width, height, HungerEnabled, isSurvival, useReal,
                                              masterVol, musicVol, ViewDistanceChunks);
             int rowBorder = UiScale.S(2, width, height);
@@ -18499,17 +18499,17 @@ void main()
                     && my >= r.Y && my < r.Y + r.H;
 
                 Vector3 fill;
-                if (r.IsDisabled)       fill = new Vector3(0.10f, 0.12f, 0.16f);
-                else if (hover)         fill = new Vector3(0.42f, 0.55f, 0.72f);
-                else                    fill = new Vector3(0.16f, 0.20f, 0.26f);
+                if (r.IsDisabled) fill = new Vector3(0.10f, 0.12f, 0.16f);
+                else if (hover) fill = new Vector3(0.42f, 0.55f, 0.72f);
+                else fill = new Vector3(0.16f, 0.20f, 0.26f);
                 float alpha = r.IsDisabled ? 0.7f : 0.95f;
                 DrawSolidQuad(r.X, r.Y, r.W, r.H, fill, alpha, ortho);
 
                 // Frame around the button — thickness scales with UI.
                 Vector3 border;
-                if (r.IsDisabled)       border = new Vector3(0.40f, 0.42f, 0.46f);
-                else if (hover)         border = new Vector3(1f, 1f, 1f);
-                else                    border = new Vector3(0.78f, 0.82f, 0.88f);
+                if (r.IsDisabled) border = new Vector3(0.40f, 0.42f, 0.46f);
+                else if (hover) border = new Vector3(1f, 1f, 1f);
+                else border = new Vector3(0.78f, 0.82f, 0.88f);
                 DrawSolidQuad(r.X, r.Y, r.W, rowBorder, border, 1f, ortho);
                 DrawSolidQuad(r.X, r.Y + r.H - rowBorder, r.W, rowBorder, border, 1f, ortho);
                 DrawSolidQuad(r.X, r.Y, rowBorder, r.H, border, 1f, ortho);
@@ -18607,15 +18607,15 @@ void main()
                 bool captureRow = r.IsCapturing;
 
                 Vector3 fill;
-                if (captureRow)      fill = new Vector3(0.85f, 0.45f, 0.10f); // hot orange
-                else if (hover)      fill = new Vector3(0.42f, 0.55f, 0.72f);
-                else                 fill = new Vector3(0.16f, 0.20f, 0.26f);
+                if (captureRow) fill = new Vector3(0.85f, 0.45f, 0.10f); // hot orange
+                else if (hover) fill = new Vector3(0.42f, 0.55f, 0.72f);
+                else fill = new Vector3(0.16f, 0.20f, 0.26f);
                 DrawSolidQuad(r.X, r.Y, r.W, r.H, fill, 0.95f, ortho);
 
                 Vector3 border;
-                if (captureRow)      border = new Vector3(1f, 0.85f, 0.40f);
-                else if (hover)      border = new Vector3(1f, 1f, 1f);
-                else                 border = new Vector3(0.78f, 0.82f, 0.88f);
+                if (captureRow) border = new Vector3(1f, 0.85f, 0.40f);
+                else if (hover) border = new Vector3(1f, 1f, 1f);
+                else border = new Vector3(0.78f, 0.82f, 0.88f);
                 DrawSolidQuad(r.X, r.Y, r.W, rowBorder, border, 1f, ortho);
                 DrawSolidQuad(r.X, r.Y + r.H - rowBorder, r.W, rowBorder, border, 1f, ortho);
                 DrawSolidQuad(r.X, r.Y, rowBorder, r.H, border, 1f, ortho);
@@ -18787,7 +18787,7 @@ void main()
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             // ---- slot wells (all 55 slots) ------------------------------
-            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellFill = new Vector3(0.35f, 0.35f, 0.35f);
             var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
             var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
             for (int i = 0; i < CraftingScreen.TotalSlots; i++)
@@ -18804,9 +18804,9 @@ void main()
             // window size.
             CraftingScreen.GetArrowCenter(width, height, out int acx, out int acy);
             int arrowBarLen = UiScale.S(28, width, height);
-            int arrowBarTh  = UiScale.S(6, width, height);
-            int arrowHead   = UiScale.S(14, width, height);
-            var arrowCol    = new Vector3(0.92f, 0.94f, 0.98f);
+            int arrowBarTh = UiScale.S(6, width, height);
+            int arrowHead = UiScale.S(14, width, height);
+            var arrowCol = new Vector3(0.92f, 0.94f, 0.98f);
             // Shaft.
             DrawSolidQuad(acx - arrowBarLen / 2, acy - arrowBarTh / 2,
                 arrowBarLen, arrowBarTh, arrowCol, 1f, ortho);
@@ -18971,7 +18971,7 @@ void main()
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             // ---- slot wells (all 48 slots) -----------------------------
-            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellFill = new Vector3(0.35f, 0.35f, 0.35f);
             var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
             var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
             for (int i = 0; i < FurnaceScreen.TotalSlots; i++)
@@ -18991,10 +18991,10 @@ void main()
             // for visual consistency.
             FurnaceScreen.GetArrowCenter(width, height, out int acx, out int acy);
             int arrowBarLen = UiScale.S(28, width, height);
-            int arrowBarTh  = UiScale.S(6, width, height);
-            int arrowHead   = UiScale.S(14, width, height);
-            var arrowDim    = new Vector3(0.35f, 0.35f, 0.40f);
-            var arrowFill   = new Vector3(0.92f, 0.94f, 0.98f);
+            int arrowBarTh = UiScale.S(6, width, height);
+            int arrowHead = UiScale.S(14, width, height);
+            var arrowDim = new Vector3(0.35f, 0.35f, 0.40f);
+            var arrowFill = new Vector3(0.92f, 0.94f, 0.98f);
             int arrowLeftX = acx - arrowBarLen / 2;
             // Background.
             DrawSolidQuad(arrowLeftX, acy - arrowBarTh / 2,
@@ -19044,11 +19044,11 @@ void main()
             int flameW = UiScale.S(14, width, height);
             int flameH = UiScale.S(18, width, height);
             int flameLeft = fcx - flameW / 2;
-            int flameTop  = fcy - flameH / 2;
+            int flameTop = fcy - flameH / 2;
             // Empty flame outline (dim) so the slot's intent reads even
             // without active fuel.
-            var flameDim  = new Vector3(0.32f, 0.18f, 0.10f);
-            var flameLow  = new Vector3(0.95f, 0.45f, 0.10f);
+            var flameDim = new Vector3(0.32f, 0.18f, 0.10f);
+            var flameLow = new Vector3(0.95f, 0.45f, 0.10f);
             var flameHigh = new Vector3(1.00f, 0.85f, 0.20f);
             DrawSolidQuad(flameLeft, flameTop, flameW, flameH, flameDim, 1f, ortho);
             if (fe != null && fe.BurnTimeTicks > 0 && fe.MaxBurnTimeTicks > 0)
@@ -19202,8 +19202,8 @@ void main()
                 new Vector3(0f, 0f, 0f), 0.55f, ortho);
 
             int rows = ChestRows;
-            int chestSlots   = ChestScreen.ChestSlotsFor(rows);
-            int totalSlots   = ChestScreen.TotalSlotsFor(rows);
+            int chestSlots = ChestScreen.ChestSlotsFor(rows);
+            int totalSlots = ChestScreen.TotalSlotsFor(rows);
             int invMainStart = ChestScreen.InvMainStartFor(rows);
 
             // ---- panel chrome ------------------------------------------
@@ -19224,7 +19224,7 @@ void main()
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             // ---- slot wells (all slots, both halves + inventory) ------
-            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellFill = new Vector3(0.35f, 0.35f, 0.35f);
             var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
             var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
             for (int i = 0; i < totalSlots; i++)
@@ -19234,7 +19234,7 @@ void main()
                 DrawSlotWell(sx, sy, sw, sh, width, height, wellFill, wellEdgeLo, wellEdgeHi, ortho);
             }
 
-            ChestTileEntity ce  = _world?.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
+            ChestTileEntity ce = _world?.TryGetChestEntity(_chestPos.x, _chestPos.y, _chestPos.z);
             ChestTileEntity ce2 = _isDoubleChest
                 ? _world?.TryGetChestEntity(_chestPos2.x, _chestPos2.y, _chestPos2.z)
                 : null;
@@ -19385,7 +19385,7 @@ void main()
                 width / 2, DispenserScreen.TitleY(width, height),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
-            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellFill = new Vector3(0.35f, 0.35f, 0.35f);
             var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
             var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
             for (int i = 0; i < DispenserScreen.TotalSlots; i++)
@@ -19510,7 +19510,7 @@ void main()
         private void RenderSurvivalInventoryBody(int width, int height, Matrix4 ortho)
         {
             // ---- slot wells ---------------------------------------------
-            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellFill = new Vector3(0.35f, 0.35f, 0.35f);
             var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
             var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
             for (int i = 0; i < InventoryScreen.TotalSlots; i++)
@@ -19731,9 +19731,9 @@ void main()
             if (Input != null) Input.InventoryScrollRows = scrollRows;
 
             int iconPad = (InventoryScreen.SlotPx(width, height) - InventoryScreen.IconPx(width, height)) / 2;
-            var catalogWellFill   = new Vector3(0.30f, 0.30f, 0.32f);
-            var catalogEdgeLo     = new Vector3(0.08f, 0.08f, 0.10f);
-            var catalogEdgeHi     = new Vector3(0.50f, 0.50f, 0.55f);
+            var catalogWellFill = new Vector3(0.30f, 0.30f, 0.32f);
+            var catalogEdgeLo = new Vector3(0.08f, 0.08f, 0.10f);
+            var catalogEdgeHi = new Vector3(0.50f, 0.50f, 0.55f);
 
             int hoverTile = -1;
             int mxh = Input?.MenuMouseX ?? -1;
@@ -19852,7 +19852,7 @@ void main()
             // ---- hotbar wells + icons -----------------------------------
             // Always visible so the player can see (and click into) their
             // current loadout while picking from the catalog.
-            var wellFill   = new Vector3(0.35f, 0.35f, 0.35f);
+            var wellFill = new Vector3(0.35f, 0.35f, 0.35f);
             var wellEdgeLo = new Vector3(0.10f, 0.10f, 0.10f);
             var wellEdgeHi = new Vector3(0.55f, 0.55f, 0.55f);
             int hotbarBase = InventoryScreen.MainSlotCount;
@@ -19957,9 +19957,9 @@ void main()
             int cursorOffset = UiScale.S(12, width, height);
             int boxX = mxh + cursorOffset;
             int boxY = myh - boxH - cursorOffset / 2;
-            if (boxX + boxW > width)  boxX = mxh - boxW - cursorOffset;
-            if (boxY < 0)             boxY = myh + cursorOffset;
-            if (boxX < 0)             boxX = 0;
+            if (boxX + boxW > width) boxX = mxh - boxW - cursorOffset;
+            if (boxY < 0) boxY = myh + cursorOffset;
+            if (boxX < 0) boxX = 0;
             if (boxY + boxH > height) boxY = height - boxH;
 
             int shadow = System.Math.Max(1, UiScale.S(2, width, height));
@@ -20061,7 +20061,7 @@ void main()
             _spriteArrayShader.SetInt("uAtlas", 0);
             _spriteArrayShader.SetVector4("uTint", new Vector4(1f, 1f, 1f, 1f));
             _spriteArrayShader.SetVector2("uUvOffset", new Vector2(0f, 1f));
-            _spriteArrayShader.SetVector2("uUvScale",  new Vector2(1f, -1f));
+            _spriteArrayShader.SetVector2("uUvScale", new Vector2(1f, -1f));
             int layer = BlockData.GetTileIndex(type, /*side*/2);
             _spriteArrayShader.SetFloat("uLayer", layer);
             GL.ActiveTexture(TextureUnit.Texture0);
@@ -20091,10 +20091,10 @@ void main()
             // sits inside the slot border. Height = 2 UI-scaled px,
             // matching the hotbar wells' chiselled border thickness.
             int inset = UiScale.S(2, viewW, viewH);
-            int barH  = UiScale.S(2, viewW, viewH);
-            int barX  = slotX + inset;
-            int barY  = slotY + slotH - inset - barH;
-            int barW  = slotW - inset * 2;
+            int barH = UiScale.S(2, viewW, viewH);
+            int barX = slotX + inset;
+            int barY = slotY + slotH - inset - barH;
+            int barW = slotW - inset * 2;
             if (barW <= 0 || barH <= 0) return;
 
             // Background (dark grey, full width) gives the foreground
