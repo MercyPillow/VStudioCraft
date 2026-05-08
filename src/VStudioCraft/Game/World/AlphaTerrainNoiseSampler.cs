@@ -271,54 +271,139 @@ namespace VStudioCraft.Game
                         wx * TextureFreq, wz * TextureFreq,
                         octaves: 4, persistence: 0.5f, lacunarity: 2f);
 
-                    // surfaceGY composition (grid-y, multiply by 8 for
-                    // world-y):
-                    //   base 9.5   → world y=76 (above sea level)
-                    //   depth × 4  → ±32 world-y (regional bias)
-                    //   hills × 3  → ±24 world-y (mountain peaks)
-                    //   texture × 1.5 → ±12 world-y (per-column roughness)
-                    // Total amplitude: ±8.5 grid-y = ±68 world-y.
+                    // BIOME-SPECIFIC TERRAIN PROFILES. The world's
+                    // temp+rain field (= the same one BiomeMap.Classify
+                    // samples) decides which amplitude profile applies
+                    // per column, so terrain shape and biome label
+                    // align perfectly:
+                    //   * Snow   → tall, POINTY alpine peaks. Big
+                    //              hills + heavy texture for jagged
+                    //              ridge lines. Cold-bias adds another
+                    //              +0..10 grid (=+0..80 blocks) on
+                    //              top — coldest cores touch the
+                    //              world ceiling.
+                    //   * Forest → default rolling terrain (unchanged).
+                    //   * Plains → flat low. Amplitudes cut ~70%.
+                    //   * Desert → flat low (sand-sea). Same as Plains.
+                    // When no worldNoise is provided (Nether, server-
+                    // side gen), the default Forest-like profile applies.
                     //
-                    // Base raised from 8.0 (mean = sea level → 50% ocean)
-                    // to 9.5 (mean = world y=76 → only ~25% ocean) so
-                    // the land-to-water ratio is more land-heavy.
-                    // Mountain peaks still reach y=120ish via the
-                    // combined depth+hills+texture sum on lucky columns;
-                    // ocean basins still occur where depth swings
-                    // strongly negative.
-                    surfaceGY = 9.5f + depth * 4f + hills * 3f + texture * 1.5f;
+                    // Base 9.5 puts mean surface above sea level. Was
+                    // 8.25 (~40% ocean → user said too much water);
+                    // bumped to 9.5 (~20% ocean) to reduce water area
+                    // by ~20% per the user's "lower large water areas"
+                    // request.
+                    float biomeBase   = 9.5f;
+                    float depthAmp    = 4f;
+                    float hillsAmp    = 3f;
+                    float textureAmp  = 1.5f;
+                    float coldBiasMax = 0f;
 
-                    // Cold-bias: if a Noise instance is provided, sample
-                    // the same biome-temperature field that BiomeMap
-                    // uses (so terrain bias and biome classification
-                    // align). Cold regions get a strong upward bias to
-                    // surfaceGY, making snow biomes reliably MOUNTAINOUS.
-                    // The bias is gated at a slightly less strict
-                    // threshold than the snow-biome threshold itself
-                    // (-0.4 vs -0.55) so the foothills around a snow
-                    // biome are also raised — gives a gradual climb
-                    // into the snow region rather than a step.
                     if (_activeWorldNoise != null)
                     {
+                        // Ocean check — overrides everything. Same
+                        // noise + threshold BiomeMap.Classify uses.
+                        float ocean = _activeWorldNoise.Octaves(
+                            (wx + BiomeMap.OceanOffset) * BiomeMap.OceanFreq,
+                            (wz + BiomeMap.OceanOffset) * BiomeMap.OceanFreq,
+                            BiomeMap.BiomeOctaves);
+                        bool isOcean = ocean > BiomeMap.OceanThreshold;
+
                         float temp = _activeWorldNoise.Octaves(
                             (wx + BiomeMap.TempOffset) * BiomeMap.TempFreq,
                             (wz + BiomeMap.TempOffset) * BiomeMap.TempFreq,
                             BiomeMap.BiomeOctaves);
-                        if (temp < -0.4f)
+                        float rain = _activeWorldNoise.Octaves(
+                            (wx + BiomeMap.RainOffset) * BiomeMap.RainFreq,
+                            (wz + BiomeMap.RainOffset) * BiomeMap.RainFreq,
+                            BiomeMap.BiomeOctaves);
+
+                        bool isSnow   = !isOcean && temp < BiomeMap.SnowThreshold;
+                        bool isDesert = !isOcean && temp >  0.35f && rain < -0.10f;
+                        bool isForest = !isOcean && !isSnow && !isDesert && rain > 0.20f;
+                        // Plains = default (warm-mild, neither forested
+                        // nor desert).
+
+                        if (isOcean)
                         {
-                            // Linear ramp from threshold (no bias) to
-                            // -1.0 (max bias = +6 grid steps = +48
-                            // world blocks). At the snow-biome
-                            // threshold (-0.55), bias is +2.5 grid
-                            // (+20 blocks); deep-cold (-0.9) gives
-                            // +5 grid (+40 blocks). Stacks on top of
-                            // the depth+hills+texture sum, so a
-                            // mountain region inside snow biome can
-                            // easily reach the world ceiling.
-                            float coldBias = (-0.4f - temp) * 10f;
-                            if (coldBias > 6f) coldBias = 6f;
+                            // Deep seafloor. Surface around grid-y=5
+                            // (= world y=40), well below sea level y=64
+                            // → fully flooded. Small undulation in
+                            // depth so the seabed has gentle variation.
+                            // Cold-bias is OFF so ocean stays low even
+                            // when classified-cold (the ocean check
+                            // overrides snow).
+                            biomeBase   = 5f;
+                            depthAmp    = 1.5f;
+                            hillsAmp    = 0.5f;
+                            textureAmp  = 0.3f;
+                            coldBiasMax = 0f;
+                        }
+                        else if (isSnow)
+                        {
+                            // VERY TALL POINTY alpine peaks. Big base
+                            // pushes the typical snow surface above
+                            // y=96; heavy amplitudes give 30+ block
+                            // peak-to-valley swings; texture amp is
+                            // high so ridge lines are jagged. The
+                            // cold-bias adds another +0..14 grid
+                            // (=+0..112 world blocks) for the coldest
+                            // cores — peaks reliably reach the build
+                            // limit (y=128) in the middle of any snow
+                            // region.
+                            biomeBase   = 12f;   // = world y=96 baseline (was 10/y=80)
+                            depthAmp    = 5f;    // ±40 world-y regional bias (was 4/±32)
+                            hillsAmp    = 7f;    // ±56 world-y peak amplitude (was 5.5/±44)
+                            textureAmp  = 5f;    // ±40 world-y ridge texture (was 4/±32)
+                            coldBiasMax = 14f;   // +0..112 world-y on top (was 10/+80)
+                        }
+                        else if (isForest)
+                        {
+                            // Default rolling terrain (explicit branch
+                            // for clarity).
+                        }
+                        else
+                        {
+                            // Plains + Desert — VERY flat, just above
+                            // water level. Total amplitude ~±0.4 grid
+                            // (= ±3 blocks RMS); typical surface in
+                            // grid-y [8.4, 9.1] = world y [67, 73] —
+                            // sits +3..+9 blocks above sea level (y=64),
+                            // matching the user's "+2..+10 above water"
+                            // request. By keeping these biomes low and
+                            // flat, snow biomes (which can rise to the
+                            // build limit via the cold-bias pass) read
+                            // as much taller mountains by contrast.
+                            biomeBase   = 8.75f;
+                            depthAmp    = 0.4f;
+                            hillsAmp    = 0.3f;
+                            textureAmp  = 0.2f;
+                        }
+
+                        surfaceGY = biomeBase
+                                    + depth * depthAmp
+                                    + hills * hillsAmp
+                                    + texture * textureAmp;
+
+                        // Snow cold-bias — stronger version of the old
+                        // pass (cap raised to +10 grid). Linear ramp
+                        // from temp=-0.4 (no bias) to temp=-1.0 (full
+                        // cap). At the snow threshold -0.55 the bias
+                        // is 25% of cap; at deep-cold -0.9 it's 83%.
+                        if (coldBiasMax > 0f && temp < -0.4f)
+                        {
+                            float coldBias = (-0.4f - temp) * (coldBiasMax / 0.6f);
+                            if (coldBias > coldBiasMax) coldBias = coldBiasMax;
                             surfaceGY += coldBias;
                         }
+                    }
+                    else
+                    {
+                        // No worldNoise → biome-agnostic default.
+                        surfaceGY = biomeBase
+                                    + depth * depthAmp
+                                    + hills * hillsAmp
+                                    + texture * textureAmp;
                     }
 
                     // scaleAmp ∈ [3, 13]. Smaller = sharper surface

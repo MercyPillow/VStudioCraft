@@ -354,8 +354,23 @@ void main()
 ";
 
         private const float ReachDistance = 8f;
-        public const int ViewDistanceChunks = 6;   // ~13x13 kept loaded around the player
-        public const int UnloadDistanceChunks = 9; // 3 chunks of hysteresis beyond view distance
+        // Tier 10 follow-up — Render distance is now runtime-
+        // configurable via Settings.RenderDistance. View = the
+        // configured radius; Unload = view + 3 chunks of hysteresis
+        // (the same +3 the original const pair used). Both values
+        // refresh from the settings store on world load and on the
+        // Options-menu slider drag, so a player can crank the radius
+        // without restarting. Static so existing call sites that
+        // referenced the const value still work as a property read.
+        public static int ViewDistanceChunks { get; private set; } = Settings.RenderDistanceDefault;
+        public static int UnloadDistanceChunks { get; private set; } = Settings.RenderDistanceDefault + 3;
+        public static void ApplyRenderDistance(int radiusChunks)
+        {
+            if (radiusChunks < Settings.RenderDistanceMin) radiusChunks = Settings.RenderDistanceMin;
+            else if (radiusChunks > Settings.RenderDistanceMax) radiusChunks = Settings.RenderDistanceMax;
+            ViewDistanceChunks = radiusChunks;
+            UnloadDistanceChunks = radiusChunks + 3;
+        }
         private const int MaxInstallsPerFrame = 8; // completed-gen drains per frame
         private const int MaxUnloadsPerFrame = 3;
         private const int MaxMeshUploadsPerFrame = 4; // completed-mesh drains per frame
@@ -933,6 +948,50 @@ void main()
         private bool _isEditingSign;
         public bool IsEditingSign => _isEditingSign;
         private (int x, int y, int z) _editingSignPos;
+
+        // Tier 10 follow-up — In-game chat / command line. Opens via
+        // T (or `/` to pre-fill the slash) and accepts text input
+        // until Enter (submit) or Escape (cancel). Chat does NOT halt
+        // the world — modern Minecraft keeps the world ticking while
+        // the player types so they can read combat events / dropped-
+        // item messages without blocking gameplay.
+        private bool _isChatOpen;
+        public bool IsChatOpen => _isChatOpen;
+        private struct ChatLine
+        {
+            public string Text;
+            public int    SpawnedTickMs; // Environment.TickCount snapshot for fade
+        }
+        private readonly System.Collections.Generic.List<ChatLine> _chatHistory =
+            new System.Collections.Generic.List<ChatLine>();
+        private const int  ChatMaxHistory     = 50;
+        // Lines older than this fade out when chat is closed; while
+        // chat is open every line stays fully visible (matches MC).
+        private const int  ChatLineLifetimeMs = 10000;
+        private const int  ChatLineFadeMs     = 2000;
+
+        // Tier 10 follow-up — /back snapshot. Captured by /tp,
+        // /spawn, /home and any other teleporting command so the
+        // player can rewind one step. Null when no jump has happened
+        // since world load.
+        private OpenTK.Vector3? _chatBackPos;
+
+        // Tier 10 follow-up — Chat scroll offset. Number of lines the
+        // history view is scrolled UP from the bottom. 0 means "show
+        // newest" (default); each mouse-wheel notch up bumps it by 1
+        // (showing older lines). Clamped each render so a wheel
+        // event past the top of history is a no-op.
+        private int _chatScrollLines;
+        // Apply a scroll delta (positive = scroll UP toward older
+        // messages, negative = down toward newer). Called by the
+        // host's mouse-wheel handler while chat is open.
+        public void ScrollChat(int delta)
+        {
+            _chatScrollLines += delta;
+            if (_chatScrollLines < 0) _chatScrollLines = 0;
+            int max = System.Math.Max(0, _chatHistory.Count - 1);
+            if (_chatScrollLines > max) _chatScrollLines = max;
+        }
 
         // Convenience for the host: any modal UI that should freeze the
         // world. New modals (chat overlay, world-creation dialog…) just
@@ -7327,6 +7386,331 @@ void main()
             Input.Clear();
         }
 
+        // Tier 10 follow-up — Chat lifecycle + command dispatch.
+        // Opening focuses the chat text field so KeyPress flows
+        // append to ChatInputText; closing clears focus + the buffer.
+        // Submit parses `/`-prefixed input as a local command and
+        // appends a line to the visible history; non-command text
+        // is echoed (and would broadcast to peers in MP — the wire
+        // path is a follow-up).
+        public void OpenChat(bool prefillSlash = false)
+        {
+            if (Input == null) return;
+            _isChatOpen = true;
+            _chatScrollLines = 0; // jump to newest on open
+            Input.ChatInputText = prefillSlash ? "/" : string.Empty;
+            Input.FocusedField = InputState.TextField.Chat;
+            Input.Clear(); // drop any held WASD so movement stops while typing
+        }
+
+        public void CloseChat()
+        {
+            if (Input != null)
+            {
+                Input.ChatInputText = string.Empty;
+                if (Input.FocusedField == InputState.TextField.Chat)
+                    Input.FocusedField = InputState.TextField.None;
+            }
+            _isChatOpen = false;
+        }
+
+        // Submit the current chat buffer. Empty input → just close.
+        // /-prefixed input → dispatched through HandleChatCommand.
+        // Plain text → echoed to local history (MP broadcast TODO).
+        public void SubmitChat()
+        {
+            if (Input == null) { _isChatOpen = false; return; }
+            string text = (Input.ChatInputText ?? string.Empty).Trim();
+            if (text.Length > 0)
+            {
+                if (text.StartsWith("/"))
+                {
+                    HandleChatCommand(text.Substring(1));
+                }
+                else
+                {
+                    // Single-player echo. In MP this would route to
+                    // the server which fans out to every connected
+                    // client — wire-protocol packet TBD; for now the
+                    // local echo is correct for SP and harmless in MP.
+                    AddChatLine("<You> " + text);
+                }
+            }
+            CloseChat();
+        }
+
+        // Append a chat line to the visible history. Trims the buffer
+        // when it grows past ChatMaxHistory so a long session can't
+        // bloat memory. Public so command handlers + future MP
+        // packet receivers can drop lines into the same UI.
+        public void AddChatLine(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return;
+            _chatHistory.Add(new ChatLine
+            {
+                Text = line,
+                SpawnedTickMs = System.Environment.TickCount,
+            });
+            // Preserve scroll position: if the player is reading
+            // older history (scroll > 0), bump scroll by 1 so the
+            // visible window stays locked on the same lines as new
+            // messages arrive. At scroll == 0 (bottom-glued) the new
+            // line appears at the bottom as expected.
+            if (_chatScrollLines > 0) _chatScrollLines++;
+            if (_chatHistory.Count > ChatMaxHistory)
+            {
+                int drop = _chatHistory.Count - ChatMaxHistory;
+                _chatHistory.RemoveRange(0, drop);
+                // Trim scroll into the new range — if the user was
+                // scrolled into the dropped prefix, snap toward the
+                // top of the surviving history.
+                if (_chatScrollLines > _chatHistory.Count - 1)
+                    _chatScrollLines = System.Math.Max(0, _chatHistory.Count - 1);
+            }
+        }
+
+        // Tier 10 follow-up — Local command dispatcher. Splits the
+        // command + arg string on whitespace, switches on the verb,
+        // and echoes a result line back to chat. Unknown commands
+        // print a hint so the player learns the canonical names.
+        private void HandleChatCommand(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                AddChatLine("Empty command. Try /help.");
+                return;
+            }
+            string[] parts = command.Split(new[] { ' ', '\t' }, System.StringSplitOptions.RemoveEmptyEntries);
+            string verb = parts[0].ToLowerInvariant();
+            switch (verb)
+            {
+                case "help":
+                    AddChatLine("Commands:");
+                    AddChatLine("/help - show this list");
+                    AddChatLine("/creative - creative mode");
+                    AddChatLine("/survival - survival mode");
+                    AddChatLine("/mode <c|s> - set mode");
+                    AddChatLine("/fly - toggle flight (creative)");
+                    AddChatLine("/heal - restore health + air");
+                    AddChatLine("/kill - die + respawn");
+                    AddChatLine("/clear - clear chat history");
+                    AddChatLine("/clearinv - empty inventory");
+                    AddChatLine("/spawn - teleport to spawn");
+                    AddChatLine("/home - alias of /spawn");
+                    AddChatLine("/setspawn - set spawn here");
+                    AddChatLine("/back - undo last teleport");
+                    AddChatLine("/pos - show position");
+                    AddChatLine("/where - alias of /pos");
+                    AddChatLine("/tp <x> <y> <z> - teleport");
+                    AddChatLine("/time <0..1> - set time of day");
+                    AddChatLine("/day - set time to noon");
+                    AddChatLine("/night - set time to midnight");
+                    AddChatLine("/noon - alias of /day");
+                    AddChatLine("/midnight - alias of /night");
+                    AddChatLine("/seed - print world seed");
+                    AddChatLine("/give <name> [count] - spawn item");
+                    AddChatLine("/summon <mob> - spawn a mob");
+                    break;
+                case "creative":
+                case "c":
+                    GameMode = GameMode.Creative;
+                    AddChatLine("Game mode set to CREATIVE.");
+                    break;
+                case "survival":
+                case "s":
+                    GameMode = GameMode.Survival;
+                    if (Player != null) Player.IsFlying = false;
+                    AddChatLine("Game mode set to SURVIVAL.");
+                    break;
+                case "mode":
+                case "gamemode":
+                    if (parts.Length < 2) { AddChatLine("Usage: /mode <c|s>"); break; }
+                    string m = parts[1].ToLowerInvariant();
+                    if (m.StartsWith("c")) { GameMode = GameMode.Creative; AddChatLine("Game mode → CREATIVE."); }
+                    else if (m.StartsWith("s"))
+                    {
+                        GameMode = GameMode.Survival;
+                        if (Player != null) Player.IsFlying = false;
+                        AddChatLine("Game mode → SURVIVAL.");
+                    }
+                    else AddChatLine("Unknown mode '" + parts[1] + "'.");
+                    break;
+                case "fly":
+                    if (GameMode != GameMode.Creative)
+                    {
+                        AddChatLine("Fly is creative-only.");
+                        break;
+                    }
+                    if (Player == null) break;
+                    Player.IsFlying = !Player.IsFlying;
+                    Player.Velocity.Y = 0f;
+                    AddChatLine("Fly " + (Player.IsFlying ? "ON." : "OFF."));
+                    break;
+                case "heal":
+                    if (Player != null)
+                    {
+                        Player.Health = 20;
+                        Player.Air = Player.MaxAir;
+                        AddChatLine("Health + air restored.");
+                    }
+                    break;
+                case "clear":
+                    _chatHistory.Clear();
+                    break;
+                case "tp":
+                case "teleport":
+                    if (parts.Length < 4 || Player == null)
+                    {
+                        AddChatLine("Usage: /tp <x> <y> <z>");
+                        break;
+                    }
+                    if (!float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tx) ||
+                        !float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float ty) ||
+                        !float.TryParse(parts[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tz))
+                    {
+                        AddChatLine("Bad coordinates.");
+                        break;
+                    }
+                    _chatBackPos = Player.Position;
+                    Player.Position = new OpenTK.Vector3(tx, ty, tz);
+                    Player.Velocity = OpenTK.Vector3.Zero;
+                    AddChatLine("Teleported to (" + tx.ToString("0.#") + ", " + ty.ToString("0.#") + ", " + tz.ToString("0.#") + ").");
+                    break;
+                case "spawn":
+                case "home":
+                    if (Player == null) break;
+                    _chatBackPos = Player.Position;
+                    Player.Position = _spawnPos;
+                    Player.Velocity = OpenTK.Vector3.Zero;
+                    AddChatLine("Returned to spawn.");
+                    break;
+                case "setspawn":
+                    if (Player == null) break;
+                    _spawnPos = Player.Position;
+                    AddChatLine("Spawn set to (" + _spawnPos.X.ToString("0.#") + ", " + _spawnPos.Y.ToString("0.#") + ", " + _spawnPos.Z.ToString("0.#") + ").");
+                    break;
+                case "back":
+                    if (Player == null || !_chatBackPos.HasValue)
+                    {
+                        AddChatLine("No previous position.");
+                        break;
+                    }
+                    {
+                        var prev = _chatBackPos.Value;
+                        _chatBackPos = Player.Position;
+                        Player.Position = prev;
+                        Player.Velocity = OpenTK.Vector3.Zero;
+                        AddChatLine("Returned to (" + prev.X.ToString("0.#") + ", " + prev.Y.ToString("0.#") + ", " + prev.Z.ToString("0.#") + ").");
+                    }
+                    break;
+                case "pos":
+                case "where":
+                    if (Player == null) break;
+                    {
+                        var p = Player.Position;
+                        int cx = (int)System.Math.Floor(p.X / 16f);
+                        int cz = (int)System.Math.Floor(p.Z / 16f);
+                        AddChatLine("XYZ " + p.X.ToString("0.0") + " / " + p.Y.ToString("0.0") + " / " + p.Z.ToString("0.0"));
+                        AddChatLine("Chunk (" + cx + ", " + cz + ")");
+                    }
+                    break;
+                case "kill":
+                    if (Player == null) break;
+                    Player.Health = 0;
+                    AddChatLine("Player killed.");
+                    break;
+                case "day":
+                    TimeOfDay = 0.25f;
+                    AddChatLine("Time set to noon.");
+                    break;
+                case "night":
+                    TimeOfDay = 0.75f;
+                    AddChatLine("Time set to midnight.");
+                    break;
+                case "noon":
+                    TimeOfDay = 0.25f;
+                    AddChatLine("Time set to noon.");
+                    break;
+                case "midnight":
+                    TimeOfDay = 0.75f;
+                    AddChatLine("Time set to midnight.");
+                    break;
+                case "clearinv":
+                case "clearinventory":
+                    if (Input == null) break;
+                    {
+                        var slots = Input.Inventory.Slots;
+                        for (int i = 0; i < slots.Length; i++) slots[i] = ItemStack.Empty;
+                        Input.Inventory.Cursor = ItemStack.Empty;
+                        AddChatLine("Inventory cleared.");
+                    }
+                    break;
+                case "summon":
+                    if (parts.Length < 2 || Player == null || _world == null)
+                    {
+                        AddChatLine("Usage: /summon <Pig|Cow|Sheep|Chicken|Zombie|Skeleton|Spider|Creeper>");
+                        break;
+                    }
+                    {
+                        string kind = parts[1].ToLowerInvariant();
+                        var spawnAt = Player.Position + new OpenTK.Vector3(2f, 0f, 0f);
+                        int seed = System.Environment.TickCount;
+                        switch (kind)
+                        {
+                            case "pig":      _world.Passives.Add(new Pig(spawnAt, seed));      AddChatLine("Pig spawned.");      break;
+                            case "cow":      _world.Passives.Add(new Cow(spawnAt, seed));      AddChatLine("Cow spawned.");      break;
+                            case "sheep":    _world.Passives.Add(new Sheep(spawnAt, seed));    AddChatLine("Sheep spawned.");    break;
+                            case "chicken":  _world.Passives.Add(new Chicken(spawnAt, seed));  AddChatLine("Chicken spawned.");  break;
+                            case "zombie":   _world.Hostiles.Add(new Zombie(spawnAt, seed));   AddChatLine("Zombie spawned.");   break;
+                            case "skeleton": _world.Hostiles.Add(new Skeleton(spawnAt, seed)); AddChatLine("Skeleton spawned."); break;
+                            case "spider":   _world.Hostiles.Add(new Spider(spawnAt, seed));   AddChatLine("Spider spawned.");   break;
+                            case "creeper":  _world.Hostiles.Add(new Creeper(spawnAt, seed));  AddChatLine("Creeper spawned.");  break;
+                            default:         AddChatLine("Unknown mob '" + parts[1] + "'.");   break;
+                        }
+                    }
+                    break;
+                case "time":
+                    if (parts.Length < 2)
+                    {
+                        AddChatLine("Time = " + _timeOfDay.ToString("0.000"));
+                        break;
+                    }
+                    if (float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float ttime))
+                    {
+                        TimeOfDay = ttime;
+                        AddChatLine("Time set to " + _timeOfDay.ToString("0.000") + ".");
+                    }
+                    else AddChatLine("Bad time value (expected 0..1).");
+                    break;
+                case "seed":
+                    if (_world != null) AddChatLine("Seed: " + _world.Seed);
+                    else AddChatLine("No world loaded.");
+                    break;
+                case "give":
+                    if (parts.Length < 2 || Input == null || Player == null)
+                    {
+                        AddChatLine("Usage: /give <BlockType> [count]");
+                        break;
+                    }
+                    if (!System.Enum.TryParse<BlockType>(parts[1], ignoreCase: true, out BlockType bt))
+                    {
+                        AddChatLine("Unknown item '" + parts[1] + "'.");
+                        break;
+                    }
+                    int count = 1;
+                    if (parts.Length >= 3) int.TryParse(parts[2], out count);
+                    if (count < 1) count = 1;
+                    if (count > 64) count = 64;
+                    var leftover = Input.Inventory.TryAdd(new ItemStack(bt, (byte)count));
+                    if (leftover.IsEmpty) AddChatLine("Gave " + count + " " + bt + ".");
+                    else                  AddChatLine("Inventory full — added partial.");
+                    break;
+                default:
+                    AddChatLine("Unknown command '/" + verb + "'. Try /help.");
+                    break;
+            }
+        }
+
         // Tier 8 #44 V2 — Seal the typed buffers into the
         // SignTileEntity at the editing coord and close the editor.
         // Called from the host on Enter (past the last line) or
@@ -12227,6 +12611,13 @@ void main()
                 }
 
                 RenderHotbar(width, height);
+
+                // Tier 10 follow-up — Chat overlay. Always renders
+                // when there's history visible (open OR within the
+                // line-fade window); the open path also draws the
+                // input prompt with caret. Sits above the hotbar so
+                // text is readable while still seeing the bar.
+                RenderChatOverlay(width, height);
 
                 // Tier 5 #30 — F3 debug overlay. Drawn after the
                 // hotbar and before the modal stack so it survives a
@@ -17684,6 +18075,208 @@ void main()
                 ortho: ortho);
         }
 
+        // Tier 10 follow-up — Chat overlay. One unified semi-
+        // transparent tray at the bottom-left containing the most
+        // recent ~10 chat lines plus (when chat is open) the input
+        // prompt. The tray fades as a single block based on the
+        // newest activity timestamp: visible at full alpha while
+        // chat is open, full alpha for ChatHoldMs after the last
+        // line arrives once chat closes, then fades over ChatFadeMs
+        // to fully transparent.
+        private const int ChatHoldMs = 10000;  // full-opacity hold after last activity
+        private const int ChatFadeMs = 1500;   // fade-out duration past the hold
+
+        private void RenderChatOverlay(int width, int height)
+        {
+            if (Input == null) return;
+
+            int now = System.Environment.TickCount;
+            // Find the most recent line's age. If history is empty,
+            // there's nothing to fade against — only the input prompt
+            // (when open) should render.
+            int newestAge = int.MaxValue;
+            if (_chatHistory.Count > 0)
+                newestAge = now - _chatHistory[_chatHistory.Count - 1].SpawnedTickMs;
+
+            // Tray-wide alpha: 1 while chat is open or within
+            // ChatHoldMs of the newest line, fading linearly across
+            // ChatFadeMs after that. Once below 0.02 we skip the
+            // whole pass — the pixel cost would be invisible anyway.
+            float trayAlpha;
+            if (_isChatOpen)
+            {
+                trayAlpha = 1f;
+            }
+            else
+            {
+                if (newestAge < ChatHoldMs) trayAlpha = 1f;
+                else if (newestAge < ChatHoldMs + ChatFadeMs)
+                    trayAlpha = 1f - (newestAge - ChatHoldMs) / (float)ChatFadeMs;
+                else trayAlpha = 0f;
+            }
+            if (trayAlpha < 0.02f) return;
+
+            var ortho = Matrix4.CreateOrthographicOffCenter(0, width, height, 0, -1f, 1f);
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.CullFace);
+
+            int scale  = System.Math.Max(2, UiScale.S(2, width, height));
+            int glyphW = HotbarTextures.GlyphCellW * scale;
+            int glyphH = HotbarTextures.GlyphCellH * scale;
+            int line   = glyphH + scale * 2;
+            int padX   = scale * 6;
+            int padY   = scale * 4;
+            // Border thickness — 2 px exactly, scale-independent.
+            const int Border = 2;
+            // Tier 10 follow-up — fixed history height. The tray
+            // always reserves room for HistoryRows lines so the
+            // input prompt sits at a consistent screen position
+            // whether the buffer is full or empty.
+            const int HistoryRows = 9;
+
+            // Tray width: half the viewport, with a sane minimum.
+            int trayW = width / 2;
+            int minTrayW = glyphW * 36 + padX * 2;
+            if (trayW < minTrayW) trayW = minTrayW;
+
+            // Tray bottom: just above the hotbar with a small gap.
+            int hotbarTop  = HotbarLayout.BarTopY(width, height);
+            int trayBottom = hotbarTop - scale * 4;
+
+            // Tier 10 follow-up — wrap each history line to fit the
+            // tray width. The wrapped list is the indexable surface
+            // for the visible window + scroll, so a single long
+            // logical line that wraps to 3 visual rows takes 3 slots
+            // in the visible 9-row window. Wrap at render time
+            // instead of AddChatLine time so the same buffer
+            // re-flows correctly when the viewport resizes.
+            int textInset = padX + Border + scale; // shared by history + prompt
+            int textRightEdge = padX + trayW - Border - scale;
+            int maxChars = System.Math.Max(8, (textRightEdge - textInset) / glyphW);
+            var wrapped = new System.Collections.Generic.List<string>(_chatHistory.Count + 4);
+            for (int i = 0; i < _chatHistory.Count; i++)
+            {
+                WrapLine(_chatHistory[i].Text, maxChars, wrapped);
+            }
+
+            // Clamp scroll into the new wrapped range.
+            int wrappedCount = wrapped.Count;
+            int maxScroll = System.Math.Max(0, wrappedCount - HistoryRows);
+            if (_chatScrollLines > maxScroll) _chatScrollLines = maxScroll;
+            if (_chatScrollLines < 0) _chatScrollLines = 0;
+
+            // Visible window ends at (wrappedCount - scroll); start
+            // is HistoryRows lines above that. Empty rows render
+            // blank (the tray height is fixed regardless).
+            int visibleEnd   = wrappedCount - _chatScrollLines;
+            int visibleStart = visibleEnd - HistoryRows;
+
+            int promptRows = _isChatOpen ? 1 : 0;
+            int trayH = (HistoryRows + promptRows) * line + padY * 2;
+            int trayTop = trayBottom - trayH;
+            if (trayTop < 0) { trayTop = 0; trayH = trayBottom; }
+
+            float fillAlpha   = 0.55f * trayAlpha;
+            // Border = 10 percentage points less opacity than fill.
+            float borderAlpha = 0.45f * trayAlpha;
+            var fillRgb   = new Vector3(0f, 0f, 0f);
+            var borderRgb = new Vector3(0.85f, 0.85f, 0.95f);
+
+            DrawSolidQuad(padX, trayTop, trayW, trayH,
+                fillRgb, fillAlpha, ortho);
+
+            // I-beam border. Verticals span the full tray height;
+            // top + bottom horizontals sit between the verticals
+            // (no double-paint at the corners).
+            DrawSolidQuad(padX, trayTop, Border, trayH, borderRgb, borderAlpha, ortho);
+            DrawSolidQuad(padX + trayW - Border, trayTop, Border, trayH, borderRgb, borderAlpha, ortho);
+            DrawSolidQuad(padX + Border, trayTop,
+                trayW - 2 * Border, Border, borderRgb, borderAlpha, ortho);
+            DrawSolidQuad(padX + Border, trayTop + trayH - Border,
+                trayW - 2 * Border, Border, borderRgb, borderAlpha, ortho);
+
+            // History rows, fixed at HistoryRows entries. Empty slots
+            // render no text but still occupy the row so the prompt
+            // stays anchored at the same Y.
+            int rowY = trayTop + padY;
+            for (int row = 0; row < HistoryRows; row++)
+            {
+                int idx = visibleStart + row;
+                if (idx >= 0 && idx < wrappedCount)
+                {
+                    string text = wrapped[idx];
+                    int total = text.Length * glyphW;
+                    int centerX = textInset + total / 2;
+                    DrawString(text, scale, centerX, rowY,
+                        new Vector4(1f, 1f, 1f, trayAlpha), ortho);
+                }
+                rowY += line;
+            }
+
+            if (_isChatOpen)
+            {
+                // Edge-to-edge accent line between history and input.
+                int sepY = rowY - (line - glyphH) / 2 - 1;
+                DrawSolidQuad(padX, sepY, trayW, Border,
+                    borderRgb, borderAlpha, ortho);
+
+                // Prompt: vertically centred in its row, pushed
+                // closer to the left border than the history. Caret
+                // blinks at ~2 Hz. NO `> ` prefix — that pushed every
+                // typed character 2 glyph-cells inside the border;
+                // the blinking caret + typed text alone are clear
+                // enough that the player is in input mode.
+                string prompt = Input.ChatInputText ?? string.Empty;
+                bool caretOn = ((now / 500) & 1) == 0;
+                if (caretOn) prompt += "_";
+                int total = prompt.Length * glyphW;
+                int promptInset = padX + Border + 1;
+                int promptCenterX = promptInset + total / 2;
+                int promptY = rowY + (line - glyphH) / 2;
+                DrawString(prompt, scale, promptCenterX, promptY,
+                    new Vector4(1f, 1f, 1f, trayAlpha), ortho);
+            }
+        }
+
+        // Wrap a chat line to at most `maxChars` characters per
+        // segment. Splits on word boundaries when possible (last
+        // space inside the window); a word longer than the window
+        // gets a hard cut. Empty input yields a single empty
+        // segment so it still occupies one visual row in the
+        // history.
+        private static void WrapLine(string text, int maxChars,
+            System.Collections.Generic.List<string> output)
+        {
+            if (string.IsNullOrEmpty(text)) { output.Add(string.Empty); return; }
+            if (maxChars <= 0) { output.Add(text); return; }
+            int i = 0;
+            while (i < text.Length)
+            {
+                int remaining = text.Length - i;
+                if (remaining <= maxChars)
+                {
+                    output.Add(text.Substring(i));
+                    return;
+                }
+                // Look for a space to break on inside [i, i+maxChars].
+                int hardEnd = i + maxChars;
+                int breakAt = -1;
+                for (int j = hardEnd; j > i; j--)
+                {
+                    if (text[j - 1] == ' ') { breakAt = j; break; }
+                }
+                if (breakAt <= 0) breakAt = hardEnd;
+                output.Add(text.Substring(i, breakAt - i).TrimEnd());
+                i = breakAt;
+                // Skip a single trailing space already consumed by
+                // the wrap, but DON'T trim more — the next segment
+                // should keep any leading content the player meant.
+                while (i < text.Length && text[i] == ' ') i++;
+            }
+        }
+
         private void RenderDebugOverlay(int width, int height)
         {
             if (_world == null || Input == null) return;
@@ -17882,7 +18475,7 @@ void main()
             float masterVol = AudioEngine.MasterGain;
             float musicVol  = AudioEngine.MusicGain;
             var rows = OptionsMenu.BuildRows(width, height, HungerEnabled, isSurvival, useReal,
-                                             masterVol, musicVol);
+                                             masterVol, musicVol, ViewDistanceChunks);
             int rowBorder = UiScale.S(2, width, height);
             int rowLabelScale = System.Math.Max(1, UiScale.S(2, width, height));
 
@@ -17964,7 +18557,7 @@ void main()
             DrawString("OPTIONS", /*scale*/OptionsMenu.TitleFontScale(width, height),
                 /*centerX*/width / 2,
                 /*topY*/OptionsMenu.TitleY(width, height, HungerEnabled, isSurvival, useReal,
-                                           masterVol, musicVol),
+                                           masterVol, musicVol, ViewDistanceChunks),
                 new Vector4(1f, 1f, 1f, 1f), ortho);
 
             GL.Enable(EnableCap.CullFace);

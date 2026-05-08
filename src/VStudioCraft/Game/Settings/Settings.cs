@@ -57,6 +57,54 @@ namespace VStudioCraft.Game
             set => WriteFloat01("MusicVolume", value);
         }
 
+        // Tier 10 follow-up — Render distance in chunks. Default 6
+        // matches the legacy compile-time constant; range 4..16 covers
+        // "tiny window" to "stress test the chunk job pool". Stored as
+        // an int in the registry — clamped on read so a corrupt value
+        // can't bring chunk streaming to its knees.
+        public const int RenderDistanceMin     = 4;
+        public const int RenderDistanceMax     = 16;
+        public const int RenderDistanceDefault = 6;
+        public static int RenderDistance
+        {
+            get => ReadInt("RenderDistance", RenderDistanceDefault, RenderDistanceMin, RenderDistanceMax);
+            set => WriteInt("RenderDistance", value, RenderDistanceMin, RenderDistanceMax);
+        }
+
+        private static int ReadInt(string name, int fallback, int min, int max)
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(KeyPath))
+                {
+                    if (key == null) return fallback;
+                    var v = key.GetValue(name);
+                    if (v is int i)
+                    {
+                        if (i < min) i = min;
+                        else if (i > max) i = max;
+                        return i;
+                    }
+                    return fallback;
+                }
+            }
+            catch { return fallback; }
+        }
+
+        private static void WriteInt(string name, int value, int min, int max)
+        {
+            try
+            {
+                if (value < min) value = min;
+                else if (value > max) value = max;
+                using (var key = Registry.CurrentUser.CreateSubKey(KeyPath))
+                {
+                    key?.SetValue(name, value, RegistryValueKind.DWord);
+                }
+            }
+            catch { }
+        }
+
         private static float ReadFloat01(string name, float fallback)
         {
             try

@@ -131,6 +131,13 @@ namespace VStudioCraft.Game
             // a SignTileEntity in the world on Enter (last line) or
             // Escape — see GameRenderer.CommitSignEdit.
             SignEditor,
+            // Tier 10 follow-up — In-game chat / command line. The
+            // host opens chat via T (or `/`), focus shifts here, and
+            // KeyPress events flow into ChatInputText via AppendChar.
+            // Enter submits to GameRenderer.SubmitChat which parses
+            // `/`-prefixed commands locally and (in MP) sends regular
+            // messages to the server.
+            Chat,
         }
 
         public TextField FocusedField;
@@ -140,6 +147,13 @@ namespace VStudioCraft.Game
         public string ServerUsernameText = "Player";
         public string MultiplayerErrorText = string.Empty;
         public int WorldSelectScroll;
+
+        // Tier 10 follow-up — Chat input buffer. KeyPress appends to
+        // it via AppendChar(c, ChatMaxLen); Enter clears + submits;
+        // Escape clears + closes without submit. Renderer reads it
+        // each frame to draw the input prompt.
+        public string ChatInputText = string.Empty;
+        public const int ChatMaxLen = 100;
 
         // Tier 8 #44 V2 — Sign editor buffers. Four lines of typed
         // text, top-to-bottom, that the host's KeyPress handler
@@ -200,6 +214,9 @@ namespace VStudioCraft.Game
                             SignEditorLines[idx] += c;
                     }
                     break;
+                case TextField.Chat:
+                    if (ChatInputText.Length < maxLen) ChatInputText += c;
+                    break;
             }
         }
 
@@ -248,6 +265,10 @@ namespace VStudioCraft.Game
                             SignEditorActiveLine = idx - 1;
                         }
                     }
+                    break;
+                case TextField.Chat:
+                    if (ChatInputText.Length > 0)
+                        ChatInputText = ChatInputText.Substring(0, ChatInputText.Length - 1);
                     break;
             }
         }

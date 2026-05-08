@@ -546,6 +546,12 @@ namespace VStudioCraft.UI
             // game still runs without sound.
             VStudioCraft.Game.SfxBank.Initialize();
 
+            // Tier 10 follow-up — Apply persisted render distance
+            // before the first chunk-load pass so the initial radius
+            // matches the player's saved preference.
+            VStudioCraft.Game.GameRenderer.ApplyRenderDistance(
+                VStudioCraft.Game.Settings.RenderDistance);
+
             _glVersion = GL.GetString(StringName.Version) ?? "unknown";
             _glRenderer = GL.GetString(StringName.Renderer) ?? "unknown";
             _glVendor = GL.GetString(StringName.Vendor) ?? "unknown";
@@ -1115,24 +1121,35 @@ namespace VStudioCraft.UI
             // configurable KeyBindings table instead of hardcoded
             // Keys.W/A/S/D so the player's options-menu bindings
             // apply at every poll.
-            if (_input.IsDown(KeyBindings.MoveForward))  wish += fwdH;
-            if (_input.IsDown(KeyBindings.MoveBackward)) wish -= fwdH;
-            if (_input.IsDown(KeyBindings.MoveRight))    wish += rightH;
-            if (_input.IsDown(KeyBindings.MoveLeft))     wish -= rightH;
-            if (wish.LengthSquared > 0f) wish = Vector3.Normalize(wish);
+            // Tier 10 follow-up — Chat input gate. While the chat
+            // overlay is open, every WASD key the player presses is
+            // routing into the chat buffer — they'd be confused if
+            // their character also walked. Skipping the wish read
+            // here zeroes wish-velocity for the duration of the chat
+            // session; the player stops in place until they hit
+            // Enter / Esc.
+            bool chatTyping = _renderer != null && _renderer.IsChatOpen;
+            if (!chatTyping)
+            {
+                if (_input.IsDown(KeyBindings.MoveForward))  wish += fwdH;
+                if (_input.IsDown(KeyBindings.MoveBackward)) wish -= fwdH;
+                if (_input.IsDown(KeyBindings.MoveRight))    wish += rightH;
+                if (_input.IsDown(KeyBindings.MoveLeft))     wish -= rightH;
+                if (wish.LengthSquared > 0f) wish = Vector3.Normalize(wish);
+            }
 
             // Tier 5 #27 — Sneak (Shift) and sprint (Ctrl). Sneak wins
             // over sprint when both held — sneak is the safety modifier
             // (a stuck Ctrl key shouldn't launch you off a cliff). The
             // sneaking flag is also pushed into Player so its Update
             // can run the AABB edge-stop probe before MoveAxis.
-            bool sneaking = _input.IsDown(KeyBindings.Sneak);
-            bool sprinting = !sneaking && _input.IsDown(Keys.ControlKey);
+            bool sneaking = !chatTyping && _input.IsDown(KeyBindings.Sneak);
+            bool sprinting = !chatTyping && !sneaking && _input.IsDown(Keys.ControlKey);
             float speed = sneaking ? Player.SneakSpeed
                         : sprinting ? Player.SprintSpeed
                         : Player.WalkSpeed;
             _renderer.Player.IsSneaking = sneaking;
-            bool wantJump = _input.IsDown(KeyBindings.Jump);
+            bool wantJump = !chatTyping && _input.IsDown(KeyBindings.Jump);
 
             const float sensitivity = 0.0035f;
             // Tier 9 #54 V1 — Suppress player physics while mounted in
@@ -1286,6 +1303,77 @@ namespace VStudioCraft.UI
             //                structural keys so they don't double-
             //                fire game shortcuts; printable keys are
             //                allowed through so KeyPress sees them.
+            // Tier 10 follow-up — Chat input. When the chat is open
+            // the only keys the host honours are structural (Enter
+            // submits, Esc cancels, Backspace deletes a char); every
+            // other non-printable key is swallowed so game shortcuts
+            // (E, F3, 1-9, T) don't fire while typing. Printable keys
+            // fall through to KeyPress where AppendChar appends to
+            // the chat buffer.
+            if (_renderer != null && _renderer.IsChatOpen)
+            {
+                switch (e.KeyCode)
+                {
+                    case Keys.Enter:
+                        _renderer.SubmitChat();
+                        CaptureMouseLook();
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.Escape:
+                        _renderer.CloseChat();
+                        CaptureMouseLook();
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    case Keys.Back:
+                        _input.Backspace();
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                }
+                // Swallow non-printable keys; printable ones flow to
+                // KeyPress.
+                if (!IsTextProducingKey(e.KeyCode))
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+                return;
+            }
+
+            // Tier 10 follow-up — Open chat. T opens a blank prompt;
+            // / pre-fills the slash so a player who started typing
+            // a command doesn't have to delete-and-retype. Gated on
+            // the player not being inside another modal (pause /
+            // inventory / sign / death) — those have their own input
+            // routing and can't legibly stack a chat box on top.
+            if (_renderer != null && !_renderer.IsChatOpen
+                && !_renderer.IsWorldHalted
+                && !_renderer.IsTitleScreenOpen)
+            {
+                if (e.KeyCode == Keys.T)
+                {
+                    _renderer.OpenChat(prefillSlash: false);
+                    ReleaseMouseLook();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+                if (e.KeyCode == Keys.OemQuestion || e.KeyCode == Keys.Oem2)
+                {
+                    // OemQuestion = US-layout `/?` key. Open chat with
+                    // `/` already typed so the player can keep going
+                    // with the command name. Suppressed via the same
+                    // rule as T.
+                    _renderer.OpenChat(prefillSlash: true);
+                    ReleaseMouseLook();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+            }
+
             if (_renderer != null && _renderer.IsEditingSign)
             {
                 switch (e.KeyCode)
@@ -1611,6 +1699,16 @@ namespace VStudioCraft.UI
                 return;
             }
 
+            // Tier 10 follow-up — Chat input. Same flow as the sign
+            // editor: KeyDown handled the structural keys; printable
+            // chars land in ChatInputText via AppendChar.
+            if (_renderer.IsChatOpen && _input.FocusedField == InputState.TextField.Chat)
+            {
+                _input.AppendChar(c, /*maxLen*/InputState.ChatMaxLen);
+                e.Handled = true;
+                return;
+            }
+
             // In-game creative-inventory search bar (existing path).
             if (!_renderer.IsInventoryOpen) return;
             if (_renderer.GameMode != GameMode.Creative) return;
@@ -1797,6 +1895,19 @@ namespace VStudioCraft.UI
 
         private void GlOnMouseWheel(object sender, MouseEventArgs e)
         {
+            // Tier 10 follow-up — Chat open: wheel scrolls chat
+            // history one line per notch (positive Delta = scroll up
+            // toward older messages). Intercepts before the hotbar /
+            // inventory paths so the player can read scrollback while
+            // typing without their hotbar selection drifting.
+            if (_renderer != null && _renderer.IsChatOpen)
+            {
+                _wheelAccum += e.Delta;
+                while (_wheelAccum >= 120) { _wheelAccum -= 120; _renderer.ScrollChat(+1); }
+                while (_wheelAccum <= -120) { _wheelAccum += 120; _renderer.ScrollChat(-1); }
+                return;
+            }
+
             // Creative inventory open: wheel scrolls the catalog instead
             // of cycling the hotbar. One row per notch matches the catalog
             // grid's vertical step. Renderer clamps the value to the
@@ -1989,14 +2100,16 @@ namespace VStudioCraft.UI
                         var hit = OptionsMenu.HitTestEx(pw, ph, px, py,
                             _renderer.HungerEnabled, isSurvival,
                             VStudioCraft.Game.Settings.UseRealTextures,
-                            masterVol, musicVol);
+                            masterVol, musicVol,
+                            VStudioCraft.Game.GameRenderer.ViewDistanceChunks);
                         HandleOptionsMenuAction(hit.Id, hit.SliderValue);
                         // Latch slider drag: while LMB is held over a
                         // slider, mouse-moves should keep updating the
                         // value. The MouseMove handler reads this latch
                         // and re-fires the action with the new X.
                         if (hit.Id == OptionsMenu.ActionId.SetMasterVolume ||
-                            hit.Id == OptionsMenu.ActionId.SetMusicVolume)
+                            hit.Id == OptionsMenu.ActionId.SetMusicVolume ||
+                            hit.Id == OptionsMenu.ActionId.SetRenderDistance)
                         {
                             _optionsSliderDrag = hit.Id;
                         }
@@ -2127,10 +2240,12 @@ namespace VStudioCraft.UI
                 var hit = OptionsMenu.HitTestEx(width, height, mx, my,
                     _renderer.HungerEnabled, isSurvival,
                     VStudioCraft.Game.Settings.UseRealTextures,
-                    masterVol, musicVol);
+                    masterVol, musicVol,
+                    VStudioCraft.Game.GameRenderer.ViewDistanceChunks);
                 HandleOptionsMenuAction(hit.Id, hit.SliderValue);
                 if (hit.Id == OptionsMenu.ActionId.SetMasterVolume ||
-                    hit.Id == OptionsMenu.ActionId.SetMusicVolume)
+                    hit.Id == OptionsMenu.ActionId.SetMusicVolume ||
+                    hit.Id == OptionsMenu.ActionId.SetRenderDistance)
                 {
                     _optionsSliderDrag = hit.Id;
                 }
@@ -2419,7 +2534,8 @@ namespace VStudioCraft.UI
             // emit a stream of clicks that masks every SFX it's mixing.
             if (act != OptionsMenu.ActionId.None
                 && act != OptionsMenu.ActionId.SetMasterVolume
-                && act != OptionsMenu.ActionId.SetMusicVolume)
+                && act != OptionsMenu.ActionId.SetMusicVolume
+                && act != OptionsMenu.ActionId.SetRenderDistance)
             {
                 VStudioCraft.Game.SfxBank.PlayClick();
             }
@@ -2466,6 +2582,16 @@ namespace VStudioCraft.UI
                 case OptionsMenu.ActionId.SetMusicVolume:
                     VStudioCraft.Game.AudioEngine.MusicGain = sliderValue;
                     VStudioCraft.Game.Settings.MusicVolume  = sliderValue;
+                    break;
+                case OptionsMenu.ActionId.SetRenderDistance:
+                    {
+                        int rd = OptionsMenu.SliderToRenderDistance(sliderValue);
+                        if (rd != VStudioCraft.Game.GameRenderer.ViewDistanceChunks)
+                        {
+                            VStudioCraft.Game.GameRenderer.ApplyRenderDistance(rd);
+                            VStudioCraft.Game.Settings.RenderDistance = rd;
+                        }
+                    }
                     break;
                 case OptionsMenu.ActionId.OpenControls:
                     // Tier 9 #53 V3 — Push the Controls sub-screen.
@@ -2647,7 +2773,8 @@ namespace VStudioCraft.UI
                     var rows = OptionsMenu.BuildRows(pw, ph,
                         _renderer.HungerEnabled, isSurvival,
                         VStudioCraft.Game.Settings.UseRealTextures,
-                        masterVol, musicVol);
+                        masterVol, musicVol,
+                        VStudioCraft.Game.GameRenderer.ViewDistanceChunks);
                     for (int i = 0; i < rows.Length; i++)
                     {
                         var r = rows[i];

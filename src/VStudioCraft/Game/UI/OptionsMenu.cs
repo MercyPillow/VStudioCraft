@@ -25,6 +25,10 @@ namespace VStudioCraft.Game
             // within the row and return it via HitTestEx.
             SetMasterVolume,
             SetMusicVolume,
+            // Tier 10 follow-up — Render-distance slider. Slider
+            // returns a 0..1 value; caller maps to the integer
+            // chunk-radius range via Settings.RenderDistanceMin..Max.
+            SetRenderDistance,
             // Tier 9 #53 V3 — Opens the Controls sub-screen for in-
             // game key rebinding. Closes the Options menu and pushes
             // the Controls menu modal in its place.
@@ -70,7 +74,8 @@ namespace VStudioCraft.Game
         // hunger toggle). Kept tiny so the per-frame allocation is cheap.
         public static Row[] BuildRows(int screenW, int screenH,
             bool hungerEnabled, bool isSurvival, bool useRealTextures,
-            float masterVolume, float musicVolume)
+            float masterVolume, float musicVolume,
+            int renderDistance)
         {
             // SURVIVAL section: hunger toggle (disabled in creative).
             // GRAPHICS section: alpha-textures toggle (always available).
@@ -85,6 +90,14 @@ namespace VStudioCraft.Game
                                   IsDisabled = !isSurvival });
             rowList.Add(new Row { Id = ActionId.None, Label = "GRAPHICS", IsSection = true });
             rowList.Add(new Row { Id = ActionId.ToggleRealTextures, Label = TexturesLabel(useRealTextures) });
+            // Tier 10 follow-up — Render distance slider. 0..1 slider
+            // value maps to Settings.RenderDistanceMin..Max chunks.
+            // Label appends the integer value at draw time so the
+            // player can read "RENDER DISTANCE: 8" while dragging.
+            rowList.Add(new Row { Id = ActionId.SetRenderDistance,
+                                  Label = RenderDistanceLabel(renderDistance),
+                                  IsSlider = true,
+                                  Value = RenderDistanceToSlider(renderDistance) });
             rowList.Add(new Row { Id = ActionId.None, Label = "AUDIO", IsSection = true });
             rowList.Add(new Row { Id = ActionId.SetMasterVolume, Label = "ALL SOUND",
                                   IsSlider = true, Value = Clamp01(masterVolume),
@@ -149,10 +162,11 @@ namespace VStudioCraft.Game
 
         public static HitResult HitTestEx(int screenW, int screenH, int mx, int my,
             bool hungerEnabled, bool isSurvival, bool useRealTextures,
-            float masterVolume, float musicVolume)
+            float masterVolume, float musicVolume,
+            int renderDistance)
         {
             var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival, useRealTextures,
-                                 masterVolume, musicVolume);
+                                 masterVolume, musicVolume, renderDistance);
             for (int i = 0; i < rows.Length; i++)
             {
                 var r = rows[i];
@@ -185,24 +199,53 @@ namespace VStudioCraft.Game
         // hover highlight only needs the ActionId.
         public static ActionId HitTest(int screenW, int screenH, int mx, int my,
             bool hungerEnabled, bool isSurvival, bool useRealTextures,
-            float masterVolume, float musicVolume)
+            float masterVolume, float musicVolume,
+            int renderDistance)
         {
             return HitTestEx(screenW, screenH, mx, my,
                 hungerEnabled, isSurvival, useRealTextures,
-                masterVolume, musicVolume).Id;
+                masterVolume, musicVolume, renderDistance).Id;
         }
 
         // Y of the title text's top edge, sitting just above the first row.
         public static int TitleY(int screenW, int screenH,
             bool hungerEnabled, bool isSurvival, bool useRealTextures,
-            float masterVolume, float musicVolume)
+            float masterVolume, float musicVolume,
+            int renderDistance)
         {
             var rows = BuildRows(screenW, screenH, hungerEnabled, isSurvival, useRealTextures,
-                                 masterVolume, musicVolume);
+                                 masterVolume, musicVolume, renderDistance);
             int firstY = rows[0].Y;
             int titleScale = TitleFontScale(screenW, screenH);
             return firstY - TitleGap(screenW, screenH) - HotbarTextures.GlyphCellH * titleScale;
         }
+
+        // Tier 10 follow-up — Slider math + label for the render
+        // distance row. Slider value 0..1 maps linearly to the
+        // integer chunk-radius range.
+        public static int SliderToRenderDistance(float t)
+        {
+            int min = Settings.RenderDistanceMin;
+            int max = Settings.RenderDistanceMax;
+            if (t < 0f) t = 0f;
+            else if (t > 1f) t = 1f;
+            int v = (int)System.Math.Round(min + t * (max - min));
+            if (v < min) v = min;
+            else if (v > max) v = max;
+            return v;
+        }
+        public static float RenderDistanceToSlider(int rd)
+        {
+            int min = Settings.RenderDistanceMin;
+            int max = Settings.RenderDistanceMax;
+            if (max == min) return 0f;
+            float t = (rd - min) / (float)(max - min);
+            if (t < 0f) t = 0f;
+            else if (t > 1f) t = 1f;
+            return t;
+        }
+        private static string RenderDistanceLabel(int rd)
+            => "RENDER DISTANCE: " + rd;
 
         private static float Clamp01(float v) => v < 0f ? 0f : (v > 1f ? 1f : v);
 
