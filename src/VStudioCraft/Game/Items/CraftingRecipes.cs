@@ -757,6 +757,160 @@ namespace VStudioCraft.Game
                 },
                 new ItemStack(BlockType.Map, 1)));
 
+            // ---------- Redstone components (Alpha 1.1.2) ----------
+
+            // Wooden Pressure Plate — 2 planks side-by-side horizontally.
+            // Canonical Alpha pattern is "PP" → 1 plate.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Planks, BlockType.Planks },
+                },
+                new ItemStack(BlockType.WoodPressurePlate, 1)));
+
+            // Stone Pressure Plate — 2 stone side-by-side horizontally.
+            // Canonical Alpha pattern is "SS" → 1 plate.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Stone, BlockType.Stone },
+                },
+                new ItemStack(BlockType.StonePressurePlate, 1)));
+
+            // Stone Button — 1 stone block (canonical Alpha 1.0.11
+            // recipe; modern is unchanged). Single-cell shaped recipe;
+            // matches if the player puts exactly one stone anywhere
+            // in the grid and nothing else.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Stone },
+                },
+                new ItemStack(BlockType.StoneButton, 1)));
+
+            // Lever — 1 stick on top of 1 cobblestone, vertical.
+            // Canonical Alpha pattern:
+            //   T
+            //   C
+            // (T=Stick, C=Cobblestone). Output 1 lever.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Stick },
+                    { BlockType.Cobblestone },
+                },
+                new ItemStack(BlockType.Lever, 1)));
+
+            // Redstone Torch — 1 redstone dust on top of 1 stick.
+            // Canonical Alpha pattern:
+            //   R
+            //   S
+            // Output 1 RedstoneTorchOn (placed-by-hand defaults to On
+            // until simulation flips it; matches the placement comment
+            // in BlockType).
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.RedstoneDust },
+                    { BlockType.Stick },
+                },
+                new ItemStack(BlockType.RedstoneTorchOn, 1)));
+
+            // Note Block — 8 planks ringing 1 redstone dust at centre.
+            // Canonical Alpha pattern (same shape as the chest, just
+            // with a redstone-dust core):
+            //   PPP
+            //   PRP
+            //   PPP
+            // Output 1 note block.
+            list.Add(new ShapedRecipe(
+                new BlockType[3, 3]
+                {
+                    { BlockType.Planks, BlockType.Planks,       BlockType.Planks },
+                    { BlockType.Planks, BlockType.RedstoneDust, BlockType.Planks },
+                    { BlockType.Planks, BlockType.Planks,       BlockType.Planks },
+                },
+                new ItemStack(BlockType.NoteBlock, 1)));
+
+            // TNT — 5 gunpowder + 4 sand in a checkerboard. Canonical
+            // Alpha pattern:
+            //   G S G
+            //   S G S
+            //   G S G
+            // Output 1 TNT.
+            list.Add(new ShapedRecipe(
+                new BlockType[3, 3]
+                {
+                    { BlockType.Gunpowder, BlockType.Sand,      BlockType.Gunpowder },
+                    { BlockType.Sand,      BlockType.Gunpowder, BlockType.Sand      },
+                    { BlockType.Gunpowder, BlockType.Sand,      BlockType.Gunpowder },
+                },
+                new ItemStack(BlockType.Tnt, 1)));
+
+            // ---------- Material → block compaction (canonical Alpha) ----------
+
+            // Wool — 4 string in a 2×2 → 1 wool. Alpha pattern was
+            // added in 1.0.4 ("SS / SS"). Output 1 white wool.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.String, BlockType.String },
+                    { BlockType.String, BlockType.String },
+                },
+                new ItemStack(BlockType.Wool, 1)));
+
+            // Snow Block — 4 snowballs 2×2 → 1 snow block. Canonical
+            // Alpha recipe.
+            list.Add(new ShapedRecipe(
+                new BlockType[,]
+                {
+                    { BlockType.Snowball, BlockType.Snowball },
+                    { BlockType.Snowball, BlockType.Snowball },
+                },
+                new ItemStack(BlockType.SnowBlock, 1)));
+
+            // Iron / Gold / Diamond Block — 9 ingots/gems in a 3×3.
+            // Canonical Alpha resource-compaction recipes; preserves
+            // value (1 block = 9 ingots) so the reverse 1×1 craft
+            // below round-trips losslessly.
+            list.Add(new ShapedRecipe(
+                new BlockType[3, 3]
+                {
+                    { BlockType.IronIngot, BlockType.IronIngot, BlockType.IronIngot },
+                    { BlockType.IronIngot, BlockType.IronIngot, BlockType.IronIngot },
+                    { BlockType.IronIngot, BlockType.IronIngot, BlockType.IronIngot },
+                },
+                new ItemStack(BlockType.IronBlock, 1)));
+            list.Add(new ShapedRecipe(
+                new BlockType[3, 3]
+                {
+                    { BlockType.GoldIngot, BlockType.GoldIngot, BlockType.GoldIngot },
+                    { BlockType.GoldIngot, BlockType.GoldIngot, BlockType.GoldIngot },
+                    { BlockType.GoldIngot, BlockType.GoldIngot, BlockType.GoldIngot },
+                },
+                new ItemStack(BlockType.GoldBlock, 1)));
+            list.Add(new ShapedRecipe(
+                new BlockType[3, 3]
+                {
+                    { BlockType.Diamond, BlockType.Diamond, BlockType.Diamond },
+                    { BlockType.Diamond, BlockType.Diamond, BlockType.Diamond },
+                    { BlockType.Diamond, BlockType.Diamond, BlockType.Diamond },
+                },
+                new ItemStack(BlockType.DiamondBlock, 1)));
+
+            // Reverse compaction — 1 block → 9 ingots/gems. Single-
+            // cell shaped recipe; round-trips the 3×3 above. Canonical
+            // Alpha behaviour for storage blocks.
+            list.Add(new ShapedRecipe(
+                new BlockType[,] { { BlockType.IronBlock } },
+                new ItemStack(BlockType.IronIngot, 9)));
+            list.Add(new ShapedRecipe(
+                new BlockType[,] { { BlockType.GoldBlock } },
+                new ItemStack(BlockType.GoldIngot, 9)));
+            list.Add(new ShapedRecipe(
+                new BlockType[,] { { BlockType.DiamondBlock } },
+                new ItemStack(BlockType.Diamond, 9)));
+
             return list;
         }
 
