@@ -1908,19 +1908,21 @@ void main()
             }
 
             // ---------- Creeper (no arms, 4 short legs) ----------
-            // Body is 4x12x4 (thinner than zombie's 8x12x4) and legs are
-            // 4x6x4 (shorter than zombie's 4x12x4). The legs all share
-            // the same texture region (0,16); a single non-mirrored mesh
-            // covers all four — the rig draws it four times at the four
-            // corners. Mirroring isn't needed because creeper legs have
-            // no chirality.
+            // Body is 8x12x4 (same width as the head, shallow in Z) and
+            // legs are 4x6x4 (shorter than zombie's 4x12x4). Matches
+            // canonical Alpha ModelCreeper.body addBox(-4,0,-2, 8,12,4)
+            // at offset (16,16). The legs all share the same texture
+            // region (0,16); a single non-mirrored mesh covers all
+            // four — the rig draws it four times at the four corners.
+            // Mirroring isn't needed because creeper legs have no
+            // chirality.
             _creeperSkinTexture = MobSkin.CreateTexture(MobSkinData.CreeperBase64);
             if (_creeperSkinTexture != 0)
             {
                 _creeperHeadMesh = SkinCuboidMesh.BuildBodyPart(
                     8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
                 _creeperBodyMesh = SkinCuboidMesh.BuildBodyPart(
-                    4 * Px, 12 * Px, 4 * Px, 16, 16, 4, 12, 4, TexW, TexH, mirror: false);
+                    8 * Px, 12 * Px, 4 * Px, 16, 16, 8, 12, 4, TexW, TexH, mirror: false);
                 _creeperLegMesh = SkinCuboidMesh.BuildBodyPart(
                     4 * Px, 6 * Px, 4 * Px, 0, 16, 4, 6, 4, TexW, TexH, mirror: false);
             }
@@ -1992,10 +1994,15 @@ void main()
             {
                 _pigHeadMesh = SkinCuboidMesh.BuildBodyPart(
                     8 * Px, 8 * Px, 8 * Px, 0, 0, 8, 8, 8, TexW, TexH, mirror: false);
-                // Pig body: width=10, height=8, depth=16. Texture
-                // params follow the same w/h/d order: w=10, h=8, d=16.
+                // Pig body: canonical box is 10w × 16h × 8d px (upright,
+                // tall) anchored at (28, 8). The 64-px-wide texture's
+                // unwrap depends on this orientation — building with h↔d
+                // swapped puts backU at u=70 (off-texture) and the
+                // ClampToEdge transparent border bleeds in. Rotate +π/2
+                // around X at draw time to lay the body flat, matching
+                // canonical Alpha ModelPig.body.rotateAngleX = π/2.
                 _pigBodyMesh = SkinCuboidMesh.BuildBodyPart(
-                    10 * Px, 8 * Px, 16 * Px, 28, 8, 10, 8, 16, TexW, TexH, mirror: false);
+                    10 * Px, 16 * Px, 8 * Px, 28, 8, 10, 16, 8, TexW, TexH, mirror: false);
                 _pigLegMesh = SkinCuboidMesh.BuildBodyPart(
                     4 * Px, 6 * Px, 4 * Px, 0, 16, 4, 6, 4, TexW, TexH, mirror: false);
             }
@@ -2010,8 +2017,11 @@ void main()
             {
                 _cowHeadMesh = SkinCuboidMesh.BuildBodyPart(
                     8 * Px, 8 * Px, 6 * Px, 0, 0, 8, 8, 6, TexW, TexH, mirror: false);
+                // Cow body: canonical box is 12w × 18h × 10d px (upright)
+                // at (18, 4). Same rationale as pig — built upright with
+                // canonical UV layout, rotated +π/2 around X at draw time.
                 _cowBodyMesh = SkinCuboidMesh.BuildBodyPart(
-                    12 * Px, 10 * Px, 18 * Px, 18, 4, 12, 10, 18, TexW, TexH, mirror: false);
+                    12 * Px, 18 * Px, 10 * Px, 18, 4, 12, 18, 10, TexW, TexH, mirror: false);
                 _cowLegMesh = SkinCuboidMesh.BuildBodyPart(
                     4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: false);
                 _cowHornMesh = SkinCuboidMesh.BuildBodyPart(
@@ -2020,9 +2030,9 @@ void main()
 
             // ---------- Sheep ----------
             //   Head: 6x6x8 px at (0, 0)
-            //   Body: 8x6x16 px at (28, 8) — note the swapped axes:
-            //         the 16-axis is along Z (length), 8 along X
-            //         (width), 6 along Y (height).
+            //   Body: 8w × 16h × 6d px at (28, 8) — canonical upright
+            //         layout. Rotated +π/2 around X at draw time to lie
+            //         along Z, matching Alpha ModelSheep.
             //   Leg:  4x12x4 px at (0, 16)
             // Wool fur overlay uses sheep_fur.png with the same body
             // region (same UV math), drawn at 1.05x scale around the
@@ -2033,19 +2043,20 @@ void main()
                 _sheepHeadMesh = SkinCuboidMesh.BuildBodyPart(
                     6 * Px, 6 * Px, 8 * Px, 0, 0, 6, 6, 8, TexW, TexH, mirror: false);
                 _sheepBodyMesh = SkinCuboidMesh.BuildBodyPart(
-                    8 * Px, 6 * Px, 16 * Px, 28, 8, 8, 6, 16, TexW, TexH, mirror: false);
+                    8 * Px, 16 * Px, 6 * Px, 28, 8, 8, 16, 6, TexW, TexH, mirror: false);
                 _sheepLegMesh = SkinCuboidMesh.BuildBodyPart(
                     4 * Px, 12 * Px, 4 * Px, 0, 16, 4, 12, 4, TexW, TexH, mirror: false);
             }
             _sheepFurTexture = MobSkin.CreateTexture(MobSkinData.SheepFurBase64);
             if (_sheepFurTexture != 0)
             {
-                // Inflate the wool layer by 1 pixel (1.625 m³ effective)
-                // so it sits visibly around the bare body. The mesh's
-                // UV samples sheep_fur.png at the same body region
-                // (28, 8) since both textures share layout.
+                // Inflate the wool layer by 0.5 px on every axis so it
+                // sits visibly around the bare body. UV layout follows
+                // sheep_fur.png which mirrors sheep.png — same canonical
+                // upright (28, 8) region. Rotated identically to the
+                // bare body at draw time.
                 _sheepFurBodyMesh = SkinCuboidMesh.BuildBodyPart(
-                    8.5f * Px, 6.5f * Px, 16.5f * Px, 28, 8, 8, 6, 16, TexW, TexH, mirror: false);
+                    8.5f * Px, 16.5f * Px, 6.5f * Px, 28, 8, 8, 16, 6, TexW, TexH, mirror: false);
             }
 
             // ---------- Chicken ----------
@@ -15166,10 +15177,11 @@ void main()
             const float HipY = 6f / 16f;        // 0.375 — top of legs / bottom of body
             const float NeckY = HipY + 12f / 16f; // 1.125 — top of body / bottom of head
 
-            // Four legs at the four corners of the body footprint. Body
-            // is 4x4 px = 0.25 m square, so the leg centerlines sit at
-            // ±2 px / 2 = ±0.0625 m on each axis. Front/back is in Z;
-            // left/right is in X.
+            // Four legs at the body's underside corners. Body footprint
+            // is 8x4 px (X by Z); legs are 4x4 px in cross-section, so
+            // pairs of legs sit edge-to-edge along X (centerlines at
+            // ±2/16) and flush with the body's front/back edges in Z
+            // (centerlines at ±2/16, leaving body Z half-extent = 2/16).
             const float LegX = 2f / 16f;
             const float LegZ = 2f / 16f;
             DrawSkinCuboid(_creeperLegMesh, new Vector3(+LegX, 0f, +LegZ),
@@ -15428,9 +15440,16 @@ void main()
             DrawSkinCuboid(_pigLegMesh, new Vector3(+legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
             DrawSkinCuboid(_pigLegMesh, new Vector3(-legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
 
-            // Body — sits flat on the legs. Mesh is built with d=16
-            // (Z-axis), so the body lies along Z naturally.
-            DrawSkinCuboid(_pigBodyMesh, new Vector3(0f, LegY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+            // Body — built upright (16 px tall) with canonical UV
+            // layout, then rotated +π/2 around X so it lies along Z.
+            // footPos drops the mesh feet 4/16 below LegY so post-
+            // rotation the body's bottom face sits exactly at LegY;
+            // pivot is the rig-space body centre.
+            const float BodyHalfDepth = 4f / 16f; // post-rotation half-height (8/2)
+            float bodyFootY = LegY - BodyHalfDepth;
+            var bodyPivot = new Vector3(0f, LegY + BodyHalfDepth, 0f);
+            DrawSkinCuboid(_pigBodyMesh, new Vector3(0f, bodyFootY, 0f),
+                bodyPivot, (float)(Math.PI * 0.5), rigToWorld, vp);
 
             // Head at body's front (+Z). Body front face at z = +8/16.
             // Head is 8 px deep, so its mesh local +Z extends 4/16
@@ -15470,7 +15489,15 @@ void main()
             DrawSkinCuboid(_cowLegMesh, new Vector3(+legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
             DrawSkinCuboid(_cowLegMesh, new Vector3(-legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
 
-            DrawSkinCuboid(_cowBodyMesh, new Vector3(0f, LegY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+            // Body — built upright (18 px tall) with canonical UV
+            // layout at (18, 4), rotated +π/2 around X to lie along Z.
+            // Post-rotation height is 10/16; drop footPos so bottom
+            // sits at LegY and pivot at rig-space body centre.
+            const float CowBodyHalfDepth = 5f / 16f; // 10/2 — post-rotation half-height
+            float cowBodyFootY = LegY - CowBodyHalfDepth;
+            var cowBodyPivot = new Vector3(0f, LegY + CowBodyHalfDepth, 0f);
+            DrawSkinCuboid(_cowBodyMesh, new Vector3(0f, cowBodyFootY, 0f),
+                cowBodyPivot, (float)(Math.PI * 0.5), rigToWorld, vp);
 
             // Head — origin Z = body front (BodyHalfZ) + head depth/2
             // (3/16) = 9/16 + 3/16 = 12/16.
@@ -15511,7 +15538,15 @@ void main()
             DrawSkinCuboid(_sheepLegMesh, new Vector3(+legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
             DrawSkinCuboid(_sheepLegMesh, new Vector3(-legX, 0f, -legZ), Vector3.Zero, 0f, rigToWorld, vp);
 
-            DrawSkinCuboid(_sheepBodyMesh, new Vector3(0f, LegY, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+            // Body — built upright (16 px tall) with canonical UV at
+            // (28, 8), rotated +π/2 around X to lie along Z. Post-
+            // rotation height is 6/16; drop footPos so bottom sits
+            // at LegY.
+            const float SheepBodyHalfDepth = 3f / 16f; // 6/2 — post-rotation half-height
+            float sheepBodyFootY = LegY - SheepBodyHalfDepth;
+            var sheepBodyPivot = new Vector3(0f, LegY + SheepBodyHalfDepth, 0f);
+            DrawSkinCuboid(_sheepBodyMesh, new Vector3(0f, sheepBodyFootY, 0f),
+                sheepBodyPivot, (float)(Math.PI * 0.5), rigToWorld, vp);
 
             // Head — sheep head 6x6x8.
             float headY = LegY;
@@ -15519,13 +15554,18 @@ void main()
 
             // Wool overlay — second draw with sheep_fur.png bound,
             // slightly inflated body cuboid sitting at the same
-            // position as the bare body. Drawn LAST so it occludes
-            // the bare body cleanly.
+            // position as the bare body, rotated identically. Drawn
+            // LAST so it occludes the bare body cleanly.
             if (_sheepFurTexture != 0 && _sheepFurBodyMesh != null)
             {
                 _skinShader.SetVector4("uTint", new Vector4(1.00f, 0.30f, 0.30f, hurt));
                 GL.BindTexture(TextureTarget.Texture2D, _sheepFurTexture);
-                DrawSkinCuboid(_sheepFurBodyMesh, new Vector3(0f, LegY - 0.25f / 16f, 0f), Vector3.Zero, 0f, rigToWorld, vp);
+                // Fur is 0.5 px taller in every axis; offset footPos
+                // by another -0.25/16 so the inflation is symmetric
+                // around the bare body after rotation.
+                DrawSkinCuboid(_sheepFurBodyMesh,
+                    new Vector3(0f, sheepBodyFootY - 0.25f / 16f, 0f),
+                    sheepBodyPivot, (float)(Math.PI * 0.5), rigToWorld, vp);
             }
 
             GL.BindTexture(TextureTarget.Texture2D, 0);
